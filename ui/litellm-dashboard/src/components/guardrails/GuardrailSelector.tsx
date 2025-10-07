@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { Select, Typography, Tooltip } from 'antd';
-import { InfoCircleOutlined } from '@ant-design/icons';
-import { Guardrail } from './types';
-import { getGuardrailsList } from '../networking';
+import React, { useEffect, useState } from "react";
+import { Select, Typography, Tooltip } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { Guardrail } from "./types";
+import { getGuardrailsList } from "../networking";
 
 interface GuardrailSelectorProps {
   onChange: (selectedGuardrails: string[]) => void;
@@ -12,20 +12,14 @@ interface GuardrailSelectorProps {
   disabled?: boolean;
 }
 
-const GuardrailSelector: React.FC<GuardrailSelectorProps> = ({ 
-  onChange, 
-  value, 
-  className, 
-  accessToken,
-  disabled
-}) => {
+const GuardrailSelector: React.FC<GuardrailSelectorProps> = ({ onChange, value, className, accessToken, disabled }) => {
   const [guardrails, setGuardrails] = useState<Guardrail[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const fetchGuardrails = async () => {
       if (!accessToken) return;
-      
+
       setLoading(true);
       try {
         const response = await getGuardrailsList(accessToken);
@@ -59,19 +53,19 @@ const GuardrailSelector: React.FC<GuardrailSelectorProps> = ({
         value={value}
         loading={loading}
         className={className}
-        options={guardrails.map(guardrail => {
+        options={guardrails.map((guardrail) => {
           console.log("Mapping guardrail:", guardrail);
           return {
             label: `${guardrail.guardrail_name}`,
             value: guardrail.guardrail_name,
-          }
+          };
         })}
         optionFilterProp="label"
         showSearch
-        style={{ width: '100%' }}
+        style={{ width: "100%" }}
       />
     </div>
   );
 };
 
-export default GuardrailSelector; 
+export default GuardrailSelector;

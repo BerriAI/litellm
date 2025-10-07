@@ -2957,6 +2957,40 @@ class ProxyConfig:
 
         return config
 
+    def _should_load_db_object(
+        self, object_type: Union[str, SupportedDBObjectType]
+    ) -> bool:
+        """
+        Check if an object type should be loaded from the database based on general_settings.supported_db_objects.
+        
+        Args:
+            object_type: Type of object to check (e.g., SupportedDBObjectType.MODELS, "models", etc.)
+        
+        Returns:
+            True if the object should be loaded, False otherwise
+        """
+        global general_settings
+        
+        # Get the supported_db_objects configuration
+        supported_db_objects = general_settings.get("supported_db_objects", None)
+        
+        # If supported_db_objects is not set, load all objects (default behavior)
+        if supported_db_objects is None:
+            return True
+        
+        # If supported_db_objects is set, only load specified objects
+        if not isinstance(supported_db_objects, list):
+            verbose_proxy_logger.warning(
+                f"supported_db_objects is not a list, got {type(supported_db_objects)}. Loading all objects."
+            )
+            return True
+        
+        # Convert object_type to string for comparison (handles both str and enum)
+        object_type_str = str(object_type)
+        
+        # Check if the object type is in the list (supports both str and enum values)
+        return any(str(obj) == object_type_str for obj in supported_db_objects)
+
     async def _get_models_from_db(self, prisma_client: PrismaClient) -> list:
         try:
             new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
@@ -2988,12 +3022,14 @@ class ProxyConfig:
                     f"Master key is not initialized or formatted. master_key={master_key}"
                 )
 
-            new_models = await self._get_models_from_db(prisma_client=prisma_client)
+            # Only load models from DB if "models" is in supported_db_objects (or if supported_db_objects is not set)
+            if self._should_load_db_object(object_type="models"):
+                new_models = await self._get_models_from_db(prisma_client=prisma_client)
 
-            # update llm router
-            await self._update_llm_router(
-                new_models=new_models, proxy_logging_obj=proxy_logging_obj
-            )
+                # update llm router
+                await self._update_llm_router(
+                    new_models=new_models, proxy_logging_obj=proxy_logging_obj
+                )
 
             db_general_settings = await prisma_client.db.litellm_config.find_first(
                 where={"param_name": "general_settings"}
@@ -3021,12 +3057,23 @@ class ProxyConfig:
 
         ex. Vector Stores, Guardrails, MCP tools, etc.
         """
-        await self._init_guardrails_in_db(prisma_client=prisma_client)
-        await self._init_vector_stores_in_db(prisma_client=prisma_client)
-        await self._init_mcp_servers_in_db()
-        await self._init_pass_through_endpoints_in_db()
-        await self._init_prompts_in_db(prisma_client=prisma_client)
-        await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
+        if self._should_load_db_object(object_type="guardrails"):
+            await self._init_guardrails_in_db(prisma_client=prisma_client)
+        
+        if self._should_load_db_object(object_type="vector_stores"):
+            await self._init_vector_stores_in_db(prisma_client=prisma_client)
+        
+        if self._should_load_db_object(object_type="mcp"):
+            await self._init_mcp_servers_in_db()
+        
+        if self._should_load_db_object(object_type="pass_through_endpoints"):
+            await self._init_pass_through_endpoints_in_db()
+        
+        if self._should_load_db_object(object_type="prompts"):
+            await self._init_prompts_in_db(prisma_client=prisma_client)
+        
+        if self._should_load_db_object(object_type="model_cost_map"):
+            await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
 
     async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
         """

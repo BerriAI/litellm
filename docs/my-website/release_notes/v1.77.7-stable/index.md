@@ -59,11 +59,49 @@ pip install litellm==1.77.7.rc.1
 ## Key Highlights
 
 - **Dynamic Rate Limiter v3** - Automatically maximizes throughput when capacity is available (< 80% saturation) by allowing lower-priority requests to use unused capacity, then switches to fair priority-based allocation under high load (≥ 80%) to prevent blocking
-- **Major Performance Improvements** - Router optimization reducing P99 latency by 62.5%, cache improvements from O(n*log(n)) to O(log(n))
+- **Major Performance Improvements** - 2.9x lower median latency at 1,000 concurrent users.
 - **Claude Sonnet 4.5** - Support for Anthropic's new Claude Sonnet 4.5 model family with 200K+ context and tiered pricing
 - **MCP Gateway Enhancements** - Fine-grained tool control, server permissions, and forwardable headers
 - **AMD Lemonade & Nvidia NIM** - New provider support for AMD Lemonade and Nvidia NIM Rerank
 - **GitLab Prompt Management** - GitLab-based prompt management integration
+
+### Performance - 2.9x Lower Median Latency
+
+<Image img={require('../../img/release_notes/perf_77_7.png')}  style={{ width: '800px', height: 'auto' }} />
+
+<br/>
+
+This update removes LiteLLM router inefficiencies, reducing complexity from O(M×N) to O(1). Previously, it built a new array and ran repeated checks like data["model"] in llm_router.get_model_ids(). Now, a direct ID-to-deployment map eliminates redundant allocations and scans.
+
+As a result, performance improved across all latency percentiles:
+
+- **Median latency:** 320 ms → **110 ms** (−65.6%)
+- **p95 latency:** 850 ms → **440 ms** (−48.2%)
+- **p99 latency:** 1,400 ms → **810 ms** (−42.1%)
+- **Average latency:** 864 ms → **310 ms** (−64%)
+
+
+#### Test Setup
+
+**Locust**
+
+- **Concurrent users:** 1,000
+- **Ramp-up:** 500
+
+**System Specs**
+
+- **CPU:** 4 vCPUs
+- **Memory:** 8 GB RAM
+- **LiteLLM Workers:** 4
+- **Instances**: 4
+
+**Configuration (config.yaml)**
+
+View the complete configuration: [gist.github.com/AlexsanderHamir/config.yaml](https://gist.github.com/AlexsanderHamir/53f7d554a5d2afcf2c4edb5b6be68ff4)
+
+**Load Script (no_cache_hits.py)**
+
+View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache_hits.py](https://gist.github.com/AlexsanderHamir/42c33d7a4dc7a57f56a78b560dee3a42)
 
 ## New Models / Updated Models
 

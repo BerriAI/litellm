@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import React, { useState, useEffect, useMemo, useCallback } from "react"
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   BarChart,
   Card,
@@ -30,18 +30,18 @@ import {
   DateRangePicker,
   DateRangePickerValue,
   Button,
-} from "@tremor/react"
-import AdvancedDatePicker from "./shared/advanced_date_picker"
-import { AreaChart } from "@tremor/react"
+} from "@tremor/react";
+import AdvancedDatePicker from "./shared/advanced_date_picker";
+import { AreaChart } from "@tremor/react";
 
-import { userDailyActivityCall, userDailyActivityAggregatedCall, tagListCall } from "./networking"
-import { Tag } from "./tag_management/types"
-import ViewUserSpend from "./view_user_spend"
-import TopKeyView from "./top_key_view"
-import { ActivityMetrics, processActivityData } from "./activity_metrics"
-import UserAgentActivity from "./user_agent_activity"
-import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from "./usage/types"
-import EntityUsage from "./entity_usage"
+import { userDailyActivityCall, userDailyActivityAggregatedCall, tagListCall } from "./networking";
+import { Tag } from "./tag_management/types";
+import ViewUserSpend from "./view_user_spend";
+import TopKeyView from "./top_key_view";
+import { ActivityMetrics, processActivityData } from "./activity_metrics";
+import UserAgentActivity from "./user_agent_activity";
+import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from "./usage/types";
+import EntityUsage from "./entity_usage";
 import {
   old_admin_roles,
   v2_admin_role_names,
@@ -49,70 +49,70 @@ import {
   rolesAllowedToSeeUsage,
   rolesWithWriteAccess,
   internalUserRoles,
-} from "../utils/roles"
-import { Team } from "./key_team_helpers/key_list"
-import { EntityList } from "./entity_usage"
-import { formatNumberWithCommas } from "@/utils/dataUtils"
-import { valueFormatterSpend } from "./usage/utils/value_formatters"
-import CloudZeroExportModal from "./cloudzero_export_modal"
-import { ChartLoader } from "./shared/chart_loader"
-import { getProviderLogoAndName } from "./provider_info_helpers"
+} from "../utils/roles";
+import { Team } from "./key_team_helpers/key_list";
+import { EntityList } from "./entity_usage";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { valueFormatterSpend } from "./usage/utils/value_formatters";
+import CloudZeroExportModal from "./cloudzero_export_modal";
+import { ChartLoader } from "./shared/chart_loader";
+import { getProviderLogoAndName } from "./provider_info_helpers";
 
 interface NewUsagePageProps {
-  accessToken: string | null
-  userRole: string | null
-  userID: string | null
-  teams: Team[]
-  premiumUser: boolean
+  accessToken: string | null;
+  userRole: string | null;
+  userID: string | null;
+  teams: Team[];
+  premiumUser: boolean;
 }
 
 const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, userID, teams, premiumUser }) => {
   const [userSpendData, setUserSpendData] = useState<{
-    results: DailyData[]
-    metadata: any
-  }>({ results: [], metadata: {} })
+    results: DailyData[];
+    metadata: any;
+  }>({ results: [], metadata: {} });
 
   // Separate loading states for better UX
-  const [loading, setLoading] = useState(false)
-  const [isDateChanging, setIsDateChanging] = useState(false)
+  const [loading, setLoading] = useState(false);
+  const [isDateChanging, setIsDateChanging] = useState(false);
 
   // Create initial dates outside of state to prevent recreation
-  const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), [])
-  const initialToDate = useMemo(() => new Date(), [])
+  const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), []);
+  const initialToDate = useMemo(() => new Date(), []);
 
   // Single date state that directly triggers data fetching
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: initialFromDate,
     to: initialToDate,
-  })
+  });
 
-  const [allTags, setAllTags] = useState<EntityList[]>([])
-  const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups")
-  const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false)
+  const [allTags, setAllTags] = useState<EntityList[]>([]);
+  const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups");
+  const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
 
   const getAllTags = async () => {
     if (!accessToken) {
-      return
+      return;
     }
-    const tags = await tagListCall(accessToken)
+    const tags = await tagListCall(accessToken);
     setAllTags(
       Object.values(tags).map((tag: Tag) => ({
         label: tag.name,
         value: tag.name,
       })),
-    )
-  }
+    );
+  };
 
   useEffect(() => {
-    getAllTags()
-  }, [accessToken])
+    getAllTags();
+  }, [accessToken]);
 
   // Derived states from userSpendData
-  const totalSpend = userSpendData.metadata?.total_spend || 0
+  const totalSpend = userSpendData.metadata?.total_spend || 0;
 
   // Calculate top models from the breakdown data
   const getTopModels = () => {
-    const modelSpend: { [key: string]: MetricWithMetadata } = {}
+    const modelSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
         if (!modelSpend[model]) {
@@ -130,19 +130,19 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
             },
             metadata: {},
             api_key_breakdown: {},
-          }
+          };
         }
-        modelSpend[model].metrics.spend += metrics.metrics.spend
-        modelSpend[model].metrics.prompt_tokens += metrics.metrics.prompt_tokens
-        modelSpend[model].metrics.completion_tokens += metrics.metrics.completion_tokens
-        modelSpend[model].metrics.total_tokens += metrics.metrics.total_tokens
-        modelSpend[model].metrics.api_requests += metrics.metrics.api_requests
-        modelSpend[model].metrics.successful_requests += metrics.metrics.successful_requests || 0
-        modelSpend[model].metrics.failed_requests += metrics.metrics.failed_requests || 0
-        modelSpend[model].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0
-        modelSpend[model].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0
-      })
-    })
+        modelSpend[model].metrics.spend += metrics.metrics.spend;
+        modelSpend[model].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        modelSpend[model].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        modelSpend[model].metrics.total_tokens += metrics.metrics.total_tokens;
+        modelSpend[model].metrics.api_requests += metrics.metrics.api_requests;
+        modelSpend[model].metrics.successful_requests += metrics.metrics.successful_requests || 0;
+        modelSpend[model].metrics.failed_requests += metrics.metrics.failed_requests || 0;
+        modelSpend[model].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        modelSpend[model].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
+      });
+    });
 
     return Object.entries(modelSpend)
       .map(([model, metrics]) => ({
@@ -154,11 +154,11 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         tokens: metrics.metrics.total_tokens,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, 5)
-  }
+      .slice(0, 5);
+  };
 
   const getTopModelGroups = () => {
-    const modelGroupSpend: { [key: string]: MetricWithMetadata } = {}
+    const modelGroupSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.model_groups || {}).forEach(([modelGroup, metrics]) => {
         if (!modelGroupSpend[modelGroup]) {
@@ -176,20 +176,20 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
             },
             metadata: {},
             api_key_breakdown: {},
-          }
+          };
         }
-        modelGroupSpend[modelGroup].metrics.spend += metrics.metrics.spend
-        modelGroupSpend[modelGroup].metrics.prompt_tokens += metrics.metrics.prompt_tokens
-        modelGroupSpend[modelGroup].metrics.completion_tokens += metrics.metrics.completion_tokens
-        modelGroupSpend[modelGroup].metrics.total_tokens += metrics.metrics.total_tokens
-        modelGroupSpend[modelGroup].metrics.api_requests += metrics.metrics.api_requests
-        modelGroupSpend[modelGroup].metrics.successful_requests += metrics.metrics.successful_requests || 0
-        modelGroupSpend[modelGroup].metrics.failed_requests += metrics.metrics.failed_requests || 0
-        modelGroupSpend[modelGroup].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0
+        modelGroupSpend[modelGroup].metrics.spend += metrics.metrics.spend;
+        modelGroupSpend[modelGroup].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        modelGroupSpend[modelGroup].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        modelGroupSpend[modelGroup].metrics.total_tokens += metrics.metrics.total_tokens;
+        modelGroupSpend[modelGroup].metrics.api_requests += metrics.metrics.api_requests;
+        modelGroupSpend[modelGroup].metrics.successful_requests += metrics.metrics.successful_requests || 0;
+        modelGroupSpend[modelGroup].metrics.failed_requests += metrics.metrics.failed_requests || 0;
+        modelGroupSpend[modelGroup].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
         modelGroupSpend[modelGroup].metrics.cache_creation_input_tokens +=
-          metrics.metrics.cache_creation_input_tokens || 0
-      })
-    })
+          metrics.metrics.cache_creation_input_tokens || 0;
+      });
+    });
 
     return Object.entries(modelGroupSpend)
       .map(([modelGroup, metrics]) => ({
@@ -201,12 +201,12 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         tokens: metrics.metrics.total_tokens,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, 5)
-  }
+      .slice(0, 5);
+  };
 
   // Calculate provider spend from the breakdown data
   const getProviderSpend = () => {
-    const providerSpend: { [key: string]: MetricWithMetadata } = {}
+    const providerSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
         if (!providerSpend[provider]) {
@@ -224,19 +224,19 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
             },
             metadata: {},
             api_key_breakdown: {},
-          }
+          };
         }
-        providerSpend[provider].metrics.spend += metrics.metrics.spend
-        providerSpend[provider].metrics.prompt_tokens += metrics.metrics.prompt_tokens
-        providerSpend[provider].metrics.completion_tokens += metrics.metrics.completion_tokens
-        providerSpend[provider].metrics.total_tokens += metrics.metrics.total_tokens
-        providerSpend[provider].metrics.api_requests += metrics.metrics.api_requests
-        providerSpend[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0
-        providerSpend[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0
-        providerSpend[provider].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0
-        providerSpend[provider].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0
-      })
-    })
+        providerSpend[provider].metrics.spend += metrics.metrics.spend;
+        providerSpend[provider].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        providerSpend[provider].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        providerSpend[provider].metrics.total_tokens += metrics.metrics.total_tokens;
+        providerSpend[provider].metrics.api_requests += metrics.metrics.api_requests;
+        providerSpend[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
+        providerSpend[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
+        providerSpend[provider].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        providerSpend[provider].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
+      });
+    });
 
     return Object.entries(providerSpend).map(([provider, metrics]) => ({
       provider,
@@ -245,12 +245,12 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
       successful_requests: metrics.metrics.successful_requests,
       failed_requests: metrics.metrics.failed_requests,
       tokens: metrics.metrics.total_tokens,
-    }))
-  }
+    }));
+  };
 
   // Calculate top API keys from the breakdown data
   const getTopKeys = () => {
-    const keySpend: { [key: string]: KeyMetricWithMetadata } = {}
+    const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
         if (!keySpend[key]) {
@@ -271,21 +271,21 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
               team_id: null,
               tags: metrics.metadata.tags || [], // This gets key-level tags
             },
-          }
+          };
         }
-        keySpend[key].metrics.spend += metrics.metrics.spend
-        keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens
-        keySpend[key].metrics.completion_tokens += metrics.metrics.completion_tokens
-        keySpend[key].metrics.total_tokens += metrics.metrics.total_tokens
-        keySpend[key].metrics.api_requests += metrics.metrics.api_requests
-        keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests
-        keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests
-        keySpend[key].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0
-        keySpend[key].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0
-      })
-    })
+        keySpend[key].metrics.spend += metrics.metrics.spend;
+        keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+        keySpend[key].metrics.completion_tokens += metrics.metrics.completion_tokens;
+        keySpend[key].metrics.total_tokens += metrics.metrics.total_tokens;
+        keySpend[key].metrics.api_requests += metrics.metrics.api_requests;
+        keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests;
+        keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests;
+        keySpend[key].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        keySpend[key].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
+      });
+    });
 
-    console.log('debugTags',{keySpend,userSpendData})
+    console.log("debugTags", { keySpend, userSpendData });
 
     return Object.entries(keySpend)
       .map(([api_key, metrics]) => ({
@@ -295,86 +295,86 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         spend: metrics.metrics.spend,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, 5)
-  }
+      .slice(0, 5);
+  };
 
   const fetchUserSpendData = useCallback(async () => {
-    if (!accessToken || !dateValue.from || !dateValue.to) return
+    if (!accessToken || !dateValue.from || !dateValue.to) return;
 
-    setLoading(true)
+    setLoading(true);
 
     // Create new Date objects to avoid mutating the original dates
-    const startTime = new Date(dateValue.from)
-    const endTime = new Date(dateValue.to)
+    const startTime = new Date(dateValue.from);
+    const endTime = new Date(dateValue.to);
 
     try {
       // Prefer aggregated endpoint to avoid many page requests
       try {
-        const aggregated = await userDailyActivityAggregatedCall(accessToken, startTime, endTime)
-        setUserSpendData(aggregated)
-        return
+        const aggregated = await userDailyActivityAggregatedCall(accessToken, startTime, endTime);
+        setUserSpendData(aggregated);
+        return;
       } catch (e) {
         // Fallback to paginated calls if aggregated endpoint is unavailable
       }
 
-      const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime)
+      const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime);
 
       if (firstPageData.metadata.total_pages <= 1) {
-        setUserSpendData(firstPageData)
-        return
+        setUserSpendData(firstPageData);
+        return;
       }
 
-      const allResults = [...firstPageData.results]
-      const aggregatedMetadata = { ...firstPageData.metadata }
+      const allResults = [...firstPageData.results];
+      const aggregatedMetadata = { ...firstPageData.metadata };
 
       for (let page = 2; page <= firstPageData.metadata.total_pages; page++) {
-        const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page)
-        allResults.push(...pageData.results)
+        const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page);
+        allResults.push(...pageData.results);
         if (pageData.metadata) {
-          aggregatedMetadata.total_spend += pageData.metadata.total_spend || 0
-          aggregatedMetadata.total_api_requests += pageData.metadata.total_api_requests || 0
-          aggregatedMetadata.total_successful_requests += pageData.metadata.total_successful_requests || 0
-          aggregatedMetadata.total_failed_requests += pageData.metadata.total_failed_requests || 0
-          aggregatedMetadata.total_tokens += pageData.metadata.total_tokens || 0
+          aggregatedMetadata.total_spend += pageData.metadata.total_spend || 0;
+          aggregatedMetadata.total_api_requests += pageData.metadata.total_api_requests || 0;
+          aggregatedMetadata.total_successful_requests += pageData.metadata.total_successful_requests || 0;
+          aggregatedMetadata.total_failed_requests += pageData.metadata.total_failed_requests || 0;
+          aggregatedMetadata.total_tokens += pageData.metadata.total_tokens || 0;
         }
       }
 
       setUserSpendData({
         results: allResults,
         metadata: aggregatedMetadata,
-      })
+      });
     } catch (error) {
-      console.error("Error fetching user spend data:", error)
+      console.error("Error fetching user spend data:", error);
     } finally {
-      setLoading(false)
-      setIsDateChanging(false)
+      setLoading(false);
+      setIsDateChanging(false);
     }
-  }, [accessToken, dateValue.from, dateValue.to])
+  }, [accessToken, dateValue.from, dateValue.to]);
 
   // Super responsive date change handler
   const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
     // Instant visual feedback
-    setIsDateChanging(true)
-    setLoading(true)
+    setIsDateChanging(true);
+    setLoading(true);
 
     // Update date immediately for UI responsiveness
-    setDateValue(newValue)
-  }, [])
+    setDateValue(newValue);
+  }, []);
 
   // Debounced effect for data fetching with shorter delay
   useEffect(() => {
-    if (!dateValue.from || !dateValue.to) return
+    if (!dateValue.from || !dateValue.to) return;
 
     const timeoutId = setTimeout(() => {
-      fetchUserSpendData()
-    }, 50) // Very short debounce
+      fetchUserSpendData();
+    }, 50); // Very short debounce
 
-    return () => clearTimeout(timeoutId)
-  }, [fetchUserSpendData])
+    return () => clearTimeout(timeoutId);
+  }, [fetchUserSpendData]);
 
-  const modelMetrics = processActivityData(userSpendData, "models")
-  const keyMetrics = processActivityData(userSpendData, "api_keys")
-  const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers")
+  const modelMetrics = processActivityData(userSpendData, "models");
+  const keyMetrics = processActivityData(userSpendData, "api_keys");
+  const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers");
 
   return (
     <div style={{ width: "100%" }} className="p-8 relative">
@@ -522,8 +522,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                             yAxisWidth={100}
                             showLegend={false}
                             customTooltip={({ payload, active }) => {
-                              if (!active || !payload?.[0]) return null
-                              const data = payload[0].payload
+                              if (!active || !payload?.[0]) return null;
+                              const data = payload[0].payload;
                               return (
                                 <div className="bg-white p-4 shadow-lg rounded-lg border">
                                   <p className="font-bold">{data.date}</p>
@@ -535,7 +535,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                                   <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
                                   <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
                                 </div>
-                              )
+                              );
                             }}
                           />
                         )}
@@ -598,8 +598,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                             yAxisWidth={200}
                             showLegend={false}
                             customTooltip={({ payload, active }) => {
-                              if (!active || !payload?.[0]) return null
-                              const data = payload[0].payload
+                              if (!active || !payload?.[0]) return null;
+                              const data = payload[0].payload;
                               return (
                                 <div className="bg-white p-4 shadow-lg rounded-lg border">
                                   <p className="font-bold">{data.key}</p>
@@ -611,7 +611,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                                   <p className="text-red-600">Failed: {data.failed_requests.toLocaleString()}</p>
                                   <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
                                 </div>
-                              )
+                              );
                             }}
                           />
                         )}
@@ -662,14 +662,14 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                                                 alt={`${provider.provider} logo`}
                                                 className="w-4 h-4"
                                                 onError={(e) => {
-                                                  const target = e.target as HTMLImageElement
-                                                  const parent = target.parentElement
+                                                  const target = e.target as HTMLImageElement;
+                                                  const parent = target.parentElement;
                                                   if (parent) {
-                                                    const fallbackDiv = document.createElement("div")
+                                                    const fallbackDiv = document.createElement("div");
                                                     fallbackDiv.className =
-                                                      "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs"
-                                                    fallbackDiv.textContent = provider.provider?.charAt(0) || "-"
-                                                    parent.replaceChild(fallbackDiv, target)
+                                                      "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
+                                                    fallbackDiv.textContent = provider.provider?.charAt(0) || "-";
+                                                    parent.replaceChild(fallbackDiv, target);
                                                   }
                                                 }}
                                               />
@@ -755,22 +755,22 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         accessToken={accessToken}
       />
     </div>
-  )
-}
+  );
+};
 
 // Add this helper function to process model-specific activity data
 const getModelActivityData = (userSpendData: { results: DailyData[]; metadata: any }) => {
   const modelData: {
     [key: string]: {
-      total_requests: number
-      total_tokens: number
+      total_requests: number;
+      total_tokens: number;
       daily_data: Array<{
-        date: string
-        api_requests: number
-        total_tokens: number
-      }>
-    }
-  } = {}
+        date: string;
+        api_requests: number;
+        total_tokens: number;
+      }>;
+    };
+  } = {};
 
   userSpendData.results.forEach((day: DailyData) => {
     Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
@@ -779,20 +779,20 @@ const getModelActivityData = (userSpendData: { results: DailyData[]; metadata: a
           total_requests: 0,
           total_tokens: 0,
           daily_data: [],
-        }
+        };
       }
 
-      modelData[model].total_requests += metrics.metrics.api_requests
-      modelData[model].total_tokens += metrics.metrics.total_tokens
+      modelData[model].total_requests += metrics.metrics.api_requests;
+      modelData[model].total_tokens += metrics.metrics.total_tokens;
       modelData[model].daily_data.push({
         date: day.date,
         api_requests: metrics.metrics.api_requests,
         total_tokens: metrics.metrics.total_tokens,
-      })
-    })
-  })
+      });
+    });
+  });
 
-  return modelData
-}
+  return modelData;
+};
 
-export default NewUsagePage
+export default NewUsagePage;
