@@ -2849,6 +2849,79 @@ async def list_keys(
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
+@router.get(
+    "/key/aliases",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def key_aliases() -> Dict[str, List[str]]:
+    """
+    Lists all key aliases
+
+    Returns:
+        {
+            "aliases": List[str]
+        }
+    """
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        verbose_proxy_logger.debug("Entering key_aliases function")
+
+        if prisma_client is None:
+            verbose_proxy_logger.error("Database not connected")
+            raise Exception("Database not connected")
+
+        where: Dict[str, Any] = {}
+        try:
+            where.update(_get_condition_to_filter_out_ui_session_tokens())
+        except NameError:
+            # Helper may not exist in some builds; ignore if missing
+            pass
+
+        rows = await prisma_client.db.litellm_verificationtoken.find_many(
+            where=where,
+            order=[{"key_alias": "asc"}],
+        )
+
+        seen = set()
+        aliases: List[str] = []
+        for row in rows:
+            alias = getattr(row, "key_alias", None)
+            if alias is None and isinstance(row, dict):
+                alias = row.get("key_alias")
+
+            if not alias:
+                continue
+
+            alias_str = str(alias).strip()
+            if alias_str and alias_str not in seen:
+                seen.add(alias_str)
+                aliases.append(alias_str)
+
+        verbose_proxy_logger.debug(f"Returning {len(aliases)} key aliases")
+
+        return {"aliases": aliases}
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error in key_aliases: {e}")
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"error({str(e)})"),
+                type=ProxyErrorTypes.internal_server_error,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type=ProxyErrorTypes.internal_server_error,
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
 
 def _validate_sort_params(
     sort_by: Optional[str], sort_order: str
