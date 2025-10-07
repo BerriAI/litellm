@@ -2983,7 +2983,7 @@ jobs:
 
       - run:
           name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          command: docker build -t my-app:latest -f ./docker/Dockerfile.alpine .
       - run:
           name: Run Docker container
           command: |
