@@ -39,7 +39,7 @@ RUN pip install dist/*.whl
 
 # Optional: install dependencies as wheels if requirements.txt exists
 # Comment this out if no requirements.txt
-# RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
 # Ensure pyjwt is used, not jwt
 RUN pip uninstall jwt -y || true
