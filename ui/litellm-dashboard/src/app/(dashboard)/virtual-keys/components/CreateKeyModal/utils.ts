@@ -1,5 +1,5 @@
 import { mapDisplayToInternalNames } from "@/components/callback_info_helpers";
-import { ModelAliases } from "@/app/dashboard/virtual-keys/components/CreateKeyModal/types";
+import { ModelAliases } from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/types";
 
 export const getPredefinedTags = (data: any[] | null) => {
   let allTags = [];

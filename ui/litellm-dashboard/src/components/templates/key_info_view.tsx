@@ -50,7 +50,7 @@ interface KeyInfoViewProps {
 /**
  * ─────────────────────────────────────────────────────────────────────────
  * @deprecated
- * This component is being DEPRECATED in favor of src/app/dashboard/virtual-keys/components/KeyInfoView.tsx
+ * This component is being DEPRECATED in favor of src/app/(dashboard)/virtual-keys/components/KeyInfoView.tsx
  * Please contribute to the new refactor.
  * ─────────────────────────────────────────────────────────────────────────
  */

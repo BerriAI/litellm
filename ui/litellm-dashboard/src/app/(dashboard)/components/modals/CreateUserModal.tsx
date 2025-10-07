@@ -29,9 +29,9 @@ import {
 } from "@/components/networking";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import BulkCreateUsersButton from "@/components/bulk_create_users_button";
-import { fetchTeams } from "@/app/dashboard/virtual-keys/networking";
-import useTeams from "@/app/dashboard/virtual-keys/hooks/useTeams";
-import useAuthorized from "@/app/dashboard/hooks/useAuthorized";
+import { fetchTeams } from "@/app/(dashboard)/virtual-keys/networking";
+import useTeams from "@/app/(dashboard)/virtual-keys/hooks/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 // Helper function to generate UUID compatible across all environments
 const generateUUID = (): string => {

@@ -46,6 +46,21 @@ interface MenuItem {
   icon?: React.ReactNode;
 }
 
+/** ---------- Base URL helpers ---------- */
+/** Normalizes NEXT_PUBLIC_BASE_URL into either "" or "/something" (no trailing slash). */
+const getBasePath = () => {
+  const raw = process.env.NEXT_PUBLIC_BASE_URL ?? "";
+  const trimmed = raw.replace(/^\/+|\/+$/g, ""); // strip leading/trailing slashes
+  return trimmed ? `/${trimmed}` : "";
+};
+
+/** Joins base path with a relative path like "virtual-keys" or "/virtual-keys" -> "/base/virtual-keys" */
+const withBase = (relativePath: string) => {
+  const base = getBasePath(); // "" or "/ui" (no trailing slash)
+  const rel = relativePath.replace(/^\/+/, ""); // drop any leading slash
+  return `${base}/${rel}`.replace(/\/{2,}/g, "/"); // collapse accidental doubles
+};
+
 const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelectedKey, collapsed = false }) => {
   const menuItems: MenuItem[] = [
     { key: "1", page: "api-keys", label: "Virtual Keys", icon: <KeyOutlined style={{ fontSize: 18 }} /> },
@@ -217,8 +232,11 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
     return "1";
   };
 
+  // Match Virtual Keys path with base prefix (e.g., "/virtual-keys" or "/ui/virtual-keys")
+  const virtualKeysPath = withBase("virtual-keys");
+
   const selectedMenuKey =
-    pathname === "/dashboard/virtual-keys"
+    pathname === virtualKeysPath
       ? "1"
       : pageParam
         ? findMenuItemKey(pageParam)
@@ -226,16 +244,19 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
           ? findMenuItemKey(defaultSelectedKey)
           : "1";
 
-  // Root-only routing helper: always replace everything after the domain
-  const rootWithPage = (p: string) => ({ pathname: "/", query: { page: p } });
+  // Root-only routing helper: always replace everything after the domain, honoring base path
+  const rootWithPage = (p: string) => ({
+    pathname: getBasePath() || "/",
+    query: { page: p },
+  });
 
   // Convert to AntD Menu items:
-  // - "Virtual Keys" still routes to /virtual-keys
-  // - All other items (and children) route to "/?page=<page>"
+  // - "Virtual Keys" routes to "/<BASE>/virtual-keys"
+  // - All other items (and children) route to "/<BASE>/?page=<page>"
   const antdItems = filteredMenuItems.map((item) => {
     const isVirtualKeys = item.key === "1";
     const label = isVirtualKeys ? (
-      <Link href="/virtual-keys">Virtual Keys</Link>
+      <Link href={withBase("virtual-keys")}>Virtual Keys</Link>
     ) : (
       <Link href={rootWithPage(item.page)}>{item.label}</Link>
     );
