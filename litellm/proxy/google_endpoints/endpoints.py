@@ -63,7 +63,7 @@ async def google_stream_generate_content(
     # call router
     if llm_router is None:
         raise HTTPException(status_code=500, detail="Router not initialized")
-    response = await llm_router.agenerate_content(**data)
+    response = await llm_router.agenerate_content_stream(**data)
 
     # Check if response is an async iterator (streaming response)
     if hasattr(response, "__aiter__"):
