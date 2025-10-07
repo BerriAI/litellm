@@ -209,7 +209,7 @@ These also support the `OPENAI_BASE_URL` environment variable, which can be used
 
 GPT-5 Pro is OpenAI's most advanced reasoning model with unique characteristics:
 
-- **Responses API Only**: GPT-5 Pro is only available through the `/v1/responses` endpoint, not `/v1/chat/completions`
+- **Responses API Only**: GPT-5 Pro is only available through the `/v1/responses` endpoint
 - **No Streaming**: Does not support streaming responses
 - **High Reasoning**: Designed for complex reasoning tasks with highest effort reasoning
 - **Context Window**: 400,000 tokens input, 272,000 tokens output
