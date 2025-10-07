@@ -68,6 +68,13 @@ async def anthropic_response(  # noqa: PLR0915
             version=version,
             proxy_config=proxy_config,
         )
+        
+        # Set litellm_call_id if not already set
+        if "litellm_call_id" not in data:
+            import uuid
+            data["litellm_call_id"] = request.headers.get(
+                "x-litellm-call-id", str(uuid.uuid4())
+            )
 
         # override with user settings, these are params passed via cli
         if user_temperature:
@@ -154,11 +161,12 @@ async def anthropic_response(  # noqa: PLR0915
 
         response = responses[1]
 
+        # Extract values from hidden_params for headers
         hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
-        response_cost = hidden_params.get("response_cost", None) or ""
+        model_id = hidden_params.get("model_id", "")
+        cache_key = hidden_params.get("cache_key", "") or ""
+        api_base = hidden_params.get("api_base", "") or ""
+        response_cost = hidden_params.get("response_cost", "") or ""
 
         ### ALERTING ###
         asyncio.create_task(
@@ -167,15 +175,15 @@ async def anthropic_response(  # noqa: PLR0915
             )
         )
 
-        verbose_proxy_logger.debug("final response: %s", response)
-
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=data.get("litellm_call_id"),
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
                 version=version,
+                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 response_cost=response_cost,
                 request_data=data,
                 hidden_params=hidden_params,
@@ -204,6 +212,14 @@ async def anthropic_response(  # noqa: PLR0915
         response = await proxy_logging_obj.post_call_success_hook(
             data=data, user_api_key_dict=user_api_key_dict, response=response # type: ignore
         )
+
+        # Extract additional headers from hooks (rate limiting, etc.)
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        additional_headers = hidden_params.get("additional_headers", {}) or {}
+        
+        # Merge additional headers with existing response headers
+        if additional_headers:
+            fastapi_response.headers.update(additional_headers)
 
         verbose_proxy_logger.debug("\nResponse from Litellm:\n{}".format(response))
         return response
