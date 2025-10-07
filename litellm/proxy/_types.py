@@ -10,6 +10,7 @@ from pydantic import (
     Field,
     Json,
     field_validator,
+    model_serializer,
     model_validator,
 )
 from typing_extensions import Required, TypedDict
@@ -767,6 +768,30 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     blocked: Optional[bool] = None
     aliases: Optional[dict] = {}
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+
+    @model_serializer(mode='wrap', when_used='always')
+    def _serialize_model(self, serializer, info):
+        """Convert empty collections to None for optional fields during serialization"""
+        data = serializer(self)
+        
+        # Dynamically identify optional collection fields and convert empty ones to None
+        for field_name, field_info in self.model_fields.items():
+            if field_name in data:
+                # Check if field is Optional (has None in annotation)
+                is_optional = field_info.annotation is not None and (
+                    hasattr(field_info.annotation, "__origin__") and 
+                    type(None) in getattr(field_info.annotation, "__args__", [])
+                )
+                
+                # Check if the value is a collection type (list, dict, set, tuple)
+                value = data[field_name]
+                is_collection = isinstance(value, (list, dict, set, tuple))
+                
+                # If it's optional and a collection and empty, set to None
+                if is_optional and is_collection and not value:
+                    data[field_name] = None
+        
+        return data
 
 
 class KeyRequestBase(GenerateRequestBase):
