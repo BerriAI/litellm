@@ -1813,3 +1813,95 @@ def test_check_team_key_model_specific_limits_rpm_overallocation():
         "Allocated RPM limit=800 + Key RPM limit=300 is greater than team RPM limit=1000"
         in str(exc_info.value.detail)
     )
+
+
+@pytest.mark.asyncio
+async def test_generate_key_with_object_permission():
+    """
+    Test that /key/generate correctly handles object_permission by:
+    1. Creating a record in litellm_objectpermissiontable
+    2. Passing the returned object_permission_id into the key insert payload
+    3. NOT passing the object_permission dict to the key table
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy._types import (
+        GenerateKeyRequest,
+        LiteLLM_ObjectPermissionBase,
+        LitellmUserRoles,
+    )
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _common_key_generation_helper,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.jsonify_object = lambda x: x
+
+    # Mock object permission creation
+    mock_object_perm_create = AsyncMock(
+        return_value=MagicMock(object_permission_id="objperm_key_456")
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = mock_object_perm_create
+
+    # Mock key insertion
+    mock_key_insert = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123",
+            litellm_budget_table=None,
+            created_at="2024-01-01T00:00:00Z",
+            updated_at="2024-01-01T00:00:00Z",
+        )
+    )
+    mock_prisma_client.insert_data = mock_key_insert
+
+    # Create request with object_permission
+    key_request = GenerateKeyRequest(
+        models=["gpt-4"],
+        object_permission=LiteLLM_ObjectPermissionBase(
+            vector_stores=["vector_store_1"],
+            mcp_servers=["mcp_server_1"],
+        ),
+    )
+
+    mock_admin_auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user",
+    )
+
+    # Patch the prisma_client and other dependencies
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.prisma_client",
+        mock_prisma_client,
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.llm_router", None
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.premium_user",
+        False,
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm_proxy_admin_name",
+        "admin",
+    ):
+        # Execute
+        result = await _common_key_generation_helper(
+            data=key_request,
+            user_api_key_dict=mock_admin_auth,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    # Verify object permission creation was called
+    mock_object_perm_create.assert_awaited_once()
+
+    # Verify key insertion was called
+    assert mock_key_insert.call_count == 1
+    key_insert_kwargs = mock_key_insert.call_args.kwargs
+    key_data = key_insert_kwargs["data"]
+
+    # Verify object_permission_id is in the key data
+    assert key_data.get("object_permission_id") == "objperm_key_456"
+
+    # Verify object_permission dict is NOT in the key data
+    assert "object_permission" not in key_data
