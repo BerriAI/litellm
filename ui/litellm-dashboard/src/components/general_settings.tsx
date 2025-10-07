@@ -325,14 +325,46 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
 
     console.log("router_settings", router_settings);
 
+    const numberKeys = new Set(["allowed_fails", "cooldown_time", "num_retries", "timeout", "retry_after"]);
+    const jsonKeys = new Set(["model_group_alias", "retry_policy"]);
+
+    const parseInputValue = (key: string, raw: string | undefined, fallback: unknown) => {
+      if (raw === undefined) return fallback;
+
+      const v = raw.trim();
+
+      if (v.toLowerCase() === "null") return null;
+
+      if (numberKeys.has(key)) {
+        const n = Number(v);
+        return Number.isNaN(n) ? fallback : n;
+      }
+
+      if (jsonKeys.has(key)) {
+        if (v === "") return null;
+        try {
+          return JSON.parse(v);
+        } catch {
+          return fallback;
+        }
+      }
+
+      if (v.toLowerCase() === "true") return true;
+      if (v.toLowerCase() === "false") return false;
+
+      return v;
+    };
+
     const updatedVariables = Object.fromEntries(
       Object.entries(router_settings)
         .map(([key, value]) => {
           if (key !== "routing_strategy_args" && key !== "routing_strategy") {
-            return [key, (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)?.value || value];
-          } else if (key == "routing_strategy") {
+            const inputEl = document.querySelector(`input[name="${key}"]`) as HTMLInputElement | null;
+            const parsed = parseInputValue(key, inputEl?.value, value);
+            return [key, parsed];
+          } else if (key === "routing_strategy") {
             return [key, selectedStrategy];
-          } else if (key == "routing_strategy_args" && selectedStrategy == "latency-based-routing") {
+          } else if (key === "routing_strategy_args" && selectedStrategy === "latency-based-routing") {
             let setRoutingStrategyArgs: routingStrategyArgs = {};
 
             const lowestLatencyBufferElement = document.querySelector(
