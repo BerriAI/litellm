@@ -21,6 +21,7 @@ import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 import litellm
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps        
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching import DualCache
@@ -837,7 +838,7 @@ async def generate_key_fn(
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
@@ -987,7 +988,7 @@ async def generate_service_account_key_fn(
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -1125,6 +1126,13 @@ async def _set_object_permission(
         return data_json
 
     if "object_permission" in data_json:
+        # Serialize mcp_tool_permissions JSON field to avoid GraphQL parsing issues
+        # (e.g., server IDs starting with "3e64" being interpreted as floats)
+        if "mcp_tool_permissions" in data_json["object_permission"]:
+            data_json["object_permission"]["mcp_tool_permissions"] = safe_dumps(
+                data_json["object_permission"]["mcp_tool_permissions"]
+            )
+        
         created_object_permission = (
             await prisma_client.db.litellm_objectpermissiontable.create(
                 data=data_json["object_permission"],
@@ -1300,7 +1308,7 @@ async def update_key_fn(
     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
     - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
     Example:

@@ -712,6 +712,7 @@ class ModelParams(LiteLLMPydanticObjectBase):
 class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_servers: Optional[List[str]] = None
     mcp_access_groups: Optional[List[str]] = None
+    mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
     vector_stores: Optional[List[str]] = None
 
 
@@ -1414,6 +1415,16 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     object_permission_id: str
     mcp_servers: Optional[List[str]] = []
     mcp_access_groups: Optional[List[str]] = []
+    mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
+    """
+    Mapping - server_id -> list of tools
+
+    Enforces allowed tools for a specific key/team/organization
+    {
+        "1234567890": ["tool_name_1", "tool_name_2"]
+    }
+    """
+    
     vector_stores: Optional[List[str]] = []
 
 

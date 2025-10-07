@@ -681,6 +681,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     />
                   </Form.Item>
 
+                  {/* Hidden field to register mcp_tool_permissions with the form */}
+                  <Form.Item name="mcp_tool_permissions" initialValue={{}} hidden>
+                    <Input type="hidden" />
+                  </Form.Item>
+
                   <Form.Item 
                     noStyle
                     shouldUpdate={(prevValues, currentValues) => 
@@ -694,7 +699,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           accessToken={accessToken || ""}
                           selectedServers={form.getFieldValue("mcp_servers_and_groups")?.servers || []}
                           toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
-                          onChange={(toolPerms) => form.setFieldValue("mcp_tool_permissions", toolPerms)}
+                          onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
                         />
                       </div>
                     )}
