@@ -64,8 +64,8 @@ describe("MCPServerPermissions", () => {
 
   it("should display expandable tool permissions for servers when they exist", async () => {
     /**
-     * Tests that tool permissions can be expanded/collapsed for servers
-     * and that the tool count badge is displayed correctly.
+     * Tests that tool permissions can be expanded/collapsed by clicking the server row
+     * and that the tool count is displayed correctly.
      */
     const mockServers = [
       {
@@ -95,7 +95,7 @@ describe("MCPServerPermissions", () => {
       expect(screen.getByText(/DW_MCP/)).toBeInTheDocument();
     });
 
-    // Verify tool count button is shown
+    // Verify tool count is shown
     expect(screen.getByText("3 tools")).toBeInTheDocument();
 
     // Tools should NOT be visible initially (collapsed state)
@@ -103,9 +103,9 @@ describe("MCPServerPermissions", () => {
     expect(screen.queryByText("read_wiki_contents")).not.toBeInTheDocument();
     expect(screen.queryByText("ask_question")).not.toBeInTheDocument();
 
-    // Click to expand
-    const expandButton = screen.getByRole("button", { name: /expand tools/i });
-    await userEvent.click(expandButton);
+    // Click the server row to expand
+    const serverRow = screen.getByText(/DW_MCP/).closest("div");
+    await userEvent.click(serverRow!);
 
     // Now tools should be visible
     await waitFor(() => {
@@ -114,9 +114,8 @@ describe("MCPServerPermissions", () => {
       expect(screen.getByText("ask_question")).toBeInTheDocument();
     });
 
-    // Click to collapse
-    const collapseButton = screen.getByRole("button", { name: /collapse tools/i });
-    await userEvent.click(collapseButton);
+    // Click the server row again to collapse
+    await userEvent.click(serverRow!);
 
     // Tools should be hidden again
     await waitFor(() => {
@@ -153,11 +152,8 @@ describe("MCPServerPermissions", () => {
       expect(screen.getByText(/DW_MCP/)).toBeInTheDocument();
     });
 
-    // Verify no expand button is shown
-    expect(screen.queryByRole("button", { name: /expand tools/i })).not.toBeInTheDocument();
-    
-    // Verify no tool count badge is shown
-    expect(screen.queryByText(/tools/)).not.toBeInTheDocument();
+    // Verify no tool count is shown (since there are no tools)
+    expect(screen.queryByText(/tool/)).not.toBeInTheDocument();
   });
 
   it("should display access groups correctly", async () => {
@@ -291,14 +287,24 @@ describe("MCPServerPermissions", () => {
       expect(screen.getByText(/Test Server/)).toBeInTheDocument();
     });
 
-    // Verify "Allowed Tools:" appears twice (once for each server)
-    expect(screen.getAllByText("Allowed Tools:")).toHaveLength(2);
+    // Verify both servers show tool counts
+    expect(screen.getByText("2 tools")).toBeInTheDocument(); // Server 1
+    expect(screen.getByText("1 tool")).toBeInTheDocument(); // Server 2
 
-    // Verify server 1 tools
-    expect(screen.getByText("read_wiki_structure")).toBeInTheDocument();
-    expect(screen.getByText("read_wiki_contents")).toBeInTheDocument();
+    // Expand both servers by clicking their rows
+    const server1Row = screen.getByText(/DW_MCP/).closest("div");
+    const server2Row = screen.getByText(/Test Server/).closest("div");
+    
+    await userEvent.click(server1Row!); // Expand server 1
+    await userEvent.click(server2Row!); // Expand server 2
 
-    // Verify server 2 tools
+    // Verify server 1 tools are now visible
+    await waitFor(() => {
+      expect(screen.getByText("read_wiki_structure")).toBeInTheDocument();
+      expect(screen.getByText("read_wiki_contents")).toBeInTheDocument();
+    });
+
+    // Verify server 2 tools are now visible
     expect(screen.getByText("ask_question")).toBeInTheDocument();
   });
 
