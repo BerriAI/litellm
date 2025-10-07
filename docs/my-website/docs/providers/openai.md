@@ -166,6 +166,7 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 | gpt-5 | `response = completion(model="gpt-5", messages=messages)` |
 | gpt-5-mini | `response = completion(model="gpt-5-mini", messages=messages)` |
 | gpt-5-nano | `response = completion(model="gpt-5-nano", messages=messages)` |
+| gpt-5-pro | `response = completion(model="gpt-5-pro", messages=messages)` |
 | gpt-5-chat | `response = completion(model="gpt-5-chat", messages=messages)` |
 | gpt-5-chat-latest | `response = completion(model="gpt-5-chat-latest", messages=messages)` |
 | gpt-5-2025-08-07 | `response = completion(model="gpt-5-2025-08-07", messages=messages)` |
@@ -203,6 +204,26 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 
 
 These also support the `OPENAI_BASE_URL` environment variable, which can be used to specify a custom API endpoint.
+
+### GPT-5 Pro Special Notes
+
+GPT-5 Pro is OpenAI's most advanced reasoning model with unique characteristics:
+
+- **Responses API Only**: GPT-5 Pro is only available through the `/v1/responses` endpoint, not `/v1/chat/completions`
+- **No Streaming**: Does not support streaming responses
+- **High Reasoning**: Designed for complex reasoning tasks with highest effort reasoning
+- **Context Window**: 400,000 tokens input, 272,000 tokens output
+- **Pricing**: $15.00 input / $120.00 output per 1M tokens (Standard), $7.50 input / $60.00 output (Batch)
+- **Tools**: Supports Web Search, File Search, Image Generation, MCP (but not Code Interpreter or Computer Use)
+- **Modalities**: Text and Image input, Text output only
+
+```python
+# GPT-5 Pro usage example
+response = completion(
+    model="gpt-5-pro", 
+    messages=[{"role": "user", "content": "Solve this complex reasoning problem..."}]
+)
+```
 
 ## OpenAI Vision Models 
 | Model Name            | Function Call                                                   |
