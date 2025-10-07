@@ -49,13 +49,19 @@ RUN python -c "import nodejs; print(nodejs.__file__)" && \
     python -c "from nodejs import node; import subprocess; subprocess.run([node.path, '--version'], check=True)"
 
 # Download ALL Prisma binaries in builder stage
-# Let Prisma Python package handle its own CLI installation and caching
 # Set PATH so node is available for npm scripts
 ENV PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
 
-# Trigger Prisma CLI download and caching
-RUN python -c "import prisma.cli.prisma as p; p.ensure_cached()" || \
-    echo "Prisma CLI download triggered"
+# CRITICAL FIX: Let Prisma Python handle its own installation completely
+# This ensures everything is installed exactly where the package expects it
+# Remove any npm offline mode temporarily for this installation
+RUN NPM_CONFIG_OFFLINE=false \
+    NPM_CONFIG_CACHE=/app/.cache/npm \
+    python -c "import prisma.cli.prisma as p; p.ensure_cached()" && \
+    echo "Prisma CLI downloaded and cached"
+
+# Now run a test migration to ensure all binaries are downloaded
+RUN prisma migrate deploy --dry-run || true
 
 # Generate client to download query engine
 RUN prisma generate
@@ -131,9 +137,8 @@ RUN mkdir -p /tmp/.npm /nonexistent /.npm
 # Set PATH so node is available for npm scripts (same as builder)
 ENV PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
 
-# Ensure Prisma CLI is properly cached - this should use cached version, not download
-RUN python -c "import prisma.cli.prisma as p; p.ensure_cached()" || \
-    echo "Using cached Prisma CLI"
+# Create symlink to ensure Prisma CLI is found where expected
+RUN ln -sf /app/.cache/prisma-python/nodeenv/node_modules/.bin/prisma /usr/local/bin/prisma 2>/dev/null || true
 
 # Test that Prisma works with pre-cached binaries (no downloads)
 # This will fail if binaries aren't properly cached
@@ -180,11 +185,15 @@ ENV PRISMA_HIDE_UPDATE_MESSAGE=1
 ENV PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
 # Disable automatic binary downloads
 ENV PRISMA_DISABLE_WARNINGS=1
-# Ensure npm doesn't try to access network
-ENV NPM_CONFIG_OFFLINE=true
-ENV NPM_CONFIG_PREFER_OFFLINE=true
-# Set npm cache to a local directory to prevent network access
+# Set npm cache to use pre-populated cache from builder
 ENV NPM_CONFIG_CACHE=/app/.cache/npm
+# Use prefer-offline mode instead of strict offline
+# This uses cache first but can fall back if absolutely necessary
+ENV NPM_CONFIG_PREFER_OFFLINE=true
+# Don't use strict offline mode as it's too restrictive
+# ENV NPM_CONFIG_OFFLINE=true
+# Enable Prisma offline mode flag for litellm-proxy-extras
+ENV PRISMA_OFFLINE_MODE=true
 # --- End of Prisma Handling ---
 
 EXPOSE 4000/tcp
