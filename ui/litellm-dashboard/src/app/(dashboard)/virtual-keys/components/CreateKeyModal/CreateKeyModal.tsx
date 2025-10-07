@@ -5,7 +5,7 @@ import { Text } from "@tremor/react";
 import { keyCreateCall, keyCreateServiceAccountCall } from "@/components/networking";
 import React, { useEffect, useState } from "react";
 import { Team } from "@/components/key_team_helpers/key_list";
-import SaveKeyModal from "@/app/dashboard/virtual-keys/components/SaveKeyModal";
+import SaveKeyModal from "@/app/(dashboard)/virtual-keys/components/SaveKeyModal";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import {
   useGuardrailsAndPrompts,
@@ -13,15 +13,15 @@ import {
   useTeamModels,
   useUserModels,
   useUserSearch,
-} from "@/app/dashboard/virtual-keys/components/CreateKeyModal/hooks";
-import OwnershipSection from "@/app/dashboard/virtual-keys/components/CreateKeyModal/CreateKeyForm/OwnershipSection";
-import KeyDetailsSection from "@/app/dashboard/virtual-keys/components/CreateKeyModal/CreateKeyForm/KeyDetailsSection";
-import OptionalSettingsSection from "@/app/dashboard/virtual-keys/components/CreateKeyModal/CreateKeyForm/OptionalSettingsSection";
-import { ModelAliases } from "@/app/dashboard/virtual-keys/components/CreateKeyModal/types";
-import { getPredefinedTags, prepareFormValues } from "@/app/dashboard/virtual-keys/components/CreateKeyModal/utils";
-import { fetchTeams } from "@/app/dashboard/virtual-keys/networking";
-import useTeams from "@/app/dashboard/virtual-keys/hooks/useTeams";
-import useAuthorized from "@/app/dashboard/hooks/useAuthorized";
+} from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/hooks";
+import OwnershipSection from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/CreateKeyForm/OwnershipSection";
+import KeyDetailsSection from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/CreateKeyForm/KeyDetailsSection";
+import OptionalSettingsSection from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/CreateKeyForm/OptionalSettingsSection";
+import { ModelAliases } from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/types";
+import { getPredefinedTags, prepareFormValues } from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/utils";
+import { fetchTeams } from "@/app/(dashboard)/virtual-keys/networking";
+import useTeams from "@/app/(dashboard)/virtual-keys/hooks/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export interface CreateKeyModalProps {
   isModalVisible: boolean;

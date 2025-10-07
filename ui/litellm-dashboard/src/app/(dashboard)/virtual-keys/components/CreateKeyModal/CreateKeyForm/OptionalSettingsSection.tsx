@@ -17,7 +17,7 @@ import SchemaFormFields from "@/components/common_components/check_openapi_schem
 import { Team } from "@/components/key_team_helpers/key_list";
 import React from "react";
 import { DefaultOptionType } from "rc-select/lib/Select";
-import { ModelAliases } from "@/app/dashboard/virtual-keys/components/CreateKeyModal/types";
+import { ModelAliases } from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/types";
 
 export interface OptionalSettingsSectionProps {
   form: FormInstance;

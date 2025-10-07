@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { fetchGuardrails, fetchPrompts } from "@/app/dashboard/virtual-keys/components/CreateKeyModal/networking";
-import useAuthorized from "@/app/dashboard/hooks/useAuthorized";
+import { fetchGuardrails, fetchPrompts } from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/networking";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export const useGuardrailsAndPrompts = () => {
   const [guardrails, setGuardrails] = useState<string[]>([]);

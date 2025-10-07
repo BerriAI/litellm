@@ -3,8 +3,8 @@
 import React from "react";
 import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
-import Sidebar2 from "@/app/dashboard/components/Sidebar2";
-import useAuthorized from "@/app/dashboard/hooks/useAuthorized";
+import Sidebar2 from "@/app/(dashboard)/components/Sidebar2";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const { accessToken, userRole } = useAuthorized();

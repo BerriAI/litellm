@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { getUserModelNames } from "@/app/dashboard/virtual-keys/components/CreateKeyModal/networking";
-import useAuthorized from "@/app/dashboard/hooks/useAuthorized";
+import { getUserModelNames } from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/networking";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export const useUserModels = () => {
   const { userId: userID, userRole, accessToken } = useAuthorized();
