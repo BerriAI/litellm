@@ -499,11 +499,13 @@ if MCP_AVAILABLE:
                 )
                 
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
-                filtered_tools = filter_tools_by_key_team_permissions(
-                    tools=tools,
-                    server_id=server.server_id,
+                
+                filtered_tools = await filter_tools_by_key_team_permissions(
+                    tools=filtered_tools,
+                    server_id=server_id,
                     user_api_key_auth=user_api_key_auth,
                 )
+                
                 all_tools.extend(filtered_tools)
                 
                 verbose_logger.debug(
@@ -526,23 +528,15 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth],
     ) -> List[MCPTool]:
         """Filter tools based on key/team mcp_tool_permissions."""
-        if not user_api_key_auth or not user_api_key_auth.object_permission:
-            return tools
+        # Filter by key/team tool-level permissions
+        allowed_tool_names = await MCPRequestHandler.get_allowed_tools_for_server(
+            server_id=server_id,
+            user_api_key_auth=user_api_key_auth,
+        )
+        if allowed_tool_names is not None:
+            filtered_tools = [t for t in tools if t.name in allowed_tool_names]
         
-        mcp_tool_permissions = user_api_key_auth.object_permission.mcp_tool_permissions
-        
-        if not mcp_tool_permissions or not isinstance(mcp_tool_permissions, dict):
-            return tools
-        
-        if server_id not in mcp_tool_permissions:
-            return tools
-        
-        allowed_tools = mcp_tool_permissions[server_id]
-        
-        if not allowed_tools or not isinstance(allowed_tools, list):
-            return tools
-        
-        return [t for t in tools if t.name in allowed_tools]
+        return filtered_tools
 
     async def _list_mcp_tools(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
