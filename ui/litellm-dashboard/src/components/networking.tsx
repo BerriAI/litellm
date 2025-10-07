@@ -3102,6 +3102,41 @@ export const keyListCall = async (
   }
 };
 
+export const keyAliasesCall = async (
+  accessToken: String
+): Promise<{ aliases: string[] }> => {
+  /**
+   * Get all key aliases from proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/key/aliases` : `/key/aliases`;
+    console.log("in keyAliasesCall");
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("/key/aliases API Response:", data);
+    return data; // { aliases: string[] }
+  } catch (error) {
+    console.error("Failed to fetch key aliases:", error);
+    throw error;
+  }
+};
+
+
 export const spendUsersCall = async (accessToken: String, userID: String) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/spend/users` : `/spend/users`;
