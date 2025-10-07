@@ -665,10 +665,6 @@ class BaseAzureLLM(BaseOpenAILLM):
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
 
-        # If api-key is already in headers, preserve it
-        if "api-key" in headers:
-            return headers
-
         api_key = (
             litellm_params.api_key
             or litellm.api_key
@@ -693,7 +689,7 @@ class BaseAzureLLM(BaseOpenAILLM):
     def _get_base_azure_url(
         api_base: Optional[str],
         litellm_params: Optional[Union[GenericLiteLLMParams, Dict[str, Any]]],
-        route: Literal["/openai/responses", "/openai/vector_stores"],
+        route: Union[Literal["/openai/responses", "/openai/vector_stores"], str],
         default_api_version: Optional[Union[str, Literal["latest", "preview"]]] = None,
     ) -> str:
         """

@@ -532,9 +532,6 @@ def get_dynamic_callbacks(
     return returned_callbacks
 
 
-
-
-
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -802,7 +799,7 @@ def function_setup(  # noqa: PLR0915
             call_type=call_type,
         ):
             stream = True
-        logging_obj = get_litellm_logging_class()( # Victim for object pool
+        logging_obj = get_litellm_logging_class()(  # Victim for object pool
             model=model,  # type: ignore
             messages=messages,
             stream=stream,
@@ -1429,7 +1426,8 @@ def client(original_function):  # noqa: PLR0915
             if _caching_handler_response is not None:
                 if (
                     _caching_handler_response.cached_result is not None
-                    and _caching_handler_response.final_embedding_cached_response is None
+                    and _caching_handler_response.final_embedding_cached_response
+                    is None
                 ):
                     return _caching_handler_response.cached_result
 
@@ -1697,7 +1695,6 @@ def _is_streaming_request(
         return True
     #########################################################
     return False
-
 
 
 def _select_tokenizer(
@@ -4883,16 +4880,24 @@ def _get_model_info_helper(  # noqa: PLR0915
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
                 input_cost_per_token=_input_cost_per_token,
-                input_cost_per_token_flex=_model_info.get("input_cost_per_token_flex", None),
-                input_cost_per_token_priority=_model_info.get("input_cost_per_token_priority", None),
+                input_cost_per_token_flex=_model_info.get(
+                    "input_cost_per_token_flex", None
+                ),
+                input_cost_per_token_priority=_model_info.get(
+                    "input_cost_per_token_priority", None
+                ),
                 cache_creation_input_token_cost=_model_info.get(
                     "cache_creation_input_token_cost", None
                 ),
                 cache_read_input_token_cost=_model_info.get(
                     "cache_read_input_token_cost", None
                 ),
-                cache_read_input_token_cost_flex=_model_info.get("cache_read_input_token_cost_flex", None),
-                cache_read_input_token_cost_priority=_model_info.get("cache_read_input_token_cost_priority", None),
+                cache_read_input_token_cost_flex=_model_info.get(
+                    "cache_read_input_token_cost_flex", None
+                ),
+                cache_read_input_token_cost_priority=_model_info.get(
+                    "cache_read_input_token_cost_priority", None
+                ),
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
                 ),
@@ -4917,8 +4922,12 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "output_cost_per_token_batches"
                 ),
                 output_cost_per_token=_output_cost_per_token,
-                output_cost_per_token_flex=_model_info.get("output_cost_per_token_flex", None),
-                output_cost_per_token_priority=_model_info.get("output_cost_per_token_priority", None),
+                output_cost_per_token_flex=_model_info.get(
+                    "output_cost_per_token_flex", None
+                ),
+                output_cost_per_token_priority=_model_info.get(
+                    "output_cost_per_token_priority", None
+                ),
                 output_cost_per_audio_token=_model_info.get(
                     "output_cost_per_audio_token", None
                 ),
@@ -6450,7 +6459,7 @@ def get_valid_models(
 
     try:
         ################################
-        # init litellm_params 
+        # init litellm_params
         #################################
         if litellm_params is None:
             litellm_params = LiteLLM_Params(model="")
@@ -6459,7 +6468,7 @@ def get_valid_models(
         if api_base is not None:
             litellm_params.api_base = api_base
         #################################
-        
+
         check_provider_endpoint = (
             check_provider_endpoint or litellm.check_provider_endpoint
         )
@@ -6934,7 +6943,10 @@ class ProviderConfigManager:
             return litellm.LlamaAPIConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_OPENAI == provider:
             return litellm.OpenAITextCompletionConfig()
-        elif litellm.LlmProviders.COHERE_CHAT == provider or litellm.LlmProviders.COHERE == provider:
+        elif (
+            litellm.LlmProviders.COHERE_CHAT == provider
+            or litellm.LlmProviders.COHERE == provider
+        ):
             return litellm.CohereChatConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
             return litellm.SnowflakeConfig()
@@ -7361,7 +7373,12 @@ class ProviderConfigManager:
             )
 
             return VLLMPassthroughConfig()
+        elif LlmProviders.AZURE == provider:
+            from litellm.llms.azure.passthrough.transformation import (
+                AzurePassthroughConfig,
+            )
 
+            return AzurePassthroughConfig()
         return None
 
     @staticmethod
@@ -7548,9 +7565,7 @@ class ProviderConfigManager:
 
             return RecraftImageEditConfig()
         elif LlmProviders.AZURE_AI == provider:
-            from litellm.llms.azure_ai.image_edit import (
-                get_azure_ai_image_edit_config,
-            )
+            from litellm.llms.azure_ai.image_edit import get_azure_ai_image_edit_config
 
             return get_azure_ai_image_edit_config(model)
         elif LlmProviders.LITELLM_PROXY == provider:
@@ -7605,7 +7620,9 @@ def get_end_user_id_for_cost_tracking(
 
     service_type: "litellm_logging" or "prometheus" - used to allow prometheus only disable cost tracking.
     """
-    _metadata = cast(dict, get_litellm_metadata_from_kwargs(dict(litellm_params=litellm_params)))
+    _metadata = cast(
+        dict, get_litellm_metadata_from_kwargs(dict(litellm_params=litellm_params))
+    )
 
     end_user_id = cast(
         Optional[str],
