@@ -7,9 +7,7 @@ import { Organization } from "../networking";
  * @param accessToken The access token for API authentication
  * @returns Array of all unique key aliases
  */
-export const fetchAllKeyAliases = async (
-  accessToken: string | null
-): Promise<string[]> => {
+export const fetchAllKeyAliases = async (accessToken: string | null): Promise<string[]> => {
   if (!accessToken) return [];
 
   try {
@@ -29,10 +27,7 @@ export const fetchAllKeyAliases = async (
  * @param organizationId Optional organization ID to filter teams
  * @returns Array of all teams
  */
-export const fetchAllTeams = async (
-  accessToken: string | null,
-  organizationId?: string | null
-): Promise<Team[]> => {
+export const fetchAllTeams = async (accessToken: string | null, organizationId?: string | null): Promise<Team[]> => {
   if (!accessToken) return [];
 
   try {
@@ -41,11 +36,7 @@ export const fetchAllTeams = async (
     let hasMorePages = true;
 
     while (hasMorePages) {
-      const response = await teamListCall(
-        accessToken,
-        organizationId || null,
-        null
-      );
+      const response = await teamListCall(accessToken, organizationId || null, null);
 
       // Add teams from this page
       allTeams = [...allTeams, ...response];
@@ -70,9 +61,7 @@ export const fetchAllTeams = async (
  * @param accessToken The access token for API authentication
  * @returns Array of all organizations
  */
-export const fetchAllOrganizations = async (
-  accessToken: string | null
-): Promise<Organization[]> => {
+export const fetchAllOrganizations = async (accessToken: string | null): Promise<Organization[]> => {
   if (!accessToken) return [];
 
   try {
