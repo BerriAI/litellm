@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Text, Badge } from "@tremor/react";
-import { ServerIcon } from "@heroicons/react/outline";
+import { ServerIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { Tooltip } from "antd";
 import { fetchMCPServers } from "../networking";
 import { MCPServer } from "../mcp_tools/types";
@@ -8,12 +8,31 @@ import { MCPServer } from "../mcp_tools/types";
 interface MCPServerPermissionsProps {
   mcpServers: string[];
   mcpAccessGroups?: string[];
+  mcpToolPermissions?: Record<string, string[]>;
   accessToken?: string | null;
 }
 
-export function MCPServerPermissions({ mcpServers, mcpAccessGroups = [], accessToken }: MCPServerPermissionsProps) {
+export function MCPServerPermissions({ 
+  mcpServers, 
+  mcpAccessGroups = [], 
+  mcpToolPermissions = {},
+  accessToken 
+}: MCPServerPermissionsProps) {
   const [mcpServerDetails, setMCPServerDetails] = useState<MCPServer[]>([]);
   const [accessGroupNames, setAccessGroupNames] = useState<string[]>([]);
+  const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set());
+
+  const toggleServerExpansion = (serverId: string) => {
+    setExpandedServers((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(serverId)) {
+        newSet.delete(serverId);
+      } else {
+        newSet.add(serverId);
+      }
+      return newSet;
+    });
+  };
 
   // Fetch MCP server details when component mounts
   useEffect(() => {
@@ -81,25 +100,61 @@ export function MCPServerPermissions({ mcpServers, mcpAccessGroups = [], accessT
         </Badge>
       </div>
       {totalCount > 0 ? (
-        <div className="flex flex-wrap gap-2">
-          {mergedItems.map((item, index) =>
-            item.type === "server" ? (
-              <Tooltip key={index} title={`Full ID: ${item.value}`} placement="top">
-                <div className="inline-flex items-center px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm font-medium cursor-help">
-                  {getMCPServerDisplayName(item.value)}
+        <div className="space-y-2">
+          {mergedItems.map((item, index) => {
+            const toolsForServer = item.type === "server" ? mcpToolPermissions[item.value] : undefined;
+            const hasToolRestrictions = toolsForServer && toolsForServer.length > 0;
+            const isExpanded = expandedServers.has(item.value);
+            
+            return (
+              <div key={index} className="space-y-1">
+                <div className="flex items-center gap-2">
+                  {item.type === "server" ? (
+                    <>
+                      <Tooltip title={`Full ID: ${item.value}`} placement="top">
+                        <div className="inline-flex items-center px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm font-medium cursor-help">
+                          {getMCPServerDisplayName(item.value)}
+                        </div>
+                      </Tooltip>
+                      {hasToolRestrictions && (
+                        <button
+                          onClick={() => toggleServerExpansion(item.value)}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-100 hover:bg-blue-200 text-blue-700 text-xs font-medium transition-colors cursor-pointer"
+                          aria-label={isExpanded ? "Collapse tools" : "Expand tools"}
+                        >
+                          {isExpanded ? (
+                            <ChevronDownIcon className="h-3 w-3" />
+                          ) : (
+                            <ChevronRightIcon className="h-3 w-3" />
+                          )}
+                          {toolsForServer.length} {toolsForServer.length === 1 ? "tool" : "tools"}
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <div className="inline-flex items-center px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm font-medium">
+                      <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                      {getAccessGroupDisplayName(item.value)}{" "}
+                      <span className="ml-1 text-xs text-green-500">(Access Group)</span>
+                    </div>
+                  )}
                 </div>
-              </Tooltip>
-            ) : (
-              <div
-                key={index}
-                className="inline-flex items-center px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm font-medium"
-              >
-                <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
-                {getAccessGroupDisplayName(item.value)}{" "}
-                <span className="ml-1 text-xs text-green-500">(Access Group)</span>
+                
+                {/* Show tool permissions if expanded */}
+                {hasToolRestrictions && isExpanded && (
+                  <div className="ml-4 pl-4 border-l-2 border-blue-200 py-2">
+                    <div className="flex flex-wrap gap-1">
+                      {toolsForServer.map((tool, toolIndex) => (
+                        <Badge key={toolIndex} color="blue" size="xs">
+                          {tool}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
-            ),
-          )}
+            );
+          })}
         </div>
       ) : (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
