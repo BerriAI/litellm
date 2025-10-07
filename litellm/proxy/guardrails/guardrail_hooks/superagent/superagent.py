@@ -232,7 +232,7 @@ class SuperAgentGuardrail(CustomGuardrail):
             return data
 
         start_time = datetime.now()
-        guardrail_status: Literal["success", "failure", "blocked"] = "success"
+        guardrail_status: Literal["success", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"] = "success"
         decision_payload: Union[str, Dict[str, Any]] = "pass"
 
         try:
@@ -245,7 +245,7 @@ class SuperAgentGuardrail(CustomGuardrail):
             )
 
             if decision == "block":
-                guardrail_status = "blocked"
+                guardrail_status = "guardrail_intervened"
                 error_detail = {
                     "error": "Blocked by SuperAgent guardrail",
                     "guardrail_name": self.guardrail_name,
@@ -260,7 +260,7 @@ class SuperAgentGuardrail(CustomGuardrail):
         except HTTPException:
             raise
         except Exception as exc:
-            guardrail_status = "failure"
+            guardrail_status = "guardrail_failed_to_respond"
             decision_payload = {"error": str(exc)}
             raise
         finally:
