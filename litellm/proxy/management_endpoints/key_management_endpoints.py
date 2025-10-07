@@ -1099,6 +1099,10 @@ def prepare_metadata_fields(
                     casted_metadata[k] = v
             if k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
                 from litellm.proxy.utils import _premium_user_check
+                # Address issues where the frontend incorrectly sends 
+                # an empty list value for .prompts or .guardrails
+                if not v:
+                    continue
 
                 _premium_user_check(k)
                 casted_metadata[k] = v
