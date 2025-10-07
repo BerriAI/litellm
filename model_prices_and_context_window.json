@@ -1997,7 +1997,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
-        "supports_tool_choice": false,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "azure/gpt-5-chat-latest": {
@@ -2029,7 +2029,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
-        "supports_tool_choice": false,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "azure/gpt-5-codex": {

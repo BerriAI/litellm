@@ -2,7 +2,7 @@ import pytest
 
 import litellm
 from litellm.llms.openai.openai import OpenAIConfig
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_5_reasoning_transformation import OpenAIGPT5ReasoningConfig
 
 
 @pytest.fixture()
@@ -11,13 +11,17 @@ def config() -> OpenAIConfig:
 
 
 @pytest.fixture()
-def gpt5_config() -> OpenAIGPT5Config:
-    return OpenAIGPT5Config()
+def gpt5_config() -> OpenAIGPT5ReasoningConfig:
+    return OpenAIGPT5ReasoningConfig()
 
 
 def test_gpt5_supports_reasoning_effort(config: OpenAIConfig):
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5")
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-mini")
+
+
+def test_gpt5_chat_does_not_support_reasoning_effort(config: OpenAIConfig):
+    assert "reasoning_effort" not in config.get_supported_openai_params(model="gpt-5-chat-latest")
 
 
 def test_gpt5_maps_max_tokens(config: OpenAIConfig):
@@ -50,6 +54,15 @@ def test_gpt5_temperature_error(config: OpenAIConfig):
             drop_params=False,
         )
 
+def test_gpt5_chat_supports_temperature(config: OpenAIConfig):
+    # temperature is supported for chat models
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.3},
+        optional_params={},
+        model="gpt-5-chat-latest",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.3
 
 def test_gpt5_unsupported_params_drop(config: OpenAIConfig):
     assert "top_p" not in config.get_supported_openai_params(model="gpt-5")
@@ -63,9 +76,9 @@ def test_gpt5_unsupported_params_drop(config: OpenAIConfig):
 
 
 # GPT-5-Codex specific tests
-def test_gpt5_codex_model_detection(gpt5_config: OpenAIGPT5Config):
+def test_gpt5_codex_model_detection(gpt5_config: OpenAIGPT5ReasoningConfig):
     """Test that GPT-5-Codex models are correctly detected as GPT-5 models."""
-    assert gpt5_config.is_model_gpt_5_model("gpt-5-codex")
+    assert gpt5_config.is_model_gpt_5_reasoning_model("gpt-5-codex")
     assert gpt5_config.is_model_gpt_5_codex_model("gpt-5-codex")
 
     # Regular GPT-5 models should not be detected as codex
@@ -141,7 +154,7 @@ def test_gpt5_codex_unsupported_params_drop(config: OpenAIConfig):
         assert param not in config.get_supported_openai_params(model="gpt-5-codex")
 
 
-def test_gpt5_codex_supports_tool_choice(gpt5_config: OpenAIGPT5Config):
+def test_gpt5_codex_supports_tool_choice(gpt5_config: OpenAIGPT5ReasoningConfig):
     """Test that GPT-5-Codex supports tool_choice parameter."""
     supported_params = gpt5_config.get_supported_openai_params(model="gpt-5-codex")
     assert "tool_choice" in supported_params
