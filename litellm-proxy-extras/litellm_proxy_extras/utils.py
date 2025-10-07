@@ -31,47 +31,27 @@ def get_prisma_env() -> dict:
 def get_prisma_command() -> str:
     """Get the Prisma command to use, bypassing Python wrapper in offline mode."""
     if str_to_bool(os.getenv("PRISMA_OFFLINE_MODE")):
-        # First check if a custom CLI path is provided via environment variable
+        # Primary location where Prisma Python package installs the CLI
+        default_cli_path = "/app/.cache/prisma-python/binaries/node_modules/.bin/prisma"
+        
+        # Check if custom path is provided (for flexibility)
         custom_cli_path = os.getenv("PRISMA_CLI_PATH")
         if custom_cli_path and os.path.exists(custom_cli_path):
             logger.info(f"Using custom Prisma CLI at {custom_cli_path}")
             return custom_cli_path
         
-        # List of possible Prisma CLI locations to check
-        possible_paths = [
-            "/app/.cache/prisma-python/binaries/node_modules/.bin/prisma",
-            "/app/.cache/prisma-python/nodeenv/node_modules/.bin/prisma",
-            "/app/.cache/prisma-python/nodeenv/node_modules/prisma/build/index.js",
-            "/usr/local/bin/prisma",
-            # Check if Prisma Python installed it elsewhere
-            os.path.expanduser("~/.cache/prisma-python/nodeenv/node_modules/.bin/prisma"),
-            "/tmp/.cache/prisma-python/nodeenv/node_modules/.bin/prisma",
-        ]
+        # Check the default location
+        if os.path.exists(default_cli_path):
+            logger.info(f"Using cached Prisma CLI at {default_cli_path}")
+            return default_cli_path
         
-        for path in possible_paths:
-            if os.path.exists(path):
-                logger.info(f"Using cached Prisma CLI found at {path}")
-                return path
-        
-        # Try to find prisma binary anywhere in /app/.cache
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["find", "/app/.cache", "-name", "prisma", "-type", "f", "-executable"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                found_path = result.stdout.strip().split('\n')[0]
-                logger.info(f"Found Prisma CLI via search at {found_path}")
-                return found_path
-        except Exception as e:
-            logger.debug(f"Failed to search for Prisma CLI: {e}")
-        
-        logger.warning("Prisma CLI not found at any expected locations, falling back to wrapper")
+        # If not found, log warning and fall back
+        logger.warning(
+            f"Prisma CLI not found at {default_cli_path}. "
+            "Falling back to Python wrapper (may attempt downloads)"
+        )
     
-    # Fall back to the Python wrapper
+    # Fall back to the Python wrapper (will work in online mode)
     return "prisma"
 
 

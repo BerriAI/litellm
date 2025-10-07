@@ -32,50 +32,26 @@ RUN rm -rf dist/* && python -m build && \
     pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
 # --- Pre-cache Prisma binaries in builder stage ---
-# Install prisma and configure cache directories
+# Configure Prisma cache directories
 ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries
-ENV PRISMA_NODEENV_CACHE_DIR=/app/.cache/prisma-python/nodeenv
 ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 
-# Install prisma==0.11.0 (matching requirements.txt) and nodejs-bin
+# Install prisma and nodejs-bin packages
 RUN pip install --no-cache-dir prisma==0.11.0 nodejs-bin==18.4.0a4 && \
-    mkdir -p /app/.cache/prisma-python/binaries && \
-    mkdir -p /app/.cache/prisma-python/nodeenv && \
     mkdir -p /app/.cache/npm
 
-# Setup nodeenv first to ensure nodejs is available for Prisma
-RUN python -c "import nodejs; print(nodejs.__file__)" && \
-    # Ensure the nodejs binary is accessible
-    python -c "from nodejs import node; import subprocess; subprocess.run([node.path, '--version'], check=True)"
 
-# Download ALL Prisma binaries in builder stage
-# Set PATH so node is available for npm scripts
+# Set PATH for Node.js
 ENV PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
 
-# CRITICAL FIX: Install Prisma CLI in the expected location
-# First, let Prisma Python download its binaries
-RUN NPM_CONFIG_OFFLINE=false \
-    NPM_CONFIG_CACHE=/app/.cache/npm \
-    python -c "import prisma.cli.prisma as p; p.ensure_cached()" && \
-    echo "Prisma CLI downloaded via Python package"
+# Download Prisma CLI and all required binaries
+RUN NPM_CONFIG_CACHE=/app/.cache/npm \
+    python -c "import prisma.cli.prisma as p; p.ensure_cached()"
 
-# Verify Prisma CLI was installed by Python package
-RUN ls -la /app/.cache/prisma-python/binaries/node_modules/.bin/ 2>/dev/null || true && \
-    echo "Checking Prisma installation..."
-
-# Run test commands to ensure all binaries are downloaded
-RUN prisma migrate deploy --dry-run || true
-
-# Generate client to download query engine
-RUN prisma generate
-
-# Download migration engine by running commands that trigger downloads  
-RUN prisma --version && \
-    prisma migrate diff --from-empty --to-schema-datamodel ./schema.prisma --script || true && \
-    prisma format --schema=./schema.prisma || true
-
-# Force cache migration engine
-RUN prisma migrate deploy --dry-run || true
+# Run Prisma commands to ensure all engines are downloaded
+RUN prisma generate && \
+    prisma --version && \
+    prisma migrate diff --from-empty --to-schema-datamodel ./schema.prisma --script > /dev/null 2>&1 || true
 
 # -----------------
 # Runtime Stage
@@ -119,13 +95,9 @@ RUN pip uninstall jwt -y && \
     pip uninstall PyJWT -y && \
     pip install PyJWT==2.9.0 --no-cache-dir
 
-# --- Prisma Handling for Non-Root User ---
-# Prisma binaries are already cached from builder stage in /app/.cache
-# No downloads needed at runtime - everything is pre-cached
-
-# Set cache directories to use pre-cached binaries from builder stage
+# --- Prisma Configuration ---
+# Use pre-cached binaries from builder stage
 ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries
-ENV PRISMA_NODEENV_CACHE_DIR=/app/.cache/prisma-python/nodeenv
 ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 
 # Make entrypoints executable
@@ -140,29 +112,9 @@ RUN mkdir -p /tmp/.npm /nonexistent /.npm
 # Set PATH so node is available for npm scripts (same as builder)
 ENV PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
 
-# Verify the Prisma CLI was copied correctly from builder
-RUN echo "Checking for Prisma CLI in cache..." && \
-    ls -la /app/.cache/ 2>/dev/null || echo "Cache directory not found" && \
-    ls -la /app/.cache/prisma-python/ 2>/dev/null || echo "prisma-python directory not found" && \
-    ls -la /app/.cache/prisma-python/binaries/ 2>/dev/null || echo "binaries directory not found" && \
-    ls -la /app/.cache/prisma-python/binaries/node_modules/.bin/ 2>/dev/null || echo "node_modules/.bin directory not found" && \
-    if [ -f /app/.cache/prisma-python/binaries/node_modules/.bin/prisma ]; then \
-        echo "✅ Prisma CLI found at expected path"; \
-        /app/.cache/prisma-python/binaries/node_modules/.bin/prisma --version || true; \
-    else \
-        echo "⚠️  WARNING: Prisma CLI not found at /app/.cache/prisma-python/binaries/node_modules/.bin/prisma"; \
-        echo "Looking for alternative Prisma locations..."; \
-        find /app/.cache -name prisma -type f 2>/dev/null || echo "No prisma binary found in cache"; \
-    fi
-
-# Create symlink to ensure Prisma CLI is found where expected
-RUN ln -sf /app/.cache/prisma-python/binaries/node_modules/.bin/prisma /usr/local/bin/prisma 2>/dev/null || true
-
-# Test that Prisma works with pre-cached binaries (no downloads)
-# This will fail if binaries aren't properly cached
+# Verify Prisma CLI works in runtime
 RUN prisma --version && \
-    prisma generate && \
-    prisma migrate diff --from-empty --to-schema-datamodel ./schema.prisma --script > /dev/null 2>&1 || true
+    prisma generate
 
 # Set permissions for non-root user
 RUN chown -R nobody:nogroup /app && \
@@ -194,27 +146,13 @@ USER nobody
 # Set HOME for non-root user
 ENV HOME=/app
 
-# Prisma configuration for runtime - CRITICAL for offline operation
-# Cache directories were already set above and persist
-# Tell Prisma CLI to skip all downloads and use cached binaries
-ENV PRISMA_SKIP_POSTINSTALL_GENERATE=1
-ENV PRISMA_HIDE_UPDATE_MESSAGE=1
-# Force Prisma to use cached binaries and never download
-ENV PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
-# Disable automatic binary downloads
-ENV PRISMA_DISABLE_WARNINGS=1
-# Set npm cache to use pre-populated cache from builder
-ENV NPM_CONFIG_CACHE=/app/.cache/npm
-# Use prefer-offline mode instead of strict offline
-# This uses cache first but can fall back if absolutely necessary
-ENV NPM_CONFIG_PREFER_OFFLINE=true
-# Don't use strict offline mode as it's too restrictive
-# ENV NPM_CONFIG_OFFLINE=true
-# Enable Prisma offline mode flag for litellm-proxy-extras
-ENV PRISMA_OFFLINE_MODE=true
-# Optional: Override the Prisma CLI path if it's in a different location
-# ENV PRISMA_CLI_PATH=/app/.cache/prisma-python/binaries/node_modules/.bin/prisma
-# --- End of Prisma Handling ---
+# Runtime Prisma configuration for offline operation
+ENV PRISMA_SKIP_POSTINSTALL_GENERATE=1 \
+    PRISMA_HIDE_UPDATE_MESSAGE=1 \
+    PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 \
+    NPM_CONFIG_CACHE=/app/.cache/npm \
+    NPM_CONFIG_PREFER_OFFLINE=true \
+    PRISMA_OFFLINE_MODE=true
 
 EXPOSE 4000/tcp
 
