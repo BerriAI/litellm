@@ -13189,6 +13189,20 @@
             "/v1/images/generations"
         ]
     },
+    "gpt-image-1-mini": {
+        "cache_read_input_image_token_cost": 2.5e-07,
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_image_token": 2.5e-06,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "output_cost_per_image_token": 8e-06,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supports_vision": true
+    },
     "gpt-realtime": {
         "cache_creation_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
@@ -14619,6 +14633,54 @@
         "litellm_provider": "openai",
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "low/1024-x-1024/gpt-image-1-mini": {
+        "input_cost_per_image": 0.005,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "low/1024-x-1536/gpt-image-1-mini": {
+        "input_cost_per_image": 0.006,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "low/1536-x-1024/gpt-image-1-mini": {
+        "input_cost_per_image": 0.006,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "medium/1024-x-1024/gpt-image-1-mini": {
+        "input_cost_per_image": 0.011,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "medium/1024-x-1536/gpt-image-1-mini": {
+        "input_cost_per_image": 0.015,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "medium/1536-x-1024/gpt-image-1-mini": {
+        "input_cost_per_image": 0.015,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
         "supported_endpoints": [
             "/v1/images/generations"
         ]
