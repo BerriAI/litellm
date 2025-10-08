@@ -31,6 +31,12 @@ LiteLLM also exposes some helper functions:
 
 - `get_max_tokens`: This returns the maximum number of tokens allowed for the given model. [**Jump to code**](#7-get_max_tokens)
 
+:::info **Note**
+
+`get_max_tokens()` returns `max_output_tokens` from model config. `max_tokens` is legacy, `max_output_tokens` is current standard.
+
+:::
+
 - `model_cost`: This returns a dictionary for all models, with their max_tokens, input_cost_per_token and output_cost_per_token. It uses the `api.litellm.ai` call shown below. [**Jump to code**](#8-model_cost)
 
 - `register_model`: This registers new / overrides existing models (and their pricing details) in the model cost dictionary. [**Jump to code**](#9-register_model)

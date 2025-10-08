@@ -164,6 +164,12 @@ def completion(
 
 - `max_tokens`: *integer (optional)* - The maximum number of tokens to generate in the chat completion.
 
+:::info **max_tokens vs max_output_tokens**
+
+`max_tokens` and `max_output_tokens` are equivalent - `max_tokens` is legacy, `max_output_tokens` is current standard. LiteLLM uses `max_output_tokens` internally.
+
+:::
+
 - `presence_penalty`: *number or null (optional)* - It is used to penalize new tokens based on their existence in the text so far.
 
 - `response_format`: *object (optional)* - An object specifying the format that the model must output.
