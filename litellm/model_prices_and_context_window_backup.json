@@ -13303,8 +13303,7 @@
         "supported_endpoints": [
             "/v1/images/generations",
             "/v1/images/edits"
-        ],
-        "supports_vision": true
+        ]
     },
     "gpt-realtime": {
         "cache_creation_input_audio_token_cost": 4e-07,
