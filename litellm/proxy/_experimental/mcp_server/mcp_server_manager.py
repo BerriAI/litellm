@@ -195,6 +195,7 @@ class MCPServerManager:
                 name=name_for_prefix,
                 alias=alias,
                 server_name=server_name,
+                spec_path=server_config.get("spec_path", None),
                 url=server_config.get("url", None) or "",
                 command=server_config.get("command", None) or "",
                 args=server_config.get("args", None) or [],
@@ -218,11 +219,169 @@ class MCPServerManager:
                 access_groups=server_config.get("access_groups", None),
             )
             self.config_mcp_servers[server_id] = new_server
+
+            # Check if this is an OpenAPI-based server
+            spec_path = server_config.get("spec_path", None)
+            if spec_path:
+                verbose_logger.info(
+                    f"Loading OpenAPI spec from {spec_path} for server {server_name}"
+                )
+                self._register_openapi_tools(
+                    spec_path=spec_path,
+                    server=new_server,
+                    base_url=server_config.get("url", ""),
+                )
+
         verbose_logger.debug(
             f"Loaded MCP Servers: {json.dumps(self.config_mcp_servers, indent=4, default=str)}"
         )
 
         self.initialize_tool_name_to_mcp_server_name_mapping()
+
+    def _register_openapi_tools(self, spec_path: str, server: MCPServer, base_url: str):
+        """
+        Register tools from an OpenAPI specification for a given server.
+
+        This creates "virtual" MCP tools from OpenAPI endpoints that are:
+        1. Registered in the global tool registry with server prefix
+        2. Mapped to the server for routing
+        3. Executed via the local tool handler
+
+        Args:
+            spec_path: Path to the OpenAPI specification file
+            server: The MCPServer instance to register tools for
+            base_url: Base URL for API calls
+        """
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            build_input_schema,
+            create_tool_function,
+        )
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            get_base_url as get_openapi_base_url,
+        )
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            load_openapi_spec,
+        )
+        from litellm.proxy._experimental.mcp_server.tool_registry import (
+            global_mcp_tool_registry,
+        )
+
+        try:
+            # Load OpenAPI spec
+            spec = load_openapi_spec(spec_path)
+
+            # Use base_url from config if provided, otherwise extract from spec
+            if not base_url:
+                base_url = get_openapi_base_url(spec)
+
+            verbose_logger.info(
+                f"Registering OpenAPI tools for server {server.name} with base URL: {base_url}"
+            )
+
+            # Get server prefix for tool naming
+            server_prefix = get_server_prefix(server)
+
+            # Build headers from server configuration
+            headers = {}
+
+            # Add authentication headers if configured
+            if server.authentication_token:
+                from litellm.types.mcp import MCPAuth
+
+                if server.auth_type == MCPAuth.bearer_token:
+                    headers["Authorization"] = f"Bearer {server.authentication_token}"
+                elif server.auth_type == MCPAuth.api_key:
+                    headers["Authorization"] = f"ApiKey {server.authentication_token}"
+                elif server.auth_type == MCPAuth.basic:
+                    headers["Authorization"] = f"Basic {server.authentication_token}"
+
+            # Add any extra headers from server config
+            # Note: extra_headers is a List[str] of header names to forward, not a dict
+            # For OpenAPI tools, we'll just use the authentication headers
+            # If extra_headers were needed, they would be processed separately
+
+            verbose_logger.debug(
+                f"Using headers for OpenAPI tools (excluding sensitive values): "
+                f"{list(headers.keys())}"
+            )
+
+            # Extract and register tools from OpenAPI paths
+            paths = spec.get("paths", {})
+            registered_count = 0
+
+            verbose_logger.debug(f"Processing {len(paths)} paths from OpenAPI spec")
+
+            for path, path_item in paths.items():
+                for method in ["get", "post", "put", "delete", "patch"]:
+                    if method not in path_item:
+                        continue
+
+                    operation = path_item[method]
+
+                    # Generate tool name (without prefix initially)
+                    operation_id = operation.get(
+                        "operationId", f"{method}_{path.replace('/', '_')}"
+                    )
+                    base_tool_name = operation_id.replace(" ", "_").lower()
+
+                    # Check if tool is allowed for this server
+                    if not self.check_allowed_or_banned_tools(base_tool_name, server):
+                        verbose_logger.debug(
+                            f"Skipping tool {base_tool_name} - not in allowed_tools for server {server.name}"
+                        )
+                        continue
+
+                    # Add server prefix to tool name
+                    prefixed_tool_name = add_server_prefix_to_tool_name(
+                        base_tool_name, server_prefix
+                    )
+
+                    # Get description
+                    description = operation.get(
+                        "summary",
+                        operation.get("description", f"{method.upper()} {path}"),
+                    )
+
+                    # Build input schema using imported function
+                    input_schema = build_input_schema(operation)
+
+                    # Create tool function with headers using imported function
+                    tool_func = create_tool_function(
+                        path, method, operation, base_url, headers=headers
+                    )
+                    tool_func.__name__ = prefixed_tool_name
+                    tool_func.__doc__ = description
+
+                    # Register tool with prefixed name in global registry
+                    global_mcp_tool_registry.register_tool(
+                        name=prefixed_tool_name,
+                        description=description,
+                        input_schema=input_schema,
+                        handler=tool_func,
+                    )
+
+                    # Update tool name to server name mapping (for both prefixed and base names)
+                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
+                        server_prefix
+                    )
+                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
+                        server_prefix
+                    )
+
+                    registered_count += 1
+                    verbose_logger.debug(
+                        f"Registered OpenAPI tool: {prefixed_tool_name} for server {server.name}"
+                    )
+
+            verbose_logger.info(
+                f"Successfully registered {registered_count} OpenAPI tools for server {server.name}"
+            )
+
+        except Exception as e:
+            verbose_logger.error(
+                f"Failed to register OpenAPI tools for server {server.name}: {str(e)}"
+            )
+            raise e
 
     def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
         """
@@ -469,6 +628,10 @@ class MCPServerManager:
         Returns:
             List[MCPTool]: List of tools available on the server with prefixed names
         """
+        from litellm.proxy._experimental.mcp_server.tool_registry import (
+            global_mcp_tool_registry,
+        )
+
         verbose_logger.debug(f"Connecting to url: {server.url}")
         verbose_logger.info(f"_get_tools_from_server for {server.name}...")
 
@@ -481,7 +644,14 @@ class MCPServerManager:
                 extra_headers=extra_headers,
             )
 
-            tools = await self._fetch_tools_with_timeout(client, server.name)
+            ## HANDLE OPENAPI TOOLS
+            if server.spec_path:
+                _tools = global_mcp_tool_registry.list_tools(tool_prefix=server.name)
+                tools = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(
+                    _tools
+                )
+            else:
+                tools = await self._fetch_tools_with_timeout(client, server.name)
 
             prefixed_or_original_tools = self._create_prefixed_tools(
                 tools, server, add_prefix=add_prefix
