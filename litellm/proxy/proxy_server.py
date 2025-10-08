@@ -1881,6 +1881,8 @@ class ProxyConfig:
                         f"{blue_color_code}Set Global Gitlab Config on LiteLLM Proxy{reset_color_code}"
                     )
                 elif key == "priority_reservation_settings":
+                    from litellm.types.utils import PriorityReservationSettings
+
                     litellm.priority_reservation_settings = PriorityReservationSettings(**value)
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
