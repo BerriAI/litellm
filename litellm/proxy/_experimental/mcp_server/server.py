@@ -527,14 +527,27 @@ if MCP_AVAILABLE:
         server_id: str,
         user_api_key_auth: Optional[UserAPIKeyAuth],
     ) -> List[MCPTool]:
-        """Filter tools based on key/team mcp_tool_permissions."""
+        """
+        Filter tools based on key/team mcp_tool_permissions.
+        
+        Note: Tool names in the DB are stored without server prefixes,
+        but tool names from MCP servers are prefixed. We need to strip
+        the prefix before comparing.
+        """
         # Filter by key/team tool-level permissions
         allowed_tool_names = await MCPRequestHandler.get_allowed_tools_for_server(
             server_id=server_id,
             user_api_key_auth=user_api_key_auth,
         )
         if allowed_tool_names is not None:
-            filtered_tools = [t for t in tools if t.name in allowed_tool_names]
+            # Strip prefix from tool names before comparing
+            # Tools are stored in DB without prefix, but come from MCP server with prefix
+            filtered_tools = []
+            for t in tools:
+                # Get tool name without server prefix
+                unprefixed_tool_name, _ = get_server_name_prefix_tool_mcp(t.name)
+                if unprefixed_tool_name in allowed_tool_names:
+                    filtered_tools.append(t)
         else:
             # No restrictions, return all tools
             filtered_tools = tools
