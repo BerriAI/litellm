@@ -324,13 +324,6 @@ class MCPServerManager:
                     )
                     base_tool_name = operation_id.replace(" ", "_").lower()
 
-                    # Check if tool is allowed for this server
-                    if not self.check_allowed_or_banned_tools(base_tool_name, server):
-                        verbose_logger.debug(
-                            f"Skipping tool {base_tool_name} - not in allowed_tools for server {server.name}"
-                        )
-                        continue
-
                     # Add server prefix to tool name
                     prefixed_tool_name = add_server_prefix_to_tool_name(
                         base_tool_name, server_prefix
