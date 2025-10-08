@@ -580,6 +580,13 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       required: true,
       tooltip: "Get your API key from IO.NET dashboard"
     }
+    ],
+  [Providers.Infinity]: [
+    {
+      key: "api_base",
+      label: "API Base",
+      placeholder: "http://localhost:7997",
+    },
   ],
 };
 

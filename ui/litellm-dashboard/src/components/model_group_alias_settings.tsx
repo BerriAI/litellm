@@ -5,9 +5,11 @@ import { setCallbacksCall } from "./networking";
 import { Card, Title, Text, Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
 import NotificationsManager from "./molecules/notifications_manager";
 
+type ModelGroupAliasValue = string | { model: string; hidden?: boolean };
+
 interface ModelGroupAliasSettingsProps {
   accessToken: string;
-  initialModelGroupAlias?: { [key: string]: string };
+  initialModelGroupAlias?: Record<string, ModelGroupAliasValue>;
   onAliasUpdate?: (updatedAlias: { [key: string]: string }) => void;
 }
 
@@ -28,11 +30,11 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
   const [isExpanded, setIsExpanded] = useState(true);
 
   useEffect(() => {
-    // Convert object to array for display
-    const aliasArray = Object.entries(initialModelGroupAlias).map(([aliasName, targetModelGroup], index) => ({
+    const aliasArray = Object.entries(initialModelGroupAlias).map(([aliasName, value], index) => ({
       id: `${index}-${aliasName}`,
       aliasName,
-      targetModelGroup,
+      // if object, use its model field; otherwise use the string
+      targetModelGroup: typeof value === "string" ? value : value?.model ?? "",
     }));
     setAliases(aliasArray);
   }, [initialModelGroupAlias]);
