@@ -4,7 +4,7 @@ Translation from OpenAI's `/chat/completions` endpoint to IBM WatsonX's `/text/c
 Docs: https://cloud.ibm.com/apidocs/watsonx-ai#text-chat
 """
 
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.watsonx import WatsonXAIEndpoint, WatsonXAPIParams
@@ -122,10 +122,16 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         return payload
     
     @staticmethod
-    def apply_prompt_template(model: str, messages: List[Dict[str, str]]) -> dict:
+    def apply_prompt_template(model: str, messages: List[Dict[str, str]]) -> Optional[str]:
         """
         Apply prompt template to messages for WatsonX Provider
         """
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            custom_prompt,
+            hf_chat_template,
+            ibm_granite_pt,
+            mistral_instruct_pt,
+        )
         if "granite" in model and "chat" in model:
             # granite-13b-chat-v1 and granite-13b-chat-v2 use a specific prompt template
             return ibm_granite_pt(messages=messages)
@@ -163,5 +169,5 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
                 initial_prompt_value="<|begin_of_text|>",
                 final_prompt_value="<|start_header_id|>assistant<|end_header_id|>\n",
             )
-        else:
-            return messages
+        return None
+
