@@ -21,7 +21,6 @@ import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 import litellm
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps        
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching import DualCache
