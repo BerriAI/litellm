@@ -603,9 +603,9 @@ class MCPServerManager:
             return tool_name not in server.disallowed_tools
         return True
 
-    def filter_allowed_params(
+    def validate_allowed_params(
         self, tool_name: str, arguments: Dict[str, Any], server: MCPServer
-    ) -> Dict[str, Any]:
+    ) -> None:
         """
         Filter arguments to only include allowed parameters for the given tool.
 
@@ -626,7 +626,7 @@ class MCPServerManager:
 
         # If no allowed_params configured, return all arguments
         if not server.allowed_params:
-            return arguments
+            return
 
         # Get the unprefixed tool name to match against config
         unprefixed_tool_name, _ = get_server_name_prefix_tool_mcp(tool_name)
@@ -638,7 +638,7 @@ class MCPServerManager:
 
         # If this tool doesn't have allowed_params specified, allow all params
         if allowed_params_list is None:
-            return arguments
+            return None
 
         # Filter arguments to only include allowed parameters
         disallowed_params = [
@@ -654,8 +654,6 @@ class MCPServerManager:
                     f"Contact proxy admin to allow these parameters."
                 },
             )
-
-        return {k: v for k, v in arguments.items() if k in allowed_params_list}
 
     async def check_tool_permission_for_key_team(
         self,
@@ -725,14 +723,11 @@ class MCPServerManager:
         )
 
         ## filter parameters based on allowed_params configuration
-        filtered_arguments = self.filter_allowed_params(
+        self.validate_allowed_params(
             tool_name=name,
             arguments=arguments,
             server=server,
         )
-        # Update arguments with filtered version
-        arguments.clear()
-        arguments.update(filtered_arguments)
 
         pre_hook_kwargs = {
             "name": name,
