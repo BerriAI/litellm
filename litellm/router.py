@@ -125,7 +125,6 @@ from litellm.types.router import (
     AllowedFailsPolicy,
     AssistantsTypedDict,
     CredentialLiteLLMParams,
-    CustomPricingLiteLLMParams,
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
@@ -145,7 +144,7 @@ from litellm.types.services import ServiceTypes
 from litellm.types.utils import GenericBudgetConfigType, LiteLLMBatch
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import ModelResponseStream, StandardLoggingPayload, Usage
+from litellm.types.utils import ModelResponseStream, StandardLoggingPayload, Usage, CustomPricingLiteLLMParams
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
