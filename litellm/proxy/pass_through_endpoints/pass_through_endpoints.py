@@ -1662,6 +1662,11 @@ class InitPassThroughEndpointHelpers:
             )
 
     @staticmethod
+    def clear_all_pass_through_routes():
+        """Clear all pass-through routes from the registry"""
+        _registered_pass_through_routes.clear()
+
+    @staticmethod
     def is_registered_pass_through_route(route: str) -> bool:
         """
         Check if route is a registered pass-through endpoint from DB
@@ -1695,10 +1700,22 @@ class InitPassThroughEndpointHelpers:
         return False
 
 
+def _get_combined_pass_through_endpoints(
+    pass_through_endpoints: Union[List[Dict], List[PassThroughGenericEndpoint]],
+    config_pass_through_endpoints: List[Dict],
+):
+    """Get combined pass-through endpoints from db + config"""
+    return pass_through_endpoints + config_pass_through_endpoints
+
+
 async def initialize_pass_through_endpoints(
     pass_through_endpoints: Union[List[Dict], List[PassThroughGenericEndpoint]],
 ):
     """
+    1. Create a global list of pass-through endpoints (db + config)
+    2. Clear all existing pass-through endpoints from the FastAPI app routes
+    3. Add new endpoints to the in-memory registry
+
     Initialize a list of pass-through endpoints by adding them to the FastAPI app routes
 
     Args:
@@ -1711,9 +1728,22 @@ async def initialize_pass_through_endpoints(
 
     verbose_proxy_logger.debug("initializing pass through endpoints")
     from litellm.proxy._types import CommonProxyErrors, LiteLLMRoutes
-    from litellm.proxy.proxy_server import app, premium_user
+    from litellm.proxy.proxy_server import app, general_settings, premium_user
 
-    for endpoint in pass_through_endpoints:
+    ## get combined pass-through endpoints from db + config
+    config_pass_through_endpoints = general_settings.get("pass_through_endpoints")
+    combined_pass_through_endpoints: List[Union[Dict, PassThroughGenericEndpoint]]
+    if config_pass_through_endpoints is not None:
+        combined_pass_through_endpoints = _get_combined_pass_through_endpoints(  # type: ignore
+            pass_through_endpoints, config_pass_through_endpoints
+        )
+    else:
+        combined_pass_through_endpoints = pass_through_endpoints  # type: ignore
+
+    ## clear all existing pass-through endpoints from the FastAPI app routes
+    InitPassThroughEndpointHelpers.clear_all_pass_through_routes()
+
+    for endpoint in combined_pass_through_endpoints:
         if isinstance(endpoint, PassThroughGenericEndpoint):
             endpoint = endpoint.model_dump()
 
