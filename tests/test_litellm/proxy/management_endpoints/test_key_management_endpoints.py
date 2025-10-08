@@ -487,9 +487,10 @@ async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
         ),
     )
 
-    # Verify mcp_tool_permissions was stored
+    # Verify mcp_tool_permissions was stored (serialized to JSON string for GraphQL compatibility)
     assert "mcp_tool_permissions" in created_permission_data
-    assert created_permission_data["mcp_tool_permissions"] == {
+    import json
+    assert json.loads(created_permission_data["mcp_tool_permissions"]) == {
         "server_1": ["tool1", "tool2", "tool3"]
     }
     assert created_permission_data["mcp_servers"] == ["server_1"]
