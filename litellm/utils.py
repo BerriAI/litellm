@@ -2527,7 +2527,7 @@ def _map_openai_size_to_vertex_ai_aspect_ratio(size: Optional[str]) -> str:
     )  # Default to square if size not recognized
 
 
-def get_optional_params_image_gen(
+def get_optional_params_image_gen(  # noqa: PLR0915
     model: Optional[str] = None,
     n: Optional[int] = None,
     quality: Optional[str] = None,
@@ -2590,6 +2590,7 @@ def get_optional_params_image_gen(
                 if (
                     litellm.drop_params is True or drop_params is True
                 ) and k not in supported_params:  # drop the unsupported non-default values
+                    invalid_params.append(k)
                     non_default_params.pop(k, None)
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
