@@ -2890,14 +2890,17 @@ class ProxyConfig:
             Deep-merge src into dst, skipping None values from src.
             On conflicts, src (DB) wins.
             """
-            for k, v in src.items():
-                if v is None:
-                    # Preserve existing config when DB value is None (matches prior behavior)
-                    continue
-                if isinstance(v, dict) and isinstance(dst.get(k), dict):
-                    _deep_merge_dicts(dst[k], v)
-                else:
-                    dst[k] = v
+            stack = [(dst, src)]
+            while stack:
+                d, s = stack.pop()
+                for k, v in s.items():
+                    if v is None:
+                        # Preserve existing config when DB value is None (matches prior behavior)
+                        continue
+                    if isinstance(v, dict) and isinstance(d.get(k), dict):
+                        stack.append((d[k], v))
+                    else:
+                        d[k] = v
 
         if param_name == "environment_variables":
             decrypted_env_vars = self._decrypt_and_set_db_env_variables(db_param_value)
