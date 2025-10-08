@@ -367,14 +367,19 @@ def phind_codellama_pt(messages):
 def hf_chat_template(  # noqa: PLR0915
     model: str, messages: list, chat_template: Optional[Any] = None
 ):
-    # Define Jinja2 environment
+    # Define Jinja2 environment with custom functions for advanced templates
     env = ImmutableSandboxedEnvironment()
 
     def raise_exception(message):
         raise Exception(f"Error message - {message}")
 
-    # Create a template object from the template text
+    def strftime_now(fmt):
+        """Custom function for templates that need current date/time formatting (e.g., gpt-oss)"""
+        from datetime import datetime
+        return datetime.now().strftime(fmt)
+
     env.globals["raise_exception"] = raise_exception
+    env.globals["strftime_now"] = strftime_now
 
     ## get the tokenizer config from huggingface
     bos_token = ""
@@ -382,44 +387,71 @@ def hf_chat_template(  # noqa: PLR0915
     if chat_template is None:
 
         def _get_tokenizer_config(hf_model_name):
+            """Fetch tokenizer_config.json from HuggingFace"""
             try:
                 url = f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
-                # Make a GET request to fetch the JSON data
                 client = HTTPHandler(concurrent_limit=1)
-
                 response = client.get(url)
             except Exception as e:
                 raise e
             if response.status_code == 200:
-                # Parse the JSON data
                 tokenizer_config = json.loads(response.content)
                 return {"status": "success", "tokenizer": tokenizer_config}
             else:
                 return {"status": "failure"}
 
+        def _get_chat_template_file(hf_model_name):
+            """Fetch chat template from separate .jinja file (for models like gpt-oss)"""
+            template_filenames = ["chat_template.jinja", "chat_template.jinja2"]
+            client = HTTPHandler(concurrent_limit=1)
+            
+            for filename in template_filenames:
+                try:
+                    url = f"https://huggingface.co/{hf_model_name}/raw/main/{filename}"
+                    response = client.get(url)
+                    if response.status_code == 200:
+                        return {"status": "success", "chat_template": response.content.decode("utf-8")}
+                except Exception:
+                    continue
+            
+            return {"status": "failure"}
+
+        def _extract_token_value(token_value):
+            """Extract token string from various formats (string, dict, etc.)"""
+            if token_value is None or isinstance(token_value, str):
+                return token_value or ""
+            if isinstance(token_value, dict):
+                return token_value.get("content", "")
+            return ""
+
+        # Fetch or retrieve cached tokenizer config
         if model in litellm.known_tokenizer_config:
             tokenizer_config = litellm.known_tokenizer_config[model]
         else:
             tokenizer_config = _get_tokenizer_config(model)
             litellm.known_tokenizer_config.update({model: tokenizer_config})
 
+        # Try to get chat template from tokenizer_config.json first
         if (
-            tokenizer_config["status"] == "failure"
-            or "chat_template" not in tokenizer_config["tokenizer"]
+            tokenizer_config["status"] == "success"
+            and "chat_template" in tokenizer_config["tokenizer"]
         ):
-            raise Exception("No chat template found")
-        ## read the bos token, eos token and chat template from the json
-        tokenizer_config = tokenizer_config["tokenizer"]  # type: ignore
-
-        bos_token = tokenizer_config["bos_token"]  # type: ignore
-        if bos_token is not None and not isinstance(bos_token, str):
-            if isinstance(bos_token, dict):
-                bos_token = bos_token.get("content", None)
-        eos_token = tokenizer_config["eos_token"]  # type: ignore
-        if eos_token is not None and not isinstance(eos_token, str):
-            if isinstance(eos_token, dict):
-                eos_token = eos_token.get("content", None)
-        chat_template = tokenizer_config["chat_template"]  # type: ignore
+            tokenizer_data = tokenizer_config["tokenizer"]
+            bos_token = _extract_token_value(tokenizer_data.get("bos_token"))
+            eos_token = _extract_token_value(tokenizer_data.get("eos_token"))
+            chat_template = tokenizer_data["chat_template"]
+        else:
+            # Fallback: Try to fetch chat template from separate .jinja file
+            template_result = _get_chat_template_file(model)
+            if template_result["status"] == "success":
+                chat_template = template_result["chat_template"]
+                # Still try to get tokens from tokenizer_config if available
+                if tokenizer_config["status"] == "success":
+                    tokenizer_data = tokenizer_config["tokenizer"]
+                    bos_token = _extract_token_value(tokenizer_data.get("bos_token"))
+                    eos_token = _extract_token_value(tokenizer_data.get("eos_token"))
+            else:
+                raise Exception("No chat template found")
     try:
         template = env.from_string(chat_template)  # type: ignore
     except Exception as e:
@@ -4031,33 +4063,9 @@ def prompt_factory(
     elif custom_llm_provider == "azure_text":
         return azure_text_pt(messages=messages)
     elif custom_llm_provider == "watsonx":
-        if "granite" in model and "chat" in model:
-            # granite-13b-chat-v1 and granite-13b-chat-v2 use a specific prompt template
-            return ibm_granite_pt(messages=messages)
-        elif "ibm-mistral" in model and "instruct" in model:
-            # models like ibm-mistral/mixtral-8x7b-instruct-v01-q use the mistral instruct prompt template
-            return mistral_instruct_pt(messages=messages)
-        elif "meta-llama/llama-3" in model and "instruct" in model:
-            # https://llama.meta.com/docs/model-cards-and-prompt-formats/meta-llama-3/
-            return custom_prompt(
-                role_dict={
-                    "system": {
-                        "pre_message": "<|start_header_id|>system<|end_header_id|>\n",
-                        "post_message": "<|eot_id|>",
-                    },
-                    "user": {
-                        "pre_message": "<|start_header_id|>user<|end_header_id|>\n",
-                        "post_message": "<|eot_id|>",
-                    },
-                    "assistant": {
-                        "pre_message": "<|start_header_id|>assistant<|end_header_id|>\n",
-                        "post_message": "<|eot_id|>",
-                    },
-                },
-                messages=messages,
-                initial_prompt_value="<|begin_of_text|>",
-                final_prompt_value="<|start_header_id|>assistant<|end_header_id|>\n",
-            )
+        from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
+        return IBMWatsonXChatConfig.apply_prompt_template(model=model, messages=messages)
+        
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
