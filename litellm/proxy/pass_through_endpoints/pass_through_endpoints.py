@@ -974,12 +974,25 @@ def create_pass_through_route(
             ] = None,  # if pass-through endpoint is a streaming request
             subpath: str = "",  # captures sub-paths when include_subpath=True
         ):
+
+            from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+                InitPassThroughEndpointHelpers,
+            )
+
             # Construct the full target URL with subpath if needed
             full_target = (
                 HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
                     base_target=target, subpath=subpath, include_subpath=include_subpath
                 )
             )
+
+            if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                route=endpoint
+            ):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Pass-through endpoint {target} not found. This could have been deleted or not yet added to the proxy.",
+                )
 
             return await pass_through_request(  # type: ignore
                 request=request,
