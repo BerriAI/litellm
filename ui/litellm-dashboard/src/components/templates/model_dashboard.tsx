@@ -661,18 +661,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     if (accessToken && token && userRole && userID) {
       fetchData();
     }
+  }, [accessToken, token, userRole, userID, selectedTeam]);
 
-    const fetchModelMap = async () => {
+  useEffect(() => {
+    if (!accessToken || modelMap) return;
+    (async () => {
       const data = await modelCostMap(accessToken);
-      console.log(`received model cost map data: ${Object.keys(data)}`);
       setModelMap(data);
-    };
-    if (modelMap == null) {
-      fetchModelMap();
-    }
-
-    handleRefreshClick();
-  }, [accessToken, token, userRole, userID, modelMap, lastRefreshed, selectedTeam]);
+    })();
+  }, [accessToken, modelMap]);
 
   if (!modelData) {
     return <div>Loading...</div>;
