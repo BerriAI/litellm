@@ -1971,3 +1971,148 @@ async def test_model_info_v1_oci_secrets_not_leaked():
         assert "aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:77:88:99:00" not in result_str
         assert "ocid1.tenancy.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk" not in result_str
         assert "/path/to/oci_api_key.pem" not in result_str
+
+
+def test_add_callback_from_db_to_in_memory_litellm_callbacks():
+    """
+    Test that _add_callback_from_db_to_in_memory_litellm_callbacks correctly adds callbacks
+    for success, failure, and combined event types.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+    
+    proxy_config = ProxyConfig()
+    
+    # Mock the callback manager
+    mock_callback_manager = MagicMock()
+    
+    with patch("litellm.proxy.proxy_server.litellm") as mock_litellm:
+        # Set up mock litellm attributes
+        mock_litellm._known_custom_logger_compatible_callbacks = []
+        mock_litellm.logging_callback_manager = mock_callback_manager
+        
+        # Test Case 1: Add success callback
+        mock_success_callbacks = []
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="prometheus",
+            event_types=["success"],
+            existing_callbacks=mock_success_callbacks,
+        )
+        mock_callback_manager.add_litellm_success_callback.assert_called_once_with("prometheus")
+        mock_callback_manager.reset_mock()
+        
+        # Test Case 2: Add failure callback
+        mock_failure_callbacks = []
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="langfuse",
+            event_types=["failure"],
+            existing_callbacks=mock_failure_callbacks,
+        )
+        mock_callback_manager.add_litellm_failure_callback.assert_called_once_with("langfuse")
+        mock_callback_manager.reset_mock()
+        
+        # Test Case 3: Add callback for both success and failure
+        mock_callbacks = []
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="s3",
+            event_types=["success", "failure"],
+            existing_callbacks=mock_callbacks,
+        )
+        mock_callback_manager.add_litellm_callback.assert_called_once_with("s3")
+        mock_callback_manager.reset_mock()
+        
+        # Test Case 4: Don't add callback if it already exists
+        existing_callbacks_with_item = ["prometheus"]
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="prometheus",
+            event_types=["success"],
+            existing_callbacks=existing_callbacks_with_item,
+        )
+        mock_callback_manager.add_litellm_success_callback.assert_not_called()
+
+
+def test_should_load_db_object_with_supported_db_objects():
+    """
+    Test _should_load_db_object method with supported_db_objects configuration.
+    
+    Verifies that when supported_db_objects is set, only specified object types
+    are loaded from the database.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Test Case 1: supported_db_objects not set - all objects should be loaded
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+
+    # Test Case 2: supported_db_objects set to only load MCP
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": ["mcp"]},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is False
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is False
+        assert proxy_config._should_load_db_object(object_type="prompts") is False
+
+    # Test Case 3: supported_db_objects set to load multiple types
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": ["mcp", "guardrails", "vector_stores"]},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+        assert proxy_config._should_load_db_object(object_type="prompts") is False
+
+    # Test Case 4: supported_db_objects is not a list (should default to loading all)
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": "invalid_type"},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+
+    # Test Case 5: supported_db_objects is an empty list (nothing should be loaded)
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": []},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is False
+        assert proxy_config._should_load_db_object(object_type="guardrails") is False
+
+    # Test Case 6: Test all available object types
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "supported_db_objects": [
+                "models",
+                "mcp",
+                "guardrails",
+                "vector_stores",
+                "pass_through_endpoints",
+                "prompts",
+                "model_cost_map",
+            ]
+        },
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+        assert (
+            proxy_config._should_load_db_object(object_type="pass_through_endpoints")
+            is True
+        )
+        assert proxy_config._should_load_db_object(object_type="prompts") is True
+        assert proxy_config._should_load_db_object(object_type="model_cost_map") is True

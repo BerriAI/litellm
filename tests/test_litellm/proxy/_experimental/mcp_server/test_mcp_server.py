@@ -88,10 +88,14 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
     working_server = MagicMock()
     working_server.name = "working_server"
     working_server.alias = "working"
+    working_server.allowed_tools = None
+    working_server.disallowed_tools = None
 
     failing_server = MagicMock()
     failing_server.name = "failing_server"
     failing_server.alias = "failing"
+    failing_server.allowed_tools = None
+    failing_server.disallowed_tools = None
 
     # Mock global_mcp_server_manager
     mock_manager = MagicMock()
@@ -586,6 +590,8 @@ async def test_list_tools_single_server_unprefixed_names():
     server.server_id = "server1"
     server.name = "Zapier MCP"
     server.alias = "zapier"
+    server.allowed_tools = None
+    server.disallowed_tools = None
 
     # Mock manager: allow just one server and return a tool based on add_prefix flag
     mock_manager = MagicMock()
@@ -641,11 +647,15 @@ async def test_list_tools_multiple_servers_prefixed_names():
     server1.server_id = "server1"
     server1.name = "Zapier MCP"
     server1.alias = "zapier"
+    server1.allowed_tools = None
+    server1.disallowed_tools = None
 
     server2 = MagicMock()
     server2.server_id = "server2"
     server2.name = "Jira MCP"
     server2.alias = "jira"
+    server2.allowed_tools = None
+    server2.disallowed_tools = None
 
     # Mock manager
     mock_manager = MagicMock()
@@ -724,3 +734,362 @@ async def test_call_mcp_tool_user_unauthorized_access():
         # Verify the exception details
         assert exc_info.value.status_code == 403
         assert "User not allowed to call this tool" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_list_tools_filters_by_key_team_permissions():
+    """Test that list_tools filters tools based on key/team mcp_tool_permissions"""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # Create object permission with tool-level restrictions
+    object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm_123",
+        mcp_tool_permissions={
+            "server1": ["tool1", "tool2"],  # Only allow tool1 and tool2
+        },
+    )
+
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test_key",
+        user_id="test_user",
+        object_permission=object_permission,
+    )
+    set_auth_context(user_api_key_auth)
+
+    # Mock server
+    server = MagicMock()
+    server.server_id = "server1"
+    server.name = "Test Server"
+    server.alias = "test"
+    server.allowed_tools = None
+    server.disallowed_tools = None
+
+    # Mock manager
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
+    mock_manager.get_mcp_server_by_id = lambda server_id: server
+
+    async def mock_get_tools_from_server(
+        server, mcp_auth_header=None, extra_headers=None, add_prefix=False
+    ):
+        # Return 4 tools, but only 2 should be allowed
+        tool1 = MagicMock()
+        tool1.name = "tool1"
+        tool1.description = "Tool 1"
+        tool1.inputSchema = {}
+
+        tool2 = MagicMock()
+        tool2.name = "tool2"
+        tool2.description = "Tool 2"
+        tool2.inputSchema = {}
+
+        tool3 = MagicMock()
+        tool3.name = "tool3"
+        tool3.description = "Tool 3 - not allowed"
+        tool3.inputSchema = {}
+
+        tool4 = MagicMock()
+        tool4.name = "tool4"
+        tool4.description = "Tool 4 - not allowed"
+        tool4.inputSchema = {}
+
+        return [tool1, tool2, tool3, tool4]
+
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        mock_manager,
+    ):
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+        )
+
+    # Should only return tool1 and tool2
+    assert len(tools) == 2
+    tool_names = sorted([t.name for t in tools])
+    assert tool_names == ["tool1", "tool2"]
+
+
+@pytest.mark.asyncio
+async def test_list_tools_with_team_tool_permissions_inheritance():
+    """Test that list_tools correctly applies key/team tool permissions inheritance logic"""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+        from litellm.proxy._types import (
+            LiteLLM_ObjectPermissionTable,
+            LiteLLM_TeamTable,
+            UserAPIKeyAuth,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # Team allows tool1, tool2, tool3
+    team_object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="team_perm_123",
+        mcp_tool_permissions={
+            "server1": ["tool1", "tool2", "tool3"],
+        },
+    )
+
+    # Key allows tool2, tool3, tool4 - intersection should be tool2, tool3
+    key_object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="key_perm_456",
+        mcp_tool_permissions={
+            "server1": ["tool2", "tool3", "tool4"],
+        },
+    )
+
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test_key",
+        user_id="test_user",
+        team_id="team_123",
+        object_permission=key_object_permission,
+    )
+    set_auth_context(user_api_key_auth)
+
+    # Mock server
+    server = MagicMock()
+    server.server_id = "server1"
+    server.name = "Test Server"
+    server.alias = "test"
+    server.allowed_tools = None
+    server.disallowed_tools = None
+
+    # Mock manager
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
+    mock_manager.get_mcp_server_by_id = lambda server_id: server
+
+    async def mock_get_tools_from_server(
+        server, mcp_auth_header=None, extra_headers=None, add_prefix=False
+    ):
+        # Return 4 tools
+        tool1 = MagicMock()
+        tool1.name = "tool1"
+        tool1.description = "Tool 1"
+        tool1.inputSchema = {}
+
+        tool2 = MagicMock()
+        tool2.name = "tool2"
+        tool2.description = "Tool 2"
+        tool2.inputSchema = {}
+
+        tool3 = MagicMock()
+        tool3.name = "tool3"
+        tool3.description = "Tool 3"
+        tool3.inputSchema = {}
+
+        tool4 = MagicMock()
+        tool4.name = "tool4"
+        tool4.description = "Tool 4"
+        tool4.inputSchema = {}
+
+        return [tool1, tool2, tool3, tool4]
+
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        mock_manager,
+    ):
+        # Mock the team object permission retrieval
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_team_object_permission",
+            AsyncMock(return_value=team_object_permission),
+        ):
+            tools = await _get_tools_from_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=None,
+                mcp_servers=None,
+                mcp_server_auth_headers=None,
+            )
+
+    # Should only return tool2 and tool3 (intersection of key and team permissions)
+    assert len(tools) == 2
+    tool_names = sorted([t.name for t in tools])
+    assert tool_names == ["tool2", "tool3"]
+
+
+@pytest.mark.asyncio
+async def test_list_tools_with_no_tool_permissions_shows_all():
+    """Test that list_tools shows all tools when no mcp_tool_permissions are set"""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # No tool-level restrictions
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test_key",
+        user_id="test_user",
+        object_permission=None,
+    )
+    set_auth_context(user_api_key_auth)
+
+    # Mock server
+    server = MagicMock()
+    server.server_id = "server1"
+    server.name = "Test Server"
+    server.alias = "test"
+    server.allowed_tools = None
+    server.disallowed_tools = None
+
+    # Mock manager
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
+    mock_manager.get_mcp_server_by_id = lambda server_id: server
+
+    async def mock_get_tools_from_server(
+        server, mcp_auth_header=None, extra_headers=None, add_prefix=False
+    ):
+        # Return 3 tools
+        tool1 = MagicMock()
+        tool1.name = "tool1"
+        tool1.description = "Tool 1"
+        tool1.inputSchema = {}
+
+        tool2 = MagicMock()
+        tool2.name = "tool2"
+        tool2.description = "Tool 2"
+        tool2.inputSchema = {}
+
+        tool3 = MagicMock()
+        tool3.name = "tool3"
+        tool3.description = "Tool 3"
+        tool3.inputSchema = {}
+
+        return [tool1, tool2, tool3]
+
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        mock_manager,
+    ):
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+        )
+
+    # Should return all tools when no restrictions
+    assert len(tools) == 3
+    tool_names = sorted([t.name for t in tools])
+    assert tool_names == ["tool1", "tool2", "tool3"]
+
+
+@pytest.mark.asyncio
+async def test_list_tools_strips_prefix_when_matching_permissions():
+    """
+    Test that tool permission filtering correctly strips prefixes from tool names.
+    
+    Tools from MCP servers are prefixed (e.g., "GITMCP-fetch_litellm_documentation"),
+    but allowed tools in DB are stored without prefix (e.g., "fetch_litellm_documentation").
+    The filtering should strip the prefix before comparing.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # Create object permission with tool-level restrictions (WITHOUT prefix)
+    object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm_123",
+        mcp_tool_permissions={
+            "gitmcp_server": [
+                "fetch_litellm_documentation",  # No prefix in DB
+                "search_litellm_code",  # No prefix in DB
+            ],
+        },
+    )
+
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test_key",
+        user_id="test_user",
+        object_permission=object_permission,
+    )
+    set_auth_context(user_api_key_auth)
+
+    # Mock server
+    server = MagicMock()
+    server.server_id = "gitmcp_server"
+    server.name = "GITMCP"
+    server.alias = "gitmcp"
+    server.allowed_tools = None
+    server.disallowed_tools = None
+
+    # Mock manager
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["gitmcp_server"])
+    mock_manager.get_mcp_server_by_id = lambda server_id: server
+
+    async def mock_get_tools_from_server(
+        server, mcp_auth_header=None, extra_headers=None, add_prefix=True
+    ):
+        # Return tools WITH prefix (as they come from MCP server)
+        tool1 = MagicMock()
+        tool1.name = "GITMCP-fetch_litellm_documentation"  # Prefixed
+        tool1.description = "Fetch docs"
+        tool1.inputSchema = {}
+
+        tool2 = MagicMock()
+        tool2.name = "GITMCP-search_litellm_documentation"  # Prefixed, not in allowed list
+        tool2.description = "Search docs"
+        tool2.inputSchema = {}
+
+        tool3 = MagicMock()
+        tool3.name = "GITMCP-search_litellm_code"  # Prefixed
+        tool3.description = "Search code"
+        tool3.inputSchema = {}
+
+        tool4 = MagicMock()
+        tool4.name = "GITMCP-fetch_generic_url_content"  # Prefixed, not in allowed list
+        tool4.description = "Fetch URL"
+        tool4.inputSchema = {}
+
+        return [tool1, tool2, tool3, tool4]
+
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        mock_manager,
+    ):
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+        )
+
+    # Should only return the 2 tools that match (after stripping prefix)
+    assert len(tools) == 2
+    tool_names = sorted([t.name for t in tools])
+    # Tools still have prefixes in the output, but were filtered correctly
+    assert tool_names == [
+        "GITMCP-fetch_litellm_documentation",
+        "GITMCP-search_litellm_code",
+    ]

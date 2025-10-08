@@ -21,9 +21,7 @@ from litellm.constants import BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import (
-    user_api_key_auth,
-)
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     get_form_data,
@@ -31,6 +29,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    HttpPassThroughEndpointHelpers,
     create_pass_through_route,
     create_websocket_passthrough_route,
     websocket_passthrough_request,
@@ -226,6 +225,7 @@ async def gemini_proxy_route(
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
+        custom_llm_provider="gemini",
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
@@ -304,9 +304,6 @@ async def vllm_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/vllm)
     """
-    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-        HttpPassThroughEndpointHelpers,
-    )
     from litellm.proxy.proxy_server import llm_router
 
     request_body = await get_request_body(request)
@@ -826,7 +823,77 @@ async def azure_proxy_route(
     Call any azure endpoint using the proxy.
 
     Just use `{PROXY_BASE_URL}/azure/{endpoint:path}`
+
+    Checks if the deployment id in the url is a litellm model name. If so, it will route using the llm_router.allm_passthrough_route.
     """
+    from litellm.proxy.proxy_server import llm_router
+
+    parts = endpoint.split(
+        "/"
+    )  # azure model is in the url - e.g. https://{endpoint}/openai/deployments/{deployment-id}/completions?api-version=2024-10-21
+
+    if len(parts) > 1 and llm_router:
+        for part in parts:
+            is_router_model = is_passthrough_request_using_router_model(
+                request_body={"model": part}, llm_router=llm_router
+            )
+            if is_router_model:
+                request_body = await get_request_body(request)
+                is_streaming_request = is_passthrough_request_streaming(request_body)
+                result = await llm_router.allm_passthrough_route(
+                    model=part,
+                    method=request.method,
+                    endpoint=endpoint,
+                    request_query_params=request.query_params,
+                    request_headers=dict(request.headers),
+                    stream=request_body.get("stream", False),
+                    content=None,
+                    data=None,
+                    files=None,
+                    json=(
+                        request_body
+                        if request.headers.get("content-type") == "application/json"
+                        else None
+                    ),
+                    params=None,
+                    headers=None,
+                    cookies=None,
+                )
+
+                if is_streaming_request:
+                    # Check if result is an async generator (from _async_streaming)
+                    import inspect
+
+                    if inspect.isasyncgen(result):
+                        # Result is already an async generator, use it directly
+                        return StreamingResponse(
+                            content=result,
+                            status_code=200,
+                            headers={"content-type": "text/event-stream"},
+                        )
+                    else:
+                        # Result is an httpx.Response, use aiter_bytes()
+                        result = cast(httpx.Response, result)
+                        return StreamingResponse(
+                            content=result.aiter_bytes(),
+                            status_code=result.status_code,
+                            headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                                headers=result.headers,
+                                custom_headers=None,
+                            ),
+                        )
+
+                # Non-streaming response
+                result = cast(httpx.Response, result)
+                content = await result.aread()
+                return Response(
+                    content=content,
+                    status_code=result.status_code,
+                    headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                        headers=result.headers,
+                        custom_headers=None,
+                    ),
+                )
     base_target_url = get_secret_str(secret_name="AZURE_API_BASE")
     if base_target_url is None:
         raise Exception(
@@ -1291,9 +1358,7 @@ async def vertex_ai_live_websocket_passthrough(
 
     if vertex_credentials_config is not None:
         resolved_project = resolved_project or vertex_credentials_config.vertex_project
-        temp_location = (
-            resolved_location or vertex_credentials_config.vertex_location
-        )
+        temp_location = resolved_location or vertex_credentials_config.vertex_location
         # Ensure resolved_location is a string
         if isinstance(temp_location, dict):
             resolved_location = str(temp_location)
@@ -1301,7 +1366,11 @@ async def vertex_ai_live_websocket_passthrough(
             resolved_location = str(temp_location)
         else:
             resolved_location = None
-        credentials_value = str(vertex_credentials_config.vertex_credentials) if vertex_credentials_config.vertex_credentials is not None else None
+        credentials_value = (
+            str(vertex_credentials_config.vertex_credentials)
+            if vertex_credentials_config.vertex_credentials is not None
+            else None
+        )
 
     try:
         resolved_location = resolved_location or (
@@ -1362,7 +1431,7 @@ async def vertex_ai_live_websocket_passthrough(
     # Use the new WebSocket passthrough pattern
     if user_api_key_dict is None:
         raise ValueError("user_api_key_dict is required for WebSocket passthrough")
-    
+
     return await websocket_passthrough_request(
         websocket=websocket,
         target=service_url,

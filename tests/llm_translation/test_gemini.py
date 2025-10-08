@@ -465,11 +465,11 @@ def test_gemini_url_context():
     from litellm import completion
 
     litellm._turn_on_debug()
+    URL1 = "https://www.foodnetwork.com/recipes/ina-garten/perfect-roast-chicken-recipe-1940592"
 
-    url = "https://ai.google.dev/gemini-api/docs/models"
     prompt = f"""
-    Summarize this document:
-    {url}
+    Get the recipes listed on the following website
+    {URL1}
     """
     response = completion(
         model="gemini/gemini-2.5-flash",
@@ -482,7 +482,7 @@ def test_gemini_url_context():
     url_context_metadata = response.model_extra["vertex_ai_url_context_metadata"]
     assert url_context_metadata is not None
     urlMetadata = url_context_metadata[0]["urlMetadata"][0]
-    assert urlMetadata["retrievedUrl"] == url
+    assert urlMetadata["retrievedUrl"] == URL1
     assert urlMetadata["urlRetrievalStatus"] == "URL_RETRIEVAL_STATUS_SUCCESS"
 
 
