@@ -435,8 +435,11 @@ class TestMCPServerManager:
             disallowed_tools=None,
         )
 
-        # Mock dependencies
+        # Mock dependencies - set object_permission and object_permission_id to None
+        # so permission checks return None (no restrictions)
         user_api_key_auth = MagicMock()
+        user_api_key_auth.object_permission = None
+        user_api_key_auth.object_permission_id = None
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -508,8 +511,11 @@ class TestMCPServerManager:
             disallowed_tools=["banned_tool", "another_banned_tool"],
         )
 
-        # Mock dependencies
+        # Mock dependencies - set object_permission and object_permission_id to None
+        # so permission checks return None (no restrictions)
         user_api_key_auth = MagicMock()
+        user_api_key_auth.object_permission = None
+        user_api_key_auth.object_permission_id = None
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -581,8 +587,11 @@ class TestMCPServerManager:
             disallowed_tools=None,
         )
 
-        # Mock dependencies
+        # Mock dependencies - set object_permission and object_permission_id to None
+        # so permission checks return None (no restrictions)
         user_api_key_auth = MagicMock()
+        user_api_key_auth.object_permission = None
+        user_api_key_auth.object_permission_id = None
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -617,8 +626,11 @@ class TestMCPServerManager:
             disallowed_tools=["tool2", "tool3"],  # tool2 is in both lists
         )
 
-        # Mock dependencies
+        # Mock dependencies - set object_permission and object_permission_id to None
+        # so permission checks return None (no restrictions)
         user_api_key_auth = MagicMock()
+        user_api_key_auth.object_permission = None
+        user_api_key_auth.object_permission_id = None
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
