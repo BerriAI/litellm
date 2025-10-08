@@ -37,7 +37,9 @@ When Creating a Key, Team, or Organization, you can select the allowed MCP Serve
 
 ## Set Allowed Tools for a Key, Team, or Organization
 
-This video shows how to set allowed tools for a Key, Team, or Organization. For example, if you have two teams (Engineering and Sales) using a GitHub MCP server with five tools (`list_repositories`, `create_issue`, `search_code`, `update_pull_request`, `close_issue`), you can share `list_repositories`, `create_issue`, and `search_code` with the Engineering team, while sharing `search_code`, `update_pull_request`, and `close_issue` with the Sales team.
+Control which tools different teams can access from the same MCP server. For example, give your Engineering team access to `list_repositories`, `create_issue`, and `search_code`, while Sales only gets `search_code` and `close_issue`.
 
+
+This video shows how to set allowed tools for a Key, Team, or Organization.
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/7464d444c3324078892367272fe50745" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
