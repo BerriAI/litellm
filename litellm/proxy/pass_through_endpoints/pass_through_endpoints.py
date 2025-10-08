@@ -991,7 +991,7 @@ def create_pass_through_route(
             ):
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Pass-through endpoint {target} not found. This could have been deleted or not yet added to the proxy.",
+                    detail=f"Pass-through endpoint {endpoint} not found. This could have been deleted or not yet added to the proxy.",
                 )
 
             return await pass_through_request(  # type: ignore
