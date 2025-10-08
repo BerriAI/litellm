@@ -1,7 +1,7 @@
-from litellm._uuid import uuid
 from typing import Any, Dict, Iterable, List, Optional, Set, Union
 
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LiteLLM_ObjectPermissionTable,
@@ -30,7 +30,7 @@ def _prepare_mcp_server_data(
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
     # Convert model to dict
-    data_dict = data.model_dump()
+    data_dict = data.model_dump(exclude_none=True)
     # Ensure alias is always present in the dict (even if None)
     if "alias" not in data_dict:
         data_dict["alias"] = getattr(data, "alias", None)

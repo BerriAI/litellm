@@ -405,6 +405,7 @@ async def agenerate_content_stream(
                     config=setup_result.generate_content_config_dict,
                     litellm_params=setup_result.litellm_params,
                     tools=tools,
+                    stream=True,
                     **kwargs,
                 )
             )
@@ -485,6 +486,7 @@ def generate_content_stream(
                 config=setup_result.generate_content_config_dict,
                 _is_async=_is_async,
                 litellm_params=setup_result.litellm_params,
+                stream=True,
                 **kwargs,
             )
 
