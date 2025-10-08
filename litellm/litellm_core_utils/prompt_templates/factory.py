@@ -2,7 +2,6 @@ import copy
 import json
 import mimetypes
 import re
-from litellm._uuid import uuid
 import xml.etree.ElementTree as ET
 from enum import Enum
 from typing import Any, List, Optional, Tuple, cast, overload
@@ -13,6 +12,7 @@ import litellm
 import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
+from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
@@ -367,16 +367,26 @@ def phind_codellama_pt(messages):
 def hf_chat_template(  # noqa: PLR0915
     model: str, messages: list, chat_template: Optional[Any] = None
 ):
+    """
+    HuggingFace chat template
+
+    Args:
+        model: Model name
+        messages: Messages
+        chat_template: Chat template
+    """
+    from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
+        _extract_token_value,
+        _get_chat_template_file,
+        _get_tokenizer_config,
+        strftime_now,
+    )
+
     # Define Jinja2 environment with custom functions for advanced templates
     env = ImmutableSandboxedEnvironment()
 
     def raise_exception(message):
         raise Exception(f"Error message - {message}")
-
-    def strftime_now(fmt):
-        """Custom function for templates that need current date/time formatting (e.g., gpt-oss)"""
-        from datetime import datetime
-        return datetime.now().strftime(fmt)
 
     env.globals["raise_exception"] = raise_exception
     env.globals["strftime_now"] = strftime_now
@@ -385,45 +395,6 @@ def hf_chat_template(  # noqa: PLR0915
     bos_token = ""
     eos_token = ""
     if chat_template is None:
-
-        def _get_tokenizer_config(hf_model_name):
-            """Fetch tokenizer_config.json from HuggingFace"""
-            try:
-                url = f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
-                client = HTTPHandler(concurrent_limit=1)
-                response = client.get(url)
-            except Exception as e:
-                raise e
-            if response.status_code == 200:
-                tokenizer_config = json.loads(response.content)
-                return {"status": "success", "tokenizer": tokenizer_config}
-            else:
-                return {"status": "failure"}
-
-        def _get_chat_template_file(hf_model_name):
-            """Fetch chat template from separate .jinja file (for models like gpt-oss)"""
-            template_filenames = ["chat_template.jinja", "chat_template.jinja2"]
-            client = HTTPHandler(concurrent_limit=1)
-            
-            for filename in template_filenames:
-                try:
-                    url = f"https://huggingface.co/{hf_model_name}/raw/main/{filename}"
-                    response = client.get(url)
-                    if response.status_code == 200:
-                        return {"status": "success", "chat_template": response.content.decode("utf-8")}
-                except Exception:
-                    continue
-            
-            return {"status": "failure"}
-
-        def _extract_token_value(token_value):
-            """Extract token string from various formats (string, dict, etc.)"""
-            if token_value is None or isinstance(token_value, str):
-                return token_value or ""
-            if isinstance(token_value, dict):
-                return token_value.get("content", "")
-            return ""
-
         # Fetch or retrieve cached tokenizer config
         if model in litellm.known_tokenizer_config:
             tokenizer_config = litellm.known_tokenizer_config[model]
@@ -433,21 +404,27 @@ def hf_chat_template(  # noqa: PLR0915
 
         # Try to get chat template from tokenizer_config.json first
         if (
-            tokenizer_config["status"] == "success"
+            tokenizer_config.get("status") == "success"
+            and "tokenizer" in tokenizer_config
+            and isinstance(tokenizer_config["tokenizer"], dict)
             and "chat_template" in tokenizer_config["tokenizer"]
         ):
-            tokenizer_data = tokenizer_config["tokenizer"]
+            tokenizer_data: dict = tokenizer_config["tokenizer"]  # type: ignore
             bos_token = _extract_token_value(tokenizer_data.get("bos_token"))
             eos_token = _extract_token_value(tokenizer_data.get("eos_token"))
             chat_template = tokenizer_data["chat_template"]
         else:
             # Fallback: Try to fetch chat template from separate .jinja file
             template_result = _get_chat_template_file(model)
-            if template_result["status"] == "success":
+            if template_result.get("status") == "success":
                 chat_template = template_result["chat_template"]
                 # Still try to get tokens from tokenizer_config if available
-                if tokenizer_config["status"] == "success":
-                    tokenizer_data = tokenizer_config["tokenizer"]
+                if (
+                    tokenizer_config.get("status") == "success"
+                    and "tokenizer" in tokenizer_config
+                    and isinstance(tokenizer_config["tokenizer"], dict)
+                ):
+                    tokenizer_data: dict = tokenizer_config["tokenizer"]  # type: ignore
                     bos_token = _extract_token_value(tokenizer_data.get("bos_token"))
                     eos_token = _extract_token_value(tokenizer_data.get("eos_token"))
             else:
