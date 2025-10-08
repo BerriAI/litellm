@@ -18,6 +18,7 @@ class MCPServer(BaseModel):
     url: Optional[str] = None
     spec_path: Optional[str] = None
     transport: MCPTransportType
+    spec_path: Optional[str] = None
     auth_type: Optional[MCPAuthType] = None
     authentication_token: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
