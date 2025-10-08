@@ -327,6 +327,7 @@ def test_langfuse_e2e_sync(monkeypatch):
     import respx
     import httpx
     import time
+    litellm.disable_aiohttp_transport = True # since this uses respx, we need to set use_aiohttp_transport to False
 
     litellm._turn_on_debug()
     monkeypatch.setattr(litellm, "success_callback", ["langfuse"])

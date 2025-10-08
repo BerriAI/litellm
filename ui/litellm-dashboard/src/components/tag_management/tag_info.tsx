@@ -1,23 +1,12 @@
 import React, { useState, useEffect } from "react";
-import {
-  Card,
-  Text,
-  Title,
-  Button,
-  Badge,
-} from "@tremor/react";
-import {
-  Form,
-  Input,
-  Select as Select2,
-  message,
-  Tooltip,
-} from "antd";
-import { InfoCircleOutlined } from '@ant-design/icons';
-import { fetchUserModels } from "../create_key_button";
+import { Card, Text, Title, Button, Badge } from "@tremor/react";
+import { Form, Input, Select as Select2, message, Tooltip } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { fetchUserModels } from "../organisms/create_key_button";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { tagInfoCall, tagUpdateCall } from "../networking";
 import { Tag, TagInfoResponse } from "./types";
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface TagInfoViewProps {
   tagId: string;
@@ -27,13 +16,7 @@ interface TagInfoViewProps {
   editTag: boolean;
 }
 
-const TagInfoView: React.FC<TagInfoViewProps> = ({
-  tagId,
-  onClose,
-  accessToken,
-  is_admin,
-  editTag,
-}) => {
+const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, is_admin, editTag }) => {
   const [form] = Form.useForm();
   const [tagDetails, setTagDetails] = useState<Tag | null>(null);
   const [isEditing, setIsEditing] = useState<boolean>(editTag);
@@ -56,7 +39,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
       }
     } catch (error) {
       console.error("Error fetching tag details:", error);
-      message.error("Error fetching tag details: " + error);
+      NotificationsManager.fromBackend("Error fetching tag details: " + error);
     }
   };
 
@@ -80,12 +63,12 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
         description: values.description,
         models: values.models,
       });
-      message.success("Tag updated successfully");
+      NotificationsManager.success("Tag updated successfully");
       setIsEditing(false);
       fetchTagDetails();
     } catch (error) {
       console.error("Error updating tag:", error);
-      message.error("Error updating tag: " + error);
+      NotificationsManager.fromBackend("Error updating tag: " + error);
     }
   };
 
@@ -97,53 +80,38 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button onClick={onClose} className="mb-4">← Back to Tags</Button>
+          <Button onClick={onClose} className="mb-4">
+            ← Back to Tags
+          </Button>
           <Title>Tag Name: {tagDetails.name}</Title>
           <Text className="text-gray-500">{tagDetails.description || "No description"}</Text>
         </div>
-        {is_admin && !isEditing && (
-          <Button onClick={() => setIsEditing(true)}>Edit Tag</Button>
-        )}
+        {is_admin && !isEditing && <Button onClick={() => setIsEditing(true)}>Edit Tag</Button>}
       </div>
 
       {isEditing ? (
         <Card>
-          <Form
-            form={form}
-            onFinish={handleSave}
-            layout="vertical"
-            initialValues={tagDetails}
-          >
-            <Form.Item
-              label="Tag Name"
-              name="name"
-              rules={[{ required: true, message: "Please input a tag name" }]}
-            >
+          <Form form={form} onFinish={handleSave} layout="vertical" initialValues={tagDetails}>
+            <Form.Item label="Tag Name" name="name" rules={[{ required: true, message: "Please input a tag name" }]}>
               <Input />
             </Form.Item>
 
-            <Form.Item
-              label="Description"
-              name="description"
-            >
+            <Form.Item label="Description" name="description">
               <Input.TextArea rows={4} />
             </Form.Item>
 
             <Form.Item
               label={
                 <span>
-                  Allowed LLMs{' '}
+                  Allowed LLMs{" "}
                   <Tooltip title="Select which LLMs are allowed to process this type of data">
-                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                   </Tooltip>
                 </span>
               }
               name="models"
             >
-              <Select2
-                mode="multiple"
-                placeholder="Select LLMs"
-              >
+              <Select2 mode="multiple" placeholder="Select LLMs">
                 {userModels.map((modelId) => (
                   <Select2.Option key={modelId} value={modelId}>
                     {getModelDisplayName(modelId)}
@@ -179,9 +147,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
                   ) : (
                     tagDetails.models.map((modelId) => (
                       <Badge key={modelId} color="blue">
-                        <Tooltip title={`ID: ${modelId}`}>
-                          {tagDetails.model_info?.[modelId] || modelId}
-                        </Tooltip>
+                        <Tooltip title={`ID: ${modelId}`}>{tagDetails.model_info?.[modelId] || modelId}</Tooltip>
                       </Badge>
                     ))
                   )}
@@ -203,4 +169,4 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({
   );
 };
 
-export default TagInfoView; 
+export default TagInfoView;

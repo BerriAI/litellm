@@ -204,7 +204,71 @@ For quick testing, you can also use REDIS_URL, eg.:
 REDIS_URL="rediss://.."
 ```
 
-but we **don't** recommend using REDIS_URL in prod. We've noticed a performance difference between using it vs. redis_host, port, etc. 
+but we **don't** recommend using REDIS_URL in prod. We've noticed a performance difference between using it vs. redis_host, port, etc.
+
+#### GCP IAM Authentication
+
+For GCP Memorystore Redis with IAM authentication, install the required dependency:
+
+:::info
+IAM authentication for redis is only supported via GCP and only on Redis Clusters for now.
+:::
+
+```shell
+pip install google-cloud-iam
+```
+
+<Tabs>
+
+<TabItem value="gcp-iam-config" label="Set on config.yaml">
+
+For Redis Cluster with GCP IAM:
+
+```yaml
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    redis_startup_nodes: [{"host": "10.128.0.2", "port": 6379}, {"host": "10.128.0.2", "port": 11008}]
+    gcp_service_account: "projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"
+    ssl: true
+    ssl_cert_reqs: null
+    ssl_check_hostname: false
+```
+
+</TabItem>
+
+<TabItem value="gcp-iam-env" label="Set on .env">
+
+You can configure GCP IAM Redis authentication in your .env:
+
+
+For Redis Cluster:
+
+```env
+REDIS_CLUSTER_NODES='[{"host": "10.128.0.2", "port": 6379}, {"host": "10.128.0.2", "port": 11008}]'
+REDIS_GCP_SERVICE_ACCOUNT="projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"
+REDIS_GCP_SSL_CA_CERTS="./server-ca.pem"
+REDIS_SSL="True"
+REDIS_SSL_CERT_REQS="None"
+REDIS_SSL_CHECK_HOSTNAME="False"
+```
+
+**GCP Authentication Setup**
+
+Make sure your GCP credentials are configured:
+
+```shell
+# Option 1: Service account key file
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
+
+# Option 2: If running on GCP compute instance with service account attached
+# No additional setup needed
+```
+
+</TabItem>
+
+</Tabs> 
 #### Step 2: Add Redis Credentials to .env
 Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
 
@@ -895,31 +959,17 @@ curl http://localhost:4000/v1/chat/completions \
 </Tabs>
 
 
+## Redis max_connections
 
-### Turn on `batch_redis_requests` 
-
-**What it does?**
-When a request is made:
-
-- Check if a key starting with `litellm:<hashed_api_key>:<call_type>:` exists in-memory, if no - get the last 100 cached requests for this key and store it
-
-- New requests are stored with this `litellm:..` as the namespace
-
-**Why?**
-Reduce number of redis GET requests. This improved latency by 46% in prod load tests. 
-
-**Usage**
+You can set the `max_connections` parameter in your `cache_params` for Redis. This is passed directly to the Redis client and controls the maximum number of simultaneous connections in the pool. If you see errors like `No connection available`, try increasing this value:
 
 ```yaml
 litellm_settings:
   cache: true
   cache_params:
     type: redis
-    ... # remaining redis args (host, port, etc.)
-  callbacks: ["batch_redis_requests"] # 👈 KEY CHANGE!
+    max_connections: 100
 ```
-
-[**SEE CODE**](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/batch_redis_get.py)
 
 ## Supported `cache_params` on proxy config.yaml
 
@@ -929,6 +979,7 @@ cache_params:
   ttl: Optional[float]
   default_in_memory_ttl: Optional[float]
   default_in_redis_ttl: Optional[float]
+  max_connections: Optional[Int]
 
   # Type of cache (options: "local", "redis", "s3")
   type: s3
@@ -943,6 +994,13 @@ cache_params:
   port: "6379"  # Redis server port (as a string)
   password: secret_password  # Redis server password
   namespace: Optional[str] = None,
+  
+  # GCP IAM Authentication for Redis
+  gcp_service_account: "projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"  # GCP service account for IAM authentication
+  gcp_ssl_ca_certs: "./server-ca.pem"  # Path to SSL CA certificate file for GCP Memorystore Redis
+  ssl: true  # Enable SSL for secure connections  
+  ssl_cert_reqs: null  # Set to null for self-signed certificates
+  ssl_check_hostname: false  # Set to false for self-signed certificates
   
 
   # S3 cache parameters

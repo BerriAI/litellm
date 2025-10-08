@@ -1,0 +1,2 @@
+llms/bedrock/chat/invoke_agent/transformation.py:404: error: Incompatible types in assignment (expression has type "object", variable has type "InvokeAgentModelInvocationOutput | None")  [assignment]
+llms/bedrock/chat/invoke_agent/transformation.py:405: error: Argument 1 to "get" of "Mapping" has incompatible type "str | InvokeAgentModelInvocationOutput"; expected "str"  [typeddict-item]

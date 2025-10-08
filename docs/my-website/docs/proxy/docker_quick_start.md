@@ -2,7 +2,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Getting Started - E2E Tutorial
+# E2E Tutorial
 
 End-to-End tutorial for LiteLLM Proxy to:
 - Add an Azure OpenAI model 
@@ -13,7 +13,7 @@ End-to-End tutorial for LiteLLM Proxy to:
 
 ## Pre-Requisites 
 
-- Install LiteLLM Docker Image ** OR ** LiteLLM CLI (pip package)
+- Install LiteLLM Docker Image **OR** LiteLLM CLI (pip package)
 
 <Tabs>
 
@@ -35,6 +35,30 @@ $ pip install 'litellm[proxy]'
 
 </TabItem>
 
+<TabItem value="docker-compose" label="Docker Compose (Proxy + DB)">
+
+Use this docker compose to spin up the proxy with a postgres database running locally. 
+
+```bash
+# Get the docker compose file
+curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/docker-compose.yml
+
+# Add the master key - you can change this after setup
+echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
+
+# Add the litellm salt key - you cannot change this after adding a model
+# It is used to encrypt / decrypt your LLM API Key credentials
+# We recommend - https://1password.com/password-generator/ 
+# password generator to get a random hash for litellm salt key
+echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
+
+source .env
+
+# Start
+docker compose up
+```
+
+</TabItem>
 </Tabs>
 
 ## 1. Add a model 
@@ -43,14 +67,16 @@ Control LiteLLM Proxy with a config.yaml file.
 
 Setup your config.yaml with your azure model.
 
+Note: When using the proxy with a database, you can also **just add models via UI** (UI is available on `/ui` route).
+
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/my_azure_deployment
       api_base: os.environ/AZURE_API_BASE
       api_key: "os.environ/AZURE_API_KEY"
-      api_version: "2024-07-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
+      api_version: "2025-01-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
 ```
 ---
 
@@ -127,15 +153,15 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {
         "role": "system",
-        "content": "You are a helpful math tutor. Guide the user through the solution step by step."
+        "content": "You are an LLM named gpt-4o"
       },
       {
         "role": "user",
-        "content": "how can I solve 8x + 7 = -23"
+        "content": "what is your name?"
       }
     ]
 }'
@@ -145,28 +171,63 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 ```bash
 {
-    "id": "chatcmpl-2076f062-3095-4052-a520-7c321c115c68",
-    "choices": [
-        {
-            "finish_reason": "stop",
-            "index": 0,
-            "message": {
-                "content": "I am gpt-3.5-turbo",
-                "role": "assistant",
-                "tool_calls": null,
-                "function_call": null
-            }
-        }
-    ],
-    "created": 1724962831,
-    "model": "gpt-3.5-turbo",
-    "object": "chat.completion",
-    "system_fingerprint": null,
-    "usage": {
-        "completion_tokens": 20,
-        "prompt_tokens": 10,
-        "total_tokens": 30
+  "id": "chatcmpl-BcO8tRQmQV6Dfw6onqMufxPkLLkA8",
+  "created": 1748488967,
+  "model": "gpt-4o-2024-11-20",
+  "object": "chat.completion",
+  "system_fingerprint": "fp_ee1d74bde0",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "My name is **gpt-4o**! How can I assist you today?",
+        "role": "assistant",
+        "tool_calls": null,
+        "function_call": null,
+        "annotations": []
+      }
     }
+  ],
+  "usage": {
+    "completion_tokens": 19,
+    "prompt_tokens": 28,
+    "total_tokens": 47,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": 0
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0
+    }
+  },
+  "service_tier": null,
+  "prompt_filter_results": [
+    {
+      "prompt_index": 0,
+      "content_filter_results": {
+        "hate": {
+          "filtered": false,
+          "severity": "safe"
+        },
+        "self_harm": {
+          "filtered": false,
+          "severity": "safe"
+        },
+        "sexual": {
+          "filtered": false,
+          "severity": "safe"
+        },
+        "violence": {
+          "filtered": false,
+          "severity": "safe"
+        }
+      }
+    }
+  ]
 }
 ```
 
@@ -191,12 +252,12 @@ Track Spend, and control model access via virtual keys for the proxy
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/my_azure_deployment
       api_base: os.environ/AZURE_API_BASE
       api_key: "os.environ/AZURE_API_KEY"
-      api_version: "2024-07-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
+      api_version: "2025-01-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
 
 general_settings: 
   master_key: sk-1234 
@@ -217,15 +278,15 @@ See All General Settings [here](http://localhost:3000/docs/proxy/configs#all-set
    - **Description**: 
      - Set a `master key`, this is your Proxy Admin key - you can use this to create other keys (🚨 must start with `sk-`).
    - **Usage**: 
-     - ** Set on config.yaml** set your master key under `general_settings:master_key`, example - 
+     - **Set on config.yaml** set your master key under `general_settings:master_key`, example - 
         `master_key: sk-1234`
-     - ** Set env variable** set `LITELLM_MASTER_KEY`
+     - **Set env variable** set `LITELLM_MASTER_KEY`
 
 2. **`database_url`** (str)
    - **Description**: 
      - Set a `database_url`, this is the connection to your Postgres DB, which is used by litellm for generating keys, users, teams.
    - **Usage**: 
-     - ** Set on config.yaml** set your master key under `general_settings:database_url`, example - 
+     - **Set on config.yaml** set your `database_url` under `general_settings:database_url`, example - 
         `database_url: "postgresql://..."`
      - Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
 
@@ -276,7 +337,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-12...' \
 -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {
         "role": "system",
@@ -312,7 +373,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-12...' \
 -d '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
       {
         "role": "system",
@@ -331,7 +392,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 ```bash
 {
   "error": {
-    "message": "Max parallel request limit reached. Hit limit for api_key: daa1b272072a4c6841470a488c5dad0f298ff506e1cc935f4a181eed90c182ad. tpm_limit: 100, current_tpm: 29, rpm_limit: 1, current_rpm: 2.",
+    "message": "LiteLLM Rate Limit Handler for rate limit type = key. Crossed TPM / RPM / Max Parallel Request Limit. current rpm: 1, rpm limit: 1, current tpm: 348, tpm limit: 9223372036854775807, current max_parallel_requests: 0, max_parallel_requests: 9223372036854775807",
     "type": "None",
     "param": "None",
     "code": "429"
@@ -371,12 +432,12 @@ You can disable ssl verification with:
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4o
     litellm_params:
       model: azure/my_azure_deployment
       api_base: os.environ/AZURE_API_BASE
       api_key: "os.environ/AZURE_API_KEY"
-      api_version: "2024-07-01-preview"
+      api_version: "2025-01-01-preview"
 
 litellm_settings:
     ssl_verify: false # 👈 KEY CHANGE
@@ -443,6 +504,7 @@ LiteLLM Proxy uses the [LiteLLM Python SDK](https://docs.litellm.ai/docs/routing
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
 
 - [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
+- [Community Slack 💭](https://join.slack.com/share/enQtOTE0ODczMzk2Nzk4NC01YjUxNjY2YjBlYTFmNDRiZTM3NDFiYTM3MzVkODFiMDVjOGRjMmNmZTZkZTMzOWQzZGQyZWIwYjQ0MWExYmE3)
 
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 

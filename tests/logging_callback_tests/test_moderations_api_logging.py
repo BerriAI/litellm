@@ -1,7 +1,7 @@
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 import pytest
 from dotenv import load_dotenv
 from fastapi import Request
@@ -17,6 +17,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
+from litellm.router import Router
 import asyncio
 from typing import Optional
 from litellm.types.utils import StandardLoggingPayload, Usage, ModelInfoBase
@@ -41,7 +42,8 @@ class TestCustomLogger(CustomLogger):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", [
     None,
-    "omni-moderation-latest"
+    "omni-moderation-latest",
+    "router-internal-moderation-model"
 ])
 
 async def test_moderations_api_logging(model):
@@ -51,11 +53,30 @@ async def test_moderations_api_logging(model):
     custom_logger = TestCustomLogger()
     litellm.logging_callback_manager.add_litellm_callback(custom_logger)
 
-    input_content = "Hello, how are you?"
-    response = await litellm.amoderation(
-        input=input_content,
-        model=model,
+
+    MODEL_GROUP = "internal-moderation-model"
+    router = Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP,
+                "litellm_params": {
+                    "model": "openai/omni-moderation-latest",
+                },
+            }
+        ]
     )
+
+    input_content = "Hello, how are you?"
+    if model == "router-internal-moderation-model":
+        response = await router.amoderation(
+            input=input_content,
+            model=MODEL_GROUP,
+        )
+    else:
+        response = await litellm.amoderation(
+            input=input_content,
+            model=model,
+        )
 
     print("response", json.dumps(response, indent=4, default=str))
 
@@ -75,4 +96,9 @@ async def test_moderations_api_logging(model):
 
     # assert the logged response == response user received client side 
     assert dict(standard_logging_payload["response"]) == response.model_dump()
+
+
+    # if router used, validate model_group is logged as expected
+    if model == "router-internal-moderation-model":
+        assert standard_logging_payload["model_group"] == MODEL_GROUP
 

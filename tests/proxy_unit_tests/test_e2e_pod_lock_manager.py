@@ -1,7 +1,7 @@
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 from typing import List
 from datetime import datetime, timezone, timedelta
 
@@ -55,7 +55,6 @@ from litellm.proxy.proxy_server import (
     chat_completion,
     completion,
     embeddings,
-    image_generation,
     model_list,
     moderations,
     user_api_key_auth,
@@ -76,11 +75,11 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache, RedisCache
+from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 from litellm.proxy._types import (
     DynamoDBArgs,
     GenerateKeyRequest,
     KeyRequest,
-    LiteLLM_UpperboundKeyGenerateParams,
     NewCustomerRequest,
     NewTeamRequest,
     NewUserRequest,
@@ -380,7 +379,7 @@ async def test_e2e_size_of_redis_buffer():
     from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
     from litellm.proxy.db.db_transaction_queue.base_update_queue import BaseUpdateQueue
     from litellm.caching import RedisCache
-    import uuid
+    from litellm._uuid import uuid
 
 
     redis_cache = RedisCache(host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), password=os.getenv("REDIS_PASSWORD"))
@@ -401,7 +400,7 @@ async def test_e2e_size_of_redis_buffer():
     for queue in initialized_queues:
         key = f"test_key_{queue.__class__.__name__}_{uuid.uuid4()}"
         new_keys_added.append(key)
-        await queue.add_update({key: {"spend": 1.0}})
+        await queue.add_update({key: {"spend": 1.0, "entity_id": "test_entity_id", "entity_type": "user", "api_key": "test_api_key", "model": "test_model", "custom_llm_provider": "test_custom_llm_provider", "date": "2025-01-01", "prompt_tokens": 100, "completion_tokens": 100, "total_tokens": 200, "response_cost": 1.0, "api_requests": 1, "successful_requests": 1, "failed_requests": 0}})
     
     print("initialized_queues=", initialized_queues)
     print("new_keys_added=", new_keys_added)

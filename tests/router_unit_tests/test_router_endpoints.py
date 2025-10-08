@@ -14,7 +14,7 @@ sys.path.insert(
 from litellm import Router, CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 
-# Get the current directory of the file being run
+## Get the current directory of the file being run
 pwd = os.path.dirname(os.path.realpath(__file__))
 print(pwd)
 
@@ -616,4 +616,102 @@ async def test_init_responses_api_endpoints():
     second_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
     assert second_call_kwargs["model"] == "claude-3-sonnet"
     assert second_call_kwargs["response_id"] == "resp_claude_123"
+
+
+@pytest.mark.asyncio
+async def test_init_vector_store_api_endpoints():
+    """
+    Test that _init_vector_store_api_endpoints correctly passes custom_llm_provider to kwargs
+    """
+    # Create a router with a basic model
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+    
+    # Mock the original function
+    mock_original_function = AsyncMock(return_value={"status": "success"})
+    
+    # Call without custom_llm_provider
+    result = await router._init_vector_store_api_endpoints(
+        original_function=mock_original_function,
+        vector_store_id="test-store"
+    )
+    
+    # Verify original function was called with correct kwargs
+    mock_original_function.assert_called_once_with(vector_store_id="test-store")
+    assert result == {"status": "success"}
+    
+    # Reset the mock
+    mock_original_function.reset_mock()
+    
+    # Call with custom_llm_provider
+    await router._init_vector_store_api_endpoints(
+        original_function=mock_original_function,
+        custom_llm_provider="openai",
+        vector_store_id="test-store"
+    )
+    
+    # Verify custom_llm_provider was added to kwargs
+    mock_original_function.assert_called_once_with(
+        vector_store_id="test-store",
+        custom_llm_provider="openai"
+    )
+
+
+def test_apply_default_settings():
+    """
+    Test the apply_default_settings method.
+    
+    This test verifies that apply_default_settings correctly initializes
+    default pre-call checks and doesn't modify existing router state.
+    """
+    # Test with fresh router
+    router = Router()
+    initial_optional_callbacks = router.optional_callbacks
+    
+    # Test that the method runs without error
+    result = router.apply_default_settings()
+    
+    # Verify method returns None as expected
+    assert result is None
+    
+    # Verify that optional_callbacks remains None if it was initially None
+    # (since default_pre_call_checks is an empty list)
+    assert router.optional_callbacks == initial_optional_callbacks
+    
+    # Test with router that already has some optional_callbacks
+    router_with_callbacks = Router()
+    mock_callback = MagicMock()
+    router_with_callbacks.optional_callbacks = [mock_callback]
+    
+    # Apply default settings
+    result = router_with_callbacks.apply_default_settings()
+    
+    # Verify method returns None
+    assert result is None
+    
+    # Verify existing callbacks are preserved (since we're adding empty list)
+    assert mock_callback in router_with_callbacks.optional_callbacks
+    
+    # Test that the method is called during router initialization
+    with patch.object(Router, 'apply_default_settings') as mock_apply:
+        Router()
+        mock_apply.assert_called_once()
+    
+    # Test with mocked add_optional_pre_call_checks to verify internal call
+    router_test = Router()
+    with patch.object(router_test, 'add_optional_pre_call_checks') as mock_add_checks:
+        router_test.apply_default_settings()
+        
+        # Verify add_optional_pre_call_checks was called with empty list
+        mock_add_checks.assert_called_once_with([])
+
 

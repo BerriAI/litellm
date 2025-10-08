@@ -74,6 +74,146 @@ async def test_basic_s3_logging(sync_mode, streaming):
         s3.delete_object(Bucket="load-testing-oct", Key=key)
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "streaming", [(True)]
+)
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_basic_s3_v2_logging(streaming):
+    from blockbuster import BlockBuster
+    from litellm.integrations.s3_v2 import S3Logger
+    s3_v2_logger = S3Logger(s3_flush_interval=1)
+    litellm.callbacks = [s3_v2_logger]
+    blockbuster = BlockBuster()
+    blockbuster.activate()
+
+    litellm._turn_on_debug()
+    litellm.callbacks = ["s3_v2"]
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "load-testing-oct",
+        "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
+        "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
+        "s3_region_name": "us-west-2",
+    }
+    litellm.set_verbose = True
+    response_id = None
+    response = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "This is a test"}],
+        stream=streaming,
+    )
+    if streaming:
+        async for chunk in response:
+            print(chunk)
+            response_id = chunk.id
+    else:
+        response_id = response.id
+
+    await asyncio.sleep(30)
+    print(f"response: {response}")
+
+    # stop blockbuster
+    blockbuster.deactivate()
+
+    total_objects, all_s3_keys = list_all_s3_objects("load-testing-oct")
+
+    print(f"all_s3_keys: {all_s3_keys}")
+
+    #assert that atlest one key has response.id in it
+    assert any(response_id in key for key in all_s3_keys)
+    s3 = boto3.client("s3")
+    # delete all objects
+    for key in all_s3_keys:
+        s3.delete_object(Bucket="load-testing-oct", Key=key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_basic_s3_v2_logging_failure():
+    """Test that S3 v2 logger makes httpx PUT request when logging failures"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from litellm.integrations.s3_v2 import S3Logger
+    
+    # Create S3 logger with short flush interval
+    s3_v2_logger = S3Logger(s3_flush_interval=1)
+    
+    # Mock the httpx client to capture the PUT request
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    
+    s3_v2_logger.async_httpx_client = AsyncMock()
+    s3_v2_logger.async_httpx_client.put.return_value = mock_response
+    
+    # Track the upload method calls
+    original_upload = s3_v2_logger.async_upload_data_to_s3
+    upload_called = False
+    
+    async def mock_upload(batch_logging_element):
+        nonlocal upload_called
+        upload_called = True
+        # Mock the upload process but still make the httpx call
+        url = f"https://test-bucket.s3.us-west-2.amazonaws.com/{batch_logging_element.s3_object_key}"
+        headers = {"Content-Type": "application/json"}
+        data = '{"model": "gpt-4o-mini"}'
+        
+        # Make the actual httpx call we want to test
+        await s3_v2_logger.async_httpx_client.put(url=url, headers=headers, data=data)
+    
+    s3_v2_logger.async_upload_data_to_s3 = mock_upload
+    
+    # Configure S3 callback params
+    litellm.callbacks = [s3_v2_logger]
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "test-bucket",
+        "s3_aws_secret_access_key": "test-secret",
+        "s3_aws_access_key_id": "test-key",
+        "s3_region_name": "us-west-2",
+    }
+    litellm.set_verbose = True
+    
+    # Trigger a failure by using invalid API key
+    try:
+        response = await litellm.acompletion(
+            model="gpt-4o-mini",
+            api_key="invalid-api-key",
+            messages=[{"role": "user", "content": "This is a test"}],
+        )
+    except Exception as e:
+        print(f"Expected error: {e}")
+    
+    # Wait for logger to process the failure
+    await asyncio.sleep(5)
+    
+    # Verify that our mock upload was called
+    assert upload_called, "S3 upload method was not called"
+    print("✓ S3 upload method was called")
+    
+    # Verify that httpx PUT was called
+    s3_v2_logger.async_httpx_client.put.assert_called()
+    
+    # Get the call arguments to verify the S3 URL
+    call_args = s3_v2_logger.async_httpx_client.put.call_args
+    assert call_args is not None
+    url = call_args[1]['url'] if 'url' in call_args[1] else call_args[0][0]
+    
+    # Verify the URL contains expected S3 endpoint
+    assert "test-bucket.s3.us-west-2.amazonaws.com" in url
+    print(f"✓ S3 PUT request made to: {url}")
+    
+    # Verify headers include expected content type
+    headers = call_args[1]['headers']
+    assert headers['Content-Type'] == 'application/json'
+    print("✓ S3 request headers are correct")
+    
+    # Verify JSON data was included
+    data = call_args[1]['data']
+    assert data is not None
+    assert '"model": "gpt-4o-mini"' in data
+    print("✓ S3 request data contains expected log payload")
+
+
 def list_all_s3_objects(bucket_name):
     s3 = boto3.client("s3")
 
@@ -244,7 +384,7 @@ async def make_async_calls():
     for _ in range(5):
         task = asyncio.create_task(
             litellm.acompletion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-nano",
                 messages=[{"role": "user", "content": "This is a test"}],
                 max_tokens=5,
                 temperature=0.7,
@@ -336,3 +476,18 @@ def test_s3_logging_r2():
         # post, close log file and verify
         # Reset stdout to the original value
         print("Passed! Testing async s3 logging")
+
+from litellm.integrations.s3_v2 import S3Logger
+
+class TestS3Logger(S3Logger):
+    def __init__(self, *args, **kwargs):
+        self.recorded_requests = {}
+        self.logged_standard_logging_payload: Optional[StandardLoggingPayload] = None
+        super().__init__(*args, **kwargs)
+    
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.recorded_requests[response_obj["id"]] = start_time
+        print("recorded request", self.recorded_requests)
+        self.logged_standard_logging_payload = kwargs["standard_logging_object"]
+        return await super().async_log_success_event(kwargs, response_obj, start_time, end_time)
+

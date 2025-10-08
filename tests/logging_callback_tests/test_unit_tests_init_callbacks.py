@@ -16,36 +16,10 @@ import asyncio
 import logging
 from litellm._logging import verbose_logger
 from prometheus_client import REGISTRY, CollectorRegistry
-
-from litellm.integrations.lago import LagoLogger
-from litellm.integrations.openmeter import OpenMeterLogger
-from litellm.integrations.braintrust_logging import BraintrustLogger
-from litellm.integrations.galileo import GalileoObserve
-from litellm.integrations.langsmith import LangsmithLogger
-from litellm.integrations.literal_ai import LiteralAILogger
-from litellm.integrations.prometheus import PrometheusLogger
-from litellm.integrations.datadog.datadog import DataDogLogger
-from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
-from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
-from litellm.integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
-from litellm.integrations.opik.opik import OpikLogger
-from litellm.integrations.opentelemetry import OpenTelemetry
-from litellm.integrations.mlflow import MlflowLogger
-from litellm.integrations.argilla import ArgillaLogger
-from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
-from litellm.integrations.vector_stores.bedrock_vector_store import BedrockVectorStore
-from litellm.integrations.langfuse.langfuse_prompt_management import (
-    LangfusePromptManagement,
-)
-from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
-from litellm.integrations.agentops import AgentOps
-from litellm.integrations.humanloop import HumanloopLogger
-from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
-from litellm_enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
-from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
-from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
-from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
 from unittest.mock import patch
+from litellm.litellm_core_utils.custom_logger_registry import (
+    CustomLoggerRegistry,
+)
 
 # clear prometheus collectors / registry
 collectors = list(REGISTRY._collector_to_names.keys())
@@ -53,45 +27,13 @@ for collector in collectors:
     REGISTRY.unregister(collector)
 ######################################
 
-callback_class_str_to_classType = {
-    "lago": LagoLogger,
-    "openmeter": OpenMeterLogger,
-    "braintrust": BraintrustLogger,
-    "galileo": GalileoObserve,
-    "langsmith": LangsmithLogger,
-    "literalai": LiteralAILogger,
-    "prometheus": PrometheusLogger,
-    "datadog": DataDogLogger,
-    "datadog_llm_observability": DataDogLLMObsLogger,
-    "gcs_bucket": GCSBucketLogger,
-    "opik": OpikLogger,
-    "argilla": ArgillaLogger,
-    "opentelemetry": OpenTelemetry,
-    "azure_storage": AzureBlobStorageLogger,
-    "humanloop": HumanloopLogger,
-    # OTEL compatible loggers
-    "logfire": OpenTelemetry,
-    "arize": OpenTelemetry,
-    "arize_phoenix": OpenTelemetry,
-    "langtrace": OpenTelemetry,
-    "mlflow": MlflowLogger,
-    "langfuse": LangfusePromptManagement,
-    "otel": OpenTelemetry,
-    "pagerduty": PagerDutyAlerting,
-    "gcs_pubsub": GcsPubSubLogger,
-    "anthropic_cache_control_hook": AnthropicCacheControlHook,
-    "agentops": AgentOps,
-    "bedrock_vector_store": BedrockVectorStore,
-    "generic_api": GenericAPILogger,
-    "resend_email": ResendEmailLogger,
-    "smtp_email": SMTPEmailLogger,
-}
 
 expected_env_vars = {
     "LAGO_API_KEY": "api_key",
     "LAGO_API_BASE": "mock_base",
     "LAGO_API_EVENT_CODE": "mock_event_code",
     "OPENMETER_API_KEY": "openmeter_api_key",
+    "BRAINTRUST_API_BASE": "braintrust_api_base",
     "BRAINTRUST_API_KEY": "braintrust_api_key",
     "GALILEO_API_KEY": "galileo_api_key",
     "LITERAL_API_KEY": "literal_api_key",
@@ -108,6 +50,13 @@ expected_env_vars = {
     "PAGERDUTY_API_KEY": "pagerduty_api_key",
     "GCS_PUBSUB_TOPIC_ID": "gcs_pubsub_topic_id",
     "GCS_PUBSUB_PROJECT_ID": "gcs_pubsub_project_id",
+    "CONFIDENT_API_KEY": "confident_api_key",
+    "LITELM_ENVIRONMENT": "development",
+    "AWS_BUCKET_NAME": "aws_bucket_name",
+    "AWS_SECRET_ACCESS_KEY": "aws_secret_access_key",
+    "AWS_ACCESS_KEY_ID": "aws_access_key_id",
+    "AWS_REGION": "aws_region",
+    "AWS_SQS_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123456789012/test-queue",
 }
 
 
@@ -145,11 +94,41 @@ async def use_callback_in_llm_call(
     if callback == "dynamic_rate_limiter":
         # internal CustomLogger class that expects internal_usage_cache passed to it, it always fails when tested in this way
         return
+    elif callback == "dynamic_rate_limiter_v3":
+        # internal CustomLogger class that expects internal_usage_cache passed to it, it always fails when tested in this way
+        return
     elif callback == "argilla":
         litellm.argilla_transformation_object = {}
     elif callback == "openmeter":
         # it's currently handled in jank way, TODO: fix openmete and then actually run it's test
         return
+    elif callback == "bitbucket" or callback == "gitlab":
+        # Set up mock bitbucket configuration required for initialization
+        litellm.global_bitbucket_config = {
+            "workspace": "test-workspace",
+            "repository": "test-repo",
+            "access_token": "test-token",
+            "branch": "main"
+        }
+        litellm.global_gitlab_config = {
+            "project": "a/b/<repo_name>",
+            "access_token": "your-access-token",
+            "base_url": "gitlab url",
+            "prompts_path": "src/prompts", # folder to point to, defaults to root
+            "branch":"main"  # optional, defaults to main
+        }
+        # Mock BitBucket HTTP calls to prevent actual API requests
+        import httpx
+        from unittest.mock import MagicMock
+        
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"values": []}
+        mock_response.text = ""
+        
+        patch.object(
+            litellm.module_level_client, "get", return_value=mock_response
+        ).start()
     elif callback == "prometheus":
         # pytest teardown - clear existing prometheus collectors
         collectors = list(REGISTRY._collector_to_names.keys())
@@ -193,7 +172,7 @@ async def use_callback_in_llm_call(
 
         await asyncio.sleep(0.5)
 
-        expected_class = callback_class_str_to_classType[callback]
+        expected_class = CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE[callback]
 
         if used_in == "callbacks":
             assert isinstance(litellm._async_success_callback[0], expected_class)
@@ -223,7 +202,10 @@ async def use_callback_in_llm_call(
         if callback == "argilla":
             patch.stopall()
 
-        if callback == "argilla":
+        if callback == "bitbucket":
+            # Clean up bitbucket configuration and patches
+            if hasattr(litellm, 'global_bitbucket_config'):
+                delattr(litellm, 'global_bitbucket_config')
             patch.stopall()
 
 

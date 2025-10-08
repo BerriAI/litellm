@@ -5,7 +5,7 @@ RBAC tests
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -55,7 +55,6 @@ from litellm.proxy.proxy_server import (
     chat_completion,
     completion,
     embeddings,
-    image_generation,
     model_list,
     moderations,
     user_api_key_auth,

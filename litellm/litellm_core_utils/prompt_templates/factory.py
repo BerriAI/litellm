@@ -1,7 +1,8 @@
 import copy
 import json
+import mimetypes
 import re
-import uuid
+from litellm._uuid import uuid
 import xml.etree.ElementTree as ET
 from enum import Enum
 from typing import Any, List, Optional, Tuple, cast, overload
@@ -13,7 +14,9 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
+from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
+from litellm.types.llms.bedrock import CachePointBlock
 from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.ollama import OllamaVisionModelObject
@@ -942,6 +945,12 @@ def _azure_tool_call_invoke_helper(
     return function_call_params
 
 
+def _azure_image_url_helper(content: ChatCompletionImageObject):
+    if isinstance(content["image_url"], str):
+        content["image_url"] = {"url": content["image_url"]}
+    return
+
+
 def convert_to_azure_openai_messages(
     messages: List[AllMessageValues],
 ) -> List[AllMessageValues]:
@@ -950,6 +959,11 @@ def convert_to_azure_openai_messages(
             function_call = m.get("function_call", None)
             if function_call is not None:
                 m["function_call"] = _azure_tool_call_invoke_helper(function_call)
+
+        if m["role"] == "user" and isinstance(m.get("content"), list):
+            for content in m.get("content", []):
+                if isinstance(content, dict) and content.get("type") == "image_url":
+                    _azure_image_url_helper(content)  # type: ignore
     return messages
 
 
@@ -988,7 +1002,14 @@ def _gemini_tool_call_invoke_helper(
 ) -> Optional[VertexFunctionCall]:
     name = function_call_params.get("name", "") or ""
     arguments = function_call_params.get("arguments", "")
-    arguments_dict = json.loads(arguments)
+    if (
+        isinstance(arguments, str) and len(arguments) == 0
+    ):  # pass empty dict, if arguments is empty string - prevents call from failing
+        arguments_dict = {
+            "type": "object",
+        }
+    else:
+        arguments_dict = json.loads(arguments)
     function_call = VertexFunctionCall(
         name=name,
         args=arguments_dict,
@@ -1102,13 +1123,14 @@ def convert_to_gemini_tool_call_result(
     }
     """
     content_str: str = ""
-    if isinstance(message["content"], str):
-        content_str = message["content"]
-    elif isinstance(message["content"], List):
-        content_list = message["content"]
-        for content in content_list:
-            if content["type"] == "text":
-                content_str += content["text"]
+    if "content" in message:
+        if isinstance(message["content"], str):
+            content_str = message["content"]
+        elif isinstance(message["content"], List):
+            content_list = message["content"]
+            for content in content_list:
+                if content["type"] == "text":
+                    content_str += content["text"]
     name: Optional[str] = message.get("name", "")  # type: ignore
 
     # Recover name from last message with tool calls
@@ -1193,6 +1215,7 @@ def convert_to_anthropic_tool_result(
                     AnthropicMessagesToolResultContent(
                         type="text",
                         text=content["text"],
+                        cache_control=content.get("cache_control", None),
                     )
                 )
             elif content["type"] == "image_url":
@@ -1384,6 +1407,107 @@ def _anthropic_content_element_factory(
     return _anthropic_content_element
 
 
+def select_anthropic_content_block_type_for_file(
+    format: str,
+) -> Literal["document", "image", "container_upload"]:
+    if format == "application/pdf" or format == "text/plain":
+        return "document"
+    elif format in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
+        return "image"
+    else:
+        return "container_upload"
+
+
+def anthropic_infer_file_id_content_type(
+    file_id: str,
+) -> Literal["document_url", "container_upload"]:
+    """
+    Use when 'format' not provided.
+
+    - URL's - assume are document_url
+    - Else - assume is container_upload
+    """
+    if file_id.startswith("http") or file_id.startswith("https"):
+        return "document_url"
+    else:
+        return "container_upload"
+
+
+def anthropic_process_openai_file_message(
+    message: ChatCompletionFileObject,
+) -> Union[
+    AnthropicMessagesDocumentParam,
+    AnthropicMessagesImageParam,
+    AnthropicMessagesContainerUploadParam,
+]:
+    file_message = cast(ChatCompletionFileObject, message)
+    file_data = file_message["file"].get("file_data")
+    file_id = file_message["file"].get("file_id")
+    format = file_message["file"].get("format")
+    if file_data:
+        image_chunk = convert_to_anthropic_image_obj(
+            openai_image_url=file_data,
+            format=format,
+        )
+        anthropic_document_param = AnthropicMessagesDocumentParam(
+            type="document",
+            source=AnthropicContentParamSource(
+                type="base64",
+                media_type=image_chunk["media_type"],
+                data=image_chunk["data"],
+            ),
+        )
+        return anthropic_document_param
+    elif file_id:
+        content_block_type = (
+            select_anthropic_content_block_type_for_file(format)
+            if format
+            else anthropic_infer_file_id_content_type(file_id)
+        )
+        return_block_param: Optional[
+            Union[
+                AnthropicMessagesDocumentParam,
+                AnthropicMessagesImageParam,
+                AnthropicMessagesContainerUploadParam,
+            ]
+        ] = None
+        if content_block_type == "document":
+            return_block_param = AnthropicMessagesDocumentParam(
+                type="document",
+                source=AnthropicContentParamSourceFileId(
+                    type="file",
+                    file_id=file_id,
+                ),
+            )
+        elif content_block_type == "document_url":
+            return_block_param = AnthropicMessagesDocumentParam(
+                type="document",
+                source=AnthropicContentParamSourceUrl(
+                    type="url",
+                    url=file_id,
+                ),
+            )
+        elif content_block_type == "image":
+            return_block_param = AnthropicMessagesImageParam(
+                type="image",
+                source=AnthropicContentParamSourceFileId(
+                    type="file",
+                    file_id=file_id,
+                ),
+            )
+        elif content_block_type == "container_upload":
+            return_block_param = AnthropicMessagesContainerUploadParam(
+                type="container_upload", file_id=file_id
+            )
+
+        if return_block_param is None:
+            raise Exception(f"Unable to parse anthropic file message: {message}")
+        return return_block_param
+    raise Exception(
+        f"Either file_data or file_id must be present in the file message: {message}"
+    )
+
+
 def anthropic_messages_pt(  # noqa: PLR0915
     messages: List[AllMessageValues],
     model: str,
@@ -1488,24 +1612,11 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         elif m.get("type", "") == "document":
                             user_content.append(cast(AnthropicMessagesDocumentParam, m))
                         elif m.get("type", "") == "file":
-                            file_message = cast(ChatCompletionFileObject, m)
-                            file_data = file_message["file"].get("file_data")
-                            if file_data:
-                                image_chunk = convert_to_anthropic_image_obj(
-                                    openai_image_url=file_data,
-                                    format=file_message["file"].get("format"),
+                            user_content.append(
+                                anthropic_process_openai_file_message(
+                                    cast(ChatCompletionFileObject, m)
                                 )
-                                anthropic_document_param = (
-                                    AnthropicMessagesDocumentParam(
-                                        type="document",
-                                        source=AnthropicContentParamSource(
-                                            type="base64",
-                                            media_type=image_chunk["media_type"],
-                                            data=image_chunk["data"],
-                                        ),
-                                    )
-                                )
-                                user_content.append(anthropic_document_param)
+                            )
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
@@ -2242,7 +2353,6 @@ def stringify_json_tool_call_content(messages: List) -> List:
 ###### AMAZON BEDROCK #######
 
 import base64
-import mimetypes
 from email.message import Message
 
 import httpx
@@ -2266,6 +2376,7 @@ from litellm.types.llms.bedrock import (
 )
 from litellm.types.llms.bedrock import ToolSpecBlock as BedrockToolSpecBlock
 from litellm.types.llms.bedrock import ToolUseBlock as BedrockToolUseBlock
+from litellm.types.llms.bedrock import VideoBlock as BedrockVideoBlock
 
 
 def _parse_content_type(content_type: str) -> str:
@@ -2336,8 +2447,10 @@ class BedrockImageProcessor:
 
         # Extract MIME type using regular expression
         mime_type_match = re.match(r"data:(.*?);base64", image_metadata)
+
         if mime_type_match:
             mime_type = mime_type_match.group(1)
+            mime_type = mime_type.split(";")[0]
             image_format = mime_type.split("/")[1]
         else:
             mime_type = "image/jpeg"
@@ -2355,31 +2468,78 @@ class BedrockImageProcessor:
         supported_doc_formats = (
             litellm.AmazonConverseConfig().get_supported_document_types()
         )
+        supported_video_formats = (
+            litellm.AmazonConverseConfig().get_supported_video_types()
+        )
 
         document_types = ["application", "text"]
         is_document = any(mime_type.startswith(doc_type) for doc_type in document_types)
 
+        supported_image_and_video_formats: List[str] = (
+            supported_video_formats + supported_image_formats
+        )
+
         if is_document:
-            potential_extensions = mimetypes.guess_all_extensions(mime_type)
-            valid_extensions = [
-                ext[1:]
-                for ext in potential_extensions
-                if ext[1:] in supported_doc_formats
-            ]
+            return BedrockImageProcessor._get_document_format(
+                mime_type=mime_type, supported_doc_formats=supported_doc_formats
+            )
 
-            if not valid_extensions:
-                raise ValueError(
-                    f"No supported extensions for MIME type: {mime_type}. Supported formats: {supported_doc_formats}"
-                )
-
-            # Use first valid extension instead of provided image_format
-            return valid_extensions[0]
         else:
-            if image_format not in supported_image_formats:
+            #########################################################
+            # Check if image_format is an image or video
+            #########################################################
+            if image_format not in supported_image_and_video_formats:
                 raise ValueError(
-                    f"Unsupported image format: {image_format}. Supported formats: {supported_image_formats}"
+                    f"Unsupported image format: {image_format}. Supported formats: {supported_image_and_video_formats}"
                 )
             return image_format
+
+    @staticmethod
+    def _get_document_format(mime_type: str, supported_doc_formats: List[str]) -> str:
+        """
+        Get the document format from the mime type
+
+        - Primary method - uses `mimetypes.guess_all_extensions`
+        - Fallback method - uses `get_file_extension_from_mime_type`
+
+        Relevant Issue: https://github.com/BerriAI/litellm/issues/12260
+
+        `mimetypes` is not available in docker containers, so we fallback to `get_file_extension_from_mime_type`
+
+        Args:
+            mime_type: The mime type of the document
+            supported_doc_formats: The supported document formats for the current model
+
+        Returns:
+            The document format
+        """
+        valid_extensions: Optional[List[str]] = None
+        potential_extensions = mimetypes.guess_all_extensions(mime_type, strict=False)
+        valid_extensions = [
+            ext[1:] for ext in potential_extensions if ext[1:] in supported_doc_formats
+        ]
+
+        # Fallback to types/files.py if mimetypes doesn't return valid extensions
+        #################
+        # litellm runs on docker containers and `mimetypes` depends on the installed mimetypes of the OS
+        # we fallback to well known mime types in types/files.py if mimetypes doesn't return valid extensions
+        if not valid_extensions:
+            try:
+                fallback_extension = get_file_extension_from_mime_type(mime_type)
+                if fallback_extension in supported_doc_formats:
+                    valid_extensions = [fallback_extension]
+            except ValueError:
+                # Neither mimetypes nor files.py could handle this MIME type
+                # get_file_extension_from_mime_type raises ValueError if the mime type is not supported
+                pass
+
+        if not valid_extensions:
+            raise ValueError(
+                f"No supported extensions for MIME type: {mime_type}. Supported formats: {supported_doc_formats}"
+            )
+
+        # Use first valid extension instead of provided image_format
+        return valid_extensions[0]
 
     @staticmethod
     def _create_bedrock_block(
@@ -2391,6 +2551,14 @@ class BedrockImageProcessor:
         document_types = ["application", "text"]
         is_document = any(mime_type.startswith(doc_type) for doc_type in document_types)
 
+        supported_video_formats = (
+            litellm.AmazonConverseConfig().get_supported_video_types()
+        )
+        is_video = any(
+            image_format.startswith(video_type)
+            for video_type in supported_video_formats
+        )
+
         if is_document:
             return BedrockContentBlock(
                 document=BedrockDocumentBlock(
@@ -2398,6 +2566,10 @@ class BedrockImageProcessor:
                     format=image_format,
                     name=f"DocumentPDFmessages_{str(uuid.uuid4())}",
                 )
+            )
+        elif is_video:
+            return BedrockContentBlock(
+                video=BedrockVideoBlock(source=_blob, format=image_format)
             )
         else:
             return BedrockContentBlock(
@@ -2499,12 +2671,22 @@ def _convert_to_bedrock_tool_call_invoke(
                 id = tool["id"]
                 name = tool["function"].get("name", "")
                 arguments = tool["function"].get("arguments", "")
-                arguments_dict = json.loads(arguments)
+                if not arguments or not arguments.strip():
+                    arguments_dict = {}
+                else:
+                    arguments_dict = json.loads(arguments)
                 bedrock_tool = BedrockToolUseBlock(
                     input=arguments_dict, name=name, toolUseId=id
                 )
                 bedrock_content_block = BedrockContentBlock(toolUse=bedrock_tool)
                 _parts_list.append(bedrock_content_block)
+
+                # Check for cache_control and add a separate cachePoint block
+                if tool.get("cache_control", None) is not None:
+                    cache_point_block = BedrockContentBlock(
+                        cachePoint=CachePointBlock(type="default")
+                    )
+                    _parts_list.append(cache_point_block)
         return _parts_list
     except Exception as e:
         raise Exception(
@@ -2565,6 +2747,7 @@ def _convert_to_bedrock_tool_call_result(
         for content in content_list:
             if content["type"] == "text":
                 content_str += content["text"]
+
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
 
@@ -2573,6 +2756,7 @@ def _convert_to_bedrock_tool_call_result(
         content=[tool_result_content_block],
         toolUseId=id,
     )
+
     content_block = BedrockContentBlock(toolResult=tool_result)
 
     return content_block
@@ -2816,7 +3000,10 @@ def process_empty_text_blocks(
         ]
 
     modified_message = message.copy()
-    modified_message["content"] = modified_content_block
+    modified_message["content"] = cast(
+        Union[List[ChatCompletionTextObject], List[ChatCompletionThinkingBlock]],
+        modified_content_block,
+    )
     return modified_message
 
 
@@ -2934,6 +3121,12 @@ class BedrockConverseMessagesProcessor:
                             if element["type"] == "text":
                                 _part = BedrockContentBlock(text=element["text"])
                                 _parts.append(_part)
+                            elif element["type"] == "guarded_text":
+                                # Wrap guarded_text in guardContent block
+                                _part = BedrockContentBlock(
+                                    guardContent={"text": {"text": element["text"]}}
+                                )
+                                _parts.append(_part)
                             elif element["type"] == "image_url":
                                 format: Optional[str] = None
                                 if isinstance(element["image_url"], dict):
@@ -3002,9 +3195,33 @@ class BedrockConverseMessagesProcessor:
             ## MERGE CONSECUTIVE TOOL CALL MESSAGES ##
             tool_content: List[BedrockContentBlock] = []
             while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
-                tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
-
+                current_message = messages[msg_i]
+                tool_call_result = _convert_to_bedrock_tool_call_result(current_message)
                 tool_content.append(tool_call_result)
+
+                # Check if we need to add a separate cachePoint block
+                has_cache_control = False
+
+                # Check for message-level cache_control
+                if current_message.get("cache_control", None) is not None:
+                    has_cache_control = True
+                # Check for content-level cache_control in list content
+                elif isinstance(current_message.get("content"), list):
+                    for content_element in current_message["content"]:
+                        if (
+                            isinstance(content_element, dict)
+                            and content_element.get("cache_control", None) is not None
+                        ):
+                            has_cache_control = True
+                            break
+
+                # Add a separate cachePoint block if cache_control is present
+                if has_cache_control:
+                    cache_point_block = BedrockContentBlock(
+                        cachePoint=CachePointBlock(type="default")
+                    )
+                    tool_content.append(cache_point_block)
+
                 msg_i += 1
             if tool_content:
                 # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
@@ -3084,6 +3301,17 @@ class BedrockConverseMessagesProcessor:
                                     image_url=image_url
                                 )
                                 assistants_parts.append(assistants_part)
+                                # Add cache point block for assistant content elements
+                        _cache_point_block = (
+                            litellm.AmazonConverseConfig()._get_cache_point_block(
+                                message_block=cast(
+                                    OpenAIMessageContentListBlock, element
+                                ),
+                                block_type="content_block",
+                            )
+                        )
+                        if _cache_point_block is not None:
+                            assistants_parts.append(_cache_point_block)
                     assistant_content.extend(assistants_parts)
                 elif _assistant_content is not None and isinstance(
                     _assistant_content, str
@@ -3091,6 +3319,15 @@ class BedrockConverseMessagesProcessor:
                     assistant_content.append(
                         BedrockContentBlock(text=_assistant_content)
                     )
+                    # Add cache point block for assistant string content
+                    _cache_point_block = (
+                        litellm.AmazonConverseConfig()._get_cache_point_block(
+                            assistant_message_block, block_type="content_block"
+                        )
+                    )
+                    if _cache_point_block is not None:
+                        assistant_content.append(_cache_point_block)
+
                 _tool_calls = assistant_message_block.get("tool_calls", [])
                 if _tool_calls:
                     assistant_content.extend(
@@ -3265,6 +3502,12 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                         if element["type"] == "text":
                             _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
+                        elif element["type"] == "guarded_text":
+                            # Wrap guarded_text in guardContent block
+                            _part = BedrockContentBlock(
+                                guardContent={"text": {"text": element["text"]}}
+                            )
+                            _parts.append(_part)
                         elif element["type"] == "image_url":
                             format: Optional[str] = None
                             if isinstance(element["image_url"], dict):
@@ -3333,8 +3576,34 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
         tool_content: List[BedrockContentBlock] = []
         while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
             tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
+            current_message = messages[msg_i]
 
+            # Add the tool result first
             tool_content.append(tool_call_result)
+
+            # Check if we need to add a separate cachePoint block
+            has_cache_control = False
+
+            # Check for message-level cache_control
+            if current_message.get("cache_control", None) is not None:
+                has_cache_control = True
+            # Check for content-level cache_control in list content
+            elif isinstance(current_message.get("content"), list):
+                for content_element in current_message["content"]:
+                    if (
+                        isinstance(content_element, dict)
+                        and content_element.get("cache_control", None) is not None
+                    ):
+                        has_cache_control = True
+                        break
+
+            # Add a separate cachePoint block if cache_control is present
+            if has_cache_control:
+                cache_point_block = BedrockContentBlock(
+                    cachePoint=CachePointBlock(type="default")
+                )
+                tool_content.append(cache_point_block)
+
             msg_i += 1
         if tool_content:
             # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
@@ -3406,9 +3675,28 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 image_url=image_url
                             )
                             assistants_parts.append(assistants_part)
+                        # Add cache point block for assistant content elements
+                        _cache_point_block = (
+                            litellm.AmazonConverseConfig()._get_cache_point_block(
+                                message_block=cast(
+                                    OpenAIMessageContentListBlock, element
+                                ),
+                                block_type="content_block",
+                            )
+                        )
+                        if _cache_point_block is not None:
+                            assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
             elif _assistant_content is not None and isinstance(_assistant_content, str):
                 assistant_content.append(BedrockContentBlock(text=_assistant_content))
+                # Add cache point block for assistant string content
+                _cache_point_block = (
+                    litellm.AmazonConverseConfig()._get_cache_point_block(
+                        assistant_message_block, block_type="content_block"
+                    )
+                )
+                if _cache_point_block is not None:
+                    assistant_content.append(_cache_point_block)
             _tool_calls = assistant_message_block.get("tool_calls", [])
             if _tool_calls:
                 assistant_content.extend(
@@ -3577,7 +3865,12 @@ def function_call_prompt(messages: list, functions: list):
     function_added_to_prompt = False
     for message in messages:
         if "system" in message["role"]:
-            message["content"] += f""" {function_prompt}"""
+            if isinstance(message["content"], str):
+                message["content"] += f""" {function_prompt}"""
+            else:
+                message["content"].append(
+                    {"type": "text", "text": f""" {function_prompt}"""}
+                )
             function_added_to_prompt = True
 
     if function_added_to_prompt is False:

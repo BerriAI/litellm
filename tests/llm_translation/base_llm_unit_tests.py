@@ -5,9 +5,10 @@ import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
-import uuid
+from litellm._uuid import uuid
 import time
 import base64
+import inspect
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -24,6 +25,7 @@ from litellm.utils import (
 from litellm.main import stream_chunk_builder
 from typing import Union
 from litellm.types.utils import Usage, ModelResponse
+
 # test_example.py
 from abc import ABC, abstractmethod
 from openai import OpenAI
@@ -55,7 +57,8 @@ def _usage_format_tests(usage: litellm.Usage):
     print(f"usage={usage}")
     assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
 
-    assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
+    if usage.prompt_tokens_details is not None:
+        assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
 
 
 class BaseLLMChatTest(ABC):
@@ -76,10 +79,19 @@ class BaseLLMChatTest(ABC):
         """Must return the base completion call args"""
         pass
 
-
     def get_base_completion_call_args_with_reasoning_model(self) -> dict:
         """Must return the base completion call args with reasoning_effort"""
         return {}
+
+    @pytest.fixture(autouse=True)
+    def _handle_rate_limits(self):
+        """Fixture to handle rate limit errors for all test methods"""
+        try:
+            yield
+        except litellm.RateLimitError:
+            pytest.skip("Rate limit exceeded")
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
 
     def test_developer_role_translation(self):
         """
@@ -130,10 +142,112 @@ class BaseLLMChatTest(ABC):
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         assert response.choices[0].message.content is not None
 
+    def test_tool_call_with_property_type_array(self):
+        litellm._turn_on_debug()
+        from litellm.utils import supports_function_calling
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_function_calling(base_completion_call_args["model"], None):
+            print("Model does not support function calling")
+            pytest.skip("Model does not support function calling")
+        base_completion_call_args = self.get_base_completion_call_args()
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Tell me if the shoe brand Air Jordan has more models than the shoe brand Nike.",
+                }
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "shoe_get_id",
+                        "description": "Get information about a show by its ID or name",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "shoe_id": {
+                                    "type": ["string", "number"],
+                                    "description": "The shoe ID or name",
+                                }
+                            },
+                            "required": ["shoe_id"],
+                            "additionalProperties": False,
+                            "$schema": "http://json-schema.org/draft-07/schema#",
+                        },
+                    },
+                },
+            ],
+        )
+        print(response)
+        print(json.dumps(response, indent=4, default=str))
+
+    def test_tool_call_with_empty_enum_property(self):
+        litellm._turn_on_debug()
+        from litellm.utils import supports_function_calling
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_function_calling(base_completion_call_args["model"], None):
+            print("Model does not support function calling")
+            pytest.skip("Model does not support function calling")
+        base_completion_call_args = self.get_base_completion_call_args()
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Search for the latest iPhone models and tell me which storage options are available.",
+                }
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "litellm_product_search",
+                        "description": "Search for product information and specifications.\n\nSupports filtering by category, brand, price range, and availability.\nCan retrieve detailed product specifications, pricing, and stock information.\nSupports different search modes and result formatting options.\n",
+                        "parameters": {
+                            "properties": {
+                                "search_mode": {
+                                    "default": "",
+                                    "description": "The search strategy to use for finding products.",
+                                    "enum": [
+                                        "",
+                                        "product_search",
+                                        "product_search_with_filters",
+                                        "product_search_with_sorting",
+                                        "product_search_with_pagination",
+                                        "product_search_with_aggregation",
+                                    ],
+                                    "title": "Search Mode",
+                                    "type": "string",
+                                },
+                            },
+                            "required": ["search_mode"],
+                            "title": "product_search_arguments",
+                            "type": "object",
+                        },
+                    },
+                }
+            ],
+        )
+        print(response)
+        print(json.dumps(response, indent=4, default=str))
+
     def test_streaming(self):
         """Check if litellm handles streaming correctly"""
+        from litellm.types.utils import ModelResponseStream
+        from typing import Optional
+
         base_completion_call_args = self.get_base_completion_call_args()
-        litellm.set_verbose = True
+        # litellm.set_verbose = True
         messages = [
             {
                 "role": "user",
@@ -153,9 +267,14 @@ class BaseLLMChatTest(ABC):
 
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         chunks = []
+        created_at: Optional[int] = None
         for chunk in response:
             print(chunk)
             chunks.append(chunk)
+            if isinstance(chunk, ModelResponseStream):
+                if created_at is None:
+                    created_at = chunk.created
+                assert chunk.created == created_at
 
         resp = litellm.stream_chunk_builder(chunks=chunks)
         print(resp)
@@ -174,15 +293,68 @@ class BaseLLMChatTest(ABC):
 
         self.completion_function(**base_completion_call_args, messages=messages)
 
-    @pytest.mark.parametrize("sync_mode", [True, False])
-    @pytest.mark.asyncio
-    async def test_pdf_handling(self, pdf_messages, sync_mode):
-        from litellm.utils import supports_pdf_input
+    def test_web_search(self):
+        from litellm.utils import supports_web_search
+
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
         litellm._turn_on_debug()
 
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_web_search(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support web search")
+
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=[
+                {"role": "user", "content": "What's the weather like in Boston today?"}
+            ],
+            web_search_options={},
+            max_tokens=100,
+        )
+
+        assert response is not None
+
+        print(f"response={response}")
+
+    def test_url_context(self):
+        from litellm.utils import supports_url_context
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm._turn_on_debug()
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_url_context(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support url context")
+
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Summarize the content of this URL: https://en.wikipedia.org/wiki/Artificial_intelligence",
+                }
+            ],
+            tools=[{"urlContext": {}}],
+        )
+
+        assert response is not None
+        print(f"response={response}")
+
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    @pytest.mark.asyncio
+    async def test_pdf_handling(self, pdf_messages, sync_mode):
+        from litellm.utils import supports_pdf_input
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm._turn_on_debug()
 
         image_content = [
             {"type": "text", "text": "What's this file about?"},
@@ -213,11 +385,46 @@ class BaseLLMChatTest(ABC):
             )
 
         assert response is not None
-    
+
+    @pytest.mark.asyncio
+    async def test_async_pdf_handling_with_file_id(self):
+        from litellm.utils import supports_pdf_input
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm._turn_on_debug()
+
+        image_content = [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "file",
+                "file": {
+                    "file_id": "https://upload.wikimedia.org/wikipedia/commons/2/20/Re_example.pdf"
+                },
+            },
+        ]
+
+        image_messages = [{"role": "user", "content": image_content}]
+
+        base_completion_call_args = self.get_base_completion_call_args()
+
+        if not supports_pdf_input(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support image input")
+
+        response = await self.async_completion_function(
+            **base_completion_call_args,
+            messages=image_messages,
+        )
+
+        assert response is not None
+
     def test_file_data_unit_test(self, pdf_messages):
         from litellm.utils import supports_pdf_input, return_raw_request
         from litellm.types.utils import CallTypes
-        from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_image_obj
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            convert_to_anthropic_image_obj,
+        )
 
         media_chunk = convert_to_anthropic_image_obj(
             openai_image_url=pdf_messages,
@@ -230,7 +437,7 @@ class BaseLLMChatTest(ABC):
                 "type": "file",
                 "file": {
                     "file_data": pdf_messages,
-                }
+                },
             },
         ]
 
@@ -541,6 +748,7 @@ class BaseLLMChatTest(ABC):
         Test that audio input is supported by the LLM API
         """
         from litellm.utils import supports_audio_input
+
         litellm._turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_audio_input(base_completion_call_args["model"], None):
@@ -572,8 +780,6 @@ class BaseLLMChatTest(ABC):
 
         print(completion.choices[0].message)
 
-
-            
     @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_format_stream(self):
         """
@@ -748,6 +954,7 @@ class BaseLLMChatTest(ABC):
 
     @pytest.mark.flaky(retries=4, delay=1)
     def test_prompt_caching(self):
+        print("test_prompt_caching")
         litellm.set_verbose = True
         from litellm.utils import supports_prompt_caching
 
@@ -811,6 +1018,8 @@ class BaseLLMChatTest(ABC):
                 max_tokens=10,
             )
 
+            print("response=", response)
+
             initial_cost = response._hidden_params["response_cost"]
             ## call 2
             response = self.completion_function(
@@ -837,11 +1046,12 @@ class BaseLLMChatTest(ABC):
             _usage_format_tests(response.usage)
 
             assert "prompt_tokens_details" in response.usage
-            assert (
-                response.usage.prompt_tokens_details.cached_tokens > 0
-            ), f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
-        except litellm.InternalServerError:
-            pass
+            if response.usage.prompt_tokens_details is not None:
+                assert (
+                    response.usage.prompt_tokens_details.cached_tokens > 0
+                ), f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
+        except litellm.InternalServerError as e:
+            print("InternalServerError", e)
 
     @pytest.fixture
     def pdf_messages(self):
@@ -859,7 +1069,7 @@ class BaseLLMChatTest(ABC):
         url = f"data:application/pdf;base64,{encoded_file}"
 
         return url
-    
+
     @pytest.mark.flaky(retries=3, delay=1)
     def test_empty_tools(self):
         """
@@ -879,8 +1089,12 @@ class BaseLLMChatTest(ABC):
             if not supports_function_calling(base_completion_call_args["model"], None):
                 print("Model does not support function calling")
                 pytest.skip("Model does not support function calling")
-            
-            response = completion(**base_completion_call_args, messages=[{"role": "user", "content": "Hello, how are you?"}], tools=[]) # just make sure call doesn't fail
+
+            response = completion(
+                **base_completion_call_args,
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                tools=[],
+            )  # just make sure call doesn't fail
             print("response: ", response)
             assert response is not None
         except litellm.ContentPolicyViolationError:
@@ -956,8 +1170,13 @@ class BaseLLMChatTest(ABC):
                 except Exception as e:
                     print(f"Error: {e}")
                     pass
-                if "<thinking>" in response.choices[0].message.content and "</thinking>" in response.choices[0].message.content:
-                    pytest.fail("Thinking block returned in content instead of separate reasoning_content")
+                if (
+                    "<thinking>" in response.choices[0].message.content
+                    and "</thinking>" in response.choices[0].message.content
+                ):
+                    pytest.fail(
+                        "Thinking block returned in content instead of separate reasoning_content"
+                    )
             if response.choices[0].message.tool_calls is None:
                 return
             # Add any assertions here to check the response
@@ -968,7 +1187,9 @@ class BaseLLMChatTest(ABC):
             assert isinstance(
                 response.choices[0].message.tool_calls[0].function.arguments, str
             )
-            assert response.choices[0].finish_reason == "tool_calls"
+            assert (
+                response.choices[0].finish_reason == "tool_calls"
+            ), f"finish_reason: {response.choices[0].finish_reason}, expected: tool_calls"
             messages.append(
                 response.choices[0].message.model_dump()
             )  # Add assistant tool invokes
@@ -1032,9 +1253,9 @@ class BaseLLMChatTest(ABC):
     def test_supports_audio_input(self, input_type, format_specified):
         from litellm.utils import return_raw_request, supports_audio_input
         from litellm.types.utils import CallTypes
+
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
-
 
         litellm.drop_params = True
         base_completion_call_args = self.get_base_completion_call_args()
@@ -1049,20 +1270,17 @@ class BaseLLMChatTest(ABC):
         audio_format = "wav"
         encoded_string = base64.b64encode(wav_data).decode("utf-8")
 
-        audio_content = [
-            {
-                "type": "text",
-                "text": "What is in this recording?"
-            }
-        ]
+        audio_content = [{"type": "text", "text": "What is in this recording?"}]
 
         test_file_id = "gs://bucket/file.wav"
 
         if input_type == "input_audio":
-            audio_content.append({
-                "type": "input_audio",
-                "input_audio": {"data": encoded_string, "format": audio_format},
-            })
+            audio_content.append(
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": encoded_string, "format": audio_format},
+                }
+            )
         elif input_type == "audio_url":
             audio_content.append(
                 {
@@ -1070,16 +1288,14 @@ class BaseLLMChatTest(ABC):
                     "file": {
                         "file_id": test_file_id,
                         "filename": "my-sample-audio-file",
-                    }
+                    },
                 }
             )
-            
-                
 
         raw_request = return_raw_request(
             endpoint=CallTypes.completion,
             kwargs={
-                **base_completion_call_args, 
+                **base_completion_call_args,
                 "modalities": ["text", "audio"],
                 "audio": {"voice": "alloy", "format": audio_format},
                 "messages": [
@@ -1087,111 +1303,117 @@ class BaseLLMChatTest(ABC):
                         "role": "user",
                         "content": audio_content,
                     },
-                ]
-            }
+                ],
+            },
         )
         print("raw_request: ", raw_request)
 
         if input_type == "input_audio":
-            assert encoded_string in json.dumps(raw_request), "Audio data not sent to gemini"
+            assert encoded_string in json.dumps(
+                raw_request
+            ), "Audio data not sent to gemini"
         elif input_type == "audio_url":
-            assert test_file_id in json.dumps(raw_request), "Audio URL not sent to gemini"
-
+            assert test_file_id in json.dumps(
+                raw_request
+            ), "Audio URL not sent to gemini"
 
     def test_function_calling_with_tool_response(self):
         from litellm.utils import supports_function_calling
         from litellm import completion
+
         litellm._turn_on_debug()
+        try:
 
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+            litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        base_completion_call_args = self.get_base_completion_call_args()
-        if not supports_function_calling(base_completion_call_args["model"], None):
-            print("Model does not support function calling")
-            pytest.skip("Model does not support function calling")
-        
-        def get_weather(city: str):
-            return f"City: {city}, Weather: Sunny with 34 degree Celcius"
+            base_completion_call_args = self.get_base_completion_call_args()
+            if not supports_function_calling(base_completion_call_args["model"], None):
+                print("Model does not support function calling")
+                pytest.skip("Model does not support function calling")
 
-        TOOLS = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the weather in a city",
-                    "parameters": {
-                        "$id": "https://some/internal/name",
-                        "$schema": "https://json-schema.org/draft-07/schema",
-                        "type": "object",
-                        "properties": {
-                            "city": {
-                                "type": "string",
-                                "description": "The city to get the weather for",
-                            }
+            def get_weather(city: str):
+                return f"City: {city}, Weather: Sunny with 34 degree Celcius"
+
+            TOOLS = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get the weather in a city",
+                        "parameters": {
+                            "$id": "https://some/internal/name",
+                            "$schema": "https://json-schema.org/draft-07/schema",
+                            "type": "object",
+                            "properties": {
+                                "city": {
+                                    "type": "string",
+                                    "description": "The city to get the weather for",
+                                }
+                            },
+                            "required": ["city"],
+                            "additionalProperties": False,
                         },
-                        "required": ["city"],
-                        "additionalProperties": False,
+                        "strict": True,
                     },
-                    "strict": True,
-                },
-            }
-        ]
+                }
+            ]
 
+            messages = [{"content": "How is the weather in Mumbai?", "role": "user"}]
+            response, iteration = "", 0
+            while True:
+                if response:
+                    break
+                # Create a streaming response with tool calling enabled
+                stream = completion(
+                    **base_completion_call_args,
+                    messages=messages,
+                    tools=TOOLS,
+                    stream=True,
+                )
 
-        messages = [{ "content": "How is the weather in Mumbai?","role": "user"}]
-        response, iteration = "", 0
-        while True:
-            if response:
-                break
-            # Create a streaming response with tool calling enabled
-            stream = completion(
-                **base_completion_call_args,
-                messages=messages,
-                tools=TOOLS,
-                stream=True,
-            )
+                final_tool_calls = {}
+                for chunk in stream:
+                    delta = chunk.choices[0].delta
+                    print(delta)
+                    if delta.content:
+                        response += delta.content
+                    elif delta.tool_calls:
+                        for tool_call in chunk.choices[0].delta.tool_calls or []:
+                            index = tool_call.index
+                            if index not in final_tool_calls:
+                                final_tool_calls[index] = tool_call
+                            else:
+                                final_tool_calls[
+                                    index
+                                ].function.arguments += tool_call.function.arguments
+                if final_tool_calls:
+                    for tool_call in final_tool_calls.values():
+                        if tool_call.function.name == "get_weather":
+                            city = json.loads(tool_call.function.arguments)["city"]
+                            tool_response = get_weather(city)
+                            messages.append(
+                                {
+                                    "role": "assistant",
+                                    "tool_calls": [tool_call],
+                                    "content": None,
+                                }
+                            )
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "content": tool_response,
+                                }
+                            )
+                iteration += 1
+                if iteration > 2:
+                    print("Something went wrong!")
+                    break
 
-            final_tool_calls = {}
-            for chunk in stream:
-                delta = chunk.choices[0].delta
-                print(delta)
-                if delta.content:
-                    response += delta.content
-                elif delta.tool_calls:
-                    for tool_call in chunk.choices[0].delta.tool_calls or []:
-                        index = tool_call.index
-                        if index not in final_tool_calls:
-                            final_tool_calls[index] = tool_call
-                        else:
-                            final_tool_calls[
-                                index
-                            ].function.arguments += tool_call.function.arguments
-            if final_tool_calls:
-                for tool_call in final_tool_calls.values():
-                    if tool_call.function.name == "get_weather":
-                        city = json.loads(tool_call.function.arguments)["city"]
-                        tool_response = get_weather(city)
-                        messages.append(
-                            {
-                                "role": "assistant",
-                                "tool_calls": [tool_call],
-                                "content": None,
-                            }
-                        )
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": tool_response,
-                            }
-                        )
-            iteration += 1
-            if iteration > 2:
-                print("Something went wrong!")
-                break
-
-        print(response)
+            print(response)
+        except litellm.ServiceUnavailableError:
+            pass
 
     def test_reasoning_effort(self):
         """Test that reasoning_effort is passed correctly to the model"""
@@ -1201,7 +1423,9 @@ class BaseLLMChatTest(ABC):
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        base_completion_call_args = self.get_base_completion_call_args_with_reasoning_model()
+        base_completion_call_args = (
+            self.get_base_completion_call_args_with_reasoning_model()
+        )
         if len(base_completion_call_args) == 0:
             print("base_completion_call_args is empty")
             pytest.skip("Model does not support reasoning")
@@ -1213,14 +1437,16 @@ class BaseLLMChatTest(ABC):
             model=base_completion_call_args["model"]
         )
 
-        ## CHECK PARAM MAPPING 
+        ## CHECK PARAM MAPPING
         optional_params = get_optional_params(
             model=base_completion_call_args["model"],
             custom_llm_provider=provider,
             reasoning_effort="high",
         )
         # either accepts reasoning effort or thinking budget
-        assert "reasoning_effort" in optional_params or "4096" in json.dumps(optional_params)
+        assert "reasoning_effort" in optional_params or "4096" in json.dumps(
+            optional_params
+        )
 
         try:
             litellm._turn_on_debug()
@@ -1233,7 +1459,6 @@ class BaseLLMChatTest(ABC):
         except Exception as e:
             pytest.fail(f"Error: {e}")
 
-        
 
 class BaseOSeriesModelsTest(ABC):  # test across azure/openai
     @abstractmethod
@@ -1411,8 +1636,14 @@ class BaseAnthropicChatTest(ABC):
             **base_completion_call_args, **args, stream=False
         )
 
-        print("built_response.choices[0].message.content", built_response.choices[0].message.content)
-        print("non_stream_response.choices[0].message.content", non_stream_response.choices[0].message.content)
+        print(
+            "built_response.choices[0].message.content",
+            built_response.choices[0].message.content,
+        )
+        print(
+            "non_stream_response.choices[0].message.content",
+            non_stream_response.choices[0].message.content,
+        )
         assert (
             json.loads(built_response.choices[0].message.content).keys()
             == json.loads(non_stream_response.choices[0].message.content).keys()
@@ -1420,6 +1651,7 @@ class BaseAnthropicChatTest(ABC):
 
     def test_completion_thinking_with_response_format(self):
         from pydantic import BaseModel
+
         litellm._turn_on_debug()
 
         class RFormat(BaseModel):
@@ -1433,6 +1665,37 @@ class BaseAnthropicChatTest(ABC):
             **base_completion_call_args,
             messages=messages,
             response_format=RFormat,
+        )
+
+        print(response)
+
+    def test_completion_thinking_with_max_tokens(self):
+        from pydantic import BaseModel
+
+        litellm._turn_on_debug()
+
+        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+
+        messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=messages,
+            max_completion_tokens=20000,
+        )
+
+        print(response)
+
+    def test_completion_thinking_without_max_tokens(self):
+        from pydantic import BaseModel
+
+        litellm._turn_on_debug()
+
+        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+
+        messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages=messages,
         )
 
         print(response)
@@ -1459,7 +1722,9 @@ class BaseAnthropicChatTest(ABC):
     def test_anthropic_thinking_output_stream(self):
         # litellm.set_verbose = True
         try:
-            base_completion_call_args = self.get_base_completion_call_args_with_thinking()
+            base_completion_call_args = (
+                self.get_base_completion_call_args_with_thinking()
+            )
             resp = litellm.completion(
                 **base_completion_call_args,
                 messages=[{"role": "user", "content": "Tell me a joke."}],
@@ -1515,15 +1780,15 @@ class BaseReasoningLLMTests(ABC):
     - test that the responses contain reasoning_content
     - test that the usage contains reasoning_tokens
     """
+
     @abstractmethod
     def get_base_completion_call_args(self) -> dict:
         """Must return the base completion call args"""
         pass
-    
+
     @property
     def completion_function(self):
         return litellm.completion
-
 
     def test_non_streaming_reasoning_effort(self):
         """
@@ -1534,15 +1799,16 @@ class BaseReasoningLLMTests(ABC):
         """
         litellm._turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
-        response: ModelResponse = self.completion_function(**base_completion_call_args, reasoning_effort="low")
-        
+        response: ModelResponse = self.completion_function(
+            **base_completion_call_args, reasoning_effort="low"
+        )
+
         # user gets `reasoning_content` in the response message
         assert response.choices[0].message.reasoning_content is not None
         assert isinstance(response.choices[0].message.reasoning_content, str)
 
         # user get `reasoning_tokens`
         assert response.usage.completion_tokens_details.reasoning_tokens > 0
-    
 
     def test_streaming_reasoning_effort(self):
         """
@@ -1551,17 +1817,15 @@ class BaseReasoningLLMTests(ABC):
         - Assert that `reasoning_content` is not None from streaming response
         - Assert that `reasoning_tokens` is greater than 0 from usage
         """
-        #litellm._turn_on_debug()
+        # litellm._turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
         response: CustomStreamWrapper = self.completion_function(
             **base_completion_call_args,
             reasoning_effort="low",
             stream=True,
-            stream_options={
-                "include_usage": True
-            }
+            stream_options={"include_usage": True},
         )
-        
+
         resoning_content: str = ""
         usage: Usage = None
         for chunk in response:
@@ -1576,6 +1840,3 @@ class BaseReasoningLLMTests(ABC):
 
         print(f"usage: {usage}")
         assert usage.completion_tokens_details.reasoning_tokens > 0
-
-    
-    

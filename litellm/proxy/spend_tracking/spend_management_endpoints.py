@@ -17,6 +17,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -149,7 +150,6 @@ async def view_spend_tags(
     ```
     """
 
-    from enterprise.utils import get_spend_by_tags
     from litellm.proxy.proxy_server import prisma_client
 
     try:
@@ -1655,12 +1655,16 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     status_filter: Optional[str] = fastapi.Query(
-        default=None,
-        description="Filter logs by status (e.g., success, failure)"
+        default=None, description="Filter logs by status (e.g., success, failure)"
     ),
     model: Optional[str] = fastapi.Query(
-        default=None,
-        description="Filter logs by model"
+        default=None, description="Filter logs by model"
+    ),
+    key_alias: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by key alias"
+    ),
+    end_user: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by end user"
     ),
 ):
     """
@@ -1729,6 +1733,15 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         if model is not None:
             where_conditions["model"] = model
+
+        if key_alias is not None:
+            where_conditions["metadata"] = {
+                "path": ["user_api_key_alias"],
+                "string_contains": key_alias,
+            }
+
+        if end_user is not None:
+            where_conditions["end_user"] = end_user
 
         if min_spend is not None or max_spend is not None:
             where_conditions["spend"] = {}
@@ -1850,10 +1863,18 @@ async def view_spend_logs(  # noqa: PLR0915
         default=None,
         description="Time till which to view key spend",
     ),
+    summarize: bool = fastapi.Query(
+        default=True,
+        description="When start_date and end_date are provided, summarize=true returns aggregated data by date (legacy behavior), summarize=false returns filtered individual logs",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     View all spend logs, if request_id is provided, only logs for that request_id will be returned
+
+    When start_date and end_date are provided:
+    - summarize=true (default): Returns aggregated spend data grouped by date (maintains backward compatibility)
+    - summarize=false: Returns filtered individual log entries within the date range
 
     Example Request for all logs
     ```
@@ -1876,6 +1897,12 @@ async def view_spend_logs(  # noqa: PLR0915
     Example Request for specific user_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?user_id=ishaan@berri.ai" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    Example Request for date range with individual logs (unsummarized)
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" \
 -H "Authorization: Bearer sk-1234"
     ```
     """
@@ -1918,6 +1945,18 @@ async def view_spend_logs(  # noqa: PLR0915
             elif user_id is not None and isinstance(user_id, str):
                 filter_query["user"] = user_id  # type: ignore
 
+            # Check if user wants unsummarized data
+            if not summarize:
+                # Return filtered individual log entries (similar to UI endpoint)
+                data = await prisma_client.db.litellm_spendlogs.find_many(
+                    where=filter_query,  # type: ignore
+                    order={
+                        "startTime": "desc",
+                    },
+                )
+                return data
+
+            # Legacy behavior: return summarized data (when summarize=true)
             # SQL query
             response = await prisma_client.db.litellm_spendlogs.group_by(
                 by=["api_key", "user", "model", "startTime"],
@@ -2742,16 +2781,23 @@ async def provider_budgets() -> ProviderBudgetResponse:
 
         provider_budget_response_dict: Dict[str, ProviderBudgetResponseObject] = {}
         for _provider, _budget_info in provider_budget_config.items():
-            if llm_router.router_budget_logger is None:
+            router_budget_logger = next(
+                (
+                    cb
+                    for cb in (llm_router.optional_callbacks or [])
+                    if isinstance(cb, RouterBudgetLimiting)
+                ),
+                None,
+            )
+            if router_budget_logger is None:
                 raise ValueError("No router budget logger found")
             _provider_spend = (
-                await llm_router.router_budget_logger._get_current_provider_spend(
+                await router_budget_logger._get_current_provider_spend(_provider) or 0.0
+            )
+            _provider_budget_ttl = (
+                await router_budget_logger._get_current_provider_budget_reset_at(
                     _provider
                 )
-                or 0.0
-            )
-            _provider_budget_ttl = await llm_router.router_budget_logger._get_current_provider_budget_reset_at(
-                _provider
             )
             provider_budget_response_object = ProviderBudgetResponseObject(
                 budget_limit=_budget_info.max_budget,
@@ -2922,22 +2968,17 @@ async def ui_view_session_spend_logs(
 def _build_status_filter_condition(status_filter: Optional[str]) -> Dict[str, Any]:
     """
     Helper function to build the status filter condition for database queries.
-    
+
     Args:
         status_filter (Optional[str]): The status to filter by. Can be "success" or "failure".
-        
+
     Returns:
         Dict[str, Any]: A dictionary containing the status filter condition.
     """
     if status_filter is None:
         return {}
-        
+
     if status_filter == "success":
-        return {
-            "OR": [
-                {"status": {"equals": "success"}},
-                {"status": None}
-            ]
-        }
+        return {"OR": [{"status": {"equals": "success"}}, {"status": None}]}
     else:
         return {"status": {"equals": status_filter}}

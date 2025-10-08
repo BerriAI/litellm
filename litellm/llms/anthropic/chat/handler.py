@@ -4,7 +4,17 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx  # type: ignore
 
@@ -12,12 +22,12 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
-from litellm import LlmProviders
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
+    _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import (
@@ -36,15 +46,21 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
+    LlmProviders,
+    ModelResponse,
     ModelResponseStream,
     StreamingChoices,
     Usage,
+    _generate_id,
 )
-from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
 from .transformation import AnthropicConfig
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 
 async def make_call(
@@ -181,6 +197,8 @@ class AnthropicChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
     ):
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
         data["stream"] = True
 
         completion_stream, headers = await make_call(
@@ -221,11 +239,11 @@ class AnthropicChatCompletion(BaseLLM):
         optional_params: dict,
         json_mode: bool,
         litellm_params: dict,
-        provider_config: BaseConfig,
+        provider_config: "BaseConfig",
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
-    ) -> Union[ModelResponse, CustomStreamWrapper]:
+    ) -> Union[ModelResponse, "CustomStreamWrapper"]:
         async_handler = client or get_async_httpx_client(
             llm_provider=litellm.LlmProviders.ANTHROPIC
         )
@@ -290,6 +308,9 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client=None,
     ):
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.utils import ProviderConfigManager
+
         optional_params = copy.deepcopy(optional_params)
         stream = optional_params.pop("stream", None)
         json_mode: bool = optional_params.pop("json_mode", False)
@@ -414,7 +435,9 @@ class AnthropicChatCompletion(BaseLLM):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    client = HTTPHandler(timeout=timeout)  # type: ignore
+                    client = _get_httpx_client(
+                        params={"timeout": timeout}
+                    )
                 else:
                     client = client
 
@@ -468,6 +491,13 @@ class ModelResponseIterator:
         self.content_blocks: List[ContentBlockDelta] = []
         self.tool_index = -1
         self.json_mode = json_mode
+        # Generate response ID once per stream to match OpenAI-compatible behavior
+        self.response_id = _generate_id()
+
+        # Track if we're currently streaming a response_format tool
+        self.is_response_format_tool: bool = False
+        # Track if we've converted any response_format tools (affects finish_reason)
+        self.converted_response_format_tool: bool = False
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -564,6 +594,37 @@ class ModelResponseIterator:
                 reasoning_content += thinking_content
         return reasoning_content
 
+    def _handle_redacted_thinking_content(
+        self,
+        content_block_start: ContentBlockStart,
+        provider_specific_fields: Dict[str, Any],
+    ) -> Tuple[List[ChatCompletionRedactedThinkingBlock], Dict[str, Any]]:
+        """
+        Handle the redacted thinking content
+        """
+        thinking_blocks = [
+            ChatCompletionRedactedThinkingBlock(
+                type="redacted_thinking",
+                data=content_block_start["content_block"]["data"],  # type: ignore
+            )
+        ]
+        provider_specific_fields["thinking_blocks"] = thinking_blocks
+
+        return thinking_blocks, provider_specific_fields
+
+    def get_content_block_start(self, chunk: dict) -> ContentBlockStart:
+        from litellm.types.llms.anthropic import (
+            ContentBlockStartText,
+            ContentBlockStartToolUse,
+        )
+
+        if chunk.get("content_block", {}).get("type") == "tool_use":
+            content_block_start = ContentBlockStartToolUse(**chunk)  # type: ignore
+        else:
+            content_block_start = ContentBlockStartText(**chunk)  # type: ignore
+
+        return content_block_start
+
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             type_chunk = chunk.get("type", "") or ""
@@ -582,7 +643,8 @@ class ModelResponseIterator:
                 ]
             ] = None
 
-            index = int(chunk.get("index", 0))
+            # Always use index=0 for OpenAI choice format (fixes multi-choice errors)
+            index = 0
             if type_chunk == "content_block_delta":
                 """
                 Anthropic content chunk
@@ -603,7 +665,8 @@ class ModelResponseIterator:
                 event: content_block_start
                 data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","name":"get_weather","input":{}}}
                 """
-                content_block_start = ContentBlockStart(**chunk)  # type: ignore
+
+                content_block_start = self.get_content_block_start(chunk=chunk)
                 self.content_blocks = []  # reset content blocks when new block starts
                 if content_block_start["content_block"]["type"] == "text":
                     text = content_block_start["content_block"]["text"]
@@ -621,17 +684,17 @@ class ModelResponseIterator:
                 elif (
                     content_block_start["content_block"]["type"] == "redacted_thinking"
                 ):
-                    thinking_blocks = [
-                        ChatCompletionRedactedThinkingBlock(
-                            type="redacted_thinking",
-                            data=content_block_start["content_block"]["data"],
-                        )
-                    ]
+                    (
+                        thinking_blocks,
+                        provider_specific_fields,
+                    ) = self._handle_redacted_thinking_content(  # type: ignore
+                        content_block_start=content_block_start,
+                        provider_specific_fields=provider_specific_fields,
+                    )
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block
                 is_empty = self.check_empty_tool_call_args()
-
                 if is_empty:
                     tool_use = {
                         "id": None,
@@ -642,18 +705,10 @@ class ModelResponseIterator:
                         },
                         "index": self.tool_index,
                     }
+                # Reset response_format tool tracking when block stops
+                self.is_response_format_tool = False
             elif type_chunk == "message_delta":
-                """
-                Anthropic
-                chunk = {'type': 'message_delta', 'delta': {'stop_reason': 'max_tokens', 'stop_sequence': None}, 'usage': {'output_tokens': 10}}
-                """
-                # TODO - get usage from this chunk, set in response
-                message_delta = MessageBlockDelta(**chunk)  # type: ignore
-                finish_reason = map_finish_reason(
-                    finish_reason=message_delta["delta"].get("stop_reason", "stop")
-                    or "stop"
-                )
-                usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
+                finish_reason, usage = self._handle_message_delta(chunk)
             elif type_chunk == "message_start":
                 """
                 Anthropic
@@ -713,6 +768,7 @@ class ModelResponseIterator:
                     )
                 ],
                 usage=usage,
+                id=self.response_id,
             )
 
             return returned_chunk
@@ -729,6 +785,13 @@ class ModelResponseIterator:
         Anthropic returns the JSON schema as part of the tool call
         OpenAI returns the JSON schema as part of the content, this handles placing it in the content
 
+        Tool streaming follows Anthropic's fine-grained streaming pattern:
+        - content_block_start: Contains complete tool info (id, name, empty arguments)
+        - content_block_delta: Contains argument deltas (partial_json)
+        - content_block_stop: Signals end of tool
+
+        Reference: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/fine-grained-tool-streaming
+
         Args:
             text: str
             tool_use: Optional[ChatCompletionToolCallChunk]
@@ -738,15 +801,49 @@ class ModelResponseIterator:
             text: The text to use in the content
             tool_use: The ChatCompletionToolCallChunk to use in the chunk response
         """
-        if self.json_mode is True and tool_use is not None:
+        if not self.json_mode or tool_use is None:
+            return text, tool_use
+
+        # Check if this is a new tool call (has id)
+        if tool_use.get("id") is not None:
+            # New tool call from content_block_start - tool name is always complete here
+            # (per Anthropic's fine-grained streaming pattern)
+            tool_name = tool_use.get("function", {}).get("name", "")
+            self.is_response_format_tool = tool_name == RESPONSE_FORMAT_TOOL_NAME
+
+        # Convert tool to content if we're tracking a response_format tool
+        if self.is_response_format_tool:
             message = AnthropicConfig._convert_tool_response_to_message(
                 tool_calls=[tool_use]
             )
             if message is not None:
                 text = message.content or ""
                 tool_use = None
+                # Track that we converted a response_format tool
+                self.converted_response_format_tool = True
 
         return text, tool_use
+
+    def _handle_message_delta(self, chunk: dict) -> Tuple[str, Optional[Usage]]:
+        """
+        Handle message_delta event for finish_reason and usage.
+
+        Args:
+            chunk: The message_delta chunk
+
+        Returns:
+            Tuple of (finish_reason, usage)
+        """
+        message_delta = MessageBlockDelta(**chunk)  # type: ignore
+        finish_reason = map_finish_reason(
+            finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop"
+        )
+        # Override finish_reason to "stop" if we converted response_format tools
+        # (matches OpenAI behavior and non-streaming Anthropic implementation)
+        if self.converted_response_format_tool:
+            finish_reason = "stop"
+        usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
+        return finish_reason, usage
 
     # Sync iterator
     def __iter__(self):
@@ -843,4 +940,4 @@ class ModelResponseIterator:
             data_json = json.loads(str_line[5:])
             return self.chunk_parser(chunk=data_json)
         else:
-            return ModelResponseStream()
+            return ModelResponseStream(id=self.response_id)

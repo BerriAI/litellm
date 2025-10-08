@@ -1,5 +1,5 @@
 import json
-import uuid
+from litellm._uuid import uuid
 from typing import Any, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
@@ -25,6 +25,7 @@ from litellm.types.utils import (
     ModelResponse,
     ProviderSpecificModelInfo,
 )
+from litellm.utils import supports_function_calling, supports_tool_choice
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import FireworksAIException
@@ -83,10 +84,9 @@ class FireworksAIConfig(OpenAIGPTConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
-        return [
+        # Base parameters supported by all models
+        supported_params = [
             "stream",
-            "tools",
-            "tool_choice",
             "max_completion_tokens",
             "max_tokens",
             "temperature",
@@ -102,6 +102,16 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "prompt_truncate_length",
             "context_length_exceeded_behavior",
         ]
+        
+        # Only add tools for models that support function calling
+        if supports_function_calling(model=model, custom_llm_provider="fireworks_ai"):
+            supported_params.append("tools")
+        
+        # Only add tool_choice for models that explicitly support it
+        if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
+            supported_params.append("tool_choice")
+        
+        return supported_params
 
     def map_openai_params(
         self,
@@ -186,11 +196,24 @@ class FireworksAIConfig(OpenAIGPTConfig):
         """
         Add 'transform=inline' to the url of the image_url
         """
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            filter_value_from_dict,
+            migrate_file_to_image_url,
+        )
+
         disable_add_transform_inline_image_block = cast(
             Optional[bool],
             litellm_params.get("disable_add_transform_inline_image_block")
             or litellm.disable_add_transform_inline_image_block,
         )
+        ## For any 'file' message type with pdf content, move to 'image_url' message type
+        for message in messages:
+            if message["role"] == "user":
+                _message_content = message.get("content")
+                if _message_content is not None and isinstance(_message_content, list):
+                    for idx, content in enumerate(_message_content):
+                        if content["type"] == "file":
+                            _message_content[idx] = migrate_file_to_image_url(content)
         for message in messages:
             if message["role"] == "user":
                 _message_content = message.get("content")
@@ -202,6 +225,8 @@ class FireworksAIConfig(OpenAIGPTConfig):
                                 model=model,
                                 disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
                             )
+            filter_value_from_dict(cast(dict, message), "cache_control")
+
         return messages
 
     def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:

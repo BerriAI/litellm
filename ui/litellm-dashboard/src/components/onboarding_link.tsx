@@ -2,6 +2,7 @@ import React from "react";
 import { Modal, message, Typography } from "antd";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { Text, Button } from "@tremor/react";
+import NotificationsManager from "./molecules/notifications_manager";
 
 export interface InvitationLink {
   id: string;
@@ -18,11 +19,10 @@ export interface InvitationLink {
 
 interface OnboardingProps {
   isInvitationLinkModalVisible: boolean;
-  setIsInvitationLinkModalVisible: React.Dispatch<
-    React.SetStateAction<boolean>
-  >;
+  setIsInvitationLinkModalVisible: React.Dispatch<React.SetStateAction<boolean>>;
   baseUrl: string;
   invitationLinkData: InvitationLink | null;
+  modalType?: "invitation" | "resetPassword";
 }
 
 export default function OnboardingModal({
@@ -30,6 +30,7 @@ export default function OnboardingModal({
   setIsInvitationLinkModalVisible,
   baseUrl,
   invitationLinkData,
+  modalType = "invitation",
 }: OnboardingProps) {
   const { Title, Paragraph } = Typography;
   const handleInvitationOk = () => {
@@ -41,15 +42,27 @@ export default function OnboardingModal({
   };
 
   const getInvitationUrl = () => {
-    if (invitationLinkData?.has_user_setup_sso) {
-      return new URL("/ui", baseUrl).toString();
+    if (!baseUrl) {
+      return "";
     }
-    return new URL(`/ui?invitation_id=${invitationLinkData?.id}`, baseUrl).toString();
+    const baseUrlObj = new URL(baseUrl);
+    const basePath = baseUrlObj.pathname; // This will be "/litellm" or ""
+    const path = basePath && basePath !== "/" ? `${basePath}/ui` : "ui";
+    // Get the path from the base URL
+    if (invitationLinkData?.has_user_setup_sso) {
+      return new URL(path, baseUrl).toString();
+    }
+    let urlPath = `${path}?invitation_id=${invitationLinkData?.id}`;
+    if (modalType === "resetPassword") {
+      urlPath += "&action=reset_password";
+    }
+    const url = new URL(urlPath, baseUrl).toString();
+    return url;
   };
 
   return (
     <Modal
-      title="Invitation Link"
+      title={modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}
       visible={isInvitationLinkModalVisible}
       width={800}
       footer={null}
@@ -57,24 +70,25 @@ export default function OnboardingModal({
       onCancel={handleInvitationCancel}
     >
       <Paragraph>
-        Copy and send the generated link to onboard this user to the proxy.
+        {modalType === "invitation"
+          ? "Copy and send the generated link to onboard this user to the proxy."
+          : "Copy and send the generated link to the user to reset their password."}
       </Paragraph>
       <div className="flex justify-between pt-5 pb-2">
         <Text className="text-base">User ID</Text>
         <Text>{invitationLinkData?.user_id}</Text>
       </div>
       <div className="flex justify-between pt-5 pb-2">
-        <Text>Invitation Link</Text>
+        <Text>{modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}</Text>
         <Text>
           <Text>{getInvitationUrl()}</Text>
         </Text>
       </div>
       <div className="flex justify-end mt-5">
-        <CopyToClipboard
-          text={getInvitationUrl()}
-          onCopy={() => message.success("Copied!")}
-        >
-          <Button variant="primary">Copy invitation link</Button>
+        <CopyToClipboard text={getInvitationUrl()} onCopy={() => NotificationsManager.success("Copied!")}>
+          <Button variant="primary">
+            {modalType === "invitation" ? "Copy invitation link" : "Copy password reset link"}
+          </Button>
         </CopyToClipboard>
       </div>
     </Modal>

@@ -17,14 +17,13 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.openai_endpoint_utils import (
-    get_custom_llm_provider_from_request_body,
+    get_custom_llm_provider_from_request_query,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     get_models_from_unified_file_id,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import is_known_model
-from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 
 router = APIRouter()
@@ -283,7 +282,7 @@ async def retrieve_batch(
         else:
             custom_llm_provider = (
                 provider
-                or await get_custom_llm_provider_from_request_body(request=request)
+                or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
             )
             response = await litellm.aretrieve_batch(
@@ -355,6 +354,7 @@ async def list_batches(
     limit: Optional[int] = None,
     after: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    target_model_names: Optional[str] = None,
 ):
     """
     Lists 
@@ -369,20 +369,37 @@ async def list_batches(
 
     ```
     """
-    from litellm.proxy.proxy_server import proxy_logging_obj, version
+    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj, version
 
     verbose_proxy_logger.debug("GET /v1/batches after={} limit={}".format(after, limit))
     try:
-        custom_llm_provider = (
-            provider
-            or await get_custom_llm_provider_from_request_body(request=request)
-            or "openai"
-        )
-        response = await litellm.alist_batches(
-            custom_llm_provider=custom_llm_provider,  # type: ignore
-            after=after,
-            limit=limit,
-        )
+        if llm_router is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.no_llm_router.value},
+            )
+
+        ## check for target model names
+        data = await _read_request_body(request=request)
+        target_model_names = target_model_names or data.get("target_model_names", None)
+        if target_model_names:
+            model = target_model_names.split(",")[0]
+            response = await llm_router.alist_batches(
+                model=model,
+                after=after,
+                limit=limit,
+            )
+        else:
+            custom_llm_provider = (
+                provider
+                or get_custom_llm_provider_from_request_query(request=request)
+                or "openai"
+            )
+            response = await litellm.alist_batches(
+                custom_llm_provider=custom_llm_provider,  # type: ignore
+                after=after,
+                limit=limit,
+            )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -484,7 +501,7 @@ async def cancel_batch(
         _cancel_batch_data = CancelBatchRequest(batch_id=batch_id, **data)
         response = await litellm.acancel_batch(
             custom_llm_provider=custom_llm_provider,  # type: ignore
-            **_cancel_batch_data
+            **_cancel_batch_data,
         )
 
         ### ALERTING ###

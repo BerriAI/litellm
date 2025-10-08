@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💰 Budgets, Rate Limits
+# Budgets, Rate Limits
 
 Requirements: 
 
@@ -57,6 +57,9 @@ You can:
 :::info
 
 **Step-by step tutorial on setting, resetting budgets on Teams here (API or using Admin UI)**
+
+> **Prerequisite:**
+> To enable team member rate limits, you must set the environment variable `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING=true` before starting the proxy server. Without this, team member rate limits will not be enforced.
 
 👉 [https://docs.litellm.ai/docs/proxy/team_budgets](https://docs.litellm.ai/docs/proxy/team_budgets)
 
@@ -194,7 +197,9 @@ Apply a budget across all calls an internal user (key owner) can make on the pro
 
 :::info
 
-For most use-cases, we recommend setting team-member budgets
+For keys, with a 'team_id' set, the team budget is used instead of the user's personal budget.
+
+To apply a budget to a user within a team, use team member budgets.
 
 :::
 
@@ -790,6 +795,11 @@ Expected Response:
 ### [BETA] Multi-instance rate limiting
 
 Enable multi-instance rate limiting with the env var `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING="True"`
+
+**Important Notes:**
+- Setting `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING="True"` is required for team member rate limits to function, not just for multi-instance scenarios.
+- **Rate limits do not apply to proxy admin users.** 
+- When testing rate limits, use internal user roles (non-admin) to ensure limits are enforced as expected.
 
 Changes: 
 - This moves to using async_increment instead of async_set_cache when updating current requests/tokens. 

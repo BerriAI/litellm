@@ -89,6 +89,148 @@ litellm --config /path/to/config.yaml
 | OpenAI      |   [Usage](#quick-start)                 |
 | Azure OpenAI|   [Usage](../docs/providers/azure#azure-text-to-speech-tts)                 |
 | Vertex AI   |   [Usage](../docs/providers/vertex#text-to-speech-apis)                 |
+| Gemini      |   [Usage](#gemini-text-to-speech)                 |
+
+## `/audio/speech` to `/chat/completions` Bridge
+
+LiteLLM allows you to use `/chat/completions` models to generate speech through the `/audio/speech` endpoint. This is useful for models like Gemini's TTS-enabled models that are only accessible via `/chat/completions`.
+
+### Gemini Text-to-Speech
+
+#### Python SDK Usage
+
+```python showLineNumbers title="Gemini Text-to-Speech SDK Usage"
+import litellm
+import os
+
+# Set your Gemini API key
+os.environ["GEMINI_API_KEY"] = "your-gemini-api-key"
+
+def test_audio_speech_gemini():
+    result = litellm.speech(
+        model="gemini/gemini-2.5-flash-preview-tts",
+        input="the quick brown fox jumped over the lazy dogs",
+        api_key=os.getenv("GEMINI_API_KEY"),
+    )
+    
+    # Save to file
+    from pathlib import Path
+    speech_file_path = Path(__file__).parent / "gemini_speech.mp3"
+    result.stream_to_file(speech_file_path)
+    print(f"Audio saved to {speech_file_path}")
+
+test_audio_speech_gemini()
+```
+
+#### Async Usage
+
+```python showLineNumbers title="Gemini Text-to-Speech Async Usage"
+import litellm
+import asyncio
+import os
+from pathlib import Path
+
+os.environ["GEMINI_API_KEY"] = "your-gemini-api-key"
+
+async def test_async_gemini_speech():
+    speech_file_path = Path(__file__).parent / "gemini_speech.mp3"
+    response = await litellm.aspeech(
+        model="gemini/gemini-2.5-flash-preview-tts",
+        input="the quick brown fox jumped over the lazy dogs",
+        api_key=os.getenv("GEMINI_API_KEY"),
+    )
+    response.stream_to_file(speech_file_path)
+    print(f"Audio saved to {speech_file_path}")
+
+asyncio.run(test_async_gemini_speech())
+```
+
+#### LiteLLM Proxy Usage
+
+**Setup Config:**
+
+```yaml showLineNumbers title="Gemini Proxy Configuration"
+model_list:
+- model_name: gemini-tts
+  litellm_params:
+    model: gemini/gemini-2.5-flash-preview-tts
+    api_key: os.environ/GEMINI_API_KEY
+```
+
+**Start Proxy:**
+
+```bash showLineNumbers title="Start LiteLLM Proxy"
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**Make Request:**
+
+```bash showLineNumbers title="Gemini TTS Request"
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-tts",
+    "input": "The quick brown fox jumped over the lazy dog.",
+    "voice": "alloy"
+  }' \
+  --output gemini_speech.mp3
+```
+
+### Vertex AI Text-to-Speech
+
+#### Python SDK Usage
+
+```python showLineNumbers title="Vertex AI Text-to-Speech SDK Usage"
+import litellm
+import os
+from pathlib import Path
+
+# Set your Google credentials
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "path/to/service-account.json"
+
+def test_audio_speech_vertex():
+    result = litellm.speech(
+        model="vertex_ai/gemini-2.5-flash-preview-tts",
+        input="the quick brown fox jumped over the lazy dogs",
+    )
+    
+    # Save to file
+    speech_file_path = Path(__file__).parent / "vertex_speech.mp3"
+    result.stream_to_file(speech_file_path)
+    print(f"Audio saved to {speech_file_path}")
+
+test_audio_speech_vertex()
+```
+
+#### LiteLLM Proxy Usage
+
+**Setup Config:**
+
+```yaml showLineNumbers title="Vertex AI Proxy Configuration"
+model_list:
+- model_name: vertex-tts
+  litellm_params:
+    model: vertex_ai/gemini-2.5-flash-preview-tts
+    vertex_project: your-project-id
+    vertex_location: us-central1
+```
+
+**Make Request:**
+
+```bash showLineNumbers title="Vertex AI TTS Request"
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "vertex-tts",
+    "input": "The quick brown fox jumped over the lazy dog.",
+    "voice": "en-US-Wavenet-D"
+  }' \
+  --output vertex_speech.mp3
+```
 
 ## ✨ Enterprise LiteLLM Proxy - Set Max Request File Size 
 

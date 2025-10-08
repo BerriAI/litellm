@@ -81,11 +81,15 @@ class VertexPassthroughLoggingHandler:
             from litellm.llms.vertex_ai.image_generation.image_generation_handler import (
                 VertexImageGeneration,
             )
+            from litellm.llms.vertex_ai.multimodal_embeddings.transformation import (
+                VertexAIMultimodalEmbeddingConfig,
+            )
             from litellm.types.utils import PassthroughCallTypes
 
             vertex_image_generation_class = VertexImageGeneration()
 
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
+
             _json_response = httpx_response.json()
 
             litellm_prediction_response: Union[
@@ -105,6 +109,23 @@ class VertexPassthroughLoggingHandler:
                 logging_obj.call_type = (
                     PassthroughCallTypes.passthrough_image_generation.value
                 )
+            elif VertexPassthroughLoggingHandler._is_multimodal_embedding_response(
+                json_response=_json_response,
+            ):
+                # Use multimodal embedding transformation
+                vertex_multimodal_config = VertexAIMultimodalEmbeddingConfig()
+                litellm_prediction_response = (
+                    vertex_multimodal_config.transform_embedding_response(
+                        model=model,
+                        raw_response=httpx_response,
+                        model_response=litellm.EmbeddingResponse(),
+                        logging_obj=logging_obj,
+                        api_key="",
+                        request_data={},
+                        optional_params={},
+                        litellm_params={},
+                    )
+                )
             else:
                 litellm_prediction_response = litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
                     response=_json_response,
@@ -116,6 +137,68 @@ class VertexPassthroughLoggingHandler:
 
             logging_obj.model = model
             logging_obj.model_call_details["model"] = logging_obj.model
+            response_cost = litellm.completion_cost(
+                completion_response=litellm_prediction_response,
+                model=model,
+                custom_llm_provider="vertex_ai",
+            )
+
+            kwargs["response_cost"] = response_cost
+            kwargs["model"] = model
+            logging_obj.model_call_details["response_cost"] = response_cost
+
+            return {
+                "result": litellm_prediction_response,
+                "kwargs": kwargs,
+            }
+        elif "rawPredict" in url_route or "streamRawPredict" in url_route:
+            from litellm.llms.vertex_ai.vertex_ai_partner_models import (
+                get_vertex_ai_partner_model_config,
+            )
+
+            model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
+            vertex_publisher_or_api_spec = VertexPassthroughLoggingHandler._get_vertex_publisher_or_api_spec_from_url(
+                url_route
+            )
+
+            _json_response = httpx_response.json()
+
+            litellm_prediction_response = ModelResponse()
+
+            if vertex_publisher_or_api_spec is not None:
+                vertex_ai_partner_model_config = get_vertex_ai_partner_model_config(
+                    model=model,
+                    vertex_publisher_or_api_spec=vertex_publisher_or_api_spec,
+                )
+                litellm_prediction_response = (
+                    vertex_ai_partner_model_config.transform_response(
+                        model=model,
+                        raw_response=httpx_response,
+                        model_response=litellm_prediction_response,
+                        logging_obj=logging_obj,
+                        request_data={},
+                        encoding=litellm.encoding,
+                        optional_params={},
+                        litellm_params={},
+                        api_key="",
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": "no-message-pass-through-endpoint",
+                            }
+                        ],
+                    )
+                )
+
+            kwargs = VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
+                litellm_model_response=litellm_prediction_response,
+                model="vertex_ai/" + model,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=logging_obj,
+                custom_llm_provider="vertex_ai",
+            )
 
             return {
                 "result": litellm_prediction_response,
@@ -136,6 +219,7 @@ class VertexPassthroughLoggingHandler:
         endpoint_type: EndpointType,
         start_time: datetime,
         all_chunks: List[str],
+        model: Optional[str],
         end_time: datetime,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
@@ -146,12 +230,15 @@ class VertexPassthroughLoggingHandler:
         - Logs in litellm callbacks
         """
         kwargs: Dict[str, Any] = {}
-        model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
+        model = model or VertexPassthroughLoggingHandler.extract_model_from_url(
+            url_route
+        )
         complete_streaming_response = (
             VertexPassthroughLoggingHandler._build_complete_streaming_response(
                 all_chunks=all_chunks,
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
+                url_route=url_route,
             )
         )
 
@@ -186,25 +273,42 @@ class VertexPassthroughLoggingHandler:
         all_chunks: List[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
+        url_route: str,
     ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
-        vertex_iterator = VertexModelResponseIterator(
-            streaming_response=None,
-            sync_stream=False,
-        )
-        litellm_custom_stream_wrapper = litellm.CustomStreamWrapper(
-            completion_stream=vertex_iterator,
-            model=model,
-            logging_obj=litellm_logging_obj,
-            custom_llm_provider="vertex_ai",
-        )
-        all_openai_chunks = []
-        for chunk in all_chunks:
-            generic_chunk = vertex_iterator._common_chunk_parsing_logic(chunk)
-            litellm_chunk = litellm_custom_stream_wrapper.chunk_creator(
-                chunk=generic_chunk
+        parsed_chunks = []
+        if "generateContent" in url_route or "streamGenerateContent" in url_route:
+            vertex_iterator: Any = VertexModelResponseIterator(
+                streaming_response=None,
+                sync_stream=False,
+                logging_obj=litellm_logging_obj,
             )
-            if litellm_chunk is not None:
-                all_openai_chunks.append(litellm_chunk)
+            chunk_parsing_logic: Any = vertex_iterator._common_chunk_parsing_logic
+            parsed_chunks = [chunk_parsing_logic(chunk) for chunk in all_chunks]
+        elif "rawPredict" in url_route or "streamRawPredict" in url_route:
+            from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+            from litellm.llms.base_llm.base_model_iterator import (
+                BaseModelResponseIterator,
+            )
+
+            vertex_iterator = ModelResponseIterator(
+                streaming_response=None,
+                sync_stream=False,
+            )
+            chunk_parsing_logic = vertex_iterator.chunk_parser
+            for chunk in all_chunks:
+                dict_chunk = BaseModelResponseIterator._string_to_dict_parser(chunk)
+                if dict_chunk is None:
+                    continue
+                parsed_chunks.append(chunk_parsing_logic(dict_chunk))
+        else:
+            return None
+        if len(parsed_chunks) == 0:
+            return None
+        all_openai_chunks = []
+        for parsed_chunk in parsed_chunks:
+            if parsed_chunk is None:
+                continue
+            all_openai_chunks.append(parsed_chunk)
 
         complete_streaming_response = litellm.stream_chunk_builder(
             chunks=all_openai_chunks
@@ -221,6 +325,19 @@ class VertexPassthroughLoggingHandler:
         return "unknown"
 
     @staticmethod
+    def _get_vertex_publisher_or_api_spec_from_url(url: str) -> Optional[str]:
+        # Check for specific Vertex AI partner publishers
+        if "/publishers/mistralai/" in url:
+            return "mistralai"
+        elif "/publishers/anthropic/" in url:
+            return "anthropic"
+        elif "/publishers/ai21/" in url:
+            return "ai21"
+        elif "/endpoints/openapi/" in url:
+            return "openapi"
+        return None
+
+    @staticmethod
     def _get_custom_llm_provider_from_url(url: str) -> str:
         parsed_url = urlparse(url)
         if parsed_url.hostname and parsed_url.hostname.endswith(
@@ -228,6 +345,39 @@ class VertexPassthroughLoggingHandler:
         ):
             return litellm.LlmProviders.GEMINI.value
         return litellm.LlmProviders.VERTEX_AI.value
+
+    @staticmethod
+    def _is_multimodal_embedding_response(json_response: dict) -> bool:
+        """
+        Detect if the response is from a multimodal embedding request.
+
+        Check if the response contains multimodal embedding fields:
+            - Docs: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/multimodal-embeddings-api#response-body
+
+
+        Args:
+            json_response: The JSON response from Vertex AI
+
+        Returns:
+            bool: True if this is a multimodal embedding response
+        """
+        # Check if response contains multimodal embedding fields
+        if "predictions" in json_response:
+            predictions = json_response["predictions"]
+            for prediction in predictions:
+                if isinstance(prediction, dict):
+                    # Check for multimodal embedding response fields
+                    if any(
+                        key in prediction
+                        for key in [
+                            "textEmbedding",
+                            "imageEmbedding",
+                            "videoEmbeddings",
+                        ]
+                    ):
+                        return True
+
+        return False
 
     @staticmethod
     def _create_vertex_response_logging_payload_for_generate_content(
@@ -243,10 +393,13 @@ class VertexPassthroughLoggingHandler:
         Create the standard logging object for Vertex passthrough generateContent (streaming and non-streaming)
 
         """
+
         response_cost = litellm.completion_cost(
             completion_response=litellm_model_response,
             model=model,
+            custom_llm_provider="vertex_ai",
         )
+
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
 

@@ -98,7 +98,7 @@ def get_modified_max_tokens(
 
         return user_max_tokens
     except Exception as e:
-        verbose_logger.error(
+        verbose_logger.debug(
             "litellm.litellm_core_utils.token_counter.py::get_modified_max_tokens() - Error while checking max token limit: {}\nmodel={}, base_model={}".format(
                 str(e), model, base_model
             )
@@ -362,6 +362,15 @@ def token_counter(
     """
     from litellm.utils import convert_list_message_to_dict
 
+    #########################################################
+    # Flag to disable token counter
+    # We've gotten reports of this consuming CPU cycles,
+    # exposing this flag to allow users to disable
+    # it to confirm if this is indeed the issue
+    #########################################################
+    if litellm.disable_token_counter is True:
+        return 0
+
     verbose_logger.debug(
         f"messages in token_counter: {messages}, text in token_counter: {text}"
     )
@@ -453,9 +462,8 @@ def _count_messages(
                     default_token_count,
                 )
             else:
-                raise ValueError(
-                    f"Unsupported type {type(value)} for key {key} in message {message}"
-                )
+                # Skip unsupported keys instead of raising an error
+                continue
     return num_tokens
 
 
@@ -521,7 +529,7 @@ def _get_count_function(
                 encoding = tiktoken.get_encoding("cl100k_base")
 
             def count_tokens(text: str) -> int:
-                return len(encoding.encode(text))
+                return len(encoding.encode(text, disallowed_special=()))
 
         else:
             raise ValueError("Unsupported tokenizer type")

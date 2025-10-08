@@ -93,6 +93,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         optional_params: dict,
         request_data: dict,
         api_base: str,
+        api_key: Optional[str] = None,
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,

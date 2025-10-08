@@ -1,8 +1,46 @@
 // @ts-check
 // Note: type annotations allow type checking and IDEs autocompletion
 
+// @ts-ignore
 const lightCodeTheme = require('prism-react-renderer/themes/github');
+// @ts-ignore
 const darkCodeTheme = require('prism-react-renderer/themes/dracula');
+
+const inkeepConfig = {
+  baseSettings: {
+    apiKey: "0cb9c9916ec71bfe0e53c9d7f83ff046daee3fa9ef318f6a",
+    organizationDisplayName: 'liteLLM',
+    primaryBrandColor: '#4965f5',
+    theme: {
+      styles: [
+        {
+          key: "custom-theme",
+          type: "style",
+          value: `
+            .ikp-chat-button__button {
+              margin-right: 80px !important;
+            }
+          `,
+        },
+      ],
+      syntaxHighlighter: {
+        lightTheme: lightCodeTheme,
+        darkTheme: darkCodeTheme,
+      },
+    },
+  },
+  searchSettings: {
+    searchBarPlaceholder: 'Search docs...',
+  },
+  aiChatSettings: {
+    quickQuestions: [
+      'How do I use the proxy?',
+      'How do I cache responses?',
+      'How do I stream responses?',
+    ],
+    aiAssistantAvatar: '/img/favicon.ico',
+  },
+};
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
@@ -27,6 +65,17 @@ const config = {
     locales: ['en'],
   },
   plugins: [
+    [
+      '@inkeep/cxkit-docusaurus',
+      {
+        SearchBar: {
+          ...inkeepConfig,
+        },
+        ChatButton: {
+          ...inkeepConfig,
+        },
+      },
+    ],
     [
       '@docusaurus/plugin-ideal-image',
       {
@@ -87,6 +136,11 @@ const config = {
     ],
   ],
 
+  themes: ['@docusaurus/theme-mermaid'],
+  markdown: {
+    mermaid: true,
+  },
+
   scripts: [
     {
       async: true,
@@ -101,15 +155,6 @@ const config = {
     ({
       // Replace with your project's social card
       image: 'img/docusaurus-social-card.png',
-      algolia: {
-        // The application ID provided by Algolia
-        appId: 'NU85Y4NU0B',
-  
-        // Public API key: it is safe to commit it
-        apiKey: '4e0cf8c3020d0c876ad9174cea5c01fb',
-  
-        indexName: 'litellm',
-      },
       navbar: {
         title: '🚅 LiteLLM',
         items: [
@@ -120,16 +165,16 @@ const config = {
             label: 'Docs',
           },
           {
-            sidebarId: 'tutorialSidebar',
+            sidebarId: 'integrationsSidebar',
             position: 'left',
-            label: 'Enterprise',
-            to: "docs/enterprise"
+            label: 'Integrations',
+            to: "docs/integrations"
           },
           {
             sidebarId: 'tutorialSidebar',
             position: 'left',
-            label: 'Hosted',
-            to: "docs/hosted"
+            label: 'Enterprise',
+            to: "docs/enterprise"
           },
           { to: '/release_notes', label: 'Release Notes', position: 'left' },
           {
@@ -143,8 +188,8 @@ const config = {
             position: 'right',
           },
           {
-            href: 'https://discord.com/invite/wuPM9dRgDw',
-            label: 'Discord',
+            href: 'https://www.litellm.ai/support',
+            label: 'Slack/Discord',
             position: 'right',
           }
         ],

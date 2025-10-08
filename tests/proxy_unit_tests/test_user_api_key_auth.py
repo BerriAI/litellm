@@ -1044,3 +1044,38 @@ async def test_x_litellm_api_key():
     valid_token = await user_api_key_auth(request=request, api_key="Bearer " + ignored_key, custom_litellm_key_header=master_key)
     assert valid_token.token == hash_token(master_key)
 
+
+@pytest.mark.asyncio
+async def test_user_api_key_from_query_param():
+    """Ensure user_api_key_auth reads API key from `key` query parameter."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    user_key = "sk-query-1234"
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key)))
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+
+    request = Request(
+        scope={
+            "type": "http",
+            "path": "/v1beta/models/gemini:streamGenerateContent",
+            "query_string": f"alt=sse&key={user_key}".encode(),
+        }
+    )
+    request._url = URL(url=f"/v1beta/models/gemini:streamGenerateContent?alt=sse&key={user_key}")
+
+    async def return_body():
+        return b"{}"
+
+    request.body = return_body
+
+    valid_token = await user_api_key_auth(request=request, api_key="")
+    assert valid_token.token == hash_token(user_key)
+

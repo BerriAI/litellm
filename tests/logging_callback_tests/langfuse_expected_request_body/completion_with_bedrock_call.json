@@ -1,0 +1,85 @@
+{
+    "batch": [
+        {
+            "id": "3c9b544f-ef3f-449e-8ec1-763acbb56bec",
+            "type": "trace-create",
+            "body": {
+                "id": "litellm-test-c4c1c850-e8c9-4b16-b5a4-bff2bf9fa4f6",
+                "timestamp": "2025-05-26T21:13:16.796768Z",
+                "name": "litellm-acompletion",
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Hello!"
+                        }
+                    ]
+                },
+                "tags": []
+            },
+            "timestamp": "2025-05-26T21:13:16.796875Z"
+        },
+        {
+            "id": "90e6bc70-05d9-4444-8b87-4523a9a54c17",
+            "type": "generation-create",
+            "body": {
+                "traceId": "litellm-test-c4c1c850-e8c9-4b16-b5a4-bff2bf9fa4f6",
+                "name": "litellm-acompletion",
+                "startTime": "2025-05-26T14:13:16.469836-07:00",
+                "metadata": {
+                    "hidden_params": {
+                        "model_id": null,
+                        "cache_key": null,
+                        "api_base": null,
+                        "response_cost": 0.00018,
+                        "additional_headers": {},
+                        "litellm_overhead_time_ms": null,
+                        "batch_models": null,
+                        "litellm_model_name": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                        "usage_object": null
+                    },
+                    "litellm_response_cost": 0.00018,
+                    "cache_hit": false,
+                    "requester_metadata": {}
+                },
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Hello!"
+                        }
+                    ]
+                },
+                "level": "DEFAULT",
+                "id": "time-14-13-16-469836_chatcmpl-3803a9e9-aa68-4493-94d9-247f354830d6",
+                "endTime": "2025-05-26T14:13:16.795438-07:00",
+                "completionStartTime": "2025-05-26T14:13:16.795438-07:00",
+                "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "modelParameters": {
+                    "aws_region": "us-east-1"
+                },
+                "usage": {
+                    "input": 10,
+                    "output": 10,
+                    "unit": "TOKENS",
+                    "totalCost": 0.00018
+                },
+                "usageDetails": {
+                    "input": 10,
+                    "output": 10,
+                    "total": 20,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0
+                }
+            },
+            "timestamp": "2025-05-26T21:13:16.797156Z"
+        }
+    ],
+    "metadata": {
+        "batch_size": 2,
+        "sdk_integration": "litellm",
+        "sdk_name": "python",
+        "sdk_version": "2.44.1",
+        "public_key": "pk-lf-3bfc4db9-217f-48e9-92e0-142566e3c204"
+    }
+}

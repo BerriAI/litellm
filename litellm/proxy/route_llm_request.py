@@ -22,6 +22,9 @@ ROUTE_ENDPOINT_MAPPING = {
     "amoderation": "/moderations",
     "arerank": "/rerank",
     "aresponses": "/responses",
+    "alist_input_items": "/responses/{response_id}/input_items",
+    "aimage_edit": "/images/edits",
+    "acancel_responses": "/responses/{response_id}/cancel",
 }
 
 
@@ -31,6 +34,25 @@ class ProxyModelNotFoundError(HTTPException):
             "error": f"{route}: Invalid model name passed in model={model_name}. Call `/v1/models` to view available models for your key."
         }
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
+def get_team_id_from_data(data: dict) -> Optional[str]:
+    """
+    Get the team id from the data's metadata or litellm_metadata params.
+    """
+    if (
+        "metadata" in data
+        and data["metadata"] is not None
+        and "user_api_key_team_id" in data["metadata"]
+    ):
+        return data["metadata"].get("user_api_key_team_id")
+    elif (
+        "litellm_metadata" in data
+        and data["litellm_metadata"] is not None
+        and "user_api_key_team_id" in data["litellm_metadata"]
+    ):
+        return data["litellm_metadata"].get("user_api_key_team_id")
+    return None
 
 
 async def route_request(
@@ -49,15 +71,34 @@ async def route_request(
         "aresponses",
         "aget_responses",
         "adelete_responses",
+        "acancel_responses",
+        "acreate_response_reply",
+        "alist_input_items",
         "_arealtime",  # private function for realtime API
+        "aimage_edit",
+        "agenerate_content",
+        "agenerate_content_stream",
+        "allm_passthrough_route",
+        "avector_store_search",
+        "avector_store_create",
     ],
 ):
     """
     Common helper to route the request
     """
+    team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
+
+    # Preprocess Google GenAI generate content requests
+    if route_type in ["agenerate_content", "agenerate_content_stream"]:
+        # Map generationConfig to config parameter for Google GenAI compatibility
+        if "generationConfig" in data and "config" not in data:
+            data["config"] = data.pop("generationConfig")
     if "api_key" in data or "api_base" in data:
-        return getattr(llm_router, f"{route_type}")(**data)
+        if llm_router is not None:
+            return getattr(llm_router, f"{route_type}")(**data)
+        else:
+            return getattr(litellm, f"{route_type}")(**data)
 
     elif "user_config" in data:
         router_config = data.pop("user_config")
@@ -78,9 +119,18 @@ async def route_request(
             models = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
     elif llm_router is not None:
-        if (
+        team_model_name = (
+            llm_router.map_team_model(data["model"], team_id)
+            if team_id is not None
+            else None
+        )
+        if team_model_name is not None:
+            data["model"] = team_model_name
+            return getattr(llm_router, f"{route_type}")(**data)
+
+        elif (
             data["model"] in router_model_names
-            or data["model"] in llm_router.get_model_ids()
+            or llm_router.has_model_id(data["model"])
         ):
             return getattr(llm_router, f"{route_type}")(**data)
 
@@ -103,11 +153,21 @@ async def route_request(
                 or len(llm_router.pattern_router.patterns) > 0
             ):
                 return getattr(llm_router, f"{route_type}")(**data)
-            elif route_type in ["amoderation", "aget_responses", "adelete_responses"]:
+            elif route_type in [
+                "amoderation",
+                "aget_responses",
+                "adelete_responses",
+                "acancel_responses",
+                "alist_input_items",
+                "avector_store_create",
+                "avector_store_search",
+            ]:
                 # moderation endpoint does not require `model` parameter
                 return getattr(llm_router, f"{route_type}")(**data)
 
     elif user_model is not None:
+        return getattr(litellm, f"{route_type}")(**data)
+    elif route_type == "allm_passthrough_route":
         return getattr(litellm, f"{route_type}")(**data)
 
     # if no route found then it's a bad request

@@ -155,7 +155,9 @@ model LiteLLM_UserTable {
 model LiteLLM_ObjectPermissionTable {
   object_permission_id  String         @id @default(uuid())
   mcp_servers           String[]       @default([])
-  
+  mcp_access_groups     String[]       @default([])
+  mcp_tool_permissions  Json?          // Tool-level permissions for MCP servers. Format: {"server_id": ["tool_name_1", "tool_name_2"]}
+  vector_stores         String[]       @default([])
   teams                 LiteLLM_TeamTable[]
   verification_tokens   LiteLLM_VerificationToken[]
   organizations         LiteLLM_OrganizationTable[]
@@ -165,16 +167,28 @@ model LiteLLM_ObjectPermissionTable {
 // Holds the MCP server configuration 
 model LiteLLM_MCPServerTable {
   server_id    String         @id @default(uuid())
+  server_name  String?
   alias        String?
   description  String?
-  url          String
+  url          String?
   transport    String         @default("sse")
-  spec_version String         @default("2025-03-26")
   auth_type    String?        
   created_at   DateTime?      @default(now()) @map("created_at")
   created_by   String?
   updated_at   DateTime?      @default(now()) @updatedAt @map("updated_at")
   updated_by   String?
+  mcp_info     Json?          @default("{}")
+  mcp_access_groups String[]
+  allowed_tools String[]      @default([])
+  extra_headers String[]    @default([])
+  // Health check status
+  status       String?        @default("unknown")
+  last_health_check DateTime?
+  health_check_error String?
+  // Stdio-specific fields
+  command      String?
+  args         String[]       @default([])
+  env          Json?          @default("{}")
 }
 
 // Generate Tokens for Proxy
@@ -210,6 +224,11 @@ model LiteLLM_VerificationToken {
     created_by String?
     updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
     updated_by String?
+    rotation_count   Int?       @default(0) // Number of times key has been rotated
+    auto_rotate      Boolean?   @default(false) // Whether this key should be auto-rotated
+    rotation_interval String?   // How often to rotate (e.g., "30d", "90d")
+    last_rotation_at DateTime?  // When this key was last rotated
+    key_rotation_at  DateTime?  // When this key should next be rotated
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
@@ -261,6 +280,7 @@ model LiteLLM_SpendLogs {
   response            Json?     @default("{}")
   session_id          String?
   status              String?
+  mcp_namespaced_tool_name String? 
   proxy_server_request Json?     @default("{}")
   @@index([startTime])
   @@index([end_user])
@@ -356,12 +376,13 @@ model LiteLLM_AuditLog {
 // Track daily user spend metrics per model and key
 model LiteLLM_DailyUserSpend {
   id                  String   @id @default(uuid())
-  user_id             String
+  user_id             String? 
   date                String
   api_key             String   
-  model               String   
+  model               String?
   model_group         String?  
-  custom_llm_provider String?  
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
@@ -373,22 +394,24 @@ model LiteLLM_DailyUserSpend {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  @@unique([user_id, date, api_key, model, custom_llm_provider])
+  @@unique([user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
   @@index([date])
   @@index([user_id])
   @@index([api_key])
   @@index([model])
+  @@index([mcp_namespaced_tool_name])
 }
 
 // Track daily team spend metrics per model and key
 model LiteLLM_DailyTeamSpend {
   id                  String   @id @default(uuid())
-  team_id             String
+  team_id             String?
   date                String
   api_key             String   
-  model               String   
+  model               String?
   model_group         String?  
-  custom_llm_provider String?  
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
@@ -400,22 +423,24 @@ model LiteLLM_DailyTeamSpend {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  @@unique([team_id, date, api_key, model, custom_llm_provider])
+  @@unique([team_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
   @@index([date])
   @@index([team_id])
   @@index([api_key])
   @@index([model])
+  @@index([mcp_namespaced_tool_name])
 }
 
 // Track daily team spend metrics per model and key
 model LiteLLM_DailyTagSpend {
   id                  String   @id @default(uuid())
-  tag                 String   
+  tag                 String?   
   date                String
   api_key             String   
-  model               String   
+  model               String?
   model_group         String?  
-  custom_llm_provider String?  
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
@@ -427,11 +452,12 @@ model LiteLLM_DailyTagSpend {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  @@unique([tag, date, api_key, model, custom_llm_provider])
+  @@unique([tag, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
   @@index([date])
   @@index([tag])
   @@index([api_key])
   @@index([model])
+  @@index([mcp_namespaced_tool_name])
 }
 
 
@@ -452,14 +478,32 @@ enum JobStatus {
 model LiteLLM_ManagedFileTable {
   id String @id @default(uuid())
   unified_file_id String @unique // The base64 encoded unified file ID
-  file_object Json // Stores the OpenAIFileObject
-  model_mappings Json // Stores the mapping of model_id -> provider_file_id
+  file_object Json? // Stores the OpenAIFileObject
+  model_mappings Json
+  flat_model_file_ids String[]  @default([]) // Flat list of model file id's - for faster querying of model id -> unified file id
   created_at DateTime @default(now())
+  created_by String? 
   updated_at DateTime @updatedAt
+  updated_by String?
 
   @@index([unified_file_id])
 }
 
+model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use the 
+  id String @id @default(uuid())
+  unified_object_id String @unique // The base64 encoded unified file ID
+  model_object_id String @unique // the id returned by the backend API provider 
+  file_object Json // Stores the OpenAIFileObject
+  file_purpose String // either 'batch' or 'fine-tune'
+  status String? // check if batch cost has been tracked  
+  created_at DateTime @default(now())
+  created_by String?
+  updated_at DateTime @updatedAt
+  updated_by String? 
+
+  @@index([unified_object_id])
+  @@index([model_object_id])
+}
 
 model LiteLLM_ManagedVectorStoresTable {
   vector_store_id String @id
@@ -470,6 +514,7 @@ model LiteLLM_ManagedVectorStoresTable {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
   litellm_credential_name String?
+  litellm_params Json?
 }
 
 // Guardrails table for storing guardrail configurations
@@ -480,4 +525,34 @@ model LiteLLM_GuardrailsTable {
   guardrail_info Json?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+}
+
+// Prompt table for storing prompt configurations
+model LiteLLM_PromptTable {
+  id String @id @default(uuid())
+  prompt_id String @unique
+  litellm_params Json
+  prompt_info Json?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+model LiteLLM_HealthCheckTable {
+  health_check_id String @id @default(uuid())
+  model_name String
+  model_id String?
+  status String
+  healthy_count Int @default(0)
+  unhealthy_count Int @default(0)
+  error_message String?
+  response_time_ms Float?
+  details Json?
+  checked_by String?
+  checked_at DateTime @default(now())
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([model_name])
+  @@index([checked_at])
+  @@index([status])
 }

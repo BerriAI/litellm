@@ -1,5 +1,5 @@
 """
-Support for gpt model family 
+Support for gpt model family
 """
 
 from typing import List, Optional, Union
@@ -87,7 +87,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
             ## RESPONSE OBJECT
             if response_object is None or model_response_object is None:
                 raise ValueError("Error in response object format")
-            choice_list = []
+            choice_list: List[Choices] = []
             for idx, choice in enumerate(response_object["choices"]):
                 message = Message(
                     content=choice["text"],
@@ -100,7 +100,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
                     logprobs=choice.get("logprobs", None),
                 )
                 choice_list.append(choice)
-            model_response_object.choices = choice_list
+            model_response_object.choices = choice_list  # type: ignore
 
             if "usage" in response_object:
                 setattr(model_response_object, "usage", response_object["usage"])
@@ -111,9 +111,9 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
             if "model" in response_object:
                 model_response_object.model = response_object["model"]
 
-            model_response_object._hidden_params[
-                "original_response"
-            ] = response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
+            model_response_object._hidden_params["original_response"] = (
+                response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
+            )
             return model_response_object
         except Exception as e:
             raise e

@@ -175,7 +175,7 @@ export LITELLM_RATE_LIMIT_ACCURACY=true
 - **Auth**
     - Support [`x-litellm-api-key` header param by default](../../docs/pass_through/vertex_ai#use-with-virtual-keys), this fixes an issue from the prior release where `x-litellm-api-key` was not being used on vertex ai passthrough requests - [PR](https://github.com/BerriAI/litellm/pull/10392)
     - Allow key at max budget to call non-llm api endpoints - [PR](https://github.com/BerriAI/litellm/pull/10392)
-- 🆕 **[Python Client Library](../../docs/proxy/management_client) for LiteLLM Proxy management endpoints**
+- 🆕 **[Python Client Library](../../docs/proxy/management_cli) for LiteLLM Proxy management endpoints**
     - Initial PR - [PR](https://github.com/BerriAI/litellm/pull/10445)
     - Support for doing HTTP requests - [PR](https://github.com/BerriAI/litellm/pull/10452)
 - **Dependencies**

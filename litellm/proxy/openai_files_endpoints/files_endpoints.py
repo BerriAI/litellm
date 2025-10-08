@@ -31,8 +31,9 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
+    get_custom_llm_provider_from_request_query,
 )
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, is_known_model
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
@@ -96,21 +97,6 @@ def get_model_from_json_obj(json_object: dict) -> Optional[str]:
     model = body.get("model")
 
     return model
-
-
-def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
-    """
-    Returns True if the model is in the llm_router model names
-    """
-    if model is None or llm_router is None:
-        return False
-    model_names = llm_router.get_model_names()
-
-    is_in_list = False
-    if model in model_names:
-        is_in_list = True
-
-    return is_in_list
 
 
 async def _deprecated_loadbalanced_create_file(
@@ -179,6 +165,7 @@ async def route_create_file(
             create_file_request=_create_file_request,
             target_model_names_list=target_model_names_list,
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            user_api_key_dict=user_api_key_dict,
         )
     else:
         # get configs for custom_llm_provider
@@ -251,6 +238,7 @@ async def create_file(
         file_content = await file.read()
         custom_llm_provider = (
             provider
+            or get_custom_llm_provider_from_request_query(request=request)
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
@@ -439,6 +427,7 @@ async def get_file_content(
 
         custom_llm_provider = (
             provider
+            or get_custom_llm_provider_from_request_query(request=request)
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
@@ -605,6 +594,7 @@ async def get_file(
     try:
         custom_llm_provider = (
             provider
+            or get_custom_llm_provider_from_request_query(request=request)
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
@@ -747,6 +737,7 @@ async def delete_file(
     try:
         custom_llm_provider = (
             provider
+            or get_custom_llm_provider_from_request_query(request=request)
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
@@ -869,6 +860,7 @@ async def list_files(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     provider: Optional[str] = None,
+    target_model_names: Optional[str] = None,
     purpose: Optional[str] = None,
 ):
     """
@@ -885,8 +877,8 @@ async def list_files(
     ```
     """
     from litellm.proxy.proxy_server import (
-        add_litellm_data_to_request,
         general_settings,
+        llm_router,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -894,24 +886,63 @@ async def list_files(
 
     data: Dict = {}
     try:
-        custom_llm_provider = (
-            provider
-            or await get_custom_llm_provider_from_request_body(request=request)
-            or "openai"
-        )
         # Include original request and headers in the data
-        data = await add_litellm_data_to_request(
-            data=data,
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
             request=request,
             general_settings=general_settings,
             user_api_key_dict=user_api_key_dict,
             version=version,
+            proxy_logging_obj=proxy_logging_obj,
             proxy_config=proxy_config,
+            route_type=CallTypes.alist_fine_tuning_jobs.value,
         )
 
-        response = await litellm.afile_list(
-            custom_llm_provider=custom_llm_provider, purpose=purpose, **data  # type: ignore
+        response: Optional[Any] = None
+        if target_model_names and isinstance(target_model_names, str):
+            target_model_names_list = target_model_names.split(",")
+            if len(target_model_names_list) != 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="target_model_names on list files must be a list of one model name. Example: ['gpt-4o']",
+                )
+            ## Use router to list fine-tuning jobs for that model
+            if llm_router is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="LLM Router not initialized. Ensure models added to proxy.",
+                )
+            data["model"] = target_model_names_list[0]
+            response = await llm_router.afile_list(
+                **data,
+            )
+        else:
+            custom_llm_provider = (
+                provider
+                or get_custom_llm_provider_from_request_query(request=request)
+                or await get_custom_llm_provider_from_request_body(request=request)
+                or "openai"
+            )
+
+            response = await litellm.afile_list(
+                custom_llm_provider=custom_llm_provider, purpose=purpose, **data  # type: ignore
+            )
+
+        if response is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Either 'provider' or 'target_model_names' must be provided e.g. `?target_model_names=gpt-4o`",
+            )
+
+        ## POST CALL HOOKS ###
+        _response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
         )
+        if _response is not None and isinstance(_response, OpenAIFileObject):
+            response = _response
 
         ### ALERTING ###
         asyncio.create_task(
