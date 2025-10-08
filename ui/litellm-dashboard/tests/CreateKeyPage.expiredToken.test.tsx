@@ -1,8 +1,18 @@
-// @vitest-environment esm
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
-import "@testing-library/jest-dom";
 import { vi, describe, it, beforeEach, afterEach, expect } from "vitest";
+
+/** ----------------------------
+ * Hoisted helpers for mocks (required by Vitest)
+ * --------------------------- */
+const { stub, jwtDecodeMock } = vi.hoisted(() => {
+  const React = require("react");
+  const stub = (name: string) => () => React.createElement("div", { "data-testid": name });
+  return {
+    stub,
+    jwtDecodeMock: vi.fn(),
+  };
+});
 
 /** ----------------------------
  * Mocks
@@ -22,20 +32,16 @@ vi.mock("@/components/networking", () => {
     proxyBaseUrl: "https://example.com",
     // Called when decoding a valid token
     setGlobalLitellmHeaderName: vi.fn(),
-    Organization: {} as any,
+    Organization: {},
   };
 });
 
 // jwt-decode: we’ll swap implementation per test via mockImplementation
-const jwtDecodeMock = vi.fn();
 vi.mock("jwt-decode", () => ({
   jwtDecode: (token: string) => jwtDecodeMock(token),
 }));
 
-// Query client provider works fine unmocked
-
 // Super-light stubs for all heavy components so rendering doesn't explode
-const stub = (name: string) => () => <div data-testid={name} />;
 vi.mock("@/components/navbar", () => ({ default: stub("navbar") }));
 vi.mock("@/components/user_dashboard", () => ({ default: stub("user-dashboard") }));
 vi.mock("@/components/templates/model_dashboard", () => ({ default: stub("model-dashboard") }));
@@ -70,9 +76,12 @@ vi.mock("@/components/common_components/fetch_teams", () => ({ fetchTeams: vi.fn
 vi.mock("@/components/ui/ui-loading-spinner", () => ({
   UiLoadingSpinner: stub("spinner"),
 }));
-vi.mock("@/contexts/ThemeContext", () => ({
-  ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}));
+vi.mock("@/contexts/ThemeContext", () => {
+  const React = require("react");
+  return {
+    ThemeProvider: ({ children }: any) => React.createElement(React.Fragment, null, children),
+  };
+});
 vi.mock("@/lib/cva.config", () => ({
   cx: (...args: string[]) => args.join(" "),
 }));
