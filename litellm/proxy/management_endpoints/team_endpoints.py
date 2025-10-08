@@ -56,6 +56,9 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.management_helpers.object_permission_utils import (
+    _set_object_permission,
+)
 from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
     can_org_access_model,
@@ -473,14 +476,15 @@ async def new_team(  # noqa: PLR0915
 
             _model_id = model_dict.id
 
+        ## Create Team Member Budget Table
+        data_json = data.json()
+        
         ## Handle Object Permission - MCP, Vector Stores etc.
-        object_permission_id = await _set_object_permission(
-            data=data,
+        data_json = await _set_object_permission(
+            data_json=data_json,
             prisma_client=prisma_client,
         )
 
-        ## Create Team Member Budget Table
-        data_json = data.json()
         if TeamMemberBudgetHandler.should_create_budget(
             team_member_budget=data.team_member_budget,
             team_member_rpm_limit=data.team_member_rpm_limit,
@@ -499,7 +503,6 @@ async def new_team(  # noqa: PLR0915
         complete_team_data = LiteLLM_TeamTable(
             **data_json,
             model_id=_model_id,
-            object_permission_id=object_permission_id,
         )
 
         # Set Management Endpoint Metadata Fields
@@ -615,29 +618,6 @@ async def _update_model_table(
 
     return _model_id
 
-
-async def _set_object_permission(
-    data: NewTeamRequest,
-    prisma_client: Optional[PrismaClient],
-) -> Optional[str]:
-    """
-    Creates the LiteLLM_ObjectPermissionTable record for the team.
-    - Handles permissions for vector stores and mcp servers.
-
-    Returns the object_permission_id if created, otherwise None.
-    """
-    if prisma_client is None:
-        return None
-
-    if data.object_permission is not None:
-        created_object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.create(
-                data=data.object_permission.model_dump(exclude_none=True),
-            )
-        )
-        del data.object_permission
-        return created_object_permission.object_permission_id
-    return None
 
 
 def validate_team_org_change(
