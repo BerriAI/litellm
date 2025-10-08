@@ -120,3 +120,48 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             None if model.startswith("deployment/") else api_params["project_id"]
         )
         return payload
+    
+    @staticmethod
+    def apply_prompt_template(model: str, messages: List[Dict[str, str]]) -> dict:
+        """
+        Apply prompt template to messages for WatsonX Provider
+        """
+        if "granite" in model and "chat" in model:
+            # granite-13b-chat-v1 and granite-13b-chat-v2 use a specific prompt template
+            return ibm_granite_pt(messages=messages)
+        elif "ibm-mistral" in model and "instruct" in model:
+            # models like ibm-mistral/mixtral-8x7b-instruct-v01-q use the mistral instruct prompt template
+            return mistral_instruct_pt(messages=messages)
+        elif "openai/gpt-oss" in model:
+            # gpt-oss models (e.g., openai/gpt-oss-120b) use HuggingFace chat templates
+            # These models have chat templates in separate .jinja files, not in tokenizer_config.json
+            # Extract the model name for HuggingFace lookup
+            hf_model = model.split("watsonx/")[-1] if "watsonx/" in model else model
+            try:
+                return hf_chat_template(model=hf_model, messages=messages)
+            except Exception:
+                # If HF template fetch fails, fall back to trying the generic handler below
+                pass
+        elif "meta-llama/llama-3" in model and "instruct" in model:
+            # https://llama.meta.com/docs/model-cards-and-prompt-formats/meta-llama-3/
+            return custom_prompt(
+                role_dict={
+                    "system": {
+                        "pre_message": "<|start_header_id|>system<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                    "user": {
+                        "pre_message": "<|start_header_id|>user<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                    "assistant": {
+                        "pre_message": "<|start_header_id|>assistant<|end_header_id|>\n",
+                        "post_message": "<|eot_id|>",
+                    },
+                },
+                messages=messages,
+                initial_prompt_value="<|begin_of_text|>",
+                final_prompt_value="<|start_header_id|>assistant<|end_header_id|>\n",
+            )
+        else:
+            return messages
