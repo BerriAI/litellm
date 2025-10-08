@@ -772,6 +772,64 @@ class MCPServerManager:
             return tool_name not in server.disallowed_tools
         return True
 
+    async def _call_openapi_tool_handler(
+        self,
+        server: MCPServer,
+        tool_name: str,
+        arguments: Dict[str, Any],
+    ) -> CallToolResult:
+        """
+        Call an OpenAPI tool handler directly.
+
+        For OpenAPI servers, instead of using MCP protocol, we call the tool handler
+        that was registered during OpenAPI spec parsing. This handler makes direct
+        HTTP requests to the API.
+
+        Args:
+            tool_name: The full tool name (with prefix) to call
+            arguments: Tool arguments to pass to the handler
+
+        Returns:
+            CallToolResult with the response from the API
+        """
+        from mcp.types import TextContent
+
+        from litellm.proxy._experimental.mcp_server.tool_registry import (
+            global_mcp_tool_registry,
+        )
+
+        # Get the tool from the registry
+        tool = global_mcp_tool_registry.get_tool(f"{server.name}-{tool_name}")
+        if tool is None:
+            # Tool not found in registry
+            error_msg = f"OpenAPI tool {tool_name} not found in registry"
+            verbose_logger.error(error_msg)
+            return CallToolResult(
+                content=[TextContent(type="text", text=error_msg)],
+                isError=True,
+            )
+
+        try:
+            # Call the tool handler with the arguments
+            # The handler is an async function that makes the HTTP request
+            handler_result = await tool.handler(**arguments)
+
+            # Convert the handler result (string response) to CallToolResult format
+            result = CallToolResult(
+                content=[TextContent(type="text", text=str(handler_result))],
+                isError=False,
+            )
+
+            return result
+
+        except Exception as e:
+            error_msg = f"Error calling OpenAPI tool {tool_name}: {str(e)}"
+            verbose_logger.error(error_msg)
+            return CallToolResult(
+                content=[TextContent(type="text", text=error_msg)],
+                isError=True,
+            )
+
     async def pre_call_tool_check(
         self,
         name: str,
@@ -917,95 +975,109 @@ class MCPServerManager:
                 server=mcp_server,
             )
 
-        # Get server-specific auth header if available
-        server_auth_header: Optional[Union[Dict[str, str], str]] = None
-        if mcp_server_auth_headers and mcp_server.alias:
-            server_auth_header = mcp_server_auth_headers.get(mcp_server.alias)
-        elif mcp_server_auth_headers and mcp_server.server_name:
-            server_auth_header = mcp_server_auth_headers.get(mcp_server.server_name)
+        # Prepare tasks for during hooks
+        tasks = []
+        if proxy_logging_obj:
+            # Create synthetic LLM data for during hook processing
+            from litellm.types.llms.base import HiddenParams
+            from litellm.types.mcp import MCPDuringCallRequestObject
 
-        # Fall back to deprecated mcp_auth_header if no server-specific header found
-        if server_auth_header is None:
-            server_auth_header = mcp_auth_header
-
-        # oauth2 headers
-        extra_headers: Optional[Dict[str, str]] = None
-        if mcp_server.auth_type == MCPAuth.oauth2:
-            extra_headers = oauth2_headers
-
-        if mcp_server.extra_headers and raw_headers:
-            if extra_headers is None:
-                extra_headers = {}
-            for header in mcp_server.extra_headers:
-                if header in raw_headers:
-                    extra_headers[header] = raw_headers[header]
-
-        client = self._create_mcp_client(
-            server=mcp_server,
-            mcp_auth_header=server_auth_header,
-            extra_headers=extra_headers,
-        )
-
-        async with client:
-            # Use the original tool name (without prefix) for the actual call
-            call_tool_params = MCPCallToolRequestParams(
-                name=original_tool_name,
+            request_obj = MCPDuringCallRequestObject(
+                tool_name=name,
                 arguments=arguments,
+                server_name=server_name_from_prefix,
+                start_time=start_time.timestamp() if start_time else None,
+                hidden_params=HiddenParams(),
             )
-            tasks = []
-            if proxy_logging_obj:
-                # Create synthetic LLM data for during hook processing
-                from litellm.types.llms.base import HiddenParams
-                from litellm.types.mcp import MCPDuringCallRequestObject
 
-                request_obj = MCPDuringCallRequestObject(
-                    tool_name=name,
+            during_hook_kwargs = {
+                "name": name,
+                "arguments": arguments,
+                "server_name": server_name_from_prefix,
+                "user_api_key_auth": user_api_key_auth,
+            }
+
+            synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(
+                request_obj, during_hook_kwargs
+            )
+
+            during_hook_task = asyncio.create_task(
+                proxy_logging_obj.during_call_hook(
+                    user_api_key_dict=user_api_key_auth,
+                    data=synthetic_llm_data,
+                    call_type="mcp_call",  # type: ignore
+                )
+            )
+            tasks.append(during_hook_task)
+
+        # For OpenAPI servers, call the tool handler directly instead of via MCP client
+        if mcp_server.spec_path:
+            verbose_logger.debug(
+                f"Calling OpenAPI tool {name} directly via HTTP handler"
+            )
+            tasks.append(
+                asyncio.create_task(
+                    self._call_openapi_tool_handler(mcp_server, name, arguments)
+                )
+            )
+        else:
+            # For regular MCP servers, use the MCP client
+            # Get server-specific auth header if available
+            server_auth_header: Optional[Union[Dict[str, str], str]] = None
+            if mcp_server_auth_headers and mcp_server.alias:
+                server_auth_header = mcp_server_auth_headers.get(mcp_server.alias)
+            elif mcp_server_auth_headers and mcp_server.server_name:
+                server_auth_header = mcp_server_auth_headers.get(mcp_server.server_name)
+
+            # Fall back to deprecated mcp_auth_header if no server-specific header found
+            if server_auth_header is None:
+                server_auth_header = mcp_auth_header
+
+            # oauth2 headers
+            extra_headers: Optional[Dict[str, str]] = None
+            if mcp_server.auth_type == MCPAuth.oauth2:
+                extra_headers = oauth2_headers
+
+            if mcp_server.extra_headers and raw_headers:
+                if extra_headers is None:
+                    extra_headers = {}
+                for header in mcp_server.extra_headers:
+                    if header in raw_headers:
+                        extra_headers[header] = raw_headers[header]
+
+            client = self._create_mcp_client(
+                server=mcp_server,
+                mcp_auth_header=server_auth_header,
+                extra_headers=extra_headers,
+            )
+
+            async with client:
+                # Use the original tool name (without prefix) for the actual call
+                call_tool_params = MCPCallToolRequestParams(
+                    name=original_tool_name,
                     arguments=arguments,
-                    server_name=server_name_from_prefix,
-                    start_time=start_time.timestamp() if start_time else None,
-                    hidden_params=HiddenParams(),
                 )
+                tasks.append(asyncio.create_task(client.call_tool(call_tool_params)))
 
-                during_hook_kwargs = {
-                    "name": name,
-                    "arguments": arguments,
-                    "server_name": server_name_from_prefix,
-                    "user_api_key_auth": user_api_key_auth,
-                }
+        try:
+            mcp_responses = await asyncio.gather(*tasks)
 
-                synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(
-                    request_obj, during_hook_kwargs
-                )
+            # If proxy_logging_obj is None, the tool call result is at index 0
+            # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
+            result_index = 1 if proxy_logging_obj else 0
+            result = mcp_responses[result_index]
 
-                during_hook_task = asyncio.create_task(
-                    proxy_logging_obj.during_call_hook(
-                        user_api_key_dict=user_api_key_auth,
-                        data=synthetic_llm_data,
-                        call_type="mcp_call",  # type: ignore
-                    )
-                )
-                tasks.append(during_hook_task)
-
-            tasks.append(asyncio.create_task(client.call_tool(call_tool_params)))
-            try:
-                mcp_responses = await asyncio.gather(*tasks)
-
-                # If proxy_logging_obj is None, the tool call result is at index 0
-                # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
-                result_index = 1 if proxy_logging_obj else 0
-                result = mcp_responses[result_index]
-
-                return cast(CallToolResult, result)
-            except (
-                BlockedPiiEntityError,
-                GuardrailRaisedException,
-                HTTPException,
-            ) as e:
-                # Re-raise guardrail exceptions to properly fail the MCP call
-                verbose_logger.error(
-                    f"Guardrail blocked MCP tool call during result check: {str(e)}"
-                )
-                raise e
+            return cast(CallToolResult, result)
+        except (
+            BlockedPiiEntityError,
+            GuardrailRaisedException,
+            HTTPException,
+        ) as e:
+            # Re-raise guardrail exceptions to properly fail the MCP call
+            verbose_logger.error(
+                f"Guardrail blocked MCP tool call during result check: {str(e)}"
+            )
+            raise e
 
     #########################################################
     # End of Methods that call the upstream MCP servers
