@@ -7,7 +7,11 @@ Docs: https://cloud.ibm.com/apidocs/watsonx-ai#text-chat
 from typing import Dict, List, Optional, Tuple, Union
 
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.watsonx import WatsonXAIEndpoint, WatsonXAPIParams
+from litellm.types.llms.watsonx import (
+    WatsonXAIEndpoint,
+    WatsonXAPIParams,
+    WatsonXModelPattern,
+)
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -122,34 +126,64 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         return payload
     
     @staticmethod
-    def apply_prompt_template(model: str, messages: List[Dict[str, str]]) -> Optional[str]:
-        """
-        Apply prompt template to messages for WatsonX Provider
-        """
+    def _apply_prompt_template_core(model: str, messages: List[Dict[str, str]], hf_template_fn) -> Optional[str]:
+        """Core logic for applying prompt templates"""
         from litellm.litellm_core_utils.prompt_templates.factory import (
+            custom_prompt,
+            ibm_granite_pt,
+            mistral_instruct_pt,
+        )
+        
+        if WatsonXModelPattern.GRANITE_CHAT.value in model:
+            return ibm_granite_pt(messages=messages)
+        elif WatsonXModelPattern.IBM_MISTRAL.value in model:
+            return mistral_instruct_pt(messages=messages)
+        elif WatsonXModelPattern.GPT_OSS.value in model:
+            hf_model = model.split("watsonx/")[-1] if "watsonx/" in model else model
+            try:
+                return hf_template_fn(model=hf_model, messages=messages)
+            except Exception:
+                pass
+        elif WatsonXModelPattern.LLAMA3_INSTRUCT.value in model:
+            return custom_prompt(
+                role_dict={
+                    "system": {"pre_message": "<|start_header_id|>system<|end_header_id|>\n", "post_message": "<|eot_id|>"},
+                    "user": {"pre_message": "<|start_header_id|>user<|end_header_id|>\n", "post_message": "<|eot_id|>"},
+                    "assistant": {"pre_message": "<|start_header_id|>assistant<|end_header_id|>\n", "post_message": "<|eot_id|>"},
+                },
+                messages=messages,
+                initial_prompt_value="<|begin_of_text|>",
+                final_prompt_value="<|start_header_id|>assistant<|end_header_id|>\n",
+            )
+        return None
+
+    @staticmethod
+    async def aapply_prompt_template(model: str, messages: List[Dict[str, str]]) -> Optional[str]:
+        """Apply prompt template (async version)"""
+        import litellm
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            ahf_chat_template,
             custom_prompt,
             hf_chat_template,
             ibm_granite_pt,
             mistral_instruct_pt,
         )
-        if "granite" in model and "chat" in model:
-            # granite-13b-chat-v1 and granite-13b-chat-v2 use a specific prompt template
+
+        if WatsonXModelPattern.GRANITE_CHAT.value in model:
             return ibm_granite_pt(messages=messages)
-        elif "ibm-mistral" in model and "instruct" in model:
-            # models like ibm-mistral/mixtral-8x7b-instruct-v01-q use the mistral instruct prompt template
+        elif WatsonXModelPattern.IBM_MISTRAL.value in model:
             return mistral_instruct_pt(messages=messages)
-        elif "openai/gpt-oss" in model:
-            # gpt-oss models (e.g., openai/gpt-oss-120b) use HuggingFace chat templates
-            # These models have chat templates in separate .jinja files, not in tokenizer_config.json
-            # Extract the model name for HuggingFace lookup
+        elif WatsonXModelPattern.GPT_OSS.value in model:
             hf_model = model.split("watsonx/")[-1] if "watsonx/" in model else model
             try:
-                return hf_chat_template(model=hf_model, messages=messages)
+                # Use sync if cached, async if not
+                if hf_model in litellm.known_tokenizer_config:
+                    return hf_chat_template(model=hf_model, messages=messages)
+                else:
+                    return await ahf_chat_template(model=hf_model, messages=messages)
             except Exception:
-                # If HF template fetch fails, fall back to trying the generic handler below
                 pass
-        elif "meta-llama/llama-3" in model and "instruct" in model:
-            # https://llama.meta.com/docs/model-cards-and-prompt-formats/meta-llama-3/
+        elif WatsonXModelPattern.LLAMA3_INSTRUCT.value in model:
             return custom_prompt(
                 role_dict={
                     "system": {
@@ -170,4 +204,15 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
                 final_prompt_value="<|start_header_id|>assistant<|end_header_id|>\n",
             )
         return None
+    
+    @staticmethod
+    def apply_prompt_template(model: str, messages: List[Dict[str, str]]) -> Optional[str]:
+        """Apply prompt template (sync version)"""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            hf_chat_template,
+        )
+
+        return IBMWatsonXChatConfig._apply_prompt_template_core(
+            model=model, messages=messages, hf_template_fn=hf_chat_template
+        )
 

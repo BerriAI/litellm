@@ -307,3 +307,41 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
     assert "<|end|>" in transformed_prompt, "Prompt should contain <|end|> tag"
     assert "You are chatgpt" in transformed_prompt, "Prompt should contain system message content"
     assert "Hi there" in transformed_prompt, "Prompt should contain user message content"
+
+
+@pytest.mark.asyncio
+async def test_watsonx_gpt_oss_uses_async_http_handler():
+    """
+    Test that verifies async HTTP client is used when fetching HuggingFace templates.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
+        _aget_chat_template_file,
+    )
+
+    # Mock the async HTTP client
+    mock_async_client = MagicMock()
+    mock_get = AsyncMock()
+    mock_async_client.get = mock_get
+    
+    # Create mock response for chat template file
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.content = b"test template content"
+    mock_get.return_value = mock_response
+    
+    # Test the async function directly
+    with patch("litellm.litellm_core_utils.prompt_templates.huggingface_template_handler.get_async_httpx_client", return_value=mock_async_client):
+        result = await _aget_chat_template_file(hf_model_name="test/model")
+        
+        # Verify async HTTP client was called
+        assert mock_get.called, "Async HTTP client's get method should be called"
+        assert mock_get.await_count > 0, "Async HTTP client's get should be awaited"
+        
+        # Verify it was called with HuggingFace URL
+        call_args = mock_get.call_args
+        assert call_args is not None, "get should have been called with arguments"
+        called_url = call_args.kwargs.get("url", "")
+        assert "huggingface.co/test/model" in called_url, f"Should call HuggingFace API for test/model, got: {called_url}"
+        assert result["status"] == "success", "Should return success status"
