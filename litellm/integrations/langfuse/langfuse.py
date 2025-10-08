@@ -3,7 +3,7 @@
 import os
 import traceback
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union, cast
 
 from packaging.version import Version
 
@@ -204,16 +204,6 @@ class LangFuseLogger:
                 prompt["functions"] = functions
             if tools is not None:
                 prompt["tools"] = tools
-
-            # langfuse only accepts str, int, bool, float for logging
-            if isinstance(optional_params, dict):
-                for param, value in optional_params.items():
-                    if not isinstance(value, (str, int, bool, float)):
-                        try:
-                            optional_params[param] = str(value)
-                        except Exception:
-                            # if casting value to str fails don't block logging
-                            pass
 
             input, output = self._get_langfuse_input_output_content(
                 kwargs=kwargs,
@@ -427,13 +417,25 @@ class LangFuseLogger:
         return payload
 
     @staticmethod
-    def _sanitize_optional_params(value: Any) -> Any:
+    def _sanitize_optional_params(
+        value: Any, _seen: Optional[Set[int]] = None
+    ) -> Any:
         if isinstance(value, (str, int, float, bool)) or value is None:
             return value
 
+        if _seen is None:
+            _seen = set()
+
+        obj_id = id(value)
+        if obj_id in _seen:
+            return "<circular reference>"
+        _seen.add(obj_id)
+
         if hasattr(value, "model_dump") and callable(getattr(value, "model_dump")):
             try:
-                return LangFuseLogger._sanitize_optional_params(value.model_dump())
+                return LangFuseLogger._sanitize_optional_params(
+                    value.model_dump(), _seen
+                )
             except Exception:
                 return str(value)
 
@@ -443,15 +445,26 @@ class LangFuseLogger:
                 sanitized_key = (
                     key if isinstance(key, (str, int, float, bool)) else str(key)
                 )
-                sanitized[sanitized_key] = LangFuseLogger._sanitize_optional_params(item)
+                sanitized[sanitized_key] = LangFuseLogger._sanitize_optional_params(
+                    item, _seen
+                )
             return sanitized
 
-        if isinstance(value, (list, tuple)):
-            sanitized_items = [LangFuseLogger._sanitize_optional_params(item) for item in value]
-            return tuple(sanitized_items) if isinstance(value, tuple) else sanitized_items
+        if isinstance(value, list):
+            return [
+                LangFuseLogger._sanitize_optional_params(item, _seen)
+                for item in value
+            ]
+
+        if isinstance(value, tuple):
+            return tuple(
+                LangFuseLogger._sanitize_optional_params(item, _seen) for item in value
+            )
 
         if isinstance(value, set):
-            return [LangFuseLogger._sanitize_optional_params(item) for item in value]
+            return [
+                LangFuseLogger._sanitize_optional_params(item, _seen) for item in value
+            ]
 
         return str(value)
 
