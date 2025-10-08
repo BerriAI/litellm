@@ -760,9 +760,15 @@ class MCPServerManager:
         Check if the tool is allowed or banned for the given server
         """
         if server.allowed_tools:
-            return tool_name in server.allowed_tools
+            return (
+                tool_name in server.allowed_tools
+                or f"{server.name}-{tool_name}" in server.allowed_tools
+            )
         if server.disallowed_tools:
-            return tool_name not in server.disallowed_tools
+            return (
+                tool_name not in server.disallowed_tools
+                and f"{server.name}-{tool_name}" not in server.disallowed_tools
+            )
         return True
 
     async def check_tool_permission_for_key_team(
