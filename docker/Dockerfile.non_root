@@ -67,6 +67,7 @@ RUN apk upgrade --no-cache && \
 # Copy only necessary artifacts from builder stage for runtime
 COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/
 COPY --from=builder /app/schema.prisma /app/schema.prisma
+COPY --from=builder /app/db_scripts/create_views.py /app/create_views.py
 COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 # Copy pre-cached Prisma binaries, CLI, and npm cache from builder stage
