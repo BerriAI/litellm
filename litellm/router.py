@@ -5367,6 +5367,26 @@ class Router:
         # Remove the deleted model from index
         if model_id in self.model_id_to_deployment_index_map:
             del self.model_id_to_deployment_index_map[model_id]
+        
+        # Update model_name_to_deployment_indices
+        for model_name, indices in list(self.model_name_to_deployment_indices.items()):
+            # Remove the deleted index
+            if removal_idx in indices:
+                indices.remove(removal_idx)
+            
+            # Decrement all indices greater than removal_idx
+            updated_indices = []
+            for idx in indices:
+                if idx > removal_idx:
+                    updated_indices.append(idx - 1)
+                else:
+                    updated_indices.append(idx)
+            
+            # Update or remove the entry
+            if len(updated_indices) > 0:
+                self.model_name_to_deployment_indices[model_name] = updated_indices
+            else:
+                del self.model_name_to_deployment_indices[model_name]
 
     def _add_model_to_list_and_index_map(
         self, model: dict, model_id: Optional[str] = None
