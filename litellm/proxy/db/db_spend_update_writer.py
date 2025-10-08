@@ -154,7 +154,7 @@ class DBSpendUpdateWriter:
                     prisma_client=prisma_client,
                 )
             else:
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.debug(
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
                 )
 
@@ -252,7 +252,7 @@ class DBSpendUpdateWriter:
                         )
                     )
         except Exception as e:
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 "\033[91m"
                 + f"Update User DB call failed to execute {str(e)}\n{traceback.format_exc()}"
             )
@@ -294,7 +294,7 @@ class DBSpendUpdateWriter:
             except Exception:
                 pass
         except Exception as e:
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"Update Team DB failed to execute - {str(e)}\n{traceback.format_exc()}"
             )
             raise e
@@ -320,7 +320,7 @@ class DBSpendUpdateWriter:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"Update Org DB failed to execute - {str(e)}\n{traceback.format_exc()}"
             )
             raise e
@@ -331,7 +331,7 @@ class DBSpendUpdateWriter:
         prisma_client: Optional[PrismaClient] = None,
         spend_logs_url: Optional[str] = os.getenv("SPEND_LOGS_URL"),
     ) -> Optional[PrismaClient]:
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "Writing spend log to db - request_id: {}, spend: {}".format(
                 payload.get("request_id"), payload.get("spend")
             )
@@ -775,6 +775,8 @@ class DBSpendUpdateWriter:
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
 
+    # fmt: off
+
     @overload
     @staticmethod
     async def _update_daily_spend(
@@ -786,7 +788,7 @@ class DBSpendUpdateWriter:
         entity_id_field: str,
         table_name: str,
         unique_constraint_name: str,
-    ) -> None:
+    ) -> None: 
         ...
 
     @overload
@@ -814,8 +816,9 @@ class DBSpendUpdateWriter:
         entity_id_field: str,
         table_name: str,
         unique_constraint_name: str,
-    ) -> None:
+    ) -> None: 
         ...
+    # fmt: on
 
     @staticmethod
     async def _update_daily_spend(
@@ -869,7 +872,12 @@ class DBSpendUpdateWriter:
                                     "model": transaction["model"],
                                     "custom_llm_provider": transaction.get(
                                         "custom_llm_provider"
-                                    ),
+                                    )
+                                    or "",
+                                    "mcp_namespaced_tool_name": transaction.get(
+                                        "mcp_namespaced_tool_name"
+                                    )
+                                    or "",
                                 }
                             }
 
@@ -881,8 +889,11 @@ class DBSpendUpdateWriter:
                                 entity_id_field: entity_id,
                                 "date": transaction["date"],
                                 "api_key": transaction["api_key"],
-                                "model": transaction["model"],
+                                "model": transaction.get("model"),
                                 "model_group": transaction.get("model_group"),
+                                "mcp_namespaced_tool_name": transaction.get(
+                                    "mcp_namespaced_tool_name"
+                                ) or "",
                                 "custom_llm_provider": transaction.get(
                                     "custom_llm_provider"
                                 ),
@@ -898,13 +909,13 @@ class DBSpendUpdateWriter:
 
                             # Add cache-related fields if they exist
                             if "cache_read_input_tokens" in transaction:
-                                common_data[
-                                    "cache_read_input_tokens"
-                                ] = transaction.get("cache_read_input_tokens", 0)
+                                common_data["cache_read_input_tokens"] = (
+                                    transaction.get("cache_read_input_tokens", 0)
+                                )
                             if "cache_creation_input_tokens" in transaction:
-                                common_data[
-                                    "cache_creation_input_tokens"
-                                ] = transaction.get("cache_creation_input_tokens", 0)
+                                common_data["cache_creation_input_tokens"] = (
+                                    transaction.get("cache_creation_input_tokens", 0)
+                                )
 
                             # Create update data structure
                             update_data = {
@@ -948,7 +959,7 @@ class DBSpendUpdateWriter:
                                 },
                             )
 
-                    verbose_proxy_logger.info(
+                    verbose_proxy_logger.debug(
                         f"Processed {len(transactions_to_process)} daily {entity_type} transactions in {time.time() - start_time:.2f}s"
                     )
 
@@ -993,7 +1004,7 @@ class DBSpendUpdateWriter:
             entity_type="user",
             entity_id_field="user_id",
             table_name="litellm_dailyuserspend",
-            unique_constraint_name="user_id_date_api_key_model_custom_llm_provider",
+            unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
         )
 
     @staticmethod
@@ -1014,7 +1025,7 @@ class DBSpendUpdateWriter:
             entity_type="team",
             entity_id_field="team_id",
             table_name="litellm_dailyteamspend",
-            unique_constraint_name="team_id_date_api_key_model_custom_llm_provider",
+            unique_constraint_name="team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
         )
 
     @staticmethod
@@ -1035,7 +1046,7 @@ class DBSpendUpdateWriter:
             entity_type="tag",
             entity_id_field="tag",
             table_name="litellm_dailytagspend",
-            unique_constraint_name="tag_date_api_key_model_custom_llm_provider",
+            unique_constraint_name="tag_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
         )
 
     async def _common_add_spend_log_transaction_to_daily_transaction(
@@ -1044,7 +1055,7 @@ class DBSpendUpdateWriter:
         prisma_client: PrismaClient,
         type: Literal["user", "team", "request_tags"] = "user",
     ) -> Optional[BaseDailySpendTransaction]:
-        common_expected_keys = ["startTime", "api_key", "model", "custom_llm_provider"]
+        common_expected_keys = ["startTime", "api_key"]
         if type == "user":
             expected_keys = ["user", *common_expected_keys]
         elif type == "team":
@@ -1053,15 +1064,30 @@ class DBSpendUpdateWriter:
             expected_keys = ["request_tags", *common_expected_keys]
         else:
             raise ValueError(f"Invalid type: {type}")
-
         if not all(key in payload for key in expected_keys):
             verbose_proxy_logger.debug(
                 f"Missing expected keys: {expected_keys}, in payload, skipping from daily_user_spend_transactions"
             )
             return None
 
+        any_expected_keys = ["model", "mcp_namespaced_tool_name"]
+        if not any(key in payload for key in any_expected_keys):
+            verbose_proxy_logger.debug(
+                f"Missing any expected keys: {any_expected_keys}, in payload, skipping from daily_user_spend_transactions"
+            )
+            return None
+        elif "mcp_namespaced_tool_name" in payload:
+            pass
+        elif "model" in payload and (
+            "custom_llm_provider" not in payload or "model_group" not in payload
+        ):
+            verbose_proxy_logger.debug(
+                "Missing custom_llm_provider or model_group in payload, skipping from daily_user_spend_transactions"
+            )
+            return None
+
         request_status = prisma_client.get_request_status(payload)
-        verbose_proxy_logger.info(f"Logged request status: {request_status}")
+        verbose_proxy_logger.debug(f"Logged request status: {request_status}")
         _metadata: SpendLogsMetadata = json.loads(payload["metadata"])
         usage_obj = _metadata.get("usage_object", {}) or {}
         if isinstance(payload["startTime"], datetime):
@@ -1078,9 +1104,10 @@ class DBSpendUpdateWriter:
             daily_transaction = BaseDailySpendTransaction(
                 date=date,
                 api_key=payload["api_key"],
-                model=payload["model"],
-                model_group=payload["model_group"],
-                custom_llm_provider=payload["custom_llm_provider"],
+                model=payload.get("model", None),
+                model_group=payload.get("model_group", None),
+                mcp_namespaced_tool_name=payload.get("mcp_namespaced_tool_name", None),
+                custom_llm_provider=payload.get("custom_llm_provider", None),
                 prompt_tokens=payload["prompt_tokens"],
                 completion_tokens=payload["completion_tokens"],
                 spend=payload["spend"],

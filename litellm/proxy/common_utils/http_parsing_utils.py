@@ -1,10 +1,12 @@
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 import orjson
 from fastapi import Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import ProxyException
 from litellm.types.router import Deployment
 
 
@@ -44,14 +46,12 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
             else:
                 try:
                     parsed_body = orjson.loads(body)
-                except orjson.JSONDecodeError:
-                    # Fall back to the standard json module which is more forgiving
+                except orjson.JSONDecodeError as e:
+                    # First try the standard json module which is more forgiving
                     # First decode bytes to string if needed
                     body_str = body.decode("utf-8") if isinstance(body, bytes) else body
 
                     # Replace invalid surrogate pairs
-                    import re
-
                     # This regex finds incomplete surrogate pairs
                     body_str = re.sub(
                         r"[\uD800-\uDBFF](?![\uDC00-\uDFFF])", "", body_str
@@ -61,15 +61,26 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                         r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str
                     )
 
-                    parsed_body = json.loads(body_str)
+                    try:
+                        parsed_body = json.loads(body_str)
+                    except json.JSONDecodeError:
+                        # If both orjson and json.loads fail, throw a proper error
+                        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
+                        raise ProxyException(
+                            message=f"Invalid JSON payload: {str(e)}",
+                            type="invalid_request_error",
+                            param="request_body",
+                            code=status.HTTP_400_BAD_REQUEST,
+                        )
 
         # Cache the parsed result
         _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
         return parsed_body
 
-    except (json.JSONDecodeError, orjson.JSONDecodeError):
-        verbose_proxy_logger.exception("Invalid JSON payload received.")
-        return {}
+    except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
+        # Re-raise ProxyException as-is
+        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
+        raise
     except Exception as e:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception(
@@ -90,6 +101,18 @@ def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
         return {key: parsed_body[key] for key in accepted_keys}
     return None
 
+def _safe_get_request_query_params(request: Optional[Request]) -> Dict:
+    if request is None:
+        return {}
+    try:
+        if hasattr(request, "query_params"):
+            return dict(request.query_params)
+        return {}
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Unexpected error reading request query params - {}".format(e)
+        )
+        return {}
 
 def _safe_set_request_parsed_body(
     request: Optional[Request],
@@ -210,14 +233,16 @@ async def get_request_body(request: Request) -> Dict[str, Any]:
     """
     Read the request body and parse it as JSON.
     """
-    if request.headers.get("content-type") == "application/json":
-        return await _read_request_body(request)
-    elif (
-        request.headers.get("content-type") == "multipart/form-data"
-        or request.headers.get("content-type") == "application/x-www-form-urlencoded"
-    ):
-        return await get_form_data(request)
-    else:
-        raise ValueError(
-            f"Unsupported content type: {request.headers.get('content-type')}"
-        )
+    if request.method == "POST":
+        if request.headers.get("content-type", "") == "application/json":
+            return await _read_request_body(request)
+        elif (
+            "multipart/form-data" in request.headers.get("content-type", "")
+            or "application/x-www-form-urlencoded" in request.headers.get("content-type", "")
+        ):
+            return await get_form_data(request)
+        else:
+            raise ValueError(
+                f"Unsupported content type: {request.headers.get('content-type')}"
+            )
+    return {}

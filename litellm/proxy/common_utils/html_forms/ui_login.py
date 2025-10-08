@@ -129,8 +129,18 @@ html_form = f"""
             margin-bottom: 20px;
         }}
         
-        .toggle-password input {{
-            margin-right: 6px;
+        .toggle-password input[type="checkbox"] {{
+            margin-right: 8px;
+            vertical-align: middle;
+            width: 16px;
+            height: 16px;
+        }}
+        
+        .toggle-password label {{
+            margin-bottom: 0;
+            font-size: 14px;
+            cursor: pointer;
+            line-height: 1;
         }}
 
         input[type="submit"] {{

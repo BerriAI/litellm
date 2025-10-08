@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import litellm
 from litellm import get_secret
@@ -123,7 +123,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 lakera_moderations_object = lakeraAI_Moderation(**init_params)
                 imported_list.append(lakera_moderations_object)
             elif isinstance(callback, str) and callback == "aporia_prompt_injection":
-                from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import (
+                from litellm.proxy.guardrails.guardrail_hooks.aporia_ai.aporia_ai import (
                     AporiaGuardrail,
                 )
 
@@ -268,9 +268,13 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
             litellm.callbacks = imported_list  # type: ignore
 
         if "prometheus" in value:
-            from litellm.integrations.prometheus import PrometheusLogger
+            try:
+                from litellm_enterprise.integrations.prometheus import PrometheusLogger
+            except Exception:
+                PrometheusLogger = None
 
-            PrometheusLogger._mount_metrics_endpoint(premium_user)
+            if PrometheusLogger:
+                PrometheusLogger._mount_metrics_endpoint(premium_user)
     else:
         litellm.callbacks = [
             get_instance_fn(
@@ -285,7 +289,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
 
 def get_model_group_from_litellm_kwargs(kwargs: dict) -> Optional[str]:
     _litellm_params = kwargs.get("litellm_params", None) or {}
-    _metadata = _litellm_params.get("metadata", None) or {}
+    _metadata = _litellm_params.get(get_metadata_variable_name_from_kwargs(kwargs)) or {}
     _model_group = _metadata.get("model_group", None)
     if _model_group is not None:
         return _model_group
@@ -313,17 +317,26 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
     _metadata = data.get("metadata", None) or {}
     model_group = get_model_group_from_request_data(data)
 
+    # The h11 package considers "/" or ":" invalid and raise a LocalProtocolError
+    h11_model_group_name = (
+        model_group.replace("/", "-").replace(":", "-") if model_group else None
+    )
+
     # Remaining Requests
     remaining_requests_variable_name = f"litellm-key-remaining-requests-{model_group}"
     remaining_requests = _metadata.get(remaining_requests_variable_name, None)
     if remaining_requests:
-        headers[f"x-litellm-key-remaining-requests-{model_group}"] = remaining_requests
+        headers[f"x-litellm-key-remaining-requests-{h11_model_group_name}"] = (
+            remaining_requests
+        )
 
     # Remaining Tokens
     remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
     remaining_tokens = _metadata.get(remaining_tokens_variable_name, None)
     if remaining_tokens:
-        headers[f"x-litellm-key-remaining-tokens-{model_group}"] = remaining_tokens
+        headers[f"x-litellm-key-remaining-tokens-{h11_model_group_name}"] = (
+            remaining_tokens
+        )
 
     return headers
 
@@ -352,3 +365,20 @@ def add_guardrail_to_applied_guardrails_header(
         _metadata["applied_guardrails"].append(guardrail_name)
     else:
         _metadata["applied_guardrails"] = [guardrail_name]
+
+
+def get_metadata_variable_name_from_kwargs(
+        kwargs: dict
+    ) -> Literal["metadata", "litellm_metadata"]:
+        """
+        Helper to return what the "metadata" field should be called in the request data
+
+        - New endpoints return `litellm_metadata`
+        - Old endpoints return `metadata`
+
+        Context:
+        - LiteLLM used `metadata` as an internal field for storing metadata
+        - OpenAI then started using this field for their metadata
+        - LiteLLM is now moving to using `litellm_metadata` for our metadata
+        """
+        return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"

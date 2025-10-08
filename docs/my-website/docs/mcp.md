@@ -2,11 +2,9 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# /mcp [BETA] - Model Context Protocol
+# MCP Overview
 
-## Expose MCP tools on LiteLLM Proxy Server
-
-This allows you to define tools that can be called by any MCP compatible client. Define your `mcp_servers` with LiteLLM and all your clients can list and call available tools.
+LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint for all MCP tools and control MCP access by Key, Team. 
 
 <Image 
   img={require('../img/mcp_2.png')}
@@ -16,37 +14,104 @@ This allows you to define tools that can be called by any MCP compatible client.
   LiteLLM MCP Architecture: Use MCP tools with all LiteLLM supported models
 </p>
 
-#### How it works
+## Overview
+| Feature | Description |
+|---------|-------------|
+| MCP Operations | • List Tools<br/>• Call Tools |
+| Supported MCP Transports | • Streamable HTTP<br/>• SSE<br/>• Standard Input/Output (stdio) |
+| LiteLLM Permission Management | • By Key<br/>• By Team<br/>• By Organization |
 
-1. Allow proxy admin users to perform create, update, and delete operations on MCP servers stored in the db.
-2. Allows users to view and call tools to the MCP servers they have access to.
+## Adding your MCP
 
-LiteLLM exposes the following MCP endpoints:
+### Prerequisites
 
-- GET `/mcp/enabled` - Returns if MCP is enabled (python>=3.10 requirements are met)
-- GET `/mcp/tools/list` - List all available tools
-- POST `/mcp/tools/call` - Call a specific tool with the provided arguments
-- GET `/v1/mcp/server` - Returns all of the configured mcp servers in the db filtered by requestor's access
-- GET `/v1/mcp/server/{server_id}` - Returns the the specific mcp server in the db given `server_id` filtered by requestor's access
-- PUT  `/v1/mcp/server` - Updates an existing external mcp server.
-- POST `/v1/mcp/server` - Add a new external mcp server.
-- DELETE `/v1/mcp/server/{server_id}` - Deletes the mcp server given `server_id`.
+To store MCP servers in the database, you need to enable database storage:
 
-When MCP clients connect to LiteLLM they can follow this workflow:
+**Environment Variable:**
+```bash
+export STORE_MODEL_IN_DB=True
+```
 
-1. Connect to the LiteLLM MCP server
-2. List all available tools on LiteLLM
-3. Client makes LLM API request with tool call(s)
-4. LLM API returns which tools to call and with what arguments
-5. MCP client makes MCP tool calls to LiteLLM
-6. LiteLLM makes the tool calls to the appropriate MCP server
-7. LiteLLM returns the tool call results to the MCP client
+**OR in config.yaml:**
+```yaml
+general_settings:
+  store_model_in_db: true
+```
 
-#### Usage
+#### Fine-grained Database Storage Control
 
-#### 1. Define your tools on under `mcp_servers` in your config.yaml file.
+By default, when `store_model_in_db` is `true`, all object types (models, MCPs, guardrails, vector stores, etc.) are stored in the database. If you want to store only specific object types, use the `supported_db_objects` setting.
 
-LiteLLM allows you to define your tools on the `mcp_servers` section in your config.yaml file. All tools listed here will be available to MCP clients (when they connect to LiteLLM and call `list_tools`).
+**Example: Store only MCP servers in the database**
+
+```yaml title="config.yaml" showLineNumbers
+general_settings:
+  store_model_in_db: true
+  supported_db_objects: ["mcp"]  # Only store MCP servers in DB
+
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: sk-xxxxxxx
+```
+
+**See all available object types:** [Config Settings - supported_db_objects](./proxy/config_settings.md#general_settings---reference)
+
+If `supported_db_objects` is not set, all object types are loaded from the database (default behavior).
+
+<Tabs>
+<TabItem value="ui" label="LiteLLM UI">
+
+On the LiteLLM UI, Navigate to "MCP Servers" and click "Add New MCP Server".
+
+On this form, you should enter your MCP Server URL and the transport you want to use.
+
+LiteLLM supports the following MCP transports:
+- Streamable HTTP
+- SSE (Server-Sent Events)
+- Standard Input/Output (stdio)
+
+<Image 
+  img={require('../img/add_mcp.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+<br/>
+<br/>
+
+### Add HTTP MCP Server
+
+This video walks through adding and using an HTTP MCP server on LiteLLM UI and using it in Cursor IDE.
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/e2aebce78e8d46beafeb4bacdde31f14" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+<br/>
+<br/>
+
+### Add SSE MCP Server
+
+This video walks through adding and using an SSE MCP server on LiteLLM UI and using it in Cursor IDE.
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/07e04e27f5e74475b9cf8ef8247d2c3e" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+<br/>
+<br/>
+
+### Add STDIO MCP Server
+
+For stdio MCP servers, select "Standard Input/Output (stdio)" as the transport type and provide the stdio configuration in JSON format:
+
+<Image 
+  img={require('../img/add_stdio_mcp.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+</TabItem>
+
+<TabItem value="config" label="config.yaml">
+
+Add your MCP servers directly in your `config.yaml` file:
 
 ```yaml title="config.yaml" showLineNumbers
 model_list:
@@ -55,127 +120,1179 @@ model_list:
       model: openai/gpt-4o
       api_key: sk-xxxxxxx
 
+litellm_settings:
+  # MCP Aliases - Map aliases to server names for easier tool access
+  mcp_aliases:
+    "github": "github_mcp_server"
+    "zapier": "zapier_mcp_server"
+    "deepwiki": "deepwiki_mcp_server"
+
 mcp_servers:
+  # HTTP Streamable Server
+  deepwiki_mcp:
+    url: "https://mcp.deepwiki.com/mcp"
+  # SSE Server
   zapier_mcp:
     url: "https://actions.zapier.com/mcp/sk-akxxxxx/sse"
-  fetch:
-    url: "http://localhost:8000/sse"
+  
+  # Standard Input/Output (stdio) Server - CircleCI Example
+  circleci_mcp:
+    transport: "stdio"
+    command: "npx"
+    args: ["-y", "@circleci/mcp-server-circleci"]
+    env:
+      CIRCLECI_TOKEN: "your-circleci-token"
+      CIRCLECI_BASE_URL: "https://circleci.com"
+  
+  # Full configuration with all optional fields
+  my_http_server:
+    url: "https://my-mcp-server.com/mcp"
+    transport: "http"
+    description: "My custom MCP server"
+    auth_type: "api_key"
+    auth_value: "abc123"
+```
+
+**Configuration Options:**
+- **Server Name**: Use any descriptive name for your MCP server (e.g., `zapier_mcp`, `deepwiki_mcp`, `circleci_mcp`)
+- **Alias**: This name will be prefilled with the server name with "_" replacing spaces, else edit it to be the prefix in tool names
+- **URL**: The endpoint URL for your MCP server (required for HTTP/SSE transports)
+- **Transport**: Optional transport type (defaults to `sse`)
+  - `sse` - SSE (Server-Sent Events) transport
+  - `http` - Streamable HTTP transport
+  - `stdio` - Standard Input/Output transport
+- **Command**: The command to execute for stdio transport (required for stdio)
+- **Args**: Array of arguments to pass to the command (optional for stdio)
+- **Env**: Environment variables to set for the stdio process (optional for stdio)
+- **Description**: Optional description for the server
+- **Auth Type**: Optional authentication type. Supported values:
+
+  | Value | Header sent |
+  |-------|-------------|
+  | `api_key` | `X-API-Key: <auth_value>` |
+  | `bearer_token` | `Authorization: Bearer <auth_value>` |
+  | `basic` | `Authorization: Basic <auth_value>` |
+  | `authorization` | `Authorization: <auth_value>` |
+
+- **Extra Headers**: Optional list of additional header names that should be forwarded from client to the MCP server
+- **Spec Version**: Optional MCP specification version (defaults to `2025-06-18`)
+
+Examples for each auth type:
+
+```yaml title="MCP auth examples (config.yaml)" showLineNumbers
+mcp_servers:
+  api_key_example:
+    url: "https://my-mcp-server.com/mcp"
+    auth_type: "api_key"
+    auth_value: "abc123"        # headers={"X-API-Key": "abc123"}
+
+  # NEW – OAuth 2.0 Client Credentials (v1.77.5)
+  oauth2_example:
+    url: "https://my-mcp-server.com/mcp"
+    auth_type: "oauth2"         # 👈 KEY CHANGE
+    authorization_url: "https://my-mcp-server.com/oauth/authorize" # optional for client-credentials
+    token_url: "https://my-mcp-server.com/oauth/token"             # required
+    client_id: os.environ/OAUTH_CLIENT_ID
+    client_secret: os.environ/OAUTH_CLIENT_SECRET
+    scopes: ["tool.read", "tool.write"] # optional
+
+  bearer_example:
+    url: "https://my-mcp-server.com/mcp"
+    auth_type: "bearer_token"
+    auth_value: "abc123"        # headers={"Authorization": "Bearer abc123"}
+
+  basic_example:
+    url: "https://my-mcp-server.com/mcp"
+    auth_type: "basic"
+    auth_value: "dXNlcjpwYXNz"  # headers={"Authorization": "Basic dXNlcjpwYXNz"}
+
+  custom_auth_example:
+    url: "https://my-mcp-server.com/mcp"
+    auth_type: "authorization"
+    auth_value: "Token example123"  # headers={"Authorization": "Token example123"}
+
+  # Example with extra headers forwarding
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: "bearer_token"
+    auth_value: "ghp_example_token"
+    extra_headers: ["custom_key", "x-custom-header"]  # These headers will be forwarded from client
 ```
 
 
-#### 2. Start LiteLLM Gateway
+### MCP Aliases
+
+You can define aliases for your MCP servers in the `litellm_settings` section. This allows you to:
+
+1. **Map friendly names to server names**: Use shorter, more memorable aliases
+2. **Override server aliases**: If a server doesn't have an alias defined, the system will use the first matching alias from `mcp_aliases`
+3. **Ensure uniqueness**: Only the first alias for each server is used, preventing conflicts
+
+**Example:**
+```yaml
+litellm_settings:
+  mcp_aliases:
+    "github": "github_mcp_server"      # Maps "github" alias to "github_mcp_server"
+    "zapier": "zapier_mcp_server"      # Maps "zapier" alias to "zapier_mcp_server"
+    "docs": "deepwiki_mcp_server"      # Maps "docs" alias to "deepwiki_mcp_server"
+    "github_alt": "github_mcp_server"  # This will be ignored since "github" already maps to this server
+```
+
+**Benefits:**
+- **Simplified tool access**: Use `github_create_issue` instead of `github_mcp_server_create_issue`
+- **Consistent naming**: Standardize alias patterns across your organization
+- **Easy migration**: Change server names without breaking existing tool references
+
+</TabItem>
+</Tabs>
+
+## MCP Tool Filtering
+
+Control which tools are available from your MCP servers. You can either allow only specific tools or block dangerous ones.
 
 <Tabs>
-<TabItem value="docker" label="Docker Run">
+<TabItem value="allowed" label="Only Allow Specific Tools">
 
-```shell title="Docker Run" showLineNumbers
-docker run -d \
-  -p 4000:4000 \
-  -e OPENAI_API_KEY=$OPENAI_API_KEY \
-  --name my-app \
-  -v $(pwd)/my_config.yaml:/app/config.yaml \
-  my-app:latest \
-  --config /app/config.yaml \
-  --port 4000 \
-  --detailed_debug \
+Use `allowed_tools` to specify exactly which tools users can access. All other tools will be blocked.
+
+```yaml title="config.yaml" showLineNumbers
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: oauth2
+    authorization_url: https://github.com/login/oauth/authorize
+    token_url: https://github.com/login/oauth/access_token
+    client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
+    client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
+    scopes: ["public_repo", "user:email"]
+    allowed_tools: ["list_tools"]
+    # only list_tools will be available
 ```
+
+**Use this when:**
+- You want strict control over which tools are available
+- You're in a high-security environment
+- You're testing a new MCP server with limited tools
+
+</TabItem>
+<TabItem value="blocked" label="Block Specific Tools">
+
+Use `disallowed_tools` to block specific tools. All other tools will be available.
+
+```yaml title="config.yaml" showLineNumbers
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: oauth2
+    authorization_url: https://github.com/login/oauth/authorize
+    token_url: https://github.com/login/oauth/access_token
+    client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
+    client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
+    scopes: ["public_repo", "user:email"]
+    disallowed_tools: ["repo_delete"]
+    # only repo_delete will be blocked
+```
+
+**Use this when:**
+- Most tools are safe, but you want to block a few dangerous ones
+- You want to prevent expensive API calls
+- You're gradually adding restrictions to an existing server
+
+</TabItem>
+</Tabs>
+
+### Important Notes
+
+- If you specify both `allowed_tools` and `disallowed_tools`, the allowed list takes priority
+- Tool names are case-sensitive
+
+## MCP Server Access Control
+
+LiteLLM Proxy provides two methods for controlling access to specific MCP servers:
+
+1. **URL-based Namespacing** - Use URL paths to directly access specific servers or access groups
+2. **Header-based Namespacing** - Use the `x-mcp-servers` header to specify which servers to access
+
+---
+
+### Method 1: URL-based Namespacing
+
+LiteLLM Proxy supports URL-based namespacing for MCP servers using the format `/mcp/<servers or access groups>`. This allows you to:
+
+- **Direct URL Access**: Point MCP clients directly to specific servers or access groups via URL
+- **Simplified Configuration**: Use URLs instead of headers for server selection
+- **Access Group Support**: Use access group names in URLs for grouped server access
+
+#### URL Format
+
+```
+<your-litellm-proxy-base-url>/mcp/<server_alias_or_access_group>
+```
+
+**Examples:**
+- `/mcp/github` - Access tools from the "github" MCP server
+- `/mcp/zapier` - Access tools from the "zapier" MCP server  
+- `/mcp/dev_group` - Access tools from all servers in the "dev_group" access group
+- `/mcp/github,zapier` - Access tools from multiple specific servers
+
+#### Usage Examples
+
+<Tabs>
+<TabItem value="openai" label="OpenAI API">
+
+```bash title="cURL Example with URL Namespacing" showLineNumbers
+curl --location 'https://api.openai.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $OPENAI_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp/github",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+This example uses URL namespacing to access only the "github" MCP server.
 
 </TabItem>
 
-<TabItem value="py" label="litellm pip">
+<TabItem value="litellm" label="LiteLLM Proxy">
 
-```shell title="litellm pip" showLineNumbers
-litellm --config config.yaml --detailed_debug
+```bash title="cURL Example with URL Namespacing" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp/dev_group",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
 ```
+
+This example uses URL namespacing to access all servers in the "dev_group" access group.
+
+</TabItem>
+
+<TabItem value="cursor" label="Cursor IDE">
+
+```json title="Cursor MCP Configuration with URL Namespacing" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "<your-litellm-proxy-base-url>/mcp/github,zapier",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
+      }
+    }
+  }
+}
+```
+
+This configuration uses URL namespacing to access tools from both "github" and "zapier" MCP servers.
+
+</TabItem>
+</Tabs>
+
+#### Benefits of URL Namespacing
+
+- **Direct Access**: No need for additional headers to specify servers
+- **Clean URLs**: Self-documenting URLs that clearly indicate which servers are accessible
+- **Access Group Support**: Use access group names for grouped server access
+- **Multiple Servers**: Specify multiple servers in a single URL with comma separation
+- **Simplified Configuration**: Easier setup for MCP clients that prefer URL-based configuration
+
+---
+
+### Method 2: Header-based Namespacing
+
+You can choose to access specific MCP servers and only list their tools using the `x-mcp-servers` header. This header allows you to:
+- Limit tool access to one or more specific MCP servers
+- Control which tools are available in different environments or use cases
+
+The header accepts a comma-separated list of server aliases: `"alias_1,Server2,Server3"`
+
+**Notes:**
+- If the header is not provided, tools from all available MCP servers will be accessible
+- This method works with the standard LiteLLM MCP endpoint
+
+<Tabs>
+<TabItem value="openai" label="OpenAI API">
+
+```bash title="cURL Example with Header Namespacing" showLineNumbers
+curl --location 'https://api.openai.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $OPENAI_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp/",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-servers": "alias_1"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+In this example, the request will only have access to tools from the "alias_1" MCP server.
+
+</TabItem>
+
+<TabItem value="litellm" label="LiteLLM Proxy">
+
+```bash title="cURL Example with Header Namespacing" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp/",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-servers": "alias_1,Server2"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+This configuration restricts the request to only use tools from the specified MCP servers.
+
+</TabItem>
+
+<TabItem value="cursor" label="Cursor IDE">
+
+```json title="Cursor MCP Configuration with Header Namespacing" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "<your-litellm-proxy-base-url>/mcp/",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "x-mcp-servers": "alias_1,Server2"
+      }
+    }
+  }
+}
+```
+
+This configuration in Cursor IDE settings will limit tool access to only the specified MCP servers.
+
+</TabItem>
+</Tabs>
+
+---
+
+### Comparison: Header vs URL Namespacing
+
+| Feature | Header Namespacing | URL Namespacing |
+|---------|-------------------|-----------------|
+| **Method** | Uses `x-mcp-servers` header | Uses URL path `/mcp/<servers>` |
+| **Endpoint** | Standard `litellm_proxy` endpoint | Custom `/mcp/<servers>` endpoint |
+| **Configuration** | Requires additional header | Self-contained in URL |
+| **Multiple Servers** | Comma-separated in header | Comma-separated in URL path |
+| **Access Groups** | Supported via header | Supported via URL path |
+| **Client Support** | Works with all MCP clients | Works with URL-aware MCP clients |
+| **Use Case** | Dynamic server selection | Fixed server configuration |
+
+<Tabs>
+<TabItem value="openai" label="OpenAI API">
+
+```bash title="cURL Example with Server Segregation" showLineNumbers
+curl --location 'https://api.openai.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $OPENAI_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp/",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-servers": "alias_1"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+In this example, the request will only have access to tools from the "alias_1" MCP server.
+
+</TabItem>
+
+<TabItem value="litellm" label="LiteLLM Proxy">
+
+```bash title="cURL Example with Server Segregation" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "litellm_proxy",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-servers": "alias_1,Server2"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+This configuration restricts the request to only use tools from the specified MCP servers.
+
+</TabItem>
+
+<TabItem value="cursor" label="Cursor IDE">
+
+```json title="Cursor MCP Configuration with Server Segregation" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "litellm_proxy",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "x-mcp-servers": "alias_1,Server2"
+      }
+    }
+  }
+}
+```
+
+This configuration in Cursor IDE settings will limit tool access to only the specified MCP server.
+
+</TabItem>
+</Tabs>
+
+### Grouping MCPs (Access Groups)
+
+MCP Access Groups allow you to group multiple MCP servers together for easier management.
+
+#### 1. Create an Access Group
+
+##### A. Creating Access Groups using Config:
+
+```yaml title="Creating access groups for MCP using the config" showLineNumbers
+mcp_servers:
+  "deepwiki_mcp":
+    url: https://mcp.deepwiki.com/mcp
+    transport: "http"
+    auth_type: "none"
+    access_groups: ["dev_group"]
+```
+
+While adding `mcp_servers` using the config:
+- Pass in a list of strings inside `access_groups`
+- These groups can then be used for segregating access using keys, teams and MCP clients using headers
+
+##### B. Creating Access Groups using UI
+
+To create an access group:
+- Go to MCP Servers in the LiteLLM UI
+- Click "Add a New MCP Server" 
+- Under "MCP Access Groups", create a new group (e.g., "dev_group") by typing it
+- Add the same group name to other servers to group them together
+
+<Image 
+  img={require('../img/mcp_create_access_group.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+#### 2. Use Access Group in Cursor
+
+Include the access group name in the `x-mcp-servers` header:
+
+```json title="Cursor Configuration with Access Groups" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "litellm_proxy",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "x-mcp-servers": "dev_group"
+      }
+    }
+  }
+}
+```
+
+This gives you access to all servers in the "dev_group" access group.
+- Which means that if deepwiki server (and any other servers) which have the access group `dev_group` assigned to them will be available for tool calling
+
+#### Advanced: Connecting Access Groups to API Keys
+
+When creating API keys, you can assign them to specific access groups for permission management:
+
+- Go to "Keys" in the LiteLLM UI and click "Create Key"
+- Select the desired MCP access groups from the dropdown
+- The key will have access to all MCP servers in those groups
+- This is reflected in the Test Key page
+
+<Image 
+  img={require('../img/mcp_key_access_group.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+
+## Forwarding Custom Headers to MCP Servers
+
+LiteLLM supports forwarding additional custom headers from MCP clients to backend MCP servers using the `extra_headers` configuration parameter. This allows you to pass custom authentication tokens, API keys, or other headers that your MCP server requires.
+
+### Configuration
+
+
+<Tabs>
+<TabItem value="config" label="config.yaml">
+Configure `extra_headers` in your MCP server configuration to specify which header names should be forwarded:
+
+```yaml title="config.yaml with extra_headers" showLineNumbers
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: "bearer_token"
+    auth_value: "ghp_default_token"
+    extra_headers: ["custom_key", "x-custom-header", "Authorization"]
+    description: "GitHub MCP server with custom header forwarding"
+```
+</TabItem>
+<TabItem value="clientside" label="Dynamically on Client Side">
+
+Use this when giving users access to a [group of MCP servers](#grouping-mcps-access-groups).
+
+**Format:** `x-mcp-{server_alias}-{header_name}: value`
+
+This allows you to use different authentication for different MCP servers.
+
+
+**Examples:**
+- `x-mcp-github-authorization: Bearer ghp_xxxxxxxxx` - GitHub MCP server with Bearer token
+- `x-mcp-zapier-x-api-key: sk-xxxxxxxxx` - Zapier MCP server with API key
+- `x-mcp-deepwiki-authorization: Basic base64_encoded_creds` - DeepWiki MCP server with Basic auth
+
+```python title="Python Client with Server-Specific Auth" showLineNumbers
+from fastmcp import Client
+import asyncio
+
+# Standard MCP configuration with multiple servers
+config = {
+    "mcpServers": {
+        "mcp_group": {
+            "url": "http://localhost:4000/mcp",
+            "headers": {
+                "x-mcp-servers": "dev_group", # assume this gives access to github, zapier and deepwiki
+                "x-litellm-api-key": "Bearer sk-1234",
+                "x-mcp-github-authorization": "Bearer gho_token", 
+                "x-mcp-zapier-x-api-key": "sk-xxxxxxxxx",
+                "x-mcp-deepwiki-authorization": "Basic base64_encoded_creds",
+                "custom_key": "value"
+            }
+        }
+    }
+}
+
+# Create a client that connects to all servers
+client = Client(config)
+
+
+async def main():
+    async with client:
+        tools = await client.list_tools()
+        print(f"Available tools: {tools}")
+
+        # call mcp 
+        await client.call_tool(
+            name="github_mcp-search_issues",
+            arguments={'query': 'created:>2024-01-01', 'sort': 'created', 'order': 'desc', 'perPage': 30}
+        )
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+```
+
+
+
+**Benefits:**
+- **Server-specific authentication**: Each MCP server can use different auth methods
+- **Better security**: No need to share the same auth token across all servers
+- **Flexible header names**: Support for different auth header types (authorization, x-api-key, etc.)
+- **Clean separation**: Each server's auth is clearly identified
+
+
 
 </TabItem>
 </Tabs>
 
 
-#### 3. Make an LLM API request 
+### Client Usage
 
-In this example we will do the following:
+When connecting from MCP clients, include the custom headers that match the `extra_headers` configuration:
 
-1. Use MCP client to list MCP tools on LiteLLM Proxy
-2. Use `transform_mcp_tool_to_openai_tool` to convert MCP tools to OpenAI tools
-3. Provide the MCP tools to `gpt-4o`
-4. Handle tool call from `gpt-4o`
-5. Convert OpenAI tool call to MCP tool call
-6. Execute tool call on MCP server
+<Tabs>
+<TabItem value="fastmcp" label="Python FastMCP">
 
-```python title="MCP Client List Tools" showLineNumbers
+```python title="FastMCP Client with Custom Headers" showLineNumbers
+from fastmcp import Client
 import asyncio
-from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletionUserMessageParam
-from mcp import ClientSession
-from mcp.client.sse import sse_client
-from litellm.experimental_mcp_client.tools import (
-    transform_mcp_tool_to_openai_tool,
-    transform_openai_tool_call_request_to_mcp_tool_call_request,
+
+# MCP client configuration with custom headers
+config = {
+    "mcpServers": {
+        "github": {
+            "url": "http://localhost:4000/github_mcp/mcp",
+            "headers": {
+                "x-litellm-api-key": "Bearer sk-1234",
+                "Authorization": "Bearer gho_token", 
+                "custom_key": "custom_value",
+                "x-custom-header": "additional_data"
+            }
+        }
+    }
+}
+
+# Create a client that connects to the server
+client = Client(config)
+
+async def main():
+    async with client:
+        # List available tools
+        tools = await client.list_tools()
+        print(f"Available tools: {tools}")
+        
+        # Call a tool if available
+        if tools:
+            result = await client.call_tool(tools[0].name, {})
+            print(f"Tool result: {result}")
+
+# Run the client
+asyncio.run(main())
+```
+
+</TabItem>
+
+<TabItem value="cursor" label="Cursor IDE">
+
+```json title="Cursor MCP Configuration with Custom Headers" showLineNumbers
+{
+  "mcpServers": {
+    "GitHub": {
+      "url": "http://localhost:4000/github_mcp/mcp",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "Authorization": "Bearer $GITHUB_TOKEN",
+        "custom_key": "custom_value",
+        "x-custom-header": "additional_data"
+      }
+    }
+  }
+}
+```
+
+</TabItem>
+
+<TabItem value="http" label="HTTP Client">
+
+```bash title="cURL with Custom Headers" showLineNumbers
+curl --location 'http://localhost:4000/github_mcp/mcp' \
+--header 'Content-Type: application/json' \
+--header 'x-litellm-api-key: Bearer sk-1234' \
+--header 'Authorization: Bearer gho_token' \
+--header 'custom_key: custom_value' \
+--header 'x-custom-header: additional_data' \
+--data '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list"
+}'
+```
+
+</TabItem>
+</Tabs>
+
+### How It Works
+
+1. **Configuration**: Define `extra_headers` in your MCP server config with the header names you want to forward
+2. **Client Headers**: Include the corresponding headers in your MCP client requests
+3. **Header Forwarding**: LiteLLM automatically forwards matching headers to the backend MCP server
+4. **Authentication**: The backend MCP server receives both the configured auth headers and the custom headers
+
+### Use Cases
+
+- **Custom Authentication**: Forward custom API keys or tokens required by specific MCP servers
+- **Request Context**: Pass user identification, session data, or request tracking headers
+- **Third-party Integration**: Include headers required by external services that your MCP server integrates with
+- **Multi-tenant Systems**: Forward tenant-specific headers for proper request routing
+
+### Security Considerations
+
+- Only headers listed in `extra_headers` are forwarded to maintain security
+- Sensitive headers should be passed through environment variables when possible
+- Consider using server-specific auth headers for better security isolation
+
+---
+
+## MCP Oauth
+
+LiteLLM v 1.77.6 added support for OAuth 2.0 Client Credentials for MCP servers.
+
+
+This configuration is currently available on the config.yaml, with UI support coming soon.
+
+```yaml
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: oauth2
+    authorization_url: https://github.com/login/oauth/authorize
+    token_url: https://github.com/login/oauth/access_token
+    client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
+    client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
+    scopes: ["public_repo", "user:email"]
+```
+
+## Using your MCP with client side credentials
+
+Use this if you want to pass a client side authentication token to LiteLLM to then pass to your MCP to auth to your MCP.
+
+
+### New Server-Specific Auth Headers (Recommended)
+
+You can specify MCP auth tokens using server-specific headers in the format `x-mcp-{server_alias}-{header_name}`. This allows you to use different authentication for different MCP servers.
+
+**Benefits:**
+- **Server-specific authentication**: Each MCP server can use different auth methods
+- **Better security**: No need to share the same auth token across all servers
+- **Flexible header names**: Support for different auth header types (authorization, x-api-key, etc.)
+- **Clean separation**: Each server's auth is clearly identified
+
+### Legacy Auth Header (Deprecated)
+
+You can also specify your MCP auth token using the header `x-mcp-auth`. This will be forwarded to all MCP servers and is deprecated in favor of server-specific headers.
+
+<Tabs>
+<TabItem value="openai" label="OpenAI API">
+
+#### Connect via OpenAI Responses API with Server-Specific Auth
+
+Use the OpenAI Responses API and include server-specific auth headers:
+
+```bash title="cURL Example with Server-Specific Auth" showLineNumbers
+curl --location 'https://api.openai.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $OPENAI_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "litellm_proxy",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-github-authorization": "Bearer YOUR_GITHUB_TOKEN",
+                "x-mcp-zapier-x-api-key": "YOUR_ZAPIER_API_KEY"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+#### Connect via OpenAI Responses API with Legacy Auth
+
+Use the OpenAI Responses API and include the `x-mcp-auth` header for your MCP server authentication:
+
+```bash title="cURL Example with Legacy MCP Auth" showLineNumbers
+curl --location 'https://api.openai.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $OPENAI_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "litellm_proxy",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-auth": YOUR_MCP_AUTH_TOKEN
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+</TabItem>
+
+<TabItem value="litellm" label="LiteLLM Proxy">
+
+#### Connect via LiteLLM Proxy Responses API with Server-Specific Auth
+
+Use this when calling LiteLLM Proxy for LLM API requests to `/v1/responses` endpoint with server-specific authentication:
+
+```bash title="cURL Example with Server-Specific Auth" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "litellm_proxy",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-github-authorization": "Bearer YOUR_GITHUB_TOKEN",
+                "x-mcp-zapier-x-api-key": "YOUR_ZAPIER_API_KEY"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+#### Connect via LiteLLM Proxy Responses API with Legacy Auth
+
+Use this when calling LiteLLM Proxy for LLM API requests to `/v1/responses` endpoint with MCP authentication:
+
+```bash title="cURL Example with Legacy MCP Auth" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "litellm_proxy",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-auth": "YOUR_MCP_AUTH_TOKEN"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+</TabItem>
+
+<TabItem value="cursor" label="Cursor IDE">
+
+#### Connect via Cursor IDE with Server-Specific Auth
+
+Use tools directly from Cursor IDE with LiteLLM MCP and include server-specific authentication:
+
+**Setup Instructions:**
+
+1. **Open Cursor Settings**: Use `⇧+⌘+J` (Mac) or `Ctrl+Shift+J` (Windows/Linux)
+2. **Navigate to MCP Tools**: Go to the "MCP Tools" tab and click "New MCP Server"
+3. **Add Configuration**: Copy and paste the JSON configuration below, then save with `Cmd+S` or `Ctrl+S`
+
+```json title="Cursor MCP Configuration with Server-Specific Auth" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "litellm_proxy",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "x-mcp-github-authorization": "Bearer $GITHUB_TOKEN",
+        "x-mcp-zapier-x-api-key": "$ZAPIER_API_KEY"
+      }
+    }
+  }
+}
+```
+
+#### Connect via Cursor IDE with Legacy Auth
+
+Use tools directly from Cursor IDE with LiteLLM MCP and include your MCP authentication token:
+
+**Setup Instructions:**
+
+1. **Open Cursor Settings**: Use `⇧+⌘+J` (Mac) or `Ctrl+Shift+J` (Windows/Linux)
+2. **Navigate to MCP Tools**: Go to the "MCP Tools" tab and click "New MCP Server"
+3. **Add Configuration**: Copy and paste the JSON configuration below, then save with `Cmd+S` or `Ctrl+S`
+
+```json title="Cursor MCP Configuration with Legacy Auth" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "litellm_proxy",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "x-mcp-auth": "$MCP_AUTH_TOKEN"
+      }
+    }
+  }
+}
+```
+
+</TabItem>
+
+<TabItem value="http" label="Streamable HTTP">
+
+#### Connect via Streamable HTTP Transport with Server-Specific Auth
+
+Connect to LiteLLM MCP using HTTP transport with server-specific authentication:
+
+**Server URL:**
+```text showLineNumbers
+litellm_proxy
+```
+
+**Headers:**
+```text showLineNumbers
+x-litellm-api-key: Bearer YOUR_LITELLM_API_KEY
+x-mcp-github-authorization: Bearer YOUR_GITHUB_TOKEN
+x-mcp-zapier-x-api-key: YOUR_ZAPIER_API_KEY
+```
+
+#### Connect via Streamable HTTP Transport with Legacy Auth
+
+Connect to LiteLLM MCP using HTTP transport with MCP authentication:
+
+**Server URL:**
+```text showLineNumbers
+litellm_proxy
+```
+
+**Headers:**
+```text showLineNumbers
+x-litellm-api-key: Bearer YOUR_LITELLM_API_KEY
+x-mcp-auth: Bearer YOUR_MCP_AUTH_TOKEN
+```
+
+This URL can be used with any MCP client that supports HTTP transport. The `x-mcp-auth` header will be forwarded to your MCP server for authentication.
+
+</TabItem>
+
+<TabItem value="fastmcp" label="Python FastMCP">
+
+#### Connect via Python FastMCP Client with Server-Specific Auth
+
+Use the Python FastMCP client to connect to your LiteLLM MCP server with server-specific authentication:
+
+```python title="Python FastMCP Example with Server-Specific Auth" showLineNumbers
+import asyncio
+import json
+
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
+
+# Create the transport with your LiteLLM MCP server URL and server-specific auth headers
+server_url = "litellm_proxy"
+transport = StreamableHttpTransport(
+    server_url,
+    headers={
+        "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+        "x-mcp-github-authorization": "Bearer YOUR_GITHUB_TOKEN",
+        "x-mcp-zapier-x-api-key": "YOUR_ZAPIER_API_KEY"
+    }
 )
+
+# Initialize the client with the transport
+client = Client(transport=transport)
 
 
 async def main():
-    # Initialize clients
-    
-    # point OpenAI client to LiteLLM Proxy
-    client = AsyncOpenAI(api_key="sk-1234", base_url="http://localhost:4000")
+    # Connection is established here
+    print("Connecting to LiteLLM MCP server with server-specific authentication...")
+    async with client:
+        print(f"Client connected: {client.is_connected()}")
 
-    # Point MCP client to LiteLLM Proxy
-    async with sse_client("http://localhost:4000/mcp/") as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
+        # Make MCP calls within the context
+        print("Fetching available tools...")
+        tools = await client.list_tools()
 
-            # 1. List MCP tools on LiteLLM Proxy
-            mcp_tools = await session.list_tools()
-            print("List of MCP tools for MCP server:", mcp_tools.tools)
-
-            # Create message
-            messages = [
-                ChatCompletionUserMessageParam(
-                    content="Send an email about LiteLLM supporting MCP", role="user"
-                )
-            ]
-
-            # 2. Use `transform_mcp_tool_to_openai_tool` to convert MCP tools to OpenAI tools
-            # Since OpenAI only supports tools in the OpenAI format, we need to convert the MCP tools to the OpenAI format.
-            openai_tools = [
-                transform_mcp_tool_to_openai_tool(tool) for tool in mcp_tools.tools
-            ]
-
-            # 3. Provide the MCP tools to `gpt-4o`
-            response = await client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                tools=openai_tools,
-                tool_choice="auto",
-            )
-
-            # 4. Handle tool call from `gpt-4o`
-            if response.choices[0].message.tool_calls:
-                tool_call = response.choices[0].message.tool_calls[0]
-                if tool_call:
-
-                    # 5. Convert OpenAI tool call to MCP tool call
-                    # Since MCP servers expect tools in the MCP format, we need to convert the OpenAI tool call to the MCP format.
-                    # This is done using litellm.experimental_mcp_client.tools.transform_openai_tool_call_request_to_mcp_tool_call_request
-                    mcp_call = (
-                        transform_openai_tool_call_request_to_mcp_tool_call_request(
-                            openai_tool=tool_call.model_dump()
-                        )
-                    )
-
-                    # 6. Execute tool call on MCP server
-                    result = await session.call_tool(
-                        name=mcp_call.name, arguments=mcp_call.arguments
-                    )
-
-                    print("Result:", result)
+        print(f"Available tools: {json.dumps([t.name for t in tools], indent=2)}")
+        
+        # Example: Call a tool (replace 'tool_name' with an actual tool name)
+        if tools:
+            tool_name = tools[0].name
+            print(f"Calling tool: {tool_name}")
+            
+            # Call the tool with appropriate arguments
+            result = await client.call_tool(tool_name, arguments={})
+            print(f"Tool result: {result}")
 
 
-# Run it
-asyncio.run(main())
+# Run the example
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
+
+#### Connect via Python FastMCP Client with Legacy Auth
+
+Use the Python FastMCP client to connect to your LiteLLM MCP server with MCP authentication:
+
+```python title="Python FastMCP Example with Legacy MCP Auth" showLineNumbers
+import asyncio
+import json
+
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
+
+# Create the transport with your LiteLLM MCP server URL and auth headers
+server_url = "litellm_proxy"
+transport = StreamableHttpTransport(
+    server_url,
+    headers={
+        "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+        "x-mcp-auth": "Bearer YOUR_MCP_AUTH_TOKEN"
+    }
+)
+
+# Initialize the client with the transport
+client = Client(transport=transport)
+
+
+async def main():
+    # Connection is established here
+    print("Connecting to LiteLLM MCP server with authentication...")
+    async with client:
+        print(f"Client connected: {client.is_connected()}")
+
+        # Make MCP calls within the context
+        print("Fetching available tools...")
+        tools = await client.list_tools()
+
+        print(f"Available tools: {json.dumps([t.name for t in tools], indent=2)}")
+        
+        # Example: Call a tool (replace 'tool_name' with an actual tool name)
+        if tools:
+            tool_name = tools[0].name
+            print(f"Calling tool: {tool_name}")
+            
+            # Call the tool with appropriate arguments
+            result = await client.call_tool(tool_name, arguments={})
+            print(f"Tool result: {result}")
+
+
+# Run the example
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+</TabItem>
+</Tabs>
+
+### Customize the MCP Auth Header Name
+
+By default, LiteLLM uses `x-mcp-auth` to pass your credentials to MCP servers. You can change this header name in one of the following ways:
+1. Set the `LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME` environment variable
+
+```bash title="Environment Variable" showLineNumbers
+export LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME="authorization"
+```
+
+
+2. Set the `mcp_client_side_auth_header_name` in the general settings on the config.yaml file
+
+```yaml title="config.yaml" showLineNumbers
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: sk-xxxxxxx
+
+general_settings:
+  mcp_client_side_auth_header_name: "authorization"
+```
+
+#### Using the authorization header
+
+In this example the `authorization` header will be passed to the MCP server for authentication.
+
+```bash title="cURL with authorization header" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "litellm_proxy",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "authorization": "Bearer sk-zapier-token-123"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+## LiteLLM Proxy - Walk through MCP Gateway
+LiteLLM exposes an MCP Gateway for admins to add all their MCP servers to LiteLLM. The key benefits of using LiteLLM Proxy with MCP are:
+
+1. Use a fixed endpoint for all MCP tools
+2. MCP Permission management by Key, Team, or User
+
+This video demonstrates how you can onboard an MCP server to LiteLLM Proxy, use it and set access controls.
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/f7aa8d217879430987f3e64291757bfc" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
 ## LiteLLM Python SDK MCP Bridge
 
@@ -430,9 +1547,3 @@ async with stdio_client(server_params) as (read, write):
 
 </TabItem>
 </Tabs>
-
-### Permission Management
-
-Currently, all Virtual Keys are able to access the MCP endpoints. We are working on a feature to allow restricting MCP access by keys/teams/users/orgs.
-
-Join the discussion [here](https://github.com/BerriAI/litellm/discussions/9891)

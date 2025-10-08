@@ -1,7 +1,9 @@
 import asyncio
 import contextlib
+import os
 import typing
-from typing import Callable, Dict, Union
+import urllib.request
+from typing import Callable, Dict, Optional, Union
 
 import aiohttp
 import aiohttp.client_exceptions
@@ -9,7 +11,9 @@ import aiohttp.http_exceptions
 import httpx
 from aiohttp.client import ClientResponse, ClientSession
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.secret_managers.main import str_to_bool
 
 AIOHTTP_EXC_MAP: Dict = {
     # Order matters here, most specific exception first
@@ -77,11 +81,10 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
 
     async def __aiter__(self) -> typing.AsyncIterator[bytes]:
         try:
-            with map_aiohttp_exceptions():
-                async for chunk in self._aiohttp_response.content.iter_chunked(
-                    self.CHUNK_SIZE
-                ):
-                    yield chunk
+            async for chunk in self._aiohttp_response.content.iter_chunked(
+                self.CHUNK_SIZE
+            ):
+                yield chunk
         except (
             aiohttp.ClientPayloadError,
             aiohttp.client_exceptions.ClientPayloadError,
@@ -111,6 +114,12 @@ class AiohttpTransport(httpx.AsyncBaseTransport):
         self, client: Union[ClientSession, Callable[[], ClientSession]]
     ) -> None:
         self.client = client
+
+        #########################################################
+        # Class variables for proxy settings
+        #########################################################
+        self.proxy: Optional[str] = None
+        self.checked_proxy_env_settings: bool = False
 
     async def aclose(self) -> None:
         if isinstance(self.client, ClientSession):
@@ -183,7 +192,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 self.client = ClientSession()
 
         return self.client
-
+    
     async def handle_async_request(
         self,
         request: httpx.Request,
@@ -196,6 +205,9 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
         # Use helper to ensure we have a valid session for the current event loop
         client_session = self._get_valid_client_session()
+
+        # Resolve proxy settings from environment variables
+        proxy = await self._get_proxy_settings(request)
 
         with map_aiohttp_exceptions():
             try:
@@ -216,6 +228,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                     sock_read=timeout.get("read"),
                     connect=timeout.get("pool"),
                 ),
+                proxy=proxy,
                 server_hostname=sni_hostname,
             ).__aenter__()
 
@@ -225,3 +238,45 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             content=AiohttpResponseStream(response),
             request=request,
         )
+    
+
+    async def _get_proxy_settings(self, request: httpx.Request):
+        proxy = None
+        if not (
+            litellm.disable_aiohttp_trust_env
+            or str_to_bool(os.getenv("DISABLE_AIOHTTP_TRUST_ENV", "False"))
+        ):
+            try:
+                proxy = self._proxy_from_env(request.url)
+            except Exception as e:  # pragma: no cover - best effort
+                verbose_logger.debug(f"Error reading proxy env: {e}")
+
+        return proxy
+    
+
+    def _proxy_from_env(self, url: httpx.URL) -> typing.Optional[str]:
+        """
+        Return proxy URL from env for the given request URL
+
+        Only check the proxy env settings once, this is a costly operation for CPU % usage
+        
+        ."""
+        #########################################################
+        # Check if we've already checked the proxy env settings
+        #########################################################
+        if self.checked_proxy_env_settings is True:
+            return self.proxy
+        
+        #########################################################
+        # set self.checked_proxy_env_settings to True
+        #########################################################
+        self.checked_proxy_env_settings = True
+        proxies = urllib.request.getproxies()
+        if urllib.request.proxy_bypass(url.host):
+            return None
+
+        proxy = proxies.get(url.scheme) or proxies.get("all")
+        if proxy and "://" not in proxy:
+            proxy = f"http://{proxy}"
+        self.proxy = proxy
+        return self.proxy

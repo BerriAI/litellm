@@ -158,26 +158,6 @@ def test_get_model_info_ft_model_with_provider_prefix():
     assert info["key"] == "ft:gpt-3.5-turbo"
 
 
-def test_get_whitelisted_models():
-    """
-    Snapshot of all bedrock models as of 12/24/2024.
-
-    Enforce any new bedrock chat model to be added as `bedrock_converse` unless explicitly whitelisted.
-
-    Create whitelist to prevent naming regressions for older litellm versions.
-    """
-    whitelisted_models = []
-    for model, info in litellm.model_cost.items():
-        if info["litellm_provider"] == "bedrock" and info["mode"] == "chat":
-            whitelisted_models.append(model)
-
-        # Write to a local file
-    with open("whitelisted_bedrock_models.txt", "w") as file:
-        for model in whitelisted_models:
-            file.write(f"{model}\n")
-
-    print("whitelisted_models written to whitelisted_bedrock_models.txt")
-
 
 def _enforce_bedrock_converse_models(
     model_cost: List[Dict[str, Any]], whitelist_models: List[str]

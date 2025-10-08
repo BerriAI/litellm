@@ -11,7 +11,10 @@ sys.path.insert(
 
 from litellm.proxy._types import DefaultInternalUserParams, LitellmUserRoles
 from litellm.proxy.proxy_server import app
-from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    DefaultTeamSSOParams,
+    SSOConfig,
+)
 
 client = TestClient(app)
 
@@ -34,7 +37,15 @@ def mock_proxy_config(monkeypatch):
                 "tpm_limit": 100,
                 "rpm_limit": 10,
             },
-        }
+        },
+        "general_settings": {"proxy_admin_email": "admin@example.com"},
+        "environment_variables": {
+            "GOOGLE_CLIENT_ID": "test_google_client_id",
+            "GOOGLE_CLIENT_SECRET": "test_google_client_secret",
+            "MICROSOFT_CLIENT_ID": "test_microsoft_client_id",
+            "MICROSOFT_CLIENT_SECRET": "test_microsoft_client_secret",
+            "PROXY_BASE_URL": "https://example.com",
+        },
     }
 
     async def mock_get_config():
@@ -84,9 +95,9 @@ class TestProxySettingEndpoints:
         assert response.status_code == 200
         data = response.json()
 
-        # Check structure of response
+        # Check structure of response (updated to use field_schema)
         assert "values" in data
-        assert "schema" in data
+        assert "field_schema" in data
 
         # Check values match our mock config
         values = data["values"]
@@ -98,18 +109,20 @@ class TestProxySettingEndpoints:
         assert values["budget_duration"] == mock_params["budget_duration"]
         assert values["models"] == mock_params["models"]
 
-        # Check schema contains descriptions
-        assert "properties" in data["schema"]
-        assert "user_role" in data["schema"]["properties"]
-        assert "description" in data["schema"]["properties"]["user_role"]
+        # Check field_schema contains descriptions (updated from schema to field_schema)
+        assert "properties" in data["field_schema"]
+        assert "user_role" in data["field_schema"]["properties"]
+        assert "description" in data["field_schema"]["properties"]["user_role"]
 
     def test_update_internal_user_settings(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):
         """Test updating the internal user settings"""
         # Mock litellm.default_internal_user_params
+
         import litellm
 
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         monkeypatch.setattr(litellm, "default_internal_user_params", {})
 
         # New settings to update
@@ -122,6 +135,7 @@ class TestProxySettingEndpoints:
 
         response = client.patch("/update/internal_user_settings", json=new_settings)
 
+        print(response.text)
         assert response.status_code == 200
         data = response.json()
 
@@ -153,9 +167,9 @@ class TestProxySettingEndpoints:
         assert response.status_code == 200
         data = response.json()
 
-        # Check structure of response
+        # Check structure of response (updated to use field_schema)
         assert "values" in data
-        assert "schema" in data
+        assert "field_schema" in data
 
         # Check values match our mock config
         values = data["values"]
@@ -168,10 +182,10 @@ class TestProxySettingEndpoints:
         assert values["tpm_limit"] == mock_params["tpm_limit"]
         assert values["rpm_limit"] == mock_params["rpm_limit"]
 
-        # Check schema contains descriptions
-        assert "properties" in data["schema"]
-        assert "models" in data["schema"]["properties"]
-        assert "description" in data["schema"]["properties"]["models"]
+        # Check field_schema contains descriptions (updated from schema to field_schema)
+        assert "properties" in data["field_schema"]
+        assert "models" in data["field_schema"]["properties"]
+        assert "description" in data["field_schema"]["properties"]["models"]
 
     def test_update_default_team_settings(
         self, mock_proxy_config, mock_auth, monkeypatch
@@ -180,6 +194,7 @@ class TestProxySettingEndpoints:
         # Mock litellm.default_team_params
         import litellm
 
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         monkeypatch.setattr(litellm, "default_team_params", {})
 
         # New settings to update
@@ -217,4 +232,327 @@ class TestProxySettingEndpoints:
         assert updated_config["tpm_limit"] == new_settings["tpm_limit"]
 
         # Verify save_config was called exactly once
+        assert mock_proxy_config["save_call_count"]() == 1
+
+    def test_get_sso_settings(self, mock_proxy_config, mock_auth):
+        """Test getting the SSO settings"""
+        response = client.get("/get/sso_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check structure of response
+        assert "values" in data
+        assert "field_schema" in data
+
+        # Check values contain SSO configuration
+        values = data["values"]
+        assert "google_client_id" in values
+        assert "google_client_secret" in values
+        assert "microsoft_client_id" in values
+        assert "microsoft_client_secret" in values
+        assert "proxy_base_url" in values
+        assert "user_email" in values
+
+        # Verify values match our mock config
+        assert values["google_client_id"] == "test_google_client_id"
+        assert values["google_client_secret"] == "test_google_client_secret"
+        assert values["microsoft_client_id"] == "test_microsoft_client_id"
+        assert values["microsoft_client_secret"] == "test_microsoft_client_secret"
+        assert values["proxy_base_url"] == "https://example.com"
+        assert values["user_email"] == "admin@example.com"
+
+        # Check field_schema contains descriptions
+        assert "properties" in data["field_schema"]
+        assert "google_client_id" in data["field_schema"]["properties"]
+        assert "description" in data["field_schema"]["properties"]["google_client_id"]
+
+    def test_update_sso_settings(self, mock_proxy_config, mock_auth, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        """Test updating the SSO settings"""
+        # New SSO settings to update
+        new_sso_settings = {
+            "google_client_id": "new_google_client_id",
+            "google_client_secret": "new_google_client_secret",
+            "microsoft_client_id": "new_microsoft_client_id",
+            "microsoft_client_secret": "new_microsoft_client_secret",
+            "proxy_base_url": "https://newexample.com",
+            "user_email": "newadmin@example.com",
+        }
+
+        response = client.patch("/update/sso_settings", json=new_sso_settings)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check response structure
+        assert data["status"] == "success"
+        assert "settings" in data
+
+        # Verify settings were updated
+        settings = data["settings"]
+        assert settings["google_client_id"] == new_sso_settings["google_client_id"]
+        assert (
+            settings["google_client_secret"] == new_sso_settings["google_client_secret"]
+        )
+        assert (
+            settings["microsoft_client_id"] == new_sso_settings["microsoft_client_id"]
+        )
+        assert (
+            settings["microsoft_client_secret"]
+            == new_sso_settings["microsoft_client_secret"]
+        )
+        assert settings["proxy_base_url"] == new_sso_settings["proxy_base_url"]
+        assert settings["user_email"] == new_sso_settings["user_email"]
+
+        # Verify the config was updated
+        updated_config = mock_proxy_config["config"]
+        assert (
+            updated_config["environment_variables"]["GOOGLE_CLIENT_ID"]
+            != new_sso_settings["google_client_id"]
+        )
+        assert (
+            updated_config["environment_variables"]["GOOGLE_CLIENT_SECRET"]
+            != new_sso_settings["google_client_secret"]
+        )
+        assert (
+            updated_config["general_settings"]["proxy_admin_email"]
+            == new_sso_settings["user_email"]
+        )
+
+        # Verify save_config was called exactly once
+        assert mock_proxy_config["save_call_count"]() == 1
+
+    def test_update_sso_settings_with_null_values_clears_env_vars(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test that updating SSO settings with null values clears environment variables"""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+
+        # First, verify we have existing environment variables
+        initial_config = mock_proxy_config["config"]
+        assert "GOOGLE_CLIENT_ID" in initial_config["environment_variables"]
+        assert "MICROSOFT_CLIENT_ID" in initial_config["environment_variables"]
+
+        # Set some initial environment variables for runtime testing
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "test_existing_google_id")
+        monkeypatch.setenv("MICROSOFT_CLIENT_ID", "test_existing_microsoft_id")
+
+        # Send SSO settings with null values to clear them
+        clear_sso_settings = {
+            "google_client_id": None,
+            "google_client_secret": None,
+            "microsoft_client_id": None,
+            "microsoft_client_secret": None,
+            "microsoft_tenant": None,
+            "generic_client_id": None,
+            "generic_client_secret": None,
+            "generic_authorization_endpoint": None,
+            "generic_token_endpoint": None,
+            "generic_userinfo_endpoint": None,
+            "proxy_base_url": None,
+            "user_email": None,
+            "sso_provider": None,
+        }
+
+        response = client.patch("/update/sso_settings", json=clear_sso_settings)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+
+        # Verify that environment variables were cleared from config
+        updated_config = mock_proxy_config["config"]
+
+        # These should be removed from environment_variables
+        assert "GOOGLE_CLIENT_ID" not in updated_config["environment_variables"]
+        assert "GOOGLE_CLIENT_SECRET" not in updated_config["environment_variables"]
+        assert "MICROSOFT_CLIENT_ID" not in updated_config["environment_variables"]
+        assert "MICROSOFT_CLIENT_SECRET" not in updated_config["environment_variables"]
+        assert "MICROSOFT_TENANT" not in updated_config["environment_variables"]
+        assert "PROXY_BASE_URL" not in updated_config["environment_variables"]
+
+        # Verify that runtime environment variables were cleared
+        assert "GOOGLE_CLIENT_ID" not in os.environ
+        assert "MICROSOFT_CLIENT_ID" not in os.environ
+
+        # Verify user_email was cleared from general_settings
+        assert updated_config["general_settings"].get("proxy_admin_email") is None
+
+        # Verify save_config was called
+        assert mock_proxy_config["save_call_count"]() == 1
+
+    def test_update_sso_settings_with_empty_strings_clears_env_vars(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test that updating SSO settings with empty strings also clears environment variables"""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+
+        # Set some initial environment variables for runtime testing
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "test_existing_google_id")
+        monkeypatch.setenv("MICROSOFT_CLIENT_SECRET", "test_existing_microsoft_secret")
+
+        # Send SSO settings with empty strings to clear them
+        clear_sso_settings = {
+            "google_client_id": "",
+            "google_client_secret": "",
+            "microsoft_client_secret": "",
+            "proxy_base_url": "",
+            "user_email": "",
+        }
+
+        response = client.patch("/update/sso_settings", json=clear_sso_settings)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+
+        # Verify that environment variables with empty strings were cleared from config
+        updated_config = mock_proxy_config["config"]
+        assert "GOOGLE_CLIENT_ID" not in updated_config["environment_variables"]
+        assert "GOOGLE_CLIENT_SECRET" not in updated_config["environment_variables"]
+        assert "MICROSOFT_CLIENT_SECRET" not in updated_config["environment_variables"]
+        assert "PROXY_BASE_URL" not in updated_config["environment_variables"]
+
+        # Verify that runtime environment variables were cleared
+        assert "GOOGLE_CLIENT_ID" not in os.environ
+        assert "MICROSOFT_CLIENT_SECRET" not in os.environ
+
+        # Verify user_email was cleared from general_settings
+        assert updated_config["general_settings"].get("proxy_admin_email") is None
+
+        # Verify save_config was called
+        assert mock_proxy_config["save_call_count"]() == 1
+
+    def test_update_sso_settings_mixed_null_and_valid_values(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test updating SSO settings with mix of null and valid values"""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+
+        # Set some initial environment variables
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "old_google_id")
+        monkeypatch.setenv("MICROSOFT_CLIENT_ID", "old_microsoft_id")
+        monkeypatch.setenv("PROXY_BASE_URL", "old_proxy_url")
+
+        # Send mixed SSO settings - some null, some valid
+        mixed_sso_settings = {
+            "google_client_id": "new_google_client_id",  # Valid value
+            "google_client_secret": None,  # Null to clear
+            "microsoft_client_id": None,  # Null to clear
+            "microsoft_client_secret": "new_microsoft_secret",  # Valid value
+            "proxy_base_url": "https://newproxy.com",  # Valid value
+            "user_email": None,  # Null to clear
+        }
+
+        response = client.patch("/update/sso_settings", json=mixed_sso_settings)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+
+        # Verify the config was updated correctly
+        updated_config = mock_proxy_config["config"]
+
+        # Valid values should be set
+        assert (
+            updated_config["environment_variables"]["GOOGLE_CLIENT_ID"]
+            != "new_google_client_id"
+        )  # Encrypted
+        assert (
+            updated_config["environment_variables"]["MICROSOFT_CLIENT_SECRET"]
+            != "new_microsoft_secret"
+        )  # Encrypted
+        assert (
+            updated_config["environment_variables"]["PROXY_BASE_URL"]
+            != "https://newproxy.com"
+        )  # Encrypted
+
+        # Null values should be cleared
+        assert "GOOGLE_CLIENT_SECRET" not in updated_config["environment_variables"]
+        assert "MICROSOFT_CLIENT_ID" not in updated_config["environment_variables"]
+
+        # Verify runtime environment variables
+        assert os.environ.get("GOOGLE_CLIENT_ID") == "new_google_client_id"
+        assert os.environ.get("MICROSOFT_CLIENT_SECRET") == "new_microsoft_secret"
+        assert "GOOGLE_CLIENT_SECRET" not in os.environ
+        assert "MICROSOFT_CLIENT_ID" not in os.environ
+
+        # Verify user_email was cleared from general_settings
+        assert updated_config["general_settings"].get("proxy_admin_email") is None
+
+        # Verify save_config was called
+        assert mock_proxy_config["save_call_count"]() == 1
+
+    def test_update_sso_settings_ui_access_mode_handling(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test that ui_access_mode is handled correctly in general_settings"""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+
+        # Test setting ui_access_mode
+        sso_settings_with_ui_mode = {
+            "ui_access_mode": "admin_only",
+            "user_email": "admin@test.com",
+        }
+
+        response = client.patch("/update/sso_settings", json=sso_settings_with_ui_mode)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+
+        # Verify ui_access_mode was set in general_settings (not environment_variables)
+        updated_config = mock_proxy_config["config"]
+        assert updated_config["general_settings"]["ui_access_mode"] == "admin_only"
+        assert (
+            updated_config["general_settings"]["proxy_admin_email"] == "admin@test.com"
+        )
+
+        # Verify ui_access_mode is NOT in environment_variables
+        assert "ui_access_mode" not in updated_config["environment_variables"]
+
+        # Test clearing ui_access_mode
+        clear_ui_mode = {"ui_access_mode": None, "user_email": None}
+
+        response = client.patch("/update/sso_settings", json=clear_ui_mode)
+
+        assert response.status_code == 200
+
+        # Verify ui_access_mode and user_email were cleared
+        updated_config = mock_proxy_config["config"]
+        assert updated_config["general_settings"].get("ui_access_mode") is None
+        assert updated_config["general_settings"].get("proxy_admin_email") is None
+
+        # Verify save_config was called twice (once for each update)
+        assert mock_proxy_config["save_call_count"]() == 2
+
+    def test_get_ui_theme_settings(self, mock_proxy_config):
+        """Test getting UI theme settings without authentication"""
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "values" in data
+        assert "field_schema" in data
+
+    def test_update_ui_theme_settings(self, mock_proxy_config, mock_auth, monkeypatch):
+        """Test updating UI theme settings"""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        new_theme = {"logo_url": "https://example.com/new-logo.png"}
+
+        response = client.patch("/update/ui_theme_settings", json=new_theme)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["status"] == "success"
+        assert data["theme_config"]["logo_url"] == "https://example.com/new-logo.png"
+
+        # Verify config was updated
+        updated_config = mock_proxy_config["config"]
+        assert "UI_LOGO_PATH" in updated_config["environment_variables"]
         assert mock_proxy_config["save_call_count"]() == 1

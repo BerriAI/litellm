@@ -3,16 +3,11 @@ Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
 import asyncio
-import json
-import time
-import traceback
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import STREAM_SSE_DATA_PREFIX
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
@@ -21,85 +16,15 @@ from litellm.proxy.common_request_processing import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-from litellm.proxy.utils import ProxyLogging
+from litellm.types.utils import TokenCountResponse
 
 router = APIRouter()
-
-
-def return_anthropic_chunk(chunk: Any) -> str:
-    """
-    Helper function to format streaming chunks for Anthropic API format
-
-    Args:
-        chunk: A string or dictionary to be returned in SSE format
-
-    Returns:
-        str: A properly formatted SSE chunk string
-    """
-    if isinstance(chunk, dict):
-        # Use safe_dumps for proper JSON serialization with circular reference detection
-        chunk_str = safe_dumps(chunk)
-        return f"{STREAM_SSE_DATA_PREFIX}{chunk_str}\n\n"
-    else:
-        return chunk
-
-
-async def async_data_generator_anthropic(
-    response,
-    user_api_key_dict: UserAPIKeyAuth,
-    request_data: dict,
-    proxy_logging_obj: ProxyLogging,
-):
-    verbose_proxy_logger.debug("inside generator")
-    try:
-        time.time()
-        async for chunk in response:
-            verbose_proxy_logger.debug(
-                "async_data_generator: received streaming chunk - {}".format(chunk)
-            )
-            ### CALL HOOKS ### - modify outgoing data
-            chunk = await proxy_logging_obj.async_post_call_streaming_hook(
-                user_api_key_dict=user_api_key_dict, response=chunk
-            )
-
-            # Format chunk using helper function
-            yield return_anthropic_chunk(chunk)
-    except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=request_data,
-        )
-        verbose_proxy_logger.debug(
-            f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
-        )
-
-        if isinstance(e, HTTPException):
-            raise e
-        else:
-            error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
-
-        proxy_exception = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
-        )
-        error_returned = json.dumps({"error": proxy_exception.to_dict()})
-        yield f"{STREAM_SSE_DATA_PREFIX}{error_returned}\n\n"
 
 
 @router.post(
     "/v1/messages",
     tags=["[beta] Anthropic `/v1/messages`"],
     dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
 )
 async def anthropic_response(  # noqa: PLR0915
     fastapi_response: Response,
@@ -165,6 +90,17 @@ async def anthropic_response(  # noqa: PLR0915
             user_api_key_dict=user_api_key_dict, data=data, call_type="text_completion"
         )
 
+        tasks = []
+        tasks.append(
+            proxy_logging_obj.during_call_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=ProxyBaseLLMRequestProcessing._get_pre_call_type(
+                    route_type="anthropic_messages"  # type: ignore
+                ),
+            )
+        )
+
         ### ROUTE THE REQUESTs ###
         router_model_names = llm_router.model_names if llm_router is not None else []
 
@@ -172,23 +108,21 @@ async def anthropic_response(  # noqa: PLR0915
         if (
             llm_router is not None and data["model"] in router_model_names
         ):  # model in router model list
-            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
+            llm_coro = llm_router.aanthropic_messages(**data)
         elif (
             llm_router is not None
             and llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):  # model set in model_group_alias
-            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
+            llm_coro = llm_router.aanthropic_messages(**data)
         elif (
             llm_router is not None and data["model"] in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
-            llm_response = asyncio.create_task(
-                llm_router.aanthropic_messages(**data, specific_deployment=True)
-            )
+            llm_coro = llm_router.aanthropic_messages(**data, specific_deployment=True)
         elif (
-            llm_router is not None and data["model"] in llm_router.get_model_ids()
+            llm_router is not None and llm_router.has_model_id(data["model"])
         ):  # model in router model list
-            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
+            llm_coro = llm_router.aanthropic_messages(**data)
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
@@ -197,9 +131,9 @@ async def anthropic_response(  # noqa: PLR0915
                 or len(llm_router.pattern_router.patterns) > 0
             )
         ):  # model in router deployments, calling a specific deployment on the router
-            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
+            llm_coro = llm_router.aanthropic_messages(**data)
         elif user_model is not None:  # `litellm --model <your-model-name>`
-            llm_response = asyncio.create_task(litellm.anthropic_messages(**data))
+            llm_coro = litellm.anthropic_messages(**data)
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -209,8 +143,16 @@ async def anthropic_response(  # noqa: PLR0915
                 },
             )
 
-        # Await the llm_response task
-        response = await llm_response
+        tasks.append(llm_coro)
+
+        # wait for call to end
+        llm_responses = asyncio.gather(
+            *tasks
+        )  # run the moderation check in parallel to the actual llm api call
+
+        responses = await llm_responses
+
+        response = responses[1]
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
@@ -243,11 +185,13 @@ async def anthropic_response(  # noqa: PLR0915
         if (
             "stream" in data and data["stream"] is True
         ):  # use generate_responses to stream responses
-            selected_data_generator = async_data_generator_anthropic(
-                response=response,
-                user_api_key_dict=user_api_key_dict,
-                request_data=data,
-                proxy_logging_obj=proxy_logging_obj,
+            selected_data_generator = (
+                ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                    response=response,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=data,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
             )
 
             return await create_streaming_response(
@@ -256,7 +200,12 @@ async def anthropic_response(  # noqa: PLR0915
                 headers=dict(fastapi_response.headers),
             )
 
-        verbose_proxy_logger.info("\nResponse from Litellm:\n{}".format(response))
+        ### CALL HOOKS ### - modify outgoing data
+        response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response # type: ignore
+        )
+
+        verbose_proxy_logger.debug("\nResponse from Litellm:\n{}".format(response))
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -273,4 +222,89 @@ async def anthropic_response(  # noqa: PLR0915
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
+        )
+
+
+@router.post(
+    "/v1/messages/count_tokens",
+    tags=["[beta] Anthropic Messages Token Counting"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def count_tokens(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # Used for auth
+):
+    """
+    Count tokens for Anthropic Messages API format.
+    
+    This endpoint follows the Anthropic Messages API token counting specification.
+    It accepts the same parameters as the /v1/messages endpoint but returns
+    token counts instead of generating a response.
+    
+    Example usage:
+    ```
+    curl -X POST "http://localhost:4000/v1/messages/count_tokens?beta=true" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer your-key" \
+      -d '{
+        "model": "claude-3-sonnet-20240229",
+        "messages": [{"role": "user", "content": "Hello Claude!"}]
+      }'
+    ```
+    
+    Returns: {"input_tokens": <number>}
+    """
+    from litellm.proxy.proxy_server import token_counter as internal_token_counter
+    
+    try:
+        request_data = await _read_request_body(request=request)
+        data: dict = {**request_data}
+        
+        # Extract required fields
+        model_name = data.get("model")
+        messages = data.get("messages", [])
+        
+        if not model_name:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "model parameter is required"}
+            )
+        
+        if not messages:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "messages parameter is required"}
+            )
+        
+        # Create TokenCountRequest for the internal endpoint
+        from litellm.proxy._types import TokenCountRequest
+        
+        token_request = TokenCountRequest(
+            model=model_name,
+            messages=messages
+        )
+        
+        # Call the internal token counter function with direct request flag set to False
+        token_response = await internal_token_counter(
+            request=token_request,
+            call_endpoint=True,
+        )
+        _token_response_dict: dict = {}
+        if isinstance(token_response, TokenCountResponse):
+            _token_response_dict = token_response.model_dump()
+        elif isinstance(token_response, dict):
+            _token_response_dict = token_response
+    
+        # Convert the internal response to Anthropic API format
+        return {"input_tokens": _token_response_dict.get("total_tokens", 0)}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(str(e))
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Internal server error: {str(e)}"}
         )

@@ -7,7 +7,6 @@ import json
 import time
 import types
 import urllib.parse
-import uuid
 from functools import partial
 from typing import (
     Any,
@@ -26,6 +25,7 @@ import httpx  # type: ignore
 
 import litellm
 from litellm import verbose_logger
+from litellm._uuid import uuid
 from litellm.caching.caching import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -498,9 +498,9 @@ class BedrockLLM(BaseAWSLLM):
                             content=None,
                         )
                         model_response.choices[0].message = _message  # type: ignore
-                        model_response._hidden_params[
-                            "original_response"
-                        ] = outputText  # allow user to access raw anthropic tool calling response
+                        model_response._hidden_params["original_response"] = (
+                            outputText  # allow user to access raw anthropic tool calling response
+                        )
                     if (
                         _is_function_call is True
                         and stream is not None
@@ -808,9 +808,9 @@ class BedrockLLM(BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params[
-                        "stream"
-                    ] = True  # cohere requires stream = True in inference params
+                    inference_params["stream"] = (
+                        True  # cohere requires stream = True in inference params
+                    )
                 data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "anthropic":
             if model.startswith("anthropic.claude-3"):
@@ -831,7 +831,7 @@ class BedrockLLM(BaseAWSLLM):
                     model=model, messages=messages, custom_llm_provider="anthropic_xml"
                 )  # type: ignore
                 ## LOAD CONFIG
-                config = litellm.AmazonAnthropicClaude3Config.get_config()
+                config = litellm.AmazonAnthropicClaudeConfig.get_config()
                 for k, v in config.items():
                     if (
                         k not in inference_params
@@ -1225,6 +1225,7 @@ class AWSEventStreamDecoder:
         self.model = model
         self.parser = EventStreamJSONParser()
         self.content_blocks: List[ContentBlockDeltaEvent] = []
+        self.tool_calls_index: Optional[int] = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -1314,6 +1315,11 @@ class AWSEventStreamDecoder:
                         response_tool_name = get_bedrock_tool_name(
                             response_tool_name=_response_tool_name
                         )
+                        self.tool_calls_index = (
+                            0
+                            if self.tool_calls_index is None
+                            else self.tool_calls_index + 1
+                        )
                         tool_use = {
                             "id": start_obj["toolUse"]["toolUseId"],
                             "type": "function",
@@ -1321,7 +1327,7 @@ class AWSEventStreamDecoder:
                                 "name": response_tool_name,
                                 "arguments": "",
                             },
-                            "index": index,
+                            "index": self.tool_calls_index,
                         }
                     elif (
                         "reasoningContent" in start_obj
@@ -1346,7 +1352,11 @@ class AWSEventStreamDecoder:
                             "name": None,
                             "arguments": delta_obj["toolUse"]["input"],
                         },
-                        "index": index,
+                        "index": (
+                            self.tool_calls_index
+                            if self.tool_calls_index is not None
+                            else index
+                        ),
                     }
                 elif "reasoningContent" in delta_obj:
                     provider_specific_fields = {
@@ -1376,7 +1386,11 @@ class AWSEventStreamDecoder:
                             "name": None,
                             "arguments": "{}",
                         },
-                        "index": chunk_data["contentBlockIndex"],
+                        "index": (
+                            self.tool_calls_index
+                            if self.tool_calls_index is not None
+                            else index
+                        ),
                     }
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
@@ -1438,7 +1452,7 @@ class AWSEventStreamDecoder:
         ######### /bedrock/invoke nova mappings ###############
         elif "contentBlockDelta" in chunk_data:
             # when using /bedrock/invoke/nova, the chunk_data is nested under "contentBlockDelta"
-            _chunk_data = chunk_data.get("contentBlockDelta", None)
+            _chunk_data = chunk_data.get("contentBlockDelta", {})
             return self.converse_chunk_parser(chunk_data=_chunk_data)
         ######## bedrock.mistral mappings ###############
         elif "outputs" in chunk_data:

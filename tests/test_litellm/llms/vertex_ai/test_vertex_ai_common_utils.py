@@ -237,11 +237,7 @@ def test_build_vertex_schema():
                     },
                     "recursion_limit": {"type": "integer"},
                     "configurable": {"type": "object"},
-                    "run_id": {
-                        "anyOf": [
-                            {"format": "uuid", "type": "string", "nullable": True}
-                        ]
-                    },
+                    "run_id": {"anyOf": [{"type": "string", "nullable": True}]},
                 },
                 "type": "object",
             },
@@ -562,3 +558,302 @@ def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
 
     assert endpoint == expected_endpoint
     assert url == expected_url
+
+
+@pytest.mark.parametrize(
+    "supported_regions, expected_result",
+    [
+        (None, False),  # get_supported_regions returns None
+        ([], False),  # empty list, no global region
+        (["us-central1"], False),  # only regional, no global
+        (["global"], True),  # only global region
+        (["global", "us-central1"], True),  # global and other regions
+        (
+            ["us-central1", "global", "europe-west1"],
+            True,
+        ),  # global among multiple regions
+    ],
+)
+def test_is_global_only_vertex_model(supported_regions, expected_result):
+    """Test is_global_only_vertex_model with various supported regions scenarios"""
+    from litellm.llms.vertex_ai.common_utils import is_global_only_vertex_model
+
+    with patch("litellm.utils.get_supported_regions") as mock_get_supported_regions:
+        mock_get_supported_regions.return_value = supported_regions
+
+        result = is_global_only_vertex_model("test-model")
+
+        assert result == expected_result
+        mock_get_supported_regions.assert_called_once_with(
+            model="test-model", custom_llm_provider="vertex_ai"
+        )
+
+
+@pytest.mark.parametrize(
+    "model_is_global_only, vertex_region, expected_region",
+    [
+        (True, None, "global"),  # Global-only model with no region specified
+        (True, "us-central1", "global"),  # Global-only model overrides specified region
+        (True, "europe-west1", "global"),  # Global-only model overrides any region
+        (False, None, "us-central1"),  # Non-global model defaults to us-central1
+        (
+            False,
+            "europe-west1",
+            "europe-west1",
+        ),  # Non-global model uses specified region
+        (False, "us-east1", "us-east1"),  # Non-global model uses specified region
+    ],
+)
+def test_get_vertex_region_global_only_model(
+    model_is_global_only, vertex_region, expected_region
+):
+    """Test get_vertex_region ensures global-only models default to 'global' region"""
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    vertex_base = VertexBase()
+
+    with patch(
+        "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model"
+    ) as mock_is_global_only:
+        mock_is_global_only.return_value = model_is_global_only
+
+        result = vertex_base.get_vertex_region(
+            vertex_region=vertex_region, model="test-model"
+        )
+
+        assert result == expected_region
+        mock_is_global_only.assert_called_once_with("test-model")
+
+
+def test_vertex_filter_format_uri():
+    import json
+
+    from litellm.llms.vertex_ai.common_utils import filter_schema_fields
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "format": "uri",
+                "description": "The URL to fetch content from",
+            },
+            "prompt": {
+                "type": "string",
+                "description": "The prompt to run on the fetched content",
+            },
+        },
+        "required": ["url", "prompt"],
+        "$schema": "http://json-schema.org/draft-07/schema#",
+    }
+    valid_schema_fields = {
+        "minLength",
+        "nullable",
+        "maxItems",
+        "required",
+        "default",
+        "items",
+        "propertyOrdering",
+        "maximum",
+        "properties",
+        "anyOf",
+        "description",
+        "minProperties",
+        "minimum",
+        "minItems",
+        "maxProperties",
+        "title",
+        "pattern",
+        "example",
+        "format",
+        "enum",
+        "maxLength",
+        "type",
+    }
+
+    new_parameters = filter_schema_fields(
+        schema_dict=parameters,
+        valid_fields=valid_schema_fields,
+    )
+
+    assert "uri" not in json.dumps(new_parameters)
+
+def test_convert_schema_types_type_array_conversion():
+    """
+    Test _convert_schema_types function handles type arrays and case conversion.
+    
+    This test verifies the fix for the issue where type arrays like ["string", "number"] 
+    would raise an exception in Vertex AI schema validation.
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/14091
+    """
+    from litellm.llms.vertex_ai.common_utils import _convert_schema_types
+
+    # Input: OpenAI-style schema with type array (the problematic case)
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "studio": {
+                "type": ["string", "number"],
+                "description": "The studio ID or name"
+            }
+        },
+        "required": ["studio"],
+        "additionalProperties": False,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+
+    # Expected output: Vertex AI compatible schema with anyOf and uppercase types
+    expected_output = {
+        "type": "object",
+        "properties": {
+            "studio": {
+                "anyOf": [
+                    {"type": "string"}, 
+                    {"type": "number"}
+                ],
+                "description": "The studio ID or name"
+            }
+        },
+        "required": ["studio"],
+        "additionalProperties": False,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+
+    # Apply the transformation
+    _convert_schema_types(input_schema)
+
+    # Verify the transformation
+    assert input_schema == expected_output
+
+    # Verify specific transformations:
+    # 1. Root level type converted to uppercase
+    assert input_schema["type"] == "object"
+
+    # 2. Type array converted to anyOf format
+    assert "anyOf" in input_schema["properties"]["studio"]
+    assert "type" not in input_schema["properties"]["studio"]
+
+    # 3. Individual types in anyOf are uppercase
+    anyof_types = input_schema["properties"]["studio"]["anyOf"]
+    assert anyof_types[0]["type"] == "string"
+    assert anyof_types[1]["type"] == "number"
+
+    # 4. Other properties preserved
+    assert input_schema["properties"]["studio"]["description"] == "The studio ID or name"
+    assert input_schema["required"] == ["studio"]
+
+
+def test_fix_enum_empty_strings():
+    """
+    Test _fix_enum_empty_strings function replaces empty strings with None in enum arrays.
+    
+    This test verifies the fix for the issue where Gemini rejects tool definitions 
+    with empty strings in enum values, causing API failures.
+
+    Relevant issue: Gemini does not accept empty strings in enum values
+    """
+    from litellm.llms.vertex_ai.common_utils import _fix_enum_empty_strings
+
+    # Input: Schema with empty string in enum (the problematic case)
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "user_agent_type": {
+                "enum": ["", "desktop", "mobile", "tablet"],
+                "type": "string",
+                "description": "Device type for user agent"
+            }
+        },
+        "required": ["user_agent_type"]
+    }
+
+    # Expected output: Empty strings replaced with None
+    expected_output = {
+        "type": "object", 
+        "properties": {
+            "user_agent_type": {
+                "enum": [None, "desktop", "mobile", "tablet"],
+                "type": "string",
+                "description": "Device type for user agent"
+            }
+        },
+        "required": ["user_agent_type"]
+    }
+
+    # Apply the transformation
+    _fix_enum_empty_strings(input_schema)
+
+    # Verify the transformation
+    assert input_schema == expected_output
+
+    # Verify specific transformations:
+    # 1. Empty string replaced with None
+    enum_values = input_schema["properties"]["user_agent_type"]["enum"]
+    assert "" not in enum_values
+    assert None in enum_values
+
+    # 2. Other enum values preserved
+    assert "desktop" in enum_values
+    assert "mobile" in enum_values
+    assert "tablet" in enum_values
+
+    # 3. Other properties preserved
+    assert input_schema["properties"]["user_agent_type"]["type"] == "string"
+    assert input_schema["properties"]["user_agent_type"]["description"] == "Device type for user agent"
+
+
+def test_get_token_url():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexLLM,
+    )
+
+    vertex_llm = VertexLLM()
+    vertex_ai_project = "pathrise-convert-1606954137718"
+    vertex_ai_location = "us-central1"
+    vertex_credentials = ""
+
+    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
+        optional_params={"cached_content": "hi"}
+    )
+
+    _, url = vertex_llm._get_token_and_url(
+        auth_header=None,
+        vertex_project=vertex_ai_project,
+        vertex_location=vertex_ai_location,
+        vertex_credentials=vertex_credentials,
+        gemini_api_key="",
+        custom_llm_provider="vertex_ai_beta",
+        should_use_v1beta1_features=should_use_v1beta1_features,
+        api_base=None,
+        model="",
+        stream=False,
+    )
+
+    print("url=", url)
+
+
+
+    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
+        optional_params={"temperature": 0.1}
+    )
+
+    _, url = vertex_llm._get_token_and_url(
+        auth_header=None,
+        vertex_project=vertex_ai_project,
+        vertex_location=vertex_ai_location,
+        vertex_credentials=vertex_credentials,
+        gemini_api_key="",
+        custom_llm_provider="vertex_ai_beta",
+        should_use_v1beta1_features=should_use_v1beta1_features,
+        api_base=None,
+        model="",
+        stream=False,
+    )
+
+    print("url for normal request", url)
+
+    assert "v1beta1" not in url
+    assert "/v1/" in url
+
+    pass

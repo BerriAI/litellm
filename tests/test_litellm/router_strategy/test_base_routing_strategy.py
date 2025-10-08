@@ -96,8 +96,13 @@ async def test_push_in_memory_increments_to_redis(base_strategy, mock_dual_cache
 
 @pytest.mark.asyncio
 async def test_sync_in_memory_spend_with_redis(base_strategy, mock_dual_cache):
+    from litellm.types.caching import RedisPipelineIncrementOperation
+
     # Setup test data
     base_strategy.in_memory_keys_to_update = {"key1"}
+    base_strategy.redis_increment_operation_queue = [
+        RedisPipelineIncrementOperation(key="key1", increment_value=10, ttl=3600),
+    ]
 
     # Mock the in-memory cache batch get responses for before snapshot
     in_memory_before_future: asyncio.Future[List[str]] = asyncio.Future()
@@ -108,8 +113,8 @@ async def test_sync_in_memory_spend_with_redis(base_strategy, mock_dual_cache):
 
     # Mock Redis batch get response
     redis_future: asyncio.Future[Dict[str, str]] = asyncio.Future()
-    redis_future.set_result({"key1": "15.0"})  # Redis values
-    mock_dual_cache.redis_cache.async_batch_get_cache.return_value = redis_future
+    redis_future.set_result([15.0])  # Redis values
+    mock_dual_cache.redis_cache.async_increment_pipeline.return_value = redis_future
 
     # Mock in-memory get for after snapshot
     in_memory_after_future: asyncio.Future[Optional[str]] = asyncio.Future()
@@ -120,18 +125,9 @@ async def test_sync_in_memory_spend_with_redis(base_strategy, mock_dual_cache):
 
     await base_strategy._sync_in_memory_spend_with_redis()
 
-    # Verify Redis batch get was called with correct keys
-    key_list = mock_dual_cache.redis_cache.async_batch_get_cache.call_args.kwargs[
-        "key_list"
-    ]
-    assert sorted(key_list) == sorted(["key1"])
-
-    # Verify in-memory cache was updated with merged values
-    # For key1: redis_val(15.0) + delta(8.0 - 5.0) = 18.0
-    assert mock_dual_cache.in_memory_cache.async_set_cache.call_count == 1
-
     # Verify the final merged values
     set_cache_calls = mock_dual_cache.in_memory_cache.async_set_cache.call_args_list
+    print(f"set_cache_calls: {set_cache_calls}")
     assert any(
         call.kwargs["key"] == "key1" and float(call.kwargs["value"]) == 18.0
         for call in set_cache_calls

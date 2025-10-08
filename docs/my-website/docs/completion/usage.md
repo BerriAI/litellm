@@ -26,6 +26,7 @@ response = completion(
 
 print(response.usage)
 ```
+> **Note:** LiteLLM supports endpoint bridging—if a model does not natively support a requested endpoint, LiteLLM will automatically route the call to the correct supported endpoint (such as bridging `/chat/completions` to `/responses` or vice versa) based on the model's `mode`set in `model_prices_and_context_window`.
 
 ## Streaming Usage
 

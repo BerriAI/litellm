@@ -1,6 +1,7 @@
-import uuid
-from typing import Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Union
 
+from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LiteLLM_ObjectPermissionTable,
@@ -13,15 +14,60 @@ from litellm.proxy._types import (
 from litellm.proxy.utils import PrismaClient
 
 
+def _prepare_mcp_server_data(
+    data: Union[NewMCPServerRequest, UpdateMCPServerRequest],
+) -> Dict[str, Any]:
+    """
+    Helper function to prepare MCP server data for database operations.
+    Handles JSON field serialization for mcp_info and env fields.
+
+    Args:
+        data: NewMCPServerRequest or UpdateMCPServerRequest object
+
+    Returns:
+        Dict with properly serialized JSON fields
+    """
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+    # Convert model to dict
+    data_dict = data.model_dump(exclude_none=True)
+    # Ensure alias is always present in the dict (even if None)
+    if "alias" not in data_dict:
+        data_dict["alias"] = getattr(data, "alias", None)
+
+    # Handle mcp_info serialization
+    if data.mcp_info is not None:
+        data_dict["mcp_info"] = safe_dumps(data.mcp_info)
+
+    # Handle env serialization
+    if data.env is not None:
+        data_dict["env"] = safe_dumps(data.env)
+
+    # mcp_access_groups is already List[str], no serialization needed
+
+    return data_dict
+
+
 async def get_all_mcp_servers(
     prisma_client: PrismaClient,
 ) -> List[LiteLLM_MCPServerTable]:
     """
     Returns all of the mcp servers from the db
     """
-    mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
+    try:
+        mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
 
-    return mcp_servers
+        return [
+            LiteLLM_MCPServerTable(**mcp_server.model_dump())
+            for mcp_server in mcp_servers
+        ]
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "litellm.proxy._experimental.mcp_server.db.py::get_all_mcp_servers - {}".format(
+                str(e)
+            )
+        )
+        return []
 
 
 async def get_mcp_server(
@@ -30,12 +76,12 @@ async def get_mcp_server(
     """
     Returns the matching mcp server from the db iff exists
     """
-    mcp_server: Optional[
-        LiteLLM_MCPServerTable
-    ] = await prisma_client.db.litellm_mcpservertable.find_unique(
-        where={
-            "server_id": server_id,
-        }
+    mcp_server: Optional[LiteLLM_MCPServerTable] = (
+        await prisma_client.db.litellm_mcpservertable.find_unique(
+            where={
+                "server_id": server_id,
+            }
+        )
     )
     return mcp_server
 
@@ -46,14 +92,18 @@ async def get_mcp_servers(
     """
     Returns the matching mcp servers from the db with the server_ids
     """
-    mcp_servers: List[
-        LiteLLM_MCPServerTable
-    ] = await prisma_client.db.litellm_mcpservertable.find_many(
-        where={
-            "server_id": {"in": server_ids},
-        }
+    _mcp_servers: List[LiteLLM_MCPServerTable] = (
+        await prisma_client.db.litellm_mcpservertable.find_many(
+            where={
+                "server_id": {"in": server_ids},
+            }
+        )
     )
-    return mcp_servers
+    final_mcp_servers: List[LiteLLM_MCPServerTable] = []
+    for _mcp_server in _mcp_servers:
+        final_mcp_servers.append(LiteLLM_MCPServerTable(**_mcp_server.model_dump()))
+
+    return final_mcp_servers
 
 
 async def get_mcp_servers_by_verificationtoken(
@@ -218,14 +268,18 @@ async def create_mcp_server(
     if data.server_id is None:
         data.server_id = str(uuid.uuid4())
 
-    mcp_server_record = await prisma_client.db.litellm_mcpservertable.create(
-        data={
-            **data.model_dump(),
-            "created_by": touched_by,
-            "updated_by": touched_by,
-        }
+    # Use helper to prepare data with proper JSON serialization
+    data_dict = _prepare_mcp_server_data(data)
+
+    # Add audit fields
+    data_dict["created_by"] = touched_by
+    data_dict["updated_by"] = touched_by
+
+    new_mcp_server = await prisma_client.db.litellm_mcpservertable.create(
+        data=data_dict  # type: ignore
     )
-    return mcp_server_record
+
+    return new_mcp_server
 
 
 async def update_mcp_server(
@@ -234,14 +288,14 @@ async def update_mcp_server(
     """
     Update a new mcp server record in the db
     """
-    mcp_server_record = await prisma_client.db.litellm_mcpservertable.update(
-        where={
-            "server_id": data.server_id,
-        },
-        data={
-            **data.model_dump(),
-            "created_by": touched_by,
-            "updated_by": touched_by,
-        },
+    # Use helper to prepare data with proper JSON serialization
+    data_dict = _prepare_mcp_server_data(data)
+
+    # Add audit fields
+    data_dict["updated_by"] = touched_by
+
+    updated_mcp_server = await prisma_client.db.litellm_mcpservertable.update(
+        where={"server_id": data.server_id}, data=data_dict  # type: ignore
     )
-    return mcp_server_record
+
+    return updated_mcp_server

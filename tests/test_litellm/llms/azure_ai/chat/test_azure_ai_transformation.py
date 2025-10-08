@@ -31,3 +31,37 @@ async def test_get_openai_compatible_provider_info():
     )
 
     assert custom_llm_provider == "azure"
+
+
+def test_azure_ai_validate_environment():
+    config = AzureAIStudioConfig()
+    headers = config.validate_environment(
+        headers={},
+        model="azure_ai/gpt-4o-mini",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+    )
+    assert headers["Content-Type"] == "application/json"
+
+
+def test_azure_ai_grok_stop_parameter_handling():
+    """
+    Test that Grok models properly handle stop parameter filtering in Azure AI Studio.
+    """
+    config = AzureAIStudioConfig()
+    
+    # Test Grok model detection
+    assert config._supports_stop_reason("grok-4-fast") == False
+    assert config._supports_stop_reason("grok-4") == False
+    assert config._supports_stop_reason("grok-3-mini") == False
+    assert config._supports_stop_reason("grok-code-fast") == False
+    assert config._supports_stop_reason("gpt-4") == True
+    
+    # Test supported parameters for Grok models
+    grok_params = config.get_supported_openai_params("grok-4-fast")
+    assert "stop" not in grok_params, "Grok models should not support stop parameter"
+    
+    # Test supported parameters for non-Grok models
+    gpt_params = config.get_supported_openai_params("gpt-4")
+    assert "stop" in gpt_params, "GPT models should support stop parameter"

@@ -1,10 +1,8 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.types.router import GenericLiteLLMParams
 
@@ -28,17 +26,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         Validate the environment for the request
         """
         if "Authorization" not in headers:
-            vertex_ai_project = (
-                optional_params.pop("vertex_project", None)
-                or optional_params.pop("vertex_ai_project", None)
-                or litellm.vertex_project
-                or get_secret_str("VERTEXAI_PROJECT")
-            )
-            vertex_credentials = (
-                optional_params.pop("vertex_credentials", None)
-                or optional_params.pop("vertex_ai_credentials", None)
-                or get_secret_str("VERTEXAI_CREDENTIALS")
-            )
+            vertex_ai_project = VertexBase.get_vertex_ai_project(litellm_params)
+            vertex_credentials = VertexBase.get_vertex_ai_credentials(litellm_params)
+            vertex_ai_location = VertexBase.get_vertex_ai_location(litellm_params)
 
             access_token, project_id = self._ensure_access_token(
                 credentials=vertex_credentials,
@@ -50,7 +40,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
             api_base = self.get_complete_vertex_url(
                 custom_api_base=api_base,
-                vertex_location=optional_params.pop("vertex_location", None),
+                vertex_location=vertex_ai_location,
                 vertex_project=vertex_ai_project,
                 project_id=project_id,
                 partner=VertexPartnerProvider.claude,
@@ -93,4 +83,8 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         )
 
         anthropic_messages_request["anthropic_version"] = "vertex-2023-10-16"
+
+        anthropic_messages_request.pop(
+            "model", None
+        )  # do not pass model in request body to vertex ai
         return anthropic_messages_request

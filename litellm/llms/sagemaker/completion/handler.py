@@ -626,7 +626,7 @@ class SagemakerLLM(BaseAWSLLM):
                 inference_params[k] = v
 
         #### HF EMBEDDING LOGIC
-        data = json.dumps({"text_inputs": input}).encode("utf-8")
+        data = json.dumps({"inputs": input}).encode("utf-8")
 
         ## LOGGING
         request_str = f"""

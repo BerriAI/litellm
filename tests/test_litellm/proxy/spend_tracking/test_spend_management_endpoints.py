@@ -18,7 +18,9 @@ import litellm
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.proxy_server import app, prisma_client
+from litellm.proxy.spend_tracking import spend_management_endpoints
 from litellm.router import Router
+from litellm.types.utils import BudgetConfig
 
 ignored_keys = [
     "request_id",
@@ -29,6 +31,20 @@ ignored_keys = [
     "endTime",
     "metadata.model_map_information",
     "metadata.usage_object",
+    "metadata.cold_storage_object_key",
+    "metadata.additional_usage_values.prompt_tokens_details.cache_creation_tokens",
+]
+
+MODEL_LIST = [
+    {
+        "model_name": "azure-gpt-4o",
+        "litellm_params": {
+            "model": "azure/gpt-4o-mini",
+            "mock_response": "Hello, world!",
+            "tags": ["default"],
+            "base_model": "gpt-4o-mini",
+        },
+    },
 ]
 
 
@@ -40,6 +56,19 @@ def client():
 @pytest.fixture(autouse=True)
 def add_anthropic_api_key_to_env(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-1234567890")
+
+
+@pytest.fixture
+def disable_budget_sync(monkeypatch):
+    """Disable periodic sync during tests"""
+
+    async def noop(*a, **k):
+        return None
+
+    monkeypatch.setattr(
+        "litellm.router_strategy.budget_limiter.RouterBudgetLimiting.periodic_sync_in_memory_spend_with_redis",
+        noop,
+    )
 
 
 @pytest.mark.asyncio
@@ -763,6 +792,7 @@ class TestSpendLogsPayload:
                     "response": "{}",
                     "proxy_server_request": "{}",
                     "status": "success",
+                    "mcp_namespaced_tool_name": None,
                 }
             )
 
@@ -855,6 +885,7 @@ class TestSpendLogsPayload:
                     "response": "{}",
                     "proxy_server_request": "{}",
                     "status": "success",
+                    "mcp_namespaced_tool_name": None,
                 }
             )
 
@@ -945,8 +976,12 @@ class TestSpendLogsPayload:
                     "response": "{}",
                     "proxy_server_request": "{}",
                     "status": "success",
+                    "mcp_namespaced_tool_name": None,
                 }
             )
+
+            print(f"payload: {payload}")
+            print(f"expected_payload: {expected_payload}")
 
             differences = _compare_nested_dicts(
                 payload, expected_payload, ignore_keys=ignored_keys
@@ -1079,3 +1114,302 @@ async def test_global_spend_keys_endpoint_limit_validation(client, monkeypatch):
     assert response.status_code == 422
     mock_query_raw.assert_not_called()
     mock_query_raw.reset_mock()
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
+    """Test the new summarize parameter in the /spend/logs endpoint"""
+    import datetime
+    from datetime import timedelta, timezone
+
+    # Mock spend logs data
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": (
+                datetime.datetime.now(timezone.utc) - timedelta(days=1)
+            ).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": (
+                datetime.datetime.now(timezone.utc) - timedelta(days=1)
+            ).isoformat(),
+            "model": "gpt-4",
+            "prompt_tokens": 200,
+            "completion_tokens": 100,
+            "total_tokens": 300,
+        },
+    ]
+
+    # Mock for unsummarized data (summarize=false)
+    class MockDB:
+        def __init__(self):
+            self.litellm_spendlogs = self
+
+        async def find_many(self, *args, **kwargs):
+            # Return individual log entries when summarize=false
+            return mock_spend_logs
+
+        async def group_by(self, *args, **kwargs):
+            # Return grouped data when summarize=true
+            # Simplified mock response for grouped data
+            yesterday = datetime.datetime.now(timezone.utc) - timedelta(days=1)
+            return [
+                {
+                    "api_key": "sk-test-key",
+                    "user": "test_user_1",
+                    "model": "gpt-3.5-turbo",
+                    "startTime": yesterday.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                    "_sum": {"spend": 0.05},
+                },
+                {
+                    "api_key": "sk-test-key",
+                    "user": "test_user_1",
+                    "model": "gpt-4",
+                    "startTime": yesterday.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                    "_sum": {"spend": 0.10},
+                },
+            ]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    # Apply the monkeypatch
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Set up test dates
+    start_date = (datetime.datetime.now(timezone.utc) - timedelta(days=2)).strftime(
+        "%Y-%m-%d"
+    )
+    end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # Test 1: summarize=false should return individual log entries
+    response = client.get(
+        "/spend/logs",
+        params={
+            "start_date": start_date,
+            "end_date": end_date,
+            "summarize": "false",
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Should return the raw log entries
+    assert isinstance(data, list)
+    assert len(data) == 2
+    assert data[0]["id"] == "log1"
+    assert data[1]["id"] == "log2"
+    assert data[0]["request_id"] == "req1"
+    assert data[1]["request_id"] == "req2"
+
+    # Test 2: summarize=true should return grouped data
+    response = client.get(
+        "/spend/logs",
+        params={
+            "start_date": start_date,
+            "end_date": end_date,
+            "summarize": "true",
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Should return grouped/summarized data
+    assert isinstance(data, list)
+    # The structure should be different - grouped by date with aggregated spend
+    assert "startTime" in data[0]
+    assert "spend" in data[0]
+    assert "users" in data[0]
+    assert "models" in data[0]
+
+    # Test 3: default behavior (no summarize parameter) should maintain backward compatibility
+    response = client.get(
+        "/spend/logs",
+        params={
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Should return grouped/summarized data (same as summarize=true)
+    assert isinstance(data, list)
+    assert "startTime" in data[0]
+    assert "spend" in data[0]
+    assert "users" in data[0]
+    assert "models" in data[0]
+
+
+@pytest.mark.asyncio
+async def test_view_spend_tags(client, monkeypatch):
+    """Test the /spend/tags endpoint"""
+    
+    # Mock the prisma client and get_spend_by_tags function
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    
+    # Mock response data
+    mock_response = [
+        {
+            "individual_request_tag": "tag1",
+            "log_count": 10,
+            "total_spend": 0.15
+        },
+        {
+            "individual_request_tag": "tag2", 
+            "log_count": 5,
+            "total_spend": 0.08
+        }
+    ]
+    
+    # Mock the get_spend_by_tags function
+    async def mock_get_spend_by_tags(prisma_client, start_date=None, end_date=None):
+        return mock_response
+    
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints.get_spend_by_tags",
+        mock_get_spend_by_tags
+    )
+    
+    # Test without date filters
+    response = client.get(
+        "/spend/tags",
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) == 2
+    assert data[0]["individual_request_tag"] == "tag1"
+    assert data[0]["log_count"] == 10
+    assert data[0]["total_spend"] == 0.15
+    
+    # Test with date filters
+    start_date = "2024-01-01"
+    end_date = "2024-01-31"
+    
+    response = client.get(
+        "/spend/tags",
+        params={
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) == 2
+
+
+@pytest.mark.asyncio 
+async def test_view_spend_tags_no_database(client, monkeypatch):
+    """Test /spend/tags endpoint when database is not connected"""
+    
+    # Mock prisma_client as None
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    
+    response = client.get(
+        "/spend/tags",
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    
+    assert response.status_code == 500
+    data = response.json()
+    # Check the actual error message structure
+    assert "error" in data
+    assert "Database not connected" in data["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_provider_budget_under(disable_budget_sync):
+    """Test that router allows completion when under budget"""
+    provider_budget_config = {
+        "azure": BudgetConfig(max_budget=0.01, budget_duration="10d")
+    }
+
+    router = Router(
+        enable_pre_call_checks=True,
+        provider_budget_config=provider_budget_config,
+        model_list=MODEL_LIST,
+    )
+
+    response = await router.acompletion(
+        model="azure-gpt-4o",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+    )
+
+    assert response is not None
+
+
+@pytest.mark.asyncio
+async def test_provider_budget_over(disable_budget_sync):
+    """Test that router allows completion when over budget"""
+    provider_budget_config = {
+        "azure": BudgetConfig(max_budget=-0.01, budget_duration="10d")
+    }
+
+    router = Router(
+        num_retries=0,
+        enable_pre_call_checks=True,
+        provider_budget_config=provider_budget_config,
+        model_list=MODEL_LIST,
+    )
+
+    with pytest.raises(Exception) as e:
+        response = await router.acompletion(
+            model="azure-gpt-4o",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+        )
+    assert "Exceeded budget for provider" in str(e.value)
+
+
+@pytest.mark.asyncio
+async def test_provider_budget_provider_budgets(disable_budget_sync):
+    """Test that provider_budgets() returns correct values"""
+    provider = "azure"
+    max_budget = -0.01
+    budget_duration = "10d"
+    provider_budget_config = {
+        provider: BudgetConfig(max_budget=max_budget, budget_duration=budget_duration)
+    }
+
+    router = Router(
+        num_retries=0,
+        enable_pre_call_checks=True,
+        provider_budget_config=provider_budget_config,
+        model_list=MODEL_LIST,
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        response = await spend_management_endpoints.provider_budgets()
+        provider_budget_response = response.providers[provider]
+        assert provider_budget_response.budget_limit == max_budget
+        assert provider_budget_response.time_period == budget_duration

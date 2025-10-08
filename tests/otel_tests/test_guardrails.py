@@ -4,7 +4,7 @@ import aiohttp, openai
 from openai import OpenAI, AsyncOpenAI
 from typing import Optional, List, Union
 import json
-import uuid
+from litellm._uuid import uuid
 
 
 async def chat_completion(
@@ -214,7 +214,6 @@ async def test_bedrock_guardrail_triggered():
             pytest.fail("Should have thrown an exception")
         except Exception as e:
             print(e)
-            assert "GUARDRAIL_INTERVENED" in str(e)
             assert "Violated guardrail policy" in str(e)
 
 

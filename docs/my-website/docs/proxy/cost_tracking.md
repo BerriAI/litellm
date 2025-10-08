@@ -8,18 +8,19 @@ Track spend for keys, users, and teams across 100+ LLMs.
 
 LiteLLM automatically tracks spend for all known models. See our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
 
+:::tip Keep Pricing Data Updated
+[Sync model pricing data from GitHub](../sync_models_github.md) to ensure accurate cost tracking.
+:::
+
 ### How to Track Spend with LiteLLM
 
 **Step 1**
 
 👉 [Setup LiteLLM with a Database](https://docs.litellm.ai/docs/proxy/virtual_keys#setup)
 
-
 **Step2** Send `/chat/completions` request
 
 <Tabs>
-
-
 <TabItem value="openai" label="OpenAI Python v1.0.0+">
 
 ```python
@@ -38,7 +39,7 @@ response = client.chat.completions.create(
         }
     ],
     user="palantir", # OPTIONAL: pass user to track spend by user
-    extra_body={ 
+    extra_body={
         "metadata": {
             "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"] # ENTERPRISE: pass tags to track spend by tags
         }
@@ -47,6 +48,7 @@ response = client.chat.completions.create(
 
 print(response)
 ```
+
 </TabItem>
 
 <TabItem value="Curl" label="Curl Request">
@@ -71,6 +73,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     }
 }'
 ```
+
 </TabItem>
 <TabItem value="langchain" label="Langchain">
 
@@ -131,7 +134,7 @@ The following spend gets tracked in Table `LiteLLM_SpendLogs`
 ```json
 {
   "api_key": "fe6b0cab4ff5a5a8df823196cc8a450*****",                            # Hash of API Key used
-  "user": "default_user",                                                       # Internal User (LiteLLM_UserTable) that owns `api_key=sk-1234`. 
+  "user": "default_user",                                                       # Internal User (LiteLLM_UserTable) that owns `api_key=sk-1234`.
   "team_id": "e8d1460f-846c-45d7-9b43-55f3cc52ac32",                            # Team (LiteLLM_TeamTable) that owns `api_key=sk-1234`
   "request_tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"],# Tags sent in request
   "end_user": "palantir",                                                       # Customer - the `user` sent in the request
@@ -152,7 +155,7 @@ Navigate to the Usage Tab on the LiteLLM UI (found on https://your-proxy-endpoin
 </TabItem>
 </Tabs>
 
-### Allowing Non-Proxy Admins to access `/spend` endpoints 
+### Allowing Non-Proxy Admins to access `/spend` endpoints
 
 Use this when you want non-proxy admins to access `/spend` endpoints
 
@@ -162,8 +165,10 @@ Schedule a [meeting with us to get your Enterprise License](https://calendly.com
 
 :::
 
-##### Create Key 
-Create Key with with `permissions={"get_spend_routes": true}` 
+##### Create Key
+
+Create Key with with `permissions={"get_spend_routes": true}`
+
 ```shell
 curl --location 'http://0.0.0.0:4000/key/generate' \
         --header 'Authorization: Bearer sk-1234' \
@@ -176,22 +181,24 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 ##### Use generated key on `/spend` endpoints
 
 Access spend Routes with newly generate keys
+
 ```shell
 curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30' \
   -H 'Authorization: Bearer sk-H16BKvrSNConSsBYLGc_7A'
 ```
 
-
-
 #### Reset Team, API Key Spend - MASTER KEY ONLY
 
 Use `/global/spend/reset` if you want to:
+
 - Reset the Spend for all API Keys, Teams. The `spend` for ALL Teams and Keys in `LiteLLM_TeamTable` and `LiteLLM_VerificationToken` will be set to `spend=0`
 
 - LiteLLM will maintain all the logs in `LiteLLMSpendLogs` for Auditing Purposes
 
-##### Request 
+##### Request
+
 Only the `LITELLM_MASTER_KEY` you set can access this route
+
 ```shell
 curl -X POST \
   'http://localhost:4000/global/spend/reset' \
@@ -204,6 +211,68 @@ curl -X POST \
 ```shell
 {"message":"Spend for all API Keys and Teams reset successfully","status":"success"}
 ```
+
+## Total spend per user
+
+Assuming you have been issuing keys for end users, and setting their `user_id` on the key, you can check their usage.
+
+```shell title="Total for a user API" showLineNumbers
+curl -L -X GET 'http://localhost:4000/user/info?user_id=jane_smith' \
+-H 'Authorization: Bearer sk-...'
+```
+
+```json title="Total for a user API Response" showLineNumbers
+{
+  "user_id": "jane_smith",
+  "user_info": {
+    "spend": 0.1
+  },
+  "keys": [
+    {
+      "token": "6e952b0efcafbb6350240db25ed534b4ec6011b3e1ba1006eb4f903461fd36f6",
+      "key_name": "sk-...KE_A",
+      "key_alias": "user-01882d6b-e090-776a-a587-21c63e502670-01983ddb-872f-71a3-8b3a-f9452c705483",
+      "soft_budget_cooldown": false,
+      "spend": 0.1,
+      "expires": "2025-07-31T19:14:13.968000+00:00",
+      "models": [],
+      "aliases": {},
+      "config": {},
+      "user_id": "01982d6b-e090-776a-a587-21c63e502660",
+      "team_id": "f2044fde-2293-482f-bf35-a8dab4e85c5f",
+      "permissions": {},
+      "max_parallel_requests": null,
+      "metadata": {},
+      "blocked": null,
+      "tpm_limit": null,
+      "rpm_limit": null,
+      "max_budget": null,
+      "budget_duration": null,
+      "budget_reset_at": null,
+      "allowed_cache_controls": [],
+      "allowed_routes": [],
+      "model_spend": {},
+      "model_max_budget": {},
+      "budget_id": null,
+      "organization_id": null,
+      "object_permission_id": null,
+      "created_at": "2025-07-24T19:14:13.970000Z",
+      "created_by": "582b168f-fc11-4e14-ad6a-cf4bb3656ddc",
+      "updated_at": "2025-07-24T19:14:13.970000Z",
+      "updated_by": "582b168f-fc11-4e14-ad6a-cf4bb3656ddc",
+      "litellm_budget_table": null,
+      "litellm_organization_table": null,
+      "object_permission": null,
+      "team_alias": null
+    }
+  ],
+  "teams": []
+}
+```
+
+**Warning**
+End users can provide the `user` parameter in their request bodies, doing this will increment the cost reported via `/customer/info?end_user_id=self-declared-user`, and not for the user that owns the key as reported by that API. This means users could "avoid" having their spend tracked, through their method.
+This means if you need to track user spend, and are giving end users API keys, you must always set user_id when creating their api keys, and use keys issued for that user every time you're making LLM calls on their behalf in backend services. This will track their spend.
 
 ## Daily Spend Breakdown API
 
@@ -255,7 +324,198 @@ curl -L -X GET 'http://localhost:4000/user/daily/activity?start_date=2025-03-20&
 
 See our [Swagger API](https://litellm-api.up.railway.app/#/Budget%20%26%20Spend%20Tracking/get_user_daily_activity_user_daily_activity_get) for more details on the `/user/daily/activity` endpoint
 
-## ✨ (Enterprise) Generate Spend Reports 
+## Custom Tags
+
+Requirements:
+
+- Virtual Keys & a database should be set up, see [virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
+
+**Note:** By default, LiteLLM will track `User-Agent` as a custom tag for cost tracking. This enables viewing usage for tools like Claude Code, Gemini CLI, etc.
+
+<Image img={require('../../img/claude_cli_tag_usage.png')} />
+
+### Client-side spend tag
+
+<Tabs>
+<TabItem value="key" label="Set on Key">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "tags": ["tag1", "tag2", "tag3"]
+    }
+}
+
+'
+```
+
+</TabItem>
+<TabItem value="team" label="Set on Team">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/team/new' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "tags": ["tag1", "tag2", "tag3"]
+    }
+}
+
+'
+```
+
+</TabItem>
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+Set `extra_body={"metadata": { }}` to `metadata` you want to pass
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+        "metadata": {
+            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"] # 👈 Key Change
+        }
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+
+<TabItem value="openai js" label="OpenAI JS">
+
+```js
+const openai = require("openai");
+
+async function runOpenAI() {
+  const client = new openai.OpenAI({
+    apiKey: "sk-1234",
+    baseURL: "http://0.0.0.0:4000",
+  });
+
+  try {
+    const response = await client.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        {
+          role: "user",
+          content: "this is a test request, write a short poem",
+        },
+      ],
+      metadata: {
+        tags: ["model-anthropic-claude-v2.1", "app-ishaan-prod"], // 👈 Key Change
+      },
+    });
+    console.log(response);
+  } catch (error) {
+    console.log("got this exception from server");
+    console.error(error);
+  }
+}
+
+// Call the asynchronous function
+runOpenAI();
+```
+
+</TabItem>
+
+<TabItem value="Curl" label="Curl Request">
+
+Pass `metadata` as part of the request body
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "metadata": {"tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]}
+}'
+```
+
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000",
+    model = "gpt-3.5-turbo",
+    temperature=0.1,
+    extra_body={
+        "metadata": {
+            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]
+        }
+    }
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+### Add custom headers to spend tracking
+
+You can add custom headers to the request to track spend and usage.
+
+```yaml
+litellm_settings:
+  extra_spend_tag_headers:
+    - "x-custom-header"
+```
+
+### Disable user-agent tracking
+
+You can disable user-agent tracking by setting `litellm_settings.disable_add_user_agent_to_request_tags` to `true`.
+
+```yaml
+litellm_settings:
+  disable_add_user_agent_to_request_tags: true
+```
+
+## ✨ (Enterprise) Generate Spend Reports
 
 Use this to charge other teams, customers, users
 
@@ -275,6 +535,7 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 ```
 
 #### Example Response
+
 <Tabs>
 
 <TabItem value="response" label="Expected Response">
@@ -319,7 +580,6 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 ]
 ```
 
-
 </TabItem>
 
 <TabItem value="py-script" label="Script to Parse Response (Python)">
@@ -356,6 +616,7 @@ for row in spend_report:
 ```
 
 Output from script
+
 ```shell
 # Date: 2024-05-11T00:00:00+00:00
 # Team: local_test_team
@@ -378,21 +639,19 @@ Output from script
 # Metadata:  [{'model': 'gpt-3.5-turbo', 'spend': 0.0005715000000000001, 'api_key': 'b94d5e0bc3a71a573917fe1335dc0c14728c7016337451af9714924ff3a729db', 'total_tokens': 423}]
 ```
 
-
 </TabItem>
 
 </Tabs>
 
 </TabItem>
 
-
 <TabItem value="per customer" label="Spend Per Customer">
 
 :::info
 
 Customer [this is `user` passed to `/chat/completions` request](#how-to-track-spend-with-litellm)
-- [LiteLLM API key](virtual_keys.md)
 
+- [LiteLLM API key](virtual_keys.md)
 
 :::
 
@@ -400,14 +659,12 @@ Customer [this is `user` passed to `/chat/completions` request](#how-to-track-sp
 
 👉 Key Change: Specify `group_by=customer`
 
-
 ```shell
 curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30&group_by=customer' \
   -H 'Authorization: Bearer sk-1234'
 ```
 
 #### Example Response
-
 
 ```shell
 [
@@ -449,14 +706,11 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 ]
 ```
 
-
 </TabItem>
 
 <TabItem value="per key" label="Spend for Specific API Key">
 
-
 👉 Key Change: Specify `api_key=sk-1234`
-
 
 ```shell
 curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30&api_key=sk-1234' \
@@ -464,7 +718,6 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 ```
 
 #### Example Response
-
 
 ```shell
 [
@@ -501,9 +754,7 @@ Internal User (Key Owner): This is the value of `user_id` passed when calling [`
 
 :::
 
-
 👉 Key Change: Specify `internal_user_id=ishaan`
-
 
 ```shell
 curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-12-30&internal_user_id=ishaan' \
@@ -511,7 +762,6 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 ```
 
 #### Example Response
-
 
 ```shell
 [
@@ -576,23 +826,340 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 
 </Tabs>
 
+## 📊 Spend Logs API - Individual Transaction Logs
+
+The `/spend/logs` endpoint now supports a `summarize` parameter to control data format when using date filters.
+
+### Key Parameters
+
+| Parameter   | Description                                                                                  |
+| ----------- | -------------------------------------------------------------------------------------------- |
+| `summarize` | **New parameter**: `true` (default) = aggregated data, `false` = individual transaction logs |
+
+### Examples
+
+**Get individual transaction logs:**
+
+```bash
+curl -X GET "http://localhost:4000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" \
+-H "Authorization: Bearer sk-1234"
+```
+
+**Get summarized data (default):**
+
+```bash
+curl -X GET "http://localhost:4000/spend/logs?start_date=2024-01-01&end_date=2024-01-02" \
+-H "Authorization: Bearer sk-1234"
+```
+
+**Use Cases:**
+
+- `summarize=false`: Analytics dashboards, ETL processes, detailed audit trails
+- `summarize=true`: Daily spending reports, high-level cost tracking (legacy behavior)
 
 ## ✨ Custom Spend Log metadata
 
 Log specific key,value pairs as part of the metadata for a spend log
 
-:::info 
+:::info
 
-Logging specific key,value pairs in spend logs metadata is an enterprise feature. [See here](./enterprise.md#tracking-spend-with-custom-metadata)
-
-:::
-
-
-## ✨ Custom Tags
-
-:::info 
-
-Tracking spend with Custom tags is an enterprise feature. [See here](./enterprise.md#tracking-spend-for-custom-tags)
+Logging specific key,value pairs in spend logs metadata is an enterprise feature.
 
 :::
 
+Requirements: 
+
+- Virtual Keys & a database should be set up, see [virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
+
+#### Usage - /chat/completions requests with special spend logs metadata 
+
+
+<Tabs>
+<TabItem value="key" label="Set on Key">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+      "spend_logs_metadata": {
+          "hello": "world"
+      }
+    }
+}
+
+'
+```
+
+</TabItem>
+<TabItem value="team" label="Set on Team">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/team/new' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+      "spend_logs_metadata": {
+          "hello": "world"
+      }
+    }
+}
+
+'
+```
+
+</TabItem>
+
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+Set `extra_body={"metadata": { }}` to `metadata` you want to pass
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+        "metadata": {
+            "spend_logs_metadata": {
+                "hello": "world"
+            }
+        }
+    }
+)
+
+print(response)
+```
+
+**Using Headers:**
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+# Pass spend logs metadata via headers
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_headers={
+        "x-litellm-spend-logs-metadata": '{"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion"}'
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+
+
+<TabItem value="openai js" label="OpenAI JS">
+
+```js
+const openai = require('openai');
+
+async function runOpenAI() {
+  const client = new openai.OpenAI({
+    apiKey: 'sk-1234',
+    baseURL: 'http://0.0.0.0:4000'
+  });
+
+  try {
+    const response = await client.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'user',
+          content: "this is a test request, write a short poem"
+        },
+      ],
+      metadata: {
+        spend_logs_metadata: { // 👈 Key Change
+            hello: "world"
+        }
+      }
+    });
+    console.log(response);
+  } catch (error) {
+    console.log("got this exception from server");
+    console.error(error);
+  }
+}
+
+// Call the asynchronous function
+runOpenAI();
+```
+
+**Using Headers:**
+
+```js
+const openai = require('openai');
+
+async function runOpenAI() {
+  const client = new openai.OpenAI({
+    apiKey: 'sk-1234',
+    baseURL: 'http://0.0.0.0:4000'
+  });
+
+  try {
+    const response = await client.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'user',
+          content: "this is a test request, write a short poem"
+        },
+      ]
+    }, {
+      headers: {
+        'x-litellm-spend-logs-metadata': '{"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion"}'
+      }
+    });
+    console.log(response);
+  } catch (error) {
+    console.log("got this exception from server");
+    console.error(error);
+  }
+}
+
+// Call the asynchronous function
+runOpenAI();
+```
+
+</TabItem>
+
+<TabItem value="Curl" label="Curl Request">
+
+Pass `metadata` as part of the request body
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "metadata": {
+        "spend_logs_metadata": {
+            "hello": "world"
+        }
+    }
+}'
+```
+
+</TabItem>
+
+<TabItem value="headers" label="Using Headers">
+
+Pass `x-litellm-spend-logs-metadata` as a request header with JSON string
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'x-litellm-spend-logs-metadata: {"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion"}' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
+```
+
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000",
+    model = "gpt-3.5-turbo",
+    temperature=0.1,
+    extra_body={
+        "metadata": {
+            "spend_logs_metadata": {
+                "hello": "world"
+            }
+        }
+    }
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+
+#### Viewing Spend w/ custom metadata
+
+#### `/spend/logs` Request Format 
+
+```bash
+curl -X GET "http://0.0.0.0:4000/spend/logs?request_id=<your-call-id" \ # e.g.: chatcmpl-9ZKMURhVYSi9D6r6PJ9vLcayIK0Vm
+-H "Authorization: Bearer sk-1234"
+```
+
+#### `/spend/logs` Response Format
+```bash
+[
+    {
+        "request_id": "chatcmpl-9ZKMURhVYSi9D6r6PJ9vLcayIK0Vm",
+        "call_type": "acompletion",
+        "metadata": {
+            "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "user_api_key_alias": null,
+            "spend_logs_metadata": { # 👈 LOGGED CUSTOM METADATA
+                "hello": "world"
+            },
+            "user_api_key_team_id": null,
+            "user_api_key_user_id": "116544810872468347480",
+            "user_api_key_team_alias": null
+        },
+    }
+]
+```

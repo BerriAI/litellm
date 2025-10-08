@@ -28,6 +28,7 @@ from litellm.proxy.auth.auth_checks import (
     _can_object_call_vector_stores,
     get_user_object,
     vector_store_access_check,
+    _get_team_db_check,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.utils import get_utc_datetime
@@ -68,7 +69,9 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     )
 
     # Decrypt and verify token contents
-    decrypted_token = decrypt_value_helper(token, exception_type="debug")
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
     # Check that decrypted_token is not None before using json.loads
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
@@ -188,6 +191,64 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     assert creation_args["models"] == ["gpt-4", "claude-3-opus"]
     assert creation_args["max_budget"] == 200.0
     assert creation_args["user_role"] == "internal_user"
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock)
+async def test_get_team_db_check_calls_new_team_on_upsert(mock_new_team, monkeypatch):
+    """
+    Test that _get_team_db_check correctly calls the `new_team` function
+    when a team does not exist and upsert is enabled.
+    """
+    mock_prisma_client = MagicMock()
+    mock_db = AsyncMock()
+    mock_prisma_client.db = mock_db
+    mock_prisma_client.db.litellm_teamtable.find_unique.return_value = None
+
+    # Define what our mocked `new_team` function should return
+    team_id_to_create = "new-jwt-team"
+    mock_new_team.return_value = {"team_id": team_id_to_create, "max_budget": 123.45}
+
+    await _get_team_db_check(
+        team_id=team_id_to_create,
+        prisma_client=mock_prisma_client,
+        team_id_upsert=True,
+    )
+
+    # Verify that our mocked `new_team` function was called exactly once
+    mock_new_team.assert_called_once()
+
+    call_args = mock_new_team.call_args[1]
+    data_arg = call_args["data"]
+
+    # Verify that `new_team` was called with the correct team_id and that
+    # `max_budget` was None, as our function's job is to delegate, not to set defaults.
+    assert data_arg.team_id == team_id_to_create
+    assert data_arg.max_budget is None
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock)
+async def test_get_team_db_check_does_not_call_new_team_if_exists(mock_new_team, monkeypatch):
+    """
+    Test that _get_team_db_check does NOT call the `new_team` function
+    if the team already exists in the database.
+    """
+    mock_prisma_client = MagicMock()
+    mock_db = AsyncMock()
+    mock_prisma_client.db = mock_db
+    mock_prisma_client.db.litellm_teamtable.find_unique.return_value = MagicMock()
+
+    team_id_to_find = "existing-jwt-team"
+
+    await _get_team_db_check(
+        team_id=team_id_to_find,
+        prisma_client=mock_prisma_client,
+        team_id_upsert=True,
+    )
+
+    # Verify that `new_team` was NEVER called, because the team was found.
+    mock_new_team.assert_not_called()
 
 
 # Vector Store Auth Check Tests
@@ -334,3 +395,175 @@ async def test_vector_store_access_check_with_permissions():
             )
 
         assert exc_info.value.type == ProxyErrorTypes.key_vector_store_access_denied
+
+
+def test_can_object_call_model_with_alias():
+    """Test that can_object_call_model works with model aliases"""
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    model = "[ip-approved] gpt-4o"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-api-key",
+                },
+            }
+        ],
+        model_group_alias={
+            "[ip-approved] gpt-4o": {
+                "model": "gpt-3.5-turbo",
+                "hidden": True,
+            },
+        },
+    )
+
+    result = _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=["gpt-3.5-turbo"],
+        team_model_aliases=None,
+        object_type="key",
+        fallback_depth=0,
+    )
+
+    print(result)
+
+
+def test_can_object_call_model_access_via_alias_only():
+    """
+    Test that a key can access a model via alias even when it doesn't have access to the underlying model.
+
+    This tests the scenario where:
+    - Router has model alias: "my-fake-gpt" -> "gpt-4"
+    - Key has access to: ["my-fake-gpt"] (alias)
+    - Key does NOT have access to: ["gpt-4"] (underlying model)
+    - The call should succeed because access is granted via the alias
+    """
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    model = "my-fake-gpt"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "test-api-key",
+                },
+            }
+        ],
+        model_group_alias={
+            "my-fake-gpt": {
+                "model": "gpt-4",
+                "hidden": False,
+            },
+        },
+    )
+
+    # Key has access to the alias but NOT the underlying model
+    result = _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=["my-fake-gpt"],  # Only has access to alias, not "gpt-4"
+        team_model_aliases=None,
+        object_type="key",
+        fallback_depth=0,
+    )
+
+    # Should return True because access is granted via the alias
+    assert result is True
+
+
+def test_can_object_call_model_access_via_underlying_model_only():
+    """
+    Test that a key can access a model via underlying model even when using an alias.
+
+    This tests the scenario where:
+    - Router has model alias: "my-fake-gpt" -> "gpt-4"
+    - Key has access to: ["gpt-4"] (underlying model)
+    - Key does NOT have access to: ["my-fake-gpt"] (alias)
+    - The call should succeed because access is granted via the underlying model
+    """
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    model = "my-fake-gpt"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "test-api-key",
+                },
+            }
+        ],
+        model_group_alias={
+            "my-fake-gpt": {
+                "model": "gpt-4",
+                "hidden": False,
+            },
+        },
+    )
+
+    # Key has access to the underlying model but NOT the alias
+    result = _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=["gpt-4"],  # Only has access to underlying model, not "my-fake-gpt"
+        team_model_aliases=None,
+        object_type="key",
+        fallback_depth=0,
+    )
+
+    # Should return True because access is granted via the underlying model
+    assert result is True
+
+
+def test_can_object_call_model_no_access_to_alias_or_underlying():
+    """
+    Test that a key cannot access a model when it has no access to either alias or underlying model.
+    """
+    from litellm import Router
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    model = "my-fake-gpt"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "test-api-key",
+                },
+            }
+        ],
+        model_group_alias={
+            "my-fake-gpt": {
+                "model": "gpt-4",
+                "hidden": False,
+            },
+        },
+    )
+
+    # Key has access to neither the alias nor the underlying model
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=["gpt-3.5-turbo"],  # Has access to different model entirely
+            team_model_aliases=None,
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    # Should raise ProxyException with appropriate error type
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    assert "key not allowed to access model" in str(exc_info.value.message)
+    assert "my-fake-gpt" in str(exc_info.value.message)

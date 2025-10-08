@@ -25,7 +25,11 @@ class TestResponsesAPIRequestUtils:
         model = "gpt-4o"
         config = OpenAIResponsesAPIConfig()
         optional_params = ResponsesAPIOptionalRequestParams(
-            {"temperature": 0.7, "max_output_tokens": 100}
+            {
+                "temperature": 0.7,
+                "max_output_tokens": 100,
+                "prompt": {"id": "pmpt_123"},
+            }
         )
 
         # Execute
@@ -41,6 +45,8 @@ class TestResponsesAPIRequestUtils:
         assert result["temperature"] == 0.7
         assert "max_output_tokens" in result
         assert result["max_output_tokens"] == 100
+        assert "prompt" in result
+        assert result["prompt"] == {"id": "pmpt_123"}
 
     def test_get_optional_params_responses_api_unsupported_param(self):
         """Test that unsupported parameters raise an error"""
@@ -68,6 +74,7 @@ class TestResponsesAPIRequestUtils:
         params = {
             "temperature": 0.7,
             "max_output_tokens": 100,
+            "prompt": {"id": "pmpt_456"},
             "invalid_param": "value",
             "model": "gpt-4o",  # This is not in ResponsesAPIOptionalRequestParams
         }
@@ -84,6 +91,7 @@ class TestResponsesAPIRequestUtils:
         assert "model" not in result
         assert result["temperature"] == 0.7
         assert result["max_output_tokens"] == 100
+        assert result["prompt"] == {"id": "pmpt_456"}
 
     def test_decode_previous_response_id_to_original_previous_response_id(self):
         """Test decoding a LiteLLM encoded previous_response_id to the original previous_response_id"""
@@ -113,6 +121,21 @@ class TestResponsesAPIRequestUtils:
             plain_id
         )
         assert result_plain == plain_id
+
+    def test_update_responses_api_response_id_with_model_id_handles_dict(self):
+        """Ensure _update_responses_api_response_id_with_model_id works with dict input"""
+        responses_api_response = {"id": "resp_abc123"}
+        litellm_metadata = {"model_info": {"id": "gpt-4o"}}
+        updated = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            responses_api_response=responses_api_response,
+            custom_llm_provider="openai",
+            litellm_metadata=litellm_metadata,
+        )
+        assert updated["id"] != "resp_abc123"
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(updated["id"])
+        assert decoded.get("response_id") == "resp_abc123"
+        assert decoded.get("model_id") == "gpt-4o"
+        assert decoded.get("custom_llm_provider") == "openai"
 
 
 class TestResponseAPILoggingUtils:
@@ -145,6 +168,7 @@ class TestResponseAPILoggingUtils:
             "input_tokens": 10,
             "output_tokens": 20,
             "total_tokens": 30,
+            "input_tokens_details": {"cached_tokens": 2},
             "output_tokens_details": {"reasoning_tokens": 5},
         }
 
@@ -158,6 +182,7 @@ class TestResponseAPILoggingUtils:
         assert result.prompt_tokens == 10
         assert result.completion_tokens == 20
         assert result.total_tokens == 30
+        assert result.prompt_tokens_details and result.prompt_tokens_details.cached_tokens == 2
 
     def test_transform_response_api_usage_with_none_values(self):
         """Test transformation handles None values properly"""

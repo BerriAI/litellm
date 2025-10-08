@@ -1,16 +1,16 @@
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic import get_anthropic_config
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -20,7 +20,7 @@ from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
-    from ..types import EndpointType
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 else:
     PassThroughEndpointLogging = Any
     EndpointType = Any
@@ -43,7 +43,8 @@ class AnthropicPassthroughLoggingHandler:
         Transforms Anthropic response to OpenAI response, generates a standard logging object so downstream logging can be handled
         """
         model = response_body.get("model", "")
-        litellm_model_response: ModelResponse = AnthropicConfig().transform_response(
+        anthropic_config = get_anthropic_config(url_route)
+        litellm_model_response: ModelResponse = anthropic_config().transform_response(
             raw_response=httpx_response,
             model_response=litellm.ModelResponse(),
             model=model,
@@ -99,6 +100,7 @@ class AnthropicPassthroughLoggingHandler:
                 completion_response=litellm_model_response,
                 model=model,
             )
+
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
@@ -124,9 +126,10 @@ class AnthropicPassthroughLoggingHandler:
             litellm_model_response.id = logging_obj.litellm_call_id
             litellm_model_response.model = model
             logging_obj.model_call_details["model"] = model
-            logging_obj.model_call_details["custom_llm_provider"] = (
-                litellm.LlmProviders.ANTHROPIC.value
-            )
+            if not logging_obj.model_call_details.get("custom_llm_provider"):
+                logging_obj.model_call_details["custom_llm_provider"] = (
+                    litellm.LlmProviders.ANTHROPIC.value
+                )
             return kwargs
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -154,6 +157,19 @@ class AnthropicPassthroughLoggingHandler:
         """
 
         model = request_body.get("model", "")
+        # Dheck if it's available in the logging object
+        if (
+            not model
+            and hasattr(litellm_logging_obj, "model_call_details")
+            and litellm_logging_obj.model_call_details.get("model")
+        ):
+            model = cast(str, litellm_logging_obj.model_call_details.get("model"))
+            custom_llm_provider = litellm_logging_obj.model_call_details.get(
+                "custom_llm_provider"
+            )
+
+            if custom_llm_provider and not model.startswith(custom_llm_provider):
+                model = f"{custom_llm_provider}/{model}"
         complete_streaming_response = (
             AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
                 all_chunks=all_chunks,
@@ -209,13 +225,10 @@ class AnthropicPassthroughLoggingHandler:
                 if transformed_openai_chunk is not None:
                     all_openai_chunks.append(transformed_openai_chunk)
 
-                verbose_proxy_logger.debug(
-                    "all openai chunks= %s",
-                    json.dumps(all_openai_chunks, indent=4, default=str),
-                )
             except (StopIteration, StopAsyncIteration):
                 break
         complete_streaming_response = litellm.stream_chunk_builder(
-            chunks=all_openai_chunks
+            chunks=all_openai_chunks,
+            logging_obj=litellm_logging_obj,
         )
         return complete_streaming_response

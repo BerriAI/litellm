@@ -7,8 +7,11 @@ import litellm
 from litellm import supports_response_schema, supports_system_messages, verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import PartType, Schema
+from litellm.types.utils import TokenCountResponse
 
 
 class VertexAIError(BaseLLMException):
@@ -63,7 +66,7 @@ def get_supports_response_schema(
 from typing import Literal, Optional
 
 all_gemini_url_modes = Literal[
-    "chat", "embedding", "batch_embedding", "image_generation"
+    "chat", "embedding", "batch_embedding", "image_generation", "count_tokens"
 ]
 
 
@@ -113,6 +116,12 @@ def _get_vertex_url(
         url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
         if model.isdigit():
             url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+    elif mode == "count_tokens":
+        endpoint = "countTokens"
+        if vertex_location == "global":
+            url = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}:{endpoint}"
+        else:
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
     if not url or not endpoint:
         raise ValueError(f"Unable to get vertex url/endpoint for mode: {mode}")
     return url, endpoint
@@ -148,10 +157,17 @@ def _get_gemini_url(
         url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
             _gemini_model_name, endpoint, gemini_api_key
         )
+    elif mode == "count_tokens":
+        endpoint = "countTokens"
+        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
+            _gemini_model_name, endpoint, gemini_api_key
+        )
     elif mode == "image_generation":
         raise ValueError(
             "LiteLLM's `gemini/` route does not support image generation yet. Let us know if you need this feature by opening an issue at https://github.com/BerriAI/litellm/issues"
         )
+    else:
+        raise ValueError(f"Unsupported mode: {mode}")
 
     return url, endpoint
 
@@ -169,6 +185,25 @@ def _check_text_in_content(parts: List[PartType]) -> bool:
             has_text_param = True
 
     return has_text_param
+
+
+def _fix_enum_empty_strings(schema, depth=0):
+    """Fix empty strings in enum values by replacing them with None. Gemini doesn't accept empty strings in enums."""
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
+    
+    if "enum" in schema and isinstance(schema["enum"], list):
+        schema["enum"] = [None if value == "" else value for value in schema["enum"]]
+
+    # Reuse existing recursion pattern from convert_anyof_null_to_nullable
+    properties = schema.get("properties", None)
+    if properties is not None:
+        for _, value in properties.items():
+            _fix_enum_empty_strings(value, depth=depth + 1)
+
+    items = schema.get("items", None)
+    if items is not None:
+        _fix_enum_empty_strings(items, depth=depth + 1)
 
 
 def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
@@ -199,11 +234,17 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     #     * https://github.com/pydantic/pydantic/discussions/4872
     convert_anyof_null_to_nullable(parameters)
 
+    _convert_schema_types(parameters)
+
+    # Handle empty strings in enum values - Gemini doesn't accept empty strings in enums
+    _fix_enum_empty_strings(parameters)
+
     # Handle empty items objects
     process_items(parameters)
     add_object_type(parameters)
     # Postprocessing
     # Filter out fields that don't exist in Schema
+
     parameters = filter_schema_fields(parameters, valid_schema_fields)
 
     if add_property_ordering:
@@ -223,19 +264,21 @@ def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
     E.g. {"anyOf": [{"type": "string"}, {"type": "null"}], "default": "test", "title": "test"} -> {"anyOf": [{"type": "string", "title": "test"}, {"type": "null", "title": "test"}]}
     """
     title = schema_dict.get("title", None)
+    description = schema_dict.get("description", None)
 
     if isinstance(schema_dict, dict) and schema_dict.get("anyOf"):
         any_of = schema_dict["anyOf"]
         if (
-            title
+            (title or description)
             and isinstance(any_of, list)
             and all(isinstance(item, dict) for item in any_of)
         ):
             for item in any_of:
-                item["title"] = title
-            return {"anyOf": any_of}
-        else:
-            return schema_dict
+                if title:
+                    item["title"] = title
+                if description:
+                    item["description"] = description
+        return {"anyOf": any_of}
     return schema_dict
 
 
@@ -314,6 +357,11 @@ def filter_schema_fields(
                 k: filter_schema_fields(v, valid_fields, processed)
                 for k, v in value.items()
             }
+        elif key == "format":
+            if value in {"enum", "date-time"}:
+                result[key] = value
+            else:
+                continue
         elif key == "items" and isinstance(value, dict):
             result[key] = filter_schema_fields(value, valid_fields, processed)
         elif key == "anyOf" and isinstance(value, list):
@@ -415,6 +463,47 @@ def _convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
     return int(dt.timestamp())
 
 
+def _convert_schema_types(schema, depth=0):
+    """
+    Convert type arrays and lowercase types for Vertex AI compatibility.
+    
+    Transforms OpenAI-style schemas to Vertex AI format by converting type arrays 
+    like ["string", "number"] to anyOf format and converting all types to uppercase.
+    """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+    
+    if not isinstance(schema, dict):
+        return
+
+    
+    # Handle type field
+    if "type" in schema:
+        type_val = schema["type"]
+        if isinstance(type_val, list) and len(type_val) > 1:
+            # Convert ["string", "number"] -> {"anyOf": [{"type": "STRING"}, {"type": "NUMBER"}]}
+            schema["anyOf"] = [{"type": t} for t in type_val if isinstance(t, str)]
+            schema.pop("type")
+        elif isinstance(type_val, list) and len(type_val) == 1:
+            schema["type"] = type_val[0]
+        elif isinstance(type_val, str):
+            schema["type"] = type_val
+    
+    # Recursively process nested properties, items, and anyOf
+    for key in ["properties", "items", "anyOf"]:
+        if key in schema:
+            value = schema[key]
+            if key == "properties" and isinstance(value, dict):
+                for prop_schema in value.values():
+                    _convert_schema_types(prop_schema, depth + 1)
+            elif key == "items":
+                _convert_schema_types(value, depth + 1)
+            elif key == "anyOf" and isinstance(value, list):
+                for anyof_schema in value:
+                    _convert_schema_types(anyof_schema, depth + 1)
+
 def get_vertex_project_id_from_url(url: str) -> Optional[str]:
     """
     Get the vertex project id from the url
@@ -492,3 +581,119 @@ def construct_target_url(
 
     updated_url = new_base_url.copy_with(path=updated_requested_route)
     return updated_url
+
+
+def is_global_only_vertex_model(model: str) -> bool:
+    """
+    Check if a model is only available in the global region.
+
+    Args:
+        model: The model name to check
+
+    Returns:
+        True if the model is only available in global region, False otherwise
+    """
+    from litellm.utils import get_supported_regions
+
+    supported_regions = get_supported_regions(
+        model=model, custom_llm_provider="vertex_ai"
+    )
+    if supported_regions is None:
+        return False
+    return "global" in supported_regions
+
+class VertexAIModelInfo(BaseLLMModelInfo):    
+    def get_token_counter(self) -> Optional[BaseTokenCounter]:
+        """
+        Factory method to create a token counter for this provider.
+        
+        Returns:
+            Optional TokenCounterInterface implementation for this provider,
+            or None if token counting is not supported.
+        """
+        return VertexAITokenCounter()
+    
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        raise NotImplementedError("Vertex AI models are not supported yet")
+    
+    def get_models(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> List[str]:
+        """
+        Returns a list of models supported by this provider.
+        """
+        raise NotImplementedError("Vertex AI models are not supported yet")
+
+    @staticmethod
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+        raise NotImplementedError("Vertex AI models are not supported yet")
+
+    @staticmethod
+    def get_api_base(
+        api_base: Optional[str] = None,
+    ) -> Optional[str]:
+        raise NotImplementedError("Vertex AI models are not supported yet")
+
+
+
+    @staticmethod
+    def get_base_model(model: str) -> Optional[str]:
+        """
+        Returns the base model name from the given model name.
+
+        Some providers like bedrock - can receive model=`invoke/anthropic.claude-3-opus-20240229-v1:0` or `converse/anthropic.claude-3-opus-20240229-v1:0`
+            This function will return `anthropic.claude-3-opus-20240229-v1:0`
+        """
+        raise NotImplementedError("Vertex AI models are not supported yet")
+
+
+class VertexAITokenCounter(BaseTokenCounter):
+    """Token counter implementation for Google AI Studio provider."""
+    def should_use_token_counting_api(
+        self, 
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        from litellm.types.utils import LlmProviders
+        return custom_llm_provider == LlmProviders.VERTEX_AI.value
+    
+    async def count_tokens(
+        self,
+        model_to_use: str,
+        messages: Optional[List[Dict[str, Any]]],
+        contents: Optional[List[Dict[str, Any]]],
+        deployment: Optional[Dict[str, Any]] = None,
+        request_model: str = "",
+    ) -> Optional[TokenCountResponse]:
+        import copy
+
+        from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
+        deployment = deployment or {}
+        count_tokens_params_request = copy.deepcopy(deployment.get("litellm_params", {}))
+        count_tokens_params = {
+            "model": model_to_use,
+            "contents": contents,
+        }
+        count_tokens_params_request.update(count_tokens_params)
+        result = await VertexAITokenCounter().acount_tokens(
+            **count_tokens_params_request,
+        )
+        
+        if result is not None:
+            return TokenCountResponse(
+                total_tokens=result.get("totalTokens", 0),
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type=result.get("tokenizer_used", ""),
+                original_response=result,
+            )
+        
+        return None

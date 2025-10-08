@@ -10,8 +10,9 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
@@ -20,6 +21,7 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayload,
     StandardLoggingVectorStoreRequest,
+    VectorStoreSearchResponse,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -52,6 +54,7 @@ def _get_spend_logs_metadata(
     guardrail_information: Optional[StandardLoggingGuardrailInformation] = None,
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
+    cold_storage_object_key: Optional[str] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -74,6 +77,7 @@ def _get_spend_logs_metadata(
             model_map_information=None,
             usage_object=None,
             guardrail_information=None,
+            cold_storage_object_key=cold_storage_object_key,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -91,12 +95,14 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata[
-        "vector_store_request_metadata"
-    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    clean_metadata["vector_store_request_metadata"] = (
+        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    )
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
+    clean_metadata["cold_storage_object_key"] = cold_storage_object_key
+
     return clean_metadata
 
 
@@ -213,6 +219,11 @@ def get_logging_payload(  # noqa: PLR0915
         else "[]"
     )
     if (
+        standard_logging_payload is not None
+        and standard_logging_payload.get("request_tags") is not None
+    ):  # use 'tags' from standard logging payload instead
+        request_tags = json.dumps(standard_logging_payload["request_tags"])
+    if (
         _is_master_key(api_key=api_key, _master_key=master_key)
         and general_settings.get("disable_adding_master_key_hash_to_db") is True
     ):
@@ -261,6 +272,11 @@ def get_logging_payload(  # noqa: PLR0915
             if standard_logging_payload is not None
             else None
         ),
+        cold_storage_object_key=(
+            standard_logging_payload["metadata"].get("cold_storage_object_key", None)
+            if standard_logging_payload is not None
+            else None
+        ),
     )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
@@ -281,6 +297,15 @@ def get_logging_payload(  # noqa: PLR0915
 
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
 
+    mcp_namespaced_tool_name = None
+    mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = clean_metadata.get(
+        "mcp_tool_call_metadata"
+    )
+    if mcp_tool_call_metadata is not None:
+        mcp_namespaced_tool_name = mcp_tool_call_metadata.get(
+            "namespaced_tool_name", None
+        )
+
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
@@ -293,7 +318,7 @@ def get_logging_payload(  # noqa: PLR0915
             model=kwargs.get("model", "") or "",
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",
-            metadata=json.dumps(clean_metadata),
+            metadata=safe_dumps(clean_metadata),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),
             total_tokens=usage.get("total_tokens", standard_logging_total_tokens),
@@ -306,6 +331,7 @@ def get_logging_payload(  # noqa: PLR0915
             api_base=litellm_params.get("api_base", ""),
             model_group=_model_group,
             model_id=_model_id,
+            mcp_namespaced_tool_name=mcp_namespaced_tool_name,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=kwargs.get("custom_llm_provider", ""),
             messages=_get_messages_for_spend_logs_payload(
@@ -347,7 +373,7 @@ def _get_session_id_for_spend_log(
     This ensures each spend log is associated with a unique session id.
 
     """
-    import uuid
+    from litellm._uuid import uuid
 
     if (
         standard_logging_payload is not None
@@ -458,9 +484,9 @@ def _sanitize_request_body_for_spend_logs_payload(
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
-    Truncates strings longer than 1000 characters and handles nested dictionaries.
+    Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
     """
-    MAX_STRING_LENGTH = 1000
+    from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
 
     if visited is None:
         visited = set()
@@ -477,8 +503,35 @@ def _sanitize_request_body_for_spend_logs_payload(
         elif isinstance(value, list):
             return [_sanitize_value(item) for item in value]
         elif isinstance(value, str):
-            if len(value) > MAX_STRING_LENGTH:
-                return f"{value[:MAX_STRING_LENGTH]}... (truncated {len(value) - MAX_STRING_LENGTH} chars)"
+            if len(value) > MAX_STRING_LENGTH_PROMPT_IN_DB:
+                # Keep 35% from beginning and 65% from end (end is usually more important)
+                # This split ensures we keep more context from the end of conversations
+                start_ratio = 0.35
+                end_ratio = 0.65
+
+                # Calculate character distribution
+                start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * start_ratio)
+                end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * end_ratio)
+
+                # Ensure we don't exceed the total limit
+                total_keep = start_chars + end_chars
+                if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
+                    end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
+
+                # If the string length is less than what we want to keep, just truncate normally
+                if len(value) <= MAX_STRING_LENGTH_PROMPT_IN_DB:
+                    return value
+
+                # Calculate how many characters are being skipped
+                skipped_chars = len(value) - total_keep
+
+                # Build the truncated string: beginning + truncation marker + end
+                truncated_value = (
+                    f"{value[:start_chars]}"
+                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+                    f"{value[-end_chars:]}"
+                )
+                return truncated_value
             return value
         return value
 
@@ -517,8 +570,9 @@ def _get_vector_store_request_for_spend_logs_payload(
     if vector_store_request_metadata is None:
         return None
     for vector_store_request in vector_store_request_metadata:
-        vector_store_search_response = (
-            vector_store_request.get("vector_store_search_response", {}) or {}
+        vector_store_search_response: VectorStoreSearchResponse = (
+            vector_store_request.get("vector_store_search_response")
+            or VectorStoreSearchResponse()
         )
         response_data = vector_store_search_response.get("data", []) or []
         for response_item in response_data:
@@ -540,8 +594,12 @@ def _get_response_for_spend_logs_payload(
 
 def _should_store_prompts_and_responses_in_spend_logs() -> bool:
     from litellm.proxy.proxy_server import general_settings
+    from litellm.secret_managers.main import get_secret_bool
 
-    return general_settings.get("store_prompts_in_spend_logs") is True
+    return (
+        general_settings.get("store_prompts_in_spend_logs") is True
+        or get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
+    )
 
 
 def _get_status_for_spend_log(

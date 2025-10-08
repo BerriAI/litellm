@@ -195,6 +195,7 @@ async def new_end_user(
     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
     - spend: Optional[float] - Specify initial spend for a given customer.
+    - budget_reset_at: Optional[str] - Specify the date and time when the budget should be reset.
     
     
     - Allow specifying allowed regions 
@@ -416,7 +417,7 @@ async def update_end_user(
     ```
     """
 
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     try:
         data_json: dict = data.json()
@@ -458,19 +459,29 @@ async def update_end_user(
         budget_table_data = {}
         update_end_user_table_data = {}
         for k, v in non_default_values.items():
-            if k in LiteLLM_BudgetTable.model_fields.keys():
+            # budget_id is for linking to existing budget, not for creating new budget
+            if k == "budget_id":
+                update_end_user_table_data[k] = v
+            elif k in LiteLLM_BudgetTable.model_fields.keys():
                 budget_table_data[k] = v
 
-            if k in LiteLLM_EndUserTable.model_fields.keys():
+            elif k in LiteLLM_EndUserTable.model_fields.keys():
                 update_end_user_table_data[k] = v
 
-        ## Check if budget id is set ##
+        ## Check if we need to create a new budget (only if budget fields are provided, not just budget_id) ##
         if budget_table_data:
             if end_user_budget_table is None:
                 ## Create new budget ##
                 budget_table_data_record = (
                     await prisma_client.db.litellm_budgettable.create(
-                        data=budget_table_data, include={"litellm_endusertable": True}
+                        data={
+                            **budget_table_data,
+                            "created_by": user_api_key_dict.user_id
+                            or litellm_proxy_admin_name,
+                            "updated_by": user_api_key_dict.user_id
+                            or litellm_proxy_admin_name,
+                        },
+                        include={"end_users": True},
                     )
                 )
 

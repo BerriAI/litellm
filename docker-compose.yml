@@ -1,4 +1,3 @@
-version: "3.11"
 services:
   litellm:
     build:
@@ -65,4 +64,3 @@ volumes:
     driver: local
   postgres_data:
     name: litellm_postgres_data # Named volume for Postgres data persistence
-

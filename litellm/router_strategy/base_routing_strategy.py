@@ -140,17 +140,30 @@ class BaseRoutingStrategy(ABC):
                         compressed_ops[op["key"]] = op
 
                     ops_to_remove.append(idx)
+
                 # Convert back to list
                 compressed_queue = list(compressed_ops.values())
 
-                await self.dual_cache.redis_cache.async_increment_pipeline(
-                    increment_list=compressed_queue,
+                increment_result = (
+                    await self.dual_cache.redis_cache.async_increment_pipeline(
+                        increment_list=compressed_queue,
+                    )
                 )
+
                 self.redis_increment_operation_queue = [
                     op
                     for idx, op in enumerate(self.redis_increment_operation_queue)
                     if idx not in ops_to_remove
                 ]
+
+                if increment_result is not None:
+                    return_result = {
+                        key["key"]: op
+                        for key, op in zip(compressed_queue, increment_result)
+                    }
+                else:
+                    return_result = {}
+                return return_result
 
         except Exception as e:
             verbose_router_logger.error(
@@ -202,10 +215,7 @@ class BaseRoutingStrategy(ABC):
                 self.get_in_memory_keys_to_update()
             )  # if no pattern OR redis cache does not support scan_iter, use in-memory keys
 
-            if isinstance(cache_keys, set):
-                cache_keys_list = list(cache_keys)
-            else:
-                cache_keys_list = cache_keys
+            cache_keys_list = list(cache_keys)
 
             # 1. Snapshot in-memory before
             in_memory_before_dict = {}
@@ -218,12 +228,9 @@ class BaseRoutingStrategy(ABC):
                 in_memory_before_dict[k] = float(v or 0)
 
             # 1. Push all provider spend increments to Redis
-            await self._push_in_memory_increments_to_redis()
-
-            # 2. Fetch from Redis
-            redis_values = await self.dual_cache.redis_cache.async_batch_get_cache(
-                key_list=cache_keys_list
-            )
+            redis_values = await self._push_in_memory_increments_to_redis()
+            if redis_values is None:
+                return
 
             # 4. Merge
             for key in cache_keys_list:
@@ -233,7 +240,17 @@ class BaseRoutingStrategy(ABC):
                     await self.dual_cache.in_memory_cache.async_get_cache(key=key) or 0
                 )
                 delta = after - before
-                merged = redis_val + delta
+                if after <= redis_val:
+                    merged = redis_val + delta
+                else:
+                    continue
+                # elif "rpm" in key:  # redis is behind in-memory cache
+                #     # shut down the proxy
+                #     print(f"self.redis_increment_operation_queue: {self.redis_increment_operation_queue}")
+                #     print(f"Redis_val={redis_val} is behind in-memory cache_val={after} for key: {key}. This should not happen, since we should be updating redis with in-memory cache.")
+                #     import os
+                #     os._exit(1)
+                #     raise Exception(f"Redis is behind in-memory cache for key: {key}. This should not happen, since we should be updating redis with in-memory cache.")
                 await self.dual_cache.in_memory_cache.async_set_cache(
                     key=key, value=merged
                 )

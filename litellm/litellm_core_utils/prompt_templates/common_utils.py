@@ -14,10 +14,12 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Tuple,
     Union,
     cast,
 )
 
+from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -116,7 +118,7 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
 
 
 def convert_content_list_to_str(
-    message: Union[AllMessageValues, ChatCompletionResponseMessage]
+    message: Union[AllMessageValues, ChatCompletionResponseMessage],
 ) -> str:
     """
     - handles scenario where content is list and not string
@@ -453,6 +455,10 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
             filename, file_content, content_type = file_data
         elif len(file_data) == 4:
             filename, file_content, content_type, file_headers = file_data
+    elif isinstance(file_data, InMemoryFile):
+        filename = file_data.name
+        file_content = file_data
+        content_type = file_data.content_type
     else:
         file_content = file_data
     # Convert content to bytes
@@ -489,37 +495,105 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
     )
 
 
-def unpack_defs(schema, defs):
-    properties = schema.get("properties", None)
-    if properties is None:
-        return
+# ---------------------------------------------------------------------------
+# Generic, dependency-free implementation of `unpack_defs`
+# ---------------------------------------------------------------------------
 
-    for name, value in properties.items():
-        ref_key = value.get("$ref", None)
-        if ref_key is not None:
-            ref = defs[ref_key.split("defs/")[-1]]
-            unpack_defs(ref, defs)
-            properties[name] = ref
-            continue
 
-        anyof = value.get("anyOf", None)
-        if anyof is not None:
-            for i, atype in enumerate(anyof):
-                ref_key = atype.get("$ref", None)
-                if ref_key is not None:
-                    ref = defs[ref_key.split("defs/")[-1]]
-                    unpack_defs(ref, defs)
-                    anyof[i] = ref
-            continue
+def unpack_defs(schema: dict, defs: dict) -> None:
+    """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
-        items = value.get("items", None)
-        if items is not None:
-            ref_key = items.get("$ref", None)
-            if ref_key is not None:
-                ref = defs[ref_key.split("defs/")[-1]]
-                unpack_defs(ref, defs)
-                value["items"] = ref
+    This utility walks the entire schema tree (dicts and lists) so it naturally
+    resolves references hidden under any keyword – ``items``, ``allOf``,
+    ``anyOf``, ``oneOf``, ``additionalProperties``, etc.
+
+    It mutates *schema* in-place and does **not** return anything.  The helper
+    keeps memory overhead low by resolving nodes as it encounters them rather
+    than materialising a fully dereferenced copy first.
+    """
+
+    import copy
+    from collections import deque
+
+    # Combine the defs handed down by the caller with defs/definitions found on
+    # the current node.  Local keys shadow parent keys to match JSON-schema
+    # scoping rules.
+    root_defs: dict = {
+        **defs,
+        **schema.get("$defs", {}),
+        **schema.get("definitions", {}),
+    }
+
+    # Use iterative approach with queue to avoid recursion
+    # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
+    queue: deque[
+        tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]
+    ] = deque([(schema, None, None, root_defs, set())])
+
+    while queue:
+        node, parent, key, active_defs, ref_chain = queue.popleft()
+
+        # ----------------------------- dict -----------------------------
+        if isinstance(node, dict):
+            # --- Case 1: this node *is* a reference ---
+            if "$ref" in node:
+                ref_name = node["$ref"].split("/")[-1]
+
+                # Check for circular reference in the resolution chain
+                if ref_name in ref_chain:
+                    # Circular reference detected - leave as-is to prevent infinite recursion
+                    continue
+
+                target_schema = active_defs.get(ref_name)
+                # Unknown reference – leave untouched
+                if target_schema is None:
+                    continue
+
+                # Merge defs from the target to capture nested definitions
+                child_defs = {
+                    **active_defs,
+                    **target_schema.get("$defs", {}),
+                    **target_schema.get("definitions", {}),
+                }
+
+                # Replace the reference with resolved copy
+                resolved = copy.deepcopy(target_schema)
+                if parent is not None and key is not None:
+                    if isinstance(parent, dict) and isinstance(key, str):
+                        parent[key] = resolved
+                    elif isinstance(parent, list) and isinstance(key, int):
+                        parent[key] = resolved
+                else:
+                    # This is the root schema itself
+                    schema.clear()
+                    schema.update(resolved)
+                    resolved = schema
+
+                # Add to ref chain to track circular references
+                new_ref_chain = ref_chain.copy()
+                new_ref_chain.add(ref_name)
+
+                # Add resolved node to queue for further processing
+                queue.append((resolved, parent, key, child_defs, new_ref_chain))
                 continue
+
+            # --- Case 2: regular dict – process its values ---
+            # Update defs with any nested $defs/definitions present *here*.
+            current_defs = {
+                **active_defs,
+                **node.get("$defs", {}),
+                **node.get("definitions", {}),
+            }
+
+            # Add all dict values to queue
+            for k, v in node.items():
+                queue.append((v, node, k, current_defs, ref_chain))
+
+        # ---------------------------- list ------------------------------
+        elif isinstance(node, list):
+            # Add all list items to queue
+            for idx, item in enumerate(node):
+                queue.append((item, node, idx, active_defs, ref_chain))
 
 
 def _get_image_mime_type_from_url(url: str) -> Optional[str]:
@@ -532,6 +606,7 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
     audio/mpeg
     audio/mp3
     audio/wav
+    audio/ogg
     image/png
     image/jpeg
     image/webp
@@ -565,6 +640,7 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
         (".mp3",): "audio/mp3",
         (".wav",): "audio/wav",
         (".mpeg",): "audio/mpeg",
+        (".ogg",): "audio/ogg",
         # Documents
         (".pdf",): "application/pdf",
         (".txt",): "text/plain",
@@ -621,7 +697,6 @@ def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
     return file_ids
 
 
-
 def check_is_function_call(logging_obj: "LoggingClass") -> bool:
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         is_function_call,
@@ -634,6 +709,7 @@ def check_is_function_call(logging_obj: "LoggingClass") -> bool:
             return True
 
     return False
+
 
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
     """
@@ -688,3 +764,169 @@ def migrate_file_to_image_url(
     return image_url_object
 
 
+def get_last_user_message(messages: List[AllMessageValues]) -> Optional[str]:
+    """
+    Get the last consecutive block of messages from the user.
+
+    Example:
+    messages = [
+        {"role": "user", "content": "Hello, how are you?"},
+        {"role": "assistant", "content": "I'm good, thank you!"},
+        {"role": "user", "content": "What is the weather in Tokyo?"},
+    ]
+    get_user_prompt(messages) -> "What is the weather in Tokyo?"
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        convert_content_list_to_str,
+    )
+
+    if not messages:
+        return None
+
+    # Iterate from the end to find the last consecutive block of user messages
+    user_messages = []
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            user_messages.append(message)
+        else:
+            # Stop when we hit a non-user message
+            break
+
+    if not user_messages:
+        return None
+
+    # Reverse to get the messages in chronological order
+    user_messages.reverse()
+
+    user_prompt = ""
+    for message in user_messages:
+        text_content = convert_content_list_to_str(message)
+        user_prompt += text_content + "\n"
+
+    result = user_prompt.strip()
+    return result if result else None
+
+
+def set_last_user_message(
+    messages: List[AllMessageValues], content: str
+) -> List[AllMessageValues]:
+    """
+    Set the last user message
+
+    1. remove all the last consecutive user messages (FROM THE END)
+    2. add the new message
+    """
+    idx_to_remove = []
+    for idx, message in enumerate(reversed(messages)):
+        if message.get("role") == "user":
+            idx_to_remove.append(idx)
+        else:
+            # Stop when we hit a non-user message
+            break
+    if idx_to_remove:
+        messages = [
+            message
+            for idx, message in enumerate(reversed(messages))
+            if idx not in idx_to_remove
+        ]
+        messages.reverse()
+    messages.append({"role": "user", "content": content})
+    return messages
+
+
+def convert_prefix_message_to_non_prefix_messages(
+    messages: List[AllMessageValues],
+) -> List[AllMessageValues]:
+    """
+    For models that don't support {prefix: true} in messages, we need to convert the prefix message to a non-prefix message.
+
+    Use prompt:
+
+    {"role": "assistant", "content": "value", "prefix": true} -> [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
+        },
+        {
+            "role": "assistant",
+            "content": message["content"],
+        },
+    ]
+
+    do this in place
+    """
+    new_messages: List[AllMessageValues] = []
+    for message in messages:
+        if message.get("prefix"):
+            new_messages.append(
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
+                }
+            )
+            new_messages.append(
+                {**{k: v for k, v in message.items() if k != "prefix"}}  # type: ignore
+            )
+        else:
+            new_messages.append(message)
+    return new_messages
+
+
+def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Extract reasoning content and main content from a message.
+
+    Args:
+        message (dict): The message dictionary that may contain reasoning_content
+
+    Returns:
+        tuple[Optional[str], Optional[str]]: A tuple of (reasoning_content, content)
+    """
+    message_content = message.get("content")
+    if "reasoning_content" in message:
+        return message["reasoning_content"], message["content"]
+    elif "reasoning" in message:
+        return message["reasoning"], message["content"]
+    elif isinstance(message_content, str):
+        return _parse_content_for_reasoning(message_content)
+    return None, message_content
+
+
+def _parse_content_for_reasoning(
+    message_text: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Parse the content for reasoning
+
+    Returns:
+    - reasoning_content: The content of the reasoning
+    - content: The content of the message
+    """
+    if not message_text:
+        return None, message_text
+
+    reasoning_match = re.match(
+        r"<(?:think|thinking)>(.*?)</(?:think|thinking)>(.*)", message_text, re.DOTALL
+    )
+
+    if reasoning_match:
+        return reasoning_match.group(1), reasoning_match.group(2)
+
+    return None, message_text
+
+
+def extract_images_from_message(message: AllMessageValues) -> List[str]:
+    """
+    Extract images from a message
+    """
+    images = []
+    message_content = message.get("content")
+    if isinstance(message_content, list):
+        for m in message_content:
+            image_url = m.get("image_url")
+            if image_url:
+                if isinstance(image_url, str):
+                    images.append(image_url)
+                elif isinstance(image_url, dict) and "url" in image_url:
+                    images.append(image_url["url"])
+    return images

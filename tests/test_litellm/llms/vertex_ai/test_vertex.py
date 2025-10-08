@@ -145,6 +145,7 @@ def test_build_vertex_schema():
         ([{"googleSearchRetrieval": {}}], "googleSearchRetrieval"),
         ([{"enterpriseWebSearch": {}}], "enterpriseWebSearch"),
         ([{"code_execution": {}}], "code_execution"),
+        ([{"googleMaps": {}}], "googleMaps"),
     ],
 )
 def test_vertex_tool_params(tools, key):
@@ -197,6 +198,61 @@ def test_vertex_function_translation(tool, expect_parameters):
         assert (
             "parameters" not in optional_params["tools"][0]["function_declarations"][0]
         )
+
+
+def test_vertex_tool_type_field_removal():
+    """
+    Test that the 'type' field is removed from tools during processing
+    to avoid issues with Vertex AI API while maintaining functionality.
+    """
+    # Test with Google Search tool that has 'type' field
+    tools_with_type = [{"type": "google_search", "googleSearch": {}}]
+    
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="vertex_ai",
+        tools=tools_with_type,
+    )
+    
+    # Verify the tool is processed correctly
+    assert "tools" in optional_params
+    assert len(optional_params["tools"]) == 1
+    assert "googleSearch" in optional_params["tools"][0]
+    assert optional_params["tools"][0]["googleSearch"] == {}
+    
+    # Verify the 'type' field is not present in the final result
+    assert "type" not in optional_params["tools"][0]
+    
+    # Test with function tool that has 'type' field
+    function_tools_with_type = [
+        {
+            "type": "function",
+            "function": {
+                "name": "test_function",
+                "description": "A test function",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"param": {"type": "string"}}
+                }
+            }
+        }
+    ]
+    
+    optional_params_function = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="vertex_ai",
+        tools=function_tools_with_type,
+    )
+    
+    # Verify function tool is processed correctly
+    assert "tools" in optional_params_function
+    assert len(optional_params_function["tools"]) == 1
+    assert "function_declarations" in optional_params_function["tools"][0]
+    assert len(optional_params_function["tools"][0]["function_declarations"]) == 1
+    assert optional_params_function["tools"][0]["function_declarations"][0]["name"] == "test_function"
+    
+    # Verify the 'type' field is not present in the final result
+    assert "type" not in optional_params_function["tools"][0]
 
 
 def test_function_calling_with_gemini():
@@ -1218,6 +1274,10 @@ def test_get_image_mime_type_from_url():
         _get_image_mime_type_from_url("https://example.com/IMAGE.WEBP") == "image/webp"
     )
 
+    # Test audio formats
+    assert _get_image_mime_type_from_url("https://example.com/audio.ogg") == "audio/ogg"
+    assert _get_image_mime_type_from_url("https://example.com/track.OGG") == "audio/ogg"
+
     # Test unsupported formats
     assert _get_image_mime_type_from_url("https://example.com/image.gif") is None
     assert _get_image_mime_type_from_url("https://example.com/image.bmp") is None
@@ -1465,3 +1525,37 @@ def test_vertex_parallel_tool_calls_false_single_tool():
         parallel_tool_calls=False,
     )
     assert "tools" in optional_params
+
+
+from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
+
+
+def test_system_prompt_only_adds_blank_user_message():
+    """
+    Test that the system prompt only adds a blank user message when a system message is passed in.
+
+    Relevant Issue - https://github.com/BerriAI/litellm/issues/13769
+    """
+    SYSTEM_INSTRUCTION = "System instructions for the model"
+    data = _transform_request_body(
+        messages=[{"role": "system", "content": SYSTEM_INSTRUCTION}],
+        model="gemini-2.5-flash",
+        optional_params={},
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+    print("Final data: ", data)
+
+    # validate that a blank user message is added when a system message is passed in
+    assert len(data["contents"]) == 1
+    first_content = data["contents"][0]
+    assert first_content["role"] == "user"
+    assert len(first_content["parts"]) == 1
+
+
+    #########################################################
+    # system message was passed in
+    #########################################################
+    assert len(data["system_instruction"]) == 1
+    assert data["system_instruction"]["parts"][0]["text"] == SYSTEM_INSTRUCTION

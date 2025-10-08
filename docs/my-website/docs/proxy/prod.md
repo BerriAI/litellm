@@ -22,7 +22,6 @@ general_settings:
   database_connection_pool_limit: 10 # limit the number of database connections to = MAX Number of DB Connections/Number of instances of litellm proxy (Around 10-20 is good number)
 
   # OPTIONAL Best Practices
-  disable_spend_logs: True # turn off writing each transaction to the db. We recommend doing this is you don't need to see Usage on the LiteLLM UI and are tracking metrics via Prometheus
   disable_error_logs: True # turn off writing LLM Exceptions to DB
   allow_requests_on_db_unavailable: True # Only USE when running LiteLLM on your VPC. Allow requests to still be processed even if the DB is unavailable. We recommend doing this if you're running LiteLLM on VPC that cannot be accessed from the public internet.
 
@@ -49,7 +48,21 @@ Need Help or want dedicated support ? Talk to a founder [here]: (https://calendl
 :::
 
 
-## 2. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
+## 2. Recommended Machine Specifications
+
+For optimal performance in production, we recommend the following minimum machine specifications:
+
+| Resource | Recommended Value |
+|----------|------------------|
+| CPU      | 2 vCPU           |
+| Memory   | 4 GB RAM         |
+
+These specifications provide:
+- Sufficient compute power for handling concurrent requests
+- Adequate memory for request processing and caching
+
+
+## 3. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
 
 Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
 
@@ -58,8 +71,18 @@ Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
 CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
 ```
 
+> Optional: If you observe gradual memory growth under sustained load, consider recycling workers after a fixed number of requests to mitigate leaks. Set this via CLI or environment variable:
 
-## 3. Use Redis 'port','host', 'password'. NOT 'redis_url'
+```shell
+# CLI
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--max_requests_before_restart", "10000"]
+
+# or ENV (for deployment manifests / containers)
+export MAX_REQUESTS_BEFORE_RESTART=10000
+```
+
+
+## 4. Use Redis 'port','host', 'password'. NOT 'redis_url'
 
 If you decide to use Redis, DO NOT use 'redis_url'. We recommend using redis port, host, and password params. 
 
@@ -67,11 +90,17 @@ If you decide to use Redis, DO NOT use 'redis_url'. We recommend using redis por
 
 This is still something we're investigating. Keep track of it [here](https://github.com/BerriAI/litellm/issues/3188)
 
-Recommended to do this for prod: 
+### Redis Version Requirement
+
+| Component | Minimum Version |
+|-----------|-----------------|
+| Redis     | 7.0+            |
+
+Recommended to do this for prod:
 
 ```yaml
 router_settings:
-  routing_strategy: usage-based-routing-v2 
+  routing_strategy: simple-shuffle # (default) - recommended for best performance
   # redis_url: "os.environ/REDIS_URL"
   redis_host: os.environ/REDIS_HOST
   redis_port: os.environ/REDIS_PORT
@@ -86,13 +115,16 @@ litellm_settings:
     password: os.environ/REDIS_PASSWORD
 ```
 
-## 4. Disable 'load_dotenv'
+> **WARNING**
+**Usage-based routing is not recommended for production due to performance impacts.** Use `simple-shuffle` (default) for optimal performance in high-traffic scenarios.
+
+## 5. Disable 'load_dotenv'
 
 Set `export LITELLM_MODE="PRODUCTION"`
 
 This disables the load_dotenv() functionality, which will automatically load your environment credentials from the local `.env`. 
 
-## 5. If running LiteLLM on VPC, gracefully handle DB unavailability
+## 6. If running LiteLLM on VPC, gracefully handle DB unavailability
 
 When running LiteLLM on a VPC (and inaccessible from the public internet), you can enable graceful degradation so that request processing continues even if the database is temporarily unavailable.
 
@@ -118,20 +150,6 @@ When `allow_requests_on_db_unavailable` is set to `true`, LiteLLM will handle er
 | Health/Readiness Check | ✅ Always returns 200 OK | The /health/readiness endpoint returns a 200 OK status to ensure that pods remain operational even when the database is unavailable.
 | LiteLLM Budget Errors or Model Errors | ❌ Request will be blocked | Triggered when the DB is reachable but the authentication token is invalid, lacks access, or exceeds budget limits. |
 
-
-## 6. Disable spend_logs & error_logs if not using the LiteLLM UI
-
-By default, LiteLLM writes several types of logs to the database:
-- Every LLM API request to the `LiteLLM_SpendLogs` table
-- LLM Exceptions to the `LiteLLM_SpendLogs` table
-
-If you're not viewing these logs on the LiteLLM UI, you can disable them by setting the following flags to `True`:
-
-```yaml
-general_settings:
-  disable_spend_logs: True    # Disable writing spend logs to DB
-  disable_error_logs: True    # Disable writing error logs to DB
-```
 
 [More information about what the Database is used for here](db_info)
 
@@ -194,7 +212,7 @@ USE_PRISMA_MIGRATE="True"
 <TabItem value="cli" label="CLI">
 
 ```bash
-litellm --use_prisma_migrate
+litellm
 ```
 
 </TabItem>
@@ -227,19 +245,46 @@ To fix this, just set `LITELLM_MIGRATION_DIR="/path/to/writeable/directory"` in 
 
 LiteLLM will use this directory to write migration files.
 
+## 10. Use a Separate Health Check App
+:::info
+The Separate Health Check App only runs when running via the the LiteLLM Docker Image and using Docker and setting the SEPARATE_HEALTH_APP env var to "1"
+:::
+
+Using a separate health check app ensures that your liveness and readiness probes remain responsive even when the main application is under heavy load. 
+
+**Why is this important?**
+
+- If your health endpoints share the same process as your main app, high traffic or resource exhaustion can cause health checks to hang or fail.
+- When Kubernetes liveness probes hang or time out, it may incorrectly assume your pod is unhealthy and restart it—even if the main app is just busy, not dead.
+- By running health endpoints on a separate lightweight FastAPI app (with its own port), you guarantee that health checks remain fast and reliable, preventing unnecessary pod restarts during traffic spikes or heavy workloads.
+- The way it works is, if either of the health or main proxy app dies due to whatever reason, it will kill the pod and which would be marked as unhealthy prompting the orchestrator to restart the pod
+- Since the proxy and health app are running in the same pod, if the pod dies the health check probe fails, it signifies that the pod is unhealthy and needs to restart/have action taken upon.
+
+**How to enable:**
+
+Set the following environment variable(s):
+```bash
+SEPARATE_HEALTH_APP="1" # Default "0" 
+SEPARATE_HEALTH_PORT="8001" # Default "4001", Works only if `SEPARATE_HEALTH_APP` is "1"
+```
+
+<video controls width="100%" style={{ borderRadius: '8px', marginBottom: '1em' }}>
+  <source src="https://cdn.loom.com/sessions/thumbnails/b08be303331246b88fdc053940d03281-1718990992822.mp4" type="video/mp4" />
+  Your browser does not support the video tag.
+</video>
+
+Or [watch on Loom](https://www.loom.com/share/b08be303331246b88fdc053940d03281?sid=a145ec66-d55f-41f7-aade-a9f41fbe752d).
+
+
+### High Level Architecture
+
+<Image alt="Separate Health App Architecture" img={require('../../img/separate_health_app_architecture.png')} style={{ borderRadius: '8px', marginBottom: '1em', maxWidth: '100%' }} />
+
+
 ## Extras
 ### Expected Performance in Production
 
-1 LiteLLM Uvicorn Worker on Kubernetes
-
-| Description | Value |
-|--------------|-------|
-| Avg latency | `50ms` |
-| Median latency | `51ms` |
-| `/chat/completions` Requests/second | `100` |
-| `/chat/completions` Requests/minute | `6000` |
-| `/chat/completions` Requests/hour | `360K` |
-
+See benchmarks [here](../benchmarks#performance-metrics)
 
 ### Verifying Debugging logs are off
 

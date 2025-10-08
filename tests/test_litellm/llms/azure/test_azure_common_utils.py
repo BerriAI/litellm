@@ -11,13 +11,29 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure.common_utils import BaseAzureLLM, get_azure_ad_token
+from litellm.secret_managers.get_azure_ad_token_provider import (
+    get_azure_ad_token_provider,
+)
+from litellm.types.router import GenericLiteLLMParams
+from litellm.types.secret_managers.get_azure_ad_token_provider import (
+    AzureCredentialType,
+)
 from litellm.types.utils import CallTypes
 
 
 # Mock the necessary dependencies
 @pytest.fixture
-def setup_mocks():
+def setup_mocks(monkeypatch):
+    # Clear Azure environment variables that might interfere with tests
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+    monkeypatch.delenv("AZURE_AD_TOKEN", raising=False)
+
     with patch(
         "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id"
     ) as mock_entra_token, patch(
@@ -82,6 +98,7 @@ def test_initialize_with_tenant_credentials_env_var(setup_mocks, monkeypatch):
     monkeypatch.setenv("AZURE_TENANT_ID", "test-tenant-id")
     monkeypatch.setenv("AZURE_CLIENT_ID", "test-client-id")
     monkeypatch.setenv("AZURE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("AZURE_SCOPE", "test-azure-scope")
 
     result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={},
@@ -97,6 +114,7 @@ def test_initialize_with_tenant_credentials_env_var(setup_mocks, monkeypatch):
         tenant_id="test-tenant-id",
         client_id="test-client-id",
         client_secret="test-client-secret",
+        scope="test-azure-scope",
     )
 
     # Verify expected result
@@ -112,6 +130,7 @@ def test_initialize_with_tenant_credentials(setup_mocks):
             "tenant_id": "test-tenant-id",
             "client_id": "test-client-id",
             "client_secret": "test-client-secret",
+            "azure_scope": "test-azure-scope",
         },
         api_key=None,
         api_base="https://test.openai.azure.com",
@@ -125,6 +144,7 @@ def test_initialize_with_tenant_credentials(setup_mocks):
         tenant_id="test-tenant-id",
         client_id="test-client-id",
         client_secret="test-client-secret",
+        scope="test-azure-scope",
     )
 
     # Verify expected result
@@ -139,6 +159,7 @@ def test_initialize_with_username_password(monkeypatch, setup_mocks):
     monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("AZURE_USERNAME", raising=False)
     monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
 
     # Test with azure_username, azure_password, and client_id provided
     result = BaseAzureLLM().initialize_azure_sdk_client(
@@ -146,6 +167,7 @@ def test_initialize_with_username_password(monkeypatch, setup_mocks):
             "azure_username": "test-username",
             "azure_password": "test-password",
             "client_id": "test-client-id",
+            "azure_scope": "test-azure-scope",
         },
         api_key=None,
         api_base="https://test.openai.azure.com",
@@ -167,6 +189,7 @@ def test_initialize_with_username_password(monkeypatch, setup_mocks):
         azure_username="test-username",
         azure_password="test-password",
         client_id="test-client-id",
+        scope="test-azure-scope",
     )
 
     # Verify expected result
@@ -176,6 +199,8 @@ def test_initialize_with_username_password(monkeypatch, setup_mocks):
 def test_initialize_with_oidc_token(setup_mocks, monkeypatch):
     monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
     monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+
     # Test with azure_ad_token that starts with "oidc/"
     result = BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={"azure_ad_token": "oidc/test-token"},
@@ -186,9 +211,11 @@ def test_initialize_with_oidc_token(setup_mocks, monkeypatch):
         is_async=False,
     )
 
-    # Verify that get_azure_ad_token_from_oidc was called
     setup_mocks["oidc_token"].assert_called_once_with(
-        azure_ad_token="oidc/test-token", azure_client_id=None, azure_tenant_id=None
+        azure_ad_token="oidc/test-token",
+        azure_client_id=None,
+        azure_tenant_id=None,
+        scope="https://cognitiveservices.azure.com/.default",
     )
 
     # Verify expected result
@@ -202,6 +229,7 @@ def test_initialize_with_oidc_token_and_client_params(setup_mocks):
             "azure_ad_token": "oidc/test-token",
             "client_id": "test-client-id",
             "tenant_id": "test-tenant-id",
+            "azure_scope": "test-azure-scope",
         },
         api_key=None,
         api_base="https://test.openai.azure.com",
@@ -215,6 +243,7 @@ def test_initialize_with_oidc_token_and_client_params(setup_mocks):
         azure_ad_token="oidc/test-token",
         azure_client_id="test-client-id",
         azure_tenant_id="test-tenant-id",
+        scope="test-azure-scope",
     )
 
     # Verify expected result
@@ -243,6 +272,7 @@ def test_initialize_with_oidc_token_fallback_to_env(setup_mocks, monkeypatch):
         azure_ad_token="oidc/test-token",
         azure_client_id="env-client-id",
         azure_tenant_id="env-tenant-id",
+        scope="https://cognitiveservices.azure.com/.default",
     )
 
     # Verify expected result
@@ -253,6 +283,7 @@ def test_initialize_with_oidc_token_no_credentials(setup_mocks, monkeypatch):
     # Clear environment variables
     monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
     monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
 
     # Test with azure_ad_token that starts with "oidc/" but no credentials anywhere
     result = BaseAzureLLM().initialize_azure_sdk_client(
@@ -268,7 +299,10 @@ def test_initialize_with_oidc_token_no_credentials(setup_mocks, monkeypatch):
 
     # Verify that get_azure_ad_token_from_oidc was called with None values
     setup_mocks["oidc_token"].assert_called_once_with(
-        azure_ad_token="oidc/test-token", azure_client_id=None, azure_tenant_id=None
+        azure_ad_token="oidc/test-token",
+        azure_client_id=None,
+        azure_tenant_id=None,
+        scope="https://cognitiveservices.azure.com/.default",
     )
 
     # Verify expected result
@@ -391,6 +425,7 @@ def test_select_azure_base_url_called(setup_mocks):
             "add_message",
             "arun_thread_stream",
             "aresponses",
+            "alist_input_items",
             "acreate_fine_tuning_job",
             "acancel_fine_tuning_job",
             "alist_fine_tuning_jobs",
@@ -398,6 +433,10 @@ def test_select_azure_base_url_called(setup_mocks):
             "afile_list",
             "aimage_edit",
             "image_edit",
+            "agenerate_content_stream",
+            "agenerate_content",
+            "allm_passthrough_route",
+            "llm_passthrough_route",
         ]
     ],
 )
@@ -876,3 +915,572 @@ async def test_azure_client_cache_separates_sync_and_async():
         assert (
             mock_init_azure.call_count == 2
         ), "initialize_azure_sdk_client should be called twice"
+
+
+def test_scope_always_string_in_initialize_azure_sdk_client(setup_mocks, monkeypatch):
+    """
+    Test that the scope parameter in initialize_azure_sdk_client is always a string,
+    regardless of the input provided (None, empty string, etc.).
+    """
+    # Clear environment variables to ensure clean test state
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+
+    base_llm = BaseAzureLLM()
+    expected_default_scope = "https://cognitiveservices.azure.com/.default"
+
+    # Test case 1: scope is None in litellm_params
+    result = base_llm.initialize_azure_sdk_client(
+        litellm_params={"azure_scope": None},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    # Verify scope is a string and has the expected default value
+    # We need to check the internal logic by inspecting what was passed to mocked functions
+    setup_mocks["select_url"].assert_called()
+    call_args = setup_mocks["select_url"].call_args[1]["azure_client_params"]
+    # The scope should be used internally when setting up token providers
+
+    # Test case 2: azure_scope key is missing entirely
+    result = base_llm.initialize_azure_sdk_client(
+        litellm_params={},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    # Test case 3: azure_scope is an empty string
+    result = base_llm.initialize_azure_sdk_client(
+        litellm_params={"azure_scope": ""},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    # Test case 4: azure_scope is a valid custom string
+    custom_scope = "https://custom.scope.com/.default"
+    result = base_llm.initialize_azure_sdk_client(
+        litellm_params={"azure_scope": custom_scope},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    # Test case 5: Test with token authentication to verify scope is passed correctly
+    setup_mocks["entra_token"].reset_mock()
+    result = base_llm.initialize_azure_sdk_client(
+        litellm_params={
+            "azure_scope": None,  # This should default to the expected scope
+            "tenant_id": "test-tenant",
+            "client_id": "test-client",
+            "client_secret": "test-secret",
+        },
+        api_key=None,  # No API key to trigger token authentication
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    # Verify that the token function was called with a string scope
+    setup_mocks["entra_token"].assert_called_once()
+    call_args = setup_mocks["entra_token"].call_args
+    scope_arg = call_args[1]["scope"]  # scope should be passed as keyword argument
+    assert isinstance(
+        scope_arg, str
+    ), f"Scope should be a string, got {type(scope_arg)}"
+    assert (
+        scope_arg == expected_default_scope
+    ), f"Scope should be {expected_default_scope}, got {scope_arg}"
+
+    # Test case 6: Test with environment variable set to None (edge case)
+    monkeypatch.setenv("AZURE_SCOPE", "")
+    result = base_llm.initialize_azure_sdk_client(
+        litellm_params={"azure_scope": None},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    print("All scope tests passed - scope is always a string")
+
+
+def test_with_existing_token_provider(setup_mocks):
+    """Test get_azure_ad_token with an existing token provider."""
+    token_provider = lambda: "test-token"
+    litellm_params = GenericLiteLLMParams(azure_ad_token_provider=token_provider)
+
+    token = get_azure_ad_token(litellm_params)
+
+    assert token == "test-token"
+
+
+def test_with_existing_azure_ad_token(setup_mocks):
+    """Test get_azure_ad_token with an existing azure ad token."""
+    litellm_params = GenericLiteLLMParams(azure_ad_token="test-token")
+
+    token = get_azure_ad_token(litellm_params)
+
+    assert token == "test-token"
+
+
+def test_with_existing_azure_ad_token_from_env(setup_mocks):
+    """Test get_azure_ad_token with an existing AZURE_AD_TOKEN from env."""
+
+    # mock get_secret_str("AZURE_AD_TOKEN") to "test-token"
+    with patch("litellm.llms.azure.common_utils.get_secret_str") as mock_get_secret_str:
+        # Configure the mock to return "test-token" when called with "AZURE_AD_TOKEN"
+        mock_get_secret_str.side_effect = lambda key: (
+            "test-token" if key == "AZURE_AD_TOKEN" else None
+        )
+
+        litellm_params = GenericLiteLLMParams()
+
+        token = get_azure_ad_token(litellm_params)
+
+        assert token == "test-token"
+        # Verify that get_secret_str was called with "AZURE_AD_TOKEN"
+        mock_get_secret_str.assert_called_with("AZURE_AD_TOKEN")
+
+
+def test_get_azure_ad_token_with_client_id_and_client_secret(setup_mocks):
+    """Test get_azure_ad_token with tenant_id, client_id, and client_secret."""
+    # Reset mocks to ensure clean state
+    setup_mocks["entra_token"].reset_mock()
+
+    # Create test parameters with username, password, and client_id
+    # but no other authentication methods
+    litellm_params = GenericLiteLLMParams(
+        tenant_id="test-tenant-id",
+        client_id="test-client-id",
+        client_secret="test-client-secret",
+        azure_scope="test-azure-scope",
+    )
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Using Azure AD Token Provider from Entra ID for Azure Auth"
+    )
+
+    # Verify get_azure_ad_token_from_entra_id was called with correct params
+    setup_mocks["entra_token"].assert_called_once_with(
+        tenant_id="test-tenant-id",
+        client_id="test-client-id",
+        client_secret="test-client-secret",
+        scope="test-azure-scope",
+    )
+
+    # Verify the token is what we expect from our mock
+    assert token == "mock-entra-token"
+
+
+def test_get_azure_ad_token_with_client_id_and_client_secret_from_env(
+    setup_mocks, monkeypatch
+):
+    """Test get_azure_ad_token with tenant_id, client_id, and client_secret from env."""
+    # Reset mocks to ensure clean state
+    setup_mocks["entra_token"].reset_mock()
+
+    # Set environment variables
+    monkeypatch.setenv("AZURE_TENANT_ID", "test-tenant-id")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("AZURE_SCOPE", "test-azure-scope")
+
+    # Create test parameters with username, password, and client_id
+    # but no other authentication methods
+    litellm_params = GenericLiteLLMParams()
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Using Azure AD Token Provider from Entra ID for Azure Auth"
+    )
+
+    # Verify get_azure_ad_token_from_entra_id was called with correct params
+    setup_mocks["entra_token"].assert_called_once_with(
+        tenant_id="test-tenant-id",
+        client_id="test-client-id",
+        client_secret="test-client-secret",
+        scope="test-azure-scope",
+    )
+
+    # Verify the token is what we expect from our mock
+    assert token == "mock-entra-token"
+
+
+def test_get_azure_ad_token_with_username_password(setup_mocks):
+    """Test get_azure_ad_token with username, password, and client_id."""
+    # Reset mocks to ensure clean state
+    setup_mocks["username_password_token"].reset_mock()
+
+    # Create test parameters with username, password, and client_id
+    # but no other authentication methods
+    litellm_params = GenericLiteLLMParams(
+        azure_username="test-username",
+        azure_password="test-password",
+        client_id="test-client-id",
+        azure_scope="test-azure-scope",
+        # Ensure no other auth methods are available
+        azure_ad_token_provider=None,
+        azure_ad_token=None,
+        tenant_id=None,
+        client_secret=None,
+    )
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Using Azure Username and Password for Azure Auth"
+    )
+
+    # Verify get_azure_ad_token_from_username_password was called with correct params
+    setup_mocks["username_password_token"].assert_called_once_with(
+        azure_username="test-username",
+        azure_password="test-password",
+        client_id="test-client-id",
+        scope="test-azure-scope",
+    )
+
+    # Verify the token is what we expect from our mock
+    assert token == "mock-username-password-token"
+
+
+def test_get_azure_ad_token_with_missing_username_password(setup_mocks):
+    """Test get_azure_ad_token skips username/password auth when credentials are incomplete."""
+    # Reset mocks to ensure clean state
+    setup_mocks["username_password_token"].reset_mock()
+
+    # Test cases with missing credentials
+    test_cases = [
+        # Missing username
+        GenericLiteLLMParams(
+            azure_username=None,
+            azure_password="test-password",
+            client_id="test-client-id",
+        ),
+        # Missing password
+        GenericLiteLLMParams(
+            azure_username="test-username",
+            azure_password=None,
+            client_id="test-client-id",
+        ),
+        # Missing client_id
+        GenericLiteLLMParams(
+            azure_username="test-username",
+            azure_password="test-password",
+            client_id=None,
+        ),
+    ]
+
+    for params in test_cases:
+        # Call the function
+        get_azure_ad_token(params)
+
+        # Verify username/password auth was not used
+        setup_mocks["username_password_token"].assert_not_called()
+
+        # Reset mock for next test case
+        setup_mocks["username_password_token"].reset_mock()
+
+
+def test_get_azure_ad_token_with_username_password_from_env(setup_mocks, monkeypatch):
+    """Test get_azure_ad_token with username, password, and client_id from environment variables."""
+    # Reset mocks to ensure clean state
+    setup_mocks["username_password_token"].reset_mock()
+
+    # Set environment variables
+    monkeypatch.setenv("AZURE_USERNAME", "env-username")
+    monkeypatch.setenv("AZURE_PASSWORD", "env-password")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "env-client-id")
+    monkeypatch.setenv("AZURE_SCOPE", "test-azure-scope")
+
+    # Create test parameters with no explicit credentials
+    litellm_params = GenericLiteLLMParams(
+        # Ensure no other auth methods are available
+        azure_ad_token_provider=None,
+        azure_ad_token=None,
+        tenant_id=None,
+        client_secret=None,
+        # Don't set username, password, or client_id directly
+    )
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Using Azure Username and Password for Azure Auth"
+    )
+
+    # Verify get_azure_ad_token_from_username_password was called with correct params from env
+    setup_mocks["username_password_token"].assert_called_once_with(
+        azure_username="env-username",
+        azure_password="env-password",
+        client_id="env-client-id",
+        scope="test-azure-scope",
+    )
+
+    # Verify the token is what we expect from our mock
+    assert token == "mock-username-password-token"
+
+
+def test_get_azure_ad_token_with_oidc_token(setup_mocks, monkeypatch):
+    """Test get_azure_ad_token with OIDC token."""
+    # Reset mocks to ensure clean state
+    setup_mocks["oidc_token"].reset_mock()
+
+    # Clear environment variables that might interfere with OIDC token logic
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+
+    # Create test parameters with OIDC token, client_id, and tenant_id
+    litellm_params = GenericLiteLLMParams(
+        azure_ad_token="oidc/test-token",
+        client_id="test-client-id",
+        tenant_id="test-tenant-id",
+        azure_scope="test-azure-scope",
+        # Ensure no other auth methods are available
+        azure_ad_token_provider=None,
+        client_secret=None,
+        azure_username=None,
+        azure_password=None,
+    )
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the debug message was logged
+    setup_mocks["logger"].debug.assert_any_call("Using Azure OIDC Token for Azure Auth")
+
+    # Verify get_azure_ad_token_from_oidc was called with correct params
+    setup_mocks["oidc_token"].assert_called_once_with(
+        azure_ad_token="oidc/test-token",
+        azure_client_id="test-client-id",
+        azure_tenant_id="test-tenant-id",
+        scope="test-azure-scope",
+    )
+
+    # Verify the token is what we expect from our mock
+    assert token == "mock-oidc-token"
+
+
+def test_get_azure_ad_token_with_token_refresh(setup_mocks, monkeypatch):
+    """Test get_azure_ad_token with token refresh enabled."""
+    # Reset mocks to ensure clean state
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+
+    setup_mocks["token_provider"].reset_mock()
+
+    # Enable token refresh
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+
+    # Create test parameters with no other auth methods available
+    litellm_params = GenericLiteLLMParams()
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Using Azure AD token provider based on Service Principal with Secret workflow or DefaultAzureCredential for Azure Auth"
+    )
+
+    # Verify get_azure_ad_token_provider was called
+    setup_mocks["token_provider"].assert_called_once()
+
+    # Verify the token is what we expect from our mock
+    assert token == "mock-default-token"
+
+
+def test_get_azure_ad_token_with_token_refresh_error(setup_mocks):
+    """Test get_azure_ad_token with token refresh enabled but raising an error."""
+    # Reset mocks to ensure clean state
+    setup_mocks["token_provider"].reset_mock()
+
+    # Enable token refresh but make it raise an error
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+    setup_mocks["token_provider"].side_effect = ValueError("Token provider error")
+
+    # Create test parameters with no other auth methods available
+    litellm_params = GenericLiteLLMParams()
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Using Azure AD token provider based on Service Principal with Secret workflow or DefaultAzureCredential for Azure Auth"
+    )
+
+    # Verify error was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Azure AD Token Provider could not be used."
+    )
+
+    # Verify get_azure_ad_token_provider was called twice (once for service principal, once for DefaultAzureCredential)
+    assert setup_mocks["token_provider"].call_count == 2
+
+    # Verify the token is None since the provider raised an error
+    assert token is None
+
+
+def test_token_provider_returns_non_string(setup_mocks):
+    """Test that get_azure_ad_token raises TypeError when token provider returns non-string value."""
+    # Create a token provider that returns a non-string value
+    non_string_provider = lambda: 123  # Returns an integer instead of a string
+
+    # Create test parameters with the non-string token provider
+    litellm_params = GenericLiteLLMParams(azure_ad_token_provider=non_string_provider)
+
+    # Call the function and expect a TypeError
+    with pytest.raises(TypeError) as excinfo:
+        get_azure_ad_token(litellm_params)
+
+    # Verify the error message
+    assert "Azure AD token must be a string" in str(excinfo.value)
+
+    # Verify the error was logged
+    setup_mocks["logger"].error.assert_any_call(
+        "Azure AD token provider returned non-string value: <class 'int'>"
+    )
+
+
+def test_token_provider_raises_exception(setup_mocks):
+    """Test that get_azure_ad_token raises RuntimeError when token provider raises an exception."""
+    # Create a token provider that raises an exception
+    error_message = "Test provider error"
+    error_provider = lambda: exec('raise ValueError("' + error_message + '")')
+
+    # Create test parameters with the error-raising token provider
+    litellm_params = GenericLiteLLMParams(azure_ad_token_provider=error_provider)
+
+    # Call the function and expect a RuntimeError
+    with pytest.raises(RuntimeError) as excinfo:
+        get_azure_ad_token(litellm_params)
+
+    # Verify the error message
+    assert "Failed to get Azure AD token" in str(excinfo.value)
+    assert error_message in str(excinfo.value)
+
+    # Verify the error was logged
+    setup_mocks["logger"].error.assert_called()
+
+
+def test_get_azure_ad_token_provider_with_default_azure_credential():
+    """
+    Test that get_azure_ad_token_provider correctly uses DefaultAzureCredential 
+    when explicitly specified as the credential type. This verifies that the function
+    can dynamically instantiate DefaultAzureCredential and return a working token provider.
+    """
+    # Mock Azure identity classes
+    with patch('azure.identity.DefaultAzureCredential') as mock_default_cred, \
+         patch('azure.identity.get_bearer_token_provider') as mock_token_provider:
+        
+        # Configure mocks
+        mock_credential_instance = MagicMock()
+        mock_default_cred.return_value = mock_credential_instance
+        mock_token_provider.return_value = lambda: "test-default-azure-token"
+        
+        # Test with DefaultAzureCredential specified explicitly
+        token_provider = get_azure_ad_token_provider(
+            azure_scope="https://cognitiveservices.azure.com/.default",
+            azure_credential=AzureCredentialType.DefaultAzureCredential
+        )
+        
+        # Verify DefaultAzureCredential was instantiated
+        mock_default_cred.assert_called_once_with()
+        
+        # Verify get_bearer_token_provider was called with the right parameters
+        mock_token_provider.assert_called_once_with(
+            mock_credential_instance, 
+            "https://cognitiveservices.azure.com/.default"
+        )
+        
+        # Verify the returned token provider works
+        token = token_provider()
+        assert token == "test-default-azure-token"
+
+
+def test_get_azure_ad_token_fallback_to_default_azure_credential(setup_mocks, monkeypatch):
+    """
+    Test that get_azure_ad_token falls back to DefaultAzureCredential when the 
+    service principal method fails but token refresh is enabled. This tests the 
+    complete fallback flow from service principal to DefaultAzureCredential.
+    """
+    # Clear environment variables that might interfere
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+
+    # Reset mocks to ensure clean state
+    setup_mocks["token_provider"].reset_mock()
+
+    # Enable token refresh
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+
+    # Configure get_azure_ad_token_provider to fail first (service principal) 
+    # but succeed on second call (DefaultAzureCredential)
+    def mock_token_provider_side_effect(*args, **kwargs):
+        # If called with azure_credential=DefaultAzureCredential, return a working provider
+        if kwargs.get("azure_credential") == AzureCredentialType.DefaultAzureCredential:
+            return lambda: "mock-default-azure-credential-token"
+        # Otherwise (service principal call), return None to simulate failure
+        return None
+
+    setup_mocks["token_provider"].side_effect = mock_token_provider_side_effect
+
+    # Create test parameters with no other auth methods available
+    litellm_params = GenericLiteLLMParams()
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the success debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Successfully obtained Azure AD token provider using DefaultAzureCredential"
+    )
+
+    # Verify get_azure_ad_token_provider was called twice:
+    # 1. First with just azure_scope (service principal attempt)
+    # 2. Second with azure_credential=DefaultAzureCredential (fallback)
+    assert setup_mocks["token_provider"].call_count == 2
+    
+    # Verify the calls were made with expected parameters
+    calls = setup_mocks["token_provider"].call_args_list
+    
+    # First call should be service principal attempt (no azure_credential)
+    first_call_kwargs = calls[0][1]
+    assert "azure_scope" in first_call_kwargs
+    assert first_call_kwargs.get("azure_credential") is None
+    
+    # Second call should be DefaultAzureCredential attempt
+    second_call_kwargs = calls[1][1]
+    assert "azure_scope" in second_call_kwargs
+    assert second_call_kwargs.get("azure_credential") == AzureCredentialType.DefaultAzureCredential
+
+    # Verify the token is what we expect from our DefaultAzureCredential mock
+    assert token == "mock-default-azure-credential-token"

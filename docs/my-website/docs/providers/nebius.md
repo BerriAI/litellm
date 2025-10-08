@@ -168,7 +168,7 @@ The Nebius provider supports the following parameters:
 | max_tokens | integer | Maximum number of tokens to generate |
 | n | integer | Number of completions to generate |
 | presence_penalty | number | Penalizes tokens based on if they appear in the text so far |
-| response_format | object | Format of the response, e.g., {"type": "json"} |
+| response_format | object | Format of the response, e.g., `{"type": "json"}` |
 | seed | integer | Sampling seed for deterministic results |
 | stop | string/array | Sequences where the API will stop generating tokens |
 | stream | boolean | Whether to stream the response |

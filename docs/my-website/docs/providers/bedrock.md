@@ -25,11 +25,32 @@ For **Amazon Nova Models**: Bump to v1.53.5+
 
 :::
 
+## Authentication
+
 :::info
 
 LiteLLM uses boto3 to handle authentication. All these options are supported - https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html#credentials.
 
 :::
+ 
+LiteLLM supports API key authentication in addition to traditional boto3 authentication methods. For additional API key details, refer to [docs](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html).
+
+Option 1: use the AWS_BEARER_TOKEN_BEDROCK environment variable 
+
+```bash
+export AWS_BEARER_TOKEN_BEDROCK="your-api-key"
+```
+
+Option 2: use the api_key parameter to pass in API key for completion, embedding, image_generation API calls.
+
+```python
+response = completion(
+  model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  api_key="your-api-key"
+)
+```
+
 
 ## Usage
 
@@ -80,6 +101,7 @@ aws_profile_name: Optional[str],
 aws_role_name: Optional[str],
 aws_web_identity_token: Optional[str],
 aws_bedrock_runtime_endpoint: Optional[str],
+api_key: Optional[str],
 ```
 
 ### 2. Start the proxy 
@@ -287,6 +309,65 @@ print(response)
 </TabItem>
 </Tabs>
 
+## Usage - Request Metadata
+
+Attach metadata to Bedrock requests for logging and cost attribution.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import os
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    messages=[{"role": "user", "content": "Hello, how are you?"}],
+    requestMetadata={
+        "cost_center": "engineering",
+        "user_id": "user123"
+    }
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+**Set on yaml**
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-v1
+    litellm_params:
+      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      requestMetadata:
+        cost_center: "engineering"
+```
+
+**Set on request**
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="bedrock-claude-v1",
+    messages=[{"role": "user", "content": "Hello"}],
+    extra_body={
+        "requestMetadata": {"cost_center": "engineering"}
+    }
+)
+```
+
+</TabItem>
+</Tabs>
+
 ## Usage - Function Calling / Tool calling
 
 LiteLLM supports tool calling via Bedrock's Converse and Invoke API's.
@@ -446,7 +527,7 @@ print(f"\nResponse: {resp}")
 
 ## Usage - 'thinking' / 'reasoning content'
 
-This is currently only supported for Anthropic's Claude 3.7 Sonnet + Deepseek R1.
+This is currently only supported for Anthropic's Claude 3.7 Sonnet + Deepseek R1 + GPT-OSS models.
 
 Works on v1.61.20+.
 
@@ -561,6 +642,150 @@ Same as [Anthropic API response](../providers/anthropic#usage---thinking--reason
 ### Pass `thinking` to Anthropic models
 
 Same as [Anthropic API response](../providers/anthropic#usage---thinking--reasoning_content).
+
+
+## Usage - Anthropic Beta Features
+
+LiteLLM supports Anthropic's beta features on AWS Bedrock through the `anthropic-beta` header. This enables access to experimental features like:
+
+- **1M Context Window** - Up to 1 million tokens of context (Claude Sonnet 4)
+- **Computer Use Tools** - AI that can interact with computer interfaces
+- **Token-Efficient Tools** - More efficient tool usage patterns  
+- **Extended Output** - Up to 128K output tokens
+- **Enhanced Thinking** - Advanced reasoning capabilities
+
+### Supported Beta Features
+
+| Beta Feature | Header Value | Compatible Models | Description |
+|--------------|-------------|------------------|-------------|
+| 1M Context Window | `context-1m-2025-08-07` | Claude Sonnet 4 | Enable 1 million token context window |
+| Computer Use (Latest) | `computer-use-2025-01-24` | Claude 3.7 Sonnet | Latest computer use tools |
+| Computer Use (Legacy) | `computer-use-2024-10-22` | Claude 3.5 Sonnet v2 | Computer use tools for Claude 3.5 |
+| Token-Efficient Tools | `token-efficient-tools-2025-02-19` | Claude 3.7 Sonnet | More efficient tool usage |
+| Interleaved Thinking | `interleaved-thinking-2025-05-14` | Claude 4 models | Enhanced thinking capabilities |
+| Extended Output | `output-128k-2025-02-19` | Claude 3.7 Sonnet | Up to 128K output tokens |
+| Developer Thinking | `dev-full-thinking-2025-05-14` | Claude 4 models | Raw thinking mode for developers |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+**Single Beta Feature**
+
+```python
+from litellm import completion
+import os
+
+# set env
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+# Use 1M context window with Claude Sonnet 4
+response = completion(
+    model="bedrock/anthropic.claude-sonnet-4-20250115-v1:0",
+    messages=[{"role": "user", "content": "Hello! Testing 1M context window."}],
+    max_tokens=100,
+    extra_headers={
+        "anthropic-beta": "context-1m-2025-08-07"  # 👈 Enable 1M context
+    }
+)
+```
+
+**Multiple Beta Features**
+
+```python
+from litellm import completion
+
+# Combine multiple beta features (comma-separated)
+response = completion(
+    model="bedrock/converse/anthropic.claude-3-5-sonnet-20241022-v2:0",
+    messages=[{"role": "user", "content": "Testing multiple beta features"}],
+    max_tokens=100,
+    extra_headers={
+        "anthropic-beta": "computer-use-2024-10-22,context-1m-2025-08-07"
+    }
+)
+```
+
+**Computer Use Tools with Beta Features**
+
+```python
+from litellm import completion
+
+# Computer use tools automatically add computer-use-2024-10-22
+# You can add additional beta features
+response = completion(
+    model="bedrock/converse/anthropic.claude-3-5-sonnet-20241022-v2:0",
+    messages=[{"role": "user", "content": "Take a screenshot"}],
+    tools=[{
+        "type": "computer_20241022",
+        "name": "computer",
+        "display_width_px": 1920,
+        "display_height_px": 1080
+    }],
+    extra_headers={
+        "anthropic-beta": "context-1m-2025-08-07"  # Additional beta feature
+    }
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+**Set on YAML Config**
+
+```yaml
+model_list:
+  - model_name: claude-sonnet-4-1m
+    litellm_params:
+      model: bedrock/anthropic.claude-sonnet-4-20250115-v1:0
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"  # 👈 Enable 1M context
+
+  - model_name: claude-computer-use
+    litellm_params:
+      model: bedrock/converse/anthropic.claude-3-5-sonnet-20241022-v2:0
+      extra_headers:
+        anthropic-beta: "computer-use-2024-10-22,context-1m-2025-08-07"
+
+general_settings:
+  forward_client_headers_to_llm_api: true  # 👈 Required for client-side header forwarding
+```
+
+**Set on Request**
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="claude-sonnet-4-1m",
+    messages=[{
+        "role": "user", 
+        "content": "Testing 1M context window"
+    }],
+    extra_headers={
+        "anthropic-beta": "context-1m-2025-08-07"
+    }
+)
+```
+
+:::info
+**For client-side header forwarding**: When using the proxy and sending `anthropic-beta` headers from the client (like the OpenAI SDK), you need to enable `forward_client_headers_to_llm_api: true` in your proxy's `general_settings`. This tells the proxy to extract headers from HTTP requests and forward them to the underlying LLM provider.
+:::
+
+</TabItem>
+</Tabs>
+
+:::info
+
+Beta features may require special access or permissions in your AWS account. Some features are only available in specific AWS regions. Check the [AWS Bedrock documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html) for availability and access requirements.
+
+:::
 
 
 ## Usage - Structured Output / JSON mode 
@@ -724,6 +949,19 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 Example of using [Bedrock Guardrails with LiteLLM](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html)
 
+### Selective Content Moderation with `guarded_text`
+
+LiteLLM supports selective content moderation using the `guarded_text` content type. This allows you to wrap only specific content that should be moderated by Bedrock Guardrails, rather than evaluating the entire conversation.
+
+**How it works:**
+- Content with `type: "guarded_text"` gets automatically wrapped in `guardrailConverseContent` blocks
+- Only the wrapped content is evaluated by Bedrock Guardrails
+- Regular content with `type: "text"` bypasses guardrail evaluation
+
+:::note
+If `guarded_text` is not used, the entire conversation history will be sent to the guardrail for evaluation, which can increase latency and costs.
+:::
+
 <Tabs>
 <TabItem value="sdk" label="LiteLLM SDK">
 
@@ -749,6 +987,24 @@ response = completion(
         "guardrailVersion": "DRAFT",           # The version of the guardrail.
         "trace": "disabled",                   # The trace behavior for the guardrail. Can either be "disabled" or "enabled"
     },
+)
+
+# Selective guardrail usage with guarded_text - only specific content is evaluated
+response_guard = completion(
+    model="anthropic.claude-v2",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is the main topic of this legal document?"},
+                {"type": "guarded_text", "text": "This      document contains sensitive legal information that should be moderated by guardrails."}
+            ]
+        }
+    ],
+    guardrailConfig={
+        "guardrailIdentifier": "gr-abc123",
+        "guardrailVersion": "DRAFT"
+    }
 )
 ```
 </TabItem>
@@ -828,7 +1084,20 @@ response = client.chat.completions.create(model="bedrock-claude-v1", messages = 
 temperature=0.7
 )
 
-print(response)
+# For adding selective guardrail usage with guarded_text
+response_guard = client.chat.completions.create(model="bedrock-claude-v1", messages = [
+   {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is the main topic of this legal document?"},
+                {"type": "guarded_text", "text": "This document contains sensitive legal information that should be moderated by guardrails."}
+            ]
+  }
+],
+temperature=0.7
+) 
+
+print(response_guard)
 ```
 </TabItem>
 </Tabs>
@@ -1467,6 +1736,91 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 
 
+### OpenAI GPT OSS
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `bedrock/converse/openai.gpt-oss-20b-1:0`, `bedrock/converse/openai.gpt-oss-120b-1:0` |
+| Provider Documentation | [Amazon Bedrock ↗](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html) |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python title="GPT OSS SDK Usage" showLineNumbers
+from litellm import completion
+import os
+
+# Set AWS credentials
+os.environ["AWS_ACCESS_KEY_ID"] = "your-aws-access-key"
+os.environ["AWS_SECRET_ACCESS_KEY"] = "your-aws-secret-key"
+os.environ["AWS_REGION_NAME"] = "us-east-1"
+
+# GPT OSS 20B model
+response = completion(
+    model="bedrock/converse/openai.gpt-oss-20b-1:0",
+    messages=[{"role": "user", "content": "Hello, how are you?"}],
+)
+print(response.choices[0].message.content)
+
+# GPT OSS 120B model  
+response = completion(
+    model="bedrock/converse/openai.gpt-oss-120b-1:0",
+    messages=[{"role": "user", "content": "Explain machine learning in simple terms"}],
+)
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy">
+
+**1. Add to config**
+
+```yaml title="config.yaml" showLineNumbers
+model_list:
+  - model_name: gpt-oss-20b
+    litellm_params:
+      model: bedrock/converse/openai.gpt-oss-20b-1:0
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION_NAME
+      
+  - model_name: gpt-oss-120b
+    litellm_params:
+      model: bedrock/converse/openai.gpt-oss-120b-1:0
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION_NAME
+```
+
+**2. Start proxy**
+
+```bash title="Start LiteLLM Proxy" showLineNumbers
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash title="Test GPT OSS via Proxy" showLineNumbers
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+  --header 'Authorization: Bearer sk-1234' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "model": "gpt-oss-20b",
+    "messages": [
+      {
+        "role": "user", 
+        "content": "What are the key benefits of open source AI?"
+      }
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
 ## Provisioned throughput models
 To use provisioned throughput Bedrock models pass 
 - `model=bedrock/<base-model>`, example `model=bedrock/anthropic.claude-v2`. Set `model` to any of the [Supported AWS models](#supported-aws-bedrock-models)
@@ -1501,7 +1855,10 @@ Here's an example of using a bedrock model with LiteLLM. For a complete list, re
 
 | Model Name                 | Command                                                          |
 |----------------------------|------------------------------------------------------------------|
+| GPT-OSS 20B | `completion(model='bedrock/converse/openai.gpt-oss-20b-1:0', messages=messages)` | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
+| GPT-OSS 120B | `completion(model='bedrock/converse/openai.gpt-oss-120b-1:0', messages=messages)` | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Deepseek R1    | `completion(model='bedrock/us.deepseek.r1-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
+| Anthropic Claude Sonnet 4.5    | `completion(model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V3.5 Sonnet    | `completion(model='bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V3  sonnet    | `completion(model='bedrock/anthropic.claude-3-sonnet-20240229-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V3 Haiku     | `completion(model='bedrock/anthropic.claude-3-haiku-20240307-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
@@ -1525,6 +1882,7 @@ Here's an example of using a bedrock model with LiteLLM. For a complete list, re
 | Mistral 7B Instruct        | `completion(model='bedrock/mistral.mistral-7b-instruct-v0:2', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Mixtral 8x7B Instruct      | `completion(model='bedrock/mistral.mixtral-8x7b-instruct-v0:1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 
+
 ## Bedrock Embedding
 
 ### API keys
@@ -1546,11 +1904,29 @@ response = embedding(
 print(response)
 ```
 
+#### Titan V2 - encoding_format support
+```python
+from litellm import embedding
+# Float format (default)
+response = embedding(
+    model="bedrock/amazon.titan-embed-text-v2:0",
+    input=["good morning from litellm"],
+    encoding_format="float"  # Returns float array
+)
+
+# Binary format
+response = embedding(
+    model="bedrock/amazon.titan-embed-text-v2:0",
+    input=["good morning from litellm"],
+    encoding_format="base64"  # Returns base64 encoded binary
+)
+```
+
 ## Supported AWS Bedrock Embedding Models
 
 | Model Name           | Usage                               | Supported Additional OpenAI params |
 |----------------------|---------------------------------------------|-----|
-| Titan Embeddings V2 | `embedding(model="bedrock/amazon.titan-embed-text-v2:0", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_v2_transformation.py#L59) |
+| Titan Embeddings V2 | `embedding(model="bedrock/amazon.titan-embed-text-v2:0", input=input)` | `dimensions`, `encoding_format` |
 | Titan Embeddings - V1 | `embedding(model="bedrock/amazon.titan-embed-text-v1", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_g1_transformation.py#L53)
 | Titan Multimodal Embeddings | `embedding(model="bedrock/amazon.titan-embed-image-v1", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_multimodal_transformation.py#L28) |
 | Cohere Embeddings - English | `embedding(model="bedrock/cohere.embed-english-v3", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/cohere_transformation.py#L18)
@@ -1634,6 +2010,39 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
     "model": "amazon.nova-canvas-v1:0",
     "prompt": "A cute baby sea otter"
 }'
+```
+
+</TabItem>
+</Tabs>
+
+### Using Inference Profiles with Image Generation
+
+For AWS Bedrock Application Inference Profiles with image generation, use the `model_id` parameter to specify the inference profile ARN:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import image_generation
+
+response = image_generation(
+    model="bedrock/amazon.nova-canvas-v1:0",
+    model_id="arn:aws:bedrock:eu-west-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
+    prompt="A cute baby sea otter"
+)
+print(f"response: {response}")
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: nova-canvas-inference-profile
+    litellm_params:
+      model: bedrock/amazon.nova-canvas-v1:0
+      model_id: arn:aws:bedrock:eu-west-1:000000000000:application-inference-profile/a0a0a0a0a0a0
+      aws_region_name: "eu-west-1"
 ```
 
 </TabItem>
@@ -1932,6 +2341,39 @@ response = completion(
 
 
 Make the bedrock completion call
+
+---
+
+### Required AWS IAM Policy for AssumeRole
+
+To use `aws_role_name` (STS AssumeRole) with LiteLLM, your IAM user or role **must** have permission to call `sts:AssumeRole` on the target role. If you see an error like:
+
+```
+An error occurred (AccessDenied) when calling the AssumeRole operation: User: arn:aws:sts::...:assumed-role/litellm-ecs-task-role/... is not authorized to perform: sts:AssumeRole on resource: arn:aws:iam::...:role/Enterprise/BedrockCrossAccountConsumer
+```
+
+This means the IAM identity running LiteLLM does **not** have permission to assume the target role. You must update your IAM policy to allow this action.
+
+#### Example IAM Policy
+
+Replace `<TARGET_ROLE_ARN>` with the ARN of the role you want to assume (e.g., `arn:aws:iam::123456789012:role/Enterprise/BedrockCrossAccountConsumer`).
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": "<TARGET_ROLE_ARN>"
+    }
+  ]
+}
+```
+
+**Note:** The target role itself must also trust the calling IAM identity (via its trust policy) for AssumeRole to succeed. See [AWS AssumeRole docs](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-api.html) for more details.
+
+---
 
 <Tabs>
 <TabItem value="sdk" label="SDK">

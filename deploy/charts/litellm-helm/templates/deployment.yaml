@@ -1,6 +1,8 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  annotations:
+  {{- toYaml .Values.deploymentAnnotations | nindent 4 }}
   name: {{ include "litellm.fullname" . }}
   labels:
     {{- include "litellm.labels" . | nindent 4 }}
@@ -14,7 +16,9 @@ spec:
   template:
     metadata:
       annotations:
+        {{- if .Values.proxyConfigMap.create }}
         checksum/config: {{ include (print $.Template.BasePath "/configmap-litellm.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -69,7 +73,14 @@ spec:
                   name: {{ .Values.db.secret.name }}
                   key: {{ .Values.db.secret.passwordKey }}
             - name: DATABASE_HOST
+              {{- if .Values.db.secret.endpointKey }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.endpointKey }}
+              {{- else }}
               value: {{ .Values.db.endpoint }}
+              {{- end }}
             - name: DATABASE_NAME
               value: {{ .Values.db.database }}
             - name: DATABASE_URL
@@ -97,6 +108,12 @@ spec:
               value: {{ $val | quote }}
             {{- end }}
             {{- end }}
+            {{- if .Values.separateHealthApp }}
+            - name: SEPARATE_HEALTH_APP
+              value: "1"
+            - name: SEPARATE_HEALTH_PORT
+              value: {{ .Values.separateHealthPort | default "8081" | quote }}
+            {{- end }}
             {{- with .Values.extraEnvVars }}
               {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -116,19 +133,23 @@ spec:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+            {{- if .Values.separateHealthApp }}
+            - name: health
+              containerPort: {{ .Values.separateHealthPort | default 8081 }}
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /health/liveliness
-              port: http
+              port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
           readinessProbe:
             httpGet:
               path: /health/readiness
-              port: http
-          # Give the container time to start up.  Up to 5 minutes (10 * 30 seconds)
+              port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
           startupProbe:
             httpGet:
               path: /health/readiness
-              port: http
+              port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
             failureThreshold: 30
             periodSeconds: 10
           resources:
@@ -164,9 +185,13 @@ spec:
         {{- end }}
         - name: litellm-config
           configMap:
+            {{- if .Values.proxyConfigMap.create }}
             name: {{ include "litellm.fullname" . }}-config
+            {{- else }}
+            name: {{ .Values.proxyConfigMap.name }}
+            {{- end }}
             items:
-              - key: "config.yaml"
+              - key: {{ .Values.proxyConfigMap.key | default "config.yaml" }}
                 path: "config.yaml"
       {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}

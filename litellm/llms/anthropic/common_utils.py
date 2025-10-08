@@ -2,7 +2,7 @@
 This file contains common utils for anthropic calls.
 """
 
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -10,11 +10,11 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.anthropic import AllAnthropicToolsValues
+from litellm.types.llms.anthropic import AllAnthropicToolsValues, AnthropicMcpServerTool
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import TokenCountResponse
 
 
 class AnthropicError(BaseLLMException):
@@ -51,6 +51,15 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         file_ids = get_file_ids_from_messages(messages)
         return len(file_ids) > 0
+
+    def is_mcp_server_used(
+        self, mcp_servers: Optional[List[AnthropicMcpServerTool]]
+    ) -> bool:
+        if mcp_servers is None:
+            return False
+        if mcp_servers:
+            return True
+        return False
 
     def is_computer_tool_used(
         self, tools: Optional[List[AllAnthropicToolsValues]]
@@ -93,6 +102,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         prompt_caching_set: bool = False,
         pdf_used: bool = False,
         file_id_used: bool = False,
+        mcp_server_used: bool = False,
         is_vertex_request: bool = False,
         user_anthropic_beta_headers: Optional[List[str]] = None,
     ) -> dict:
@@ -106,6 +116,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if file_id_used:
             betas.add("files-api-2025-04-14")
             betas.add("code-execution-2025-05-22")
+        if mcp_server_used:
+            betas.add("mcp-client-2025-04-04")
+
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
             "x-api-key": api_key,
@@ -144,6 +157,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         tools = optional_params.get("tools")
         prompt_caching_set = self.is_cache_control_set(messages=messages)
         computer_tool_used = self.is_computer_tool_used(tools=tools)
+        mcp_server_used = self.is_mcp_server_used(
+            mcp_servers=optional_params.get("mcp_servers")
+        )
         pdf_used = self.is_pdf_used(messages=messages)
         file_id_used = self.is_file_id_used(messages=messages)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
@@ -157,6 +173,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             file_id_used=file_id_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),
             user_anthropic_beta_headers=user_anthropic_beta_headers,
+            mcp_server_used=mcp_server_used,
         )
 
         headers = {**headers, **anthropic_headers}
@@ -165,6 +182,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+        from litellm.secret_managers.main import get_secret_str
+
         return (
             api_base
             or get_secret_str("ANTHROPIC_API_BASE")
@@ -173,6 +192,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+        from litellm.secret_managers.main import get_secret_str
+
         return api_key or get_secret_str("ANTHROPIC_API_KEY")
 
     @staticmethod
@@ -208,6 +229,53 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             litellm_model_name = "anthropic/" + stripped_model_name
             litellm_model_names.append(litellm_model_name)
         return litellm_model_names
+
+    def get_token_counter(self) -> Optional[BaseTokenCounter]:
+        """
+        Factory method to create an Anthropic token counter.
+        
+        Returns:
+            AnthropicTokenCounter instance for this provider.
+        """
+        return AnthropicTokenCounter()
+
+
+class AnthropicTokenCounter(BaseTokenCounter):
+    """Token counter implementation for Anthropic provider."""
+
+    def should_use_token_counting_api(
+        self, 
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        from litellm.types.utils import LlmProviders
+        return custom_llm_provider == LlmProviders.ANTHROPIC.value
+    
+    async def count_tokens(
+        self,
+        model_to_use: str,
+        messages: Optional[List[Dict[str, Any]]],
+        contents: Optional[List[Dict[str, Any]]],
+        deployment: Optional[Dict[str, Any]] = None,
+        request_model: str = "",
+    ) -> Optional[TokenCountResponse]:
+        from litellm.proxy.utils import count_tokens_with_anthropic_api
+        
+        result = await count_tokens_with_anthropic_api(
+            model_to_use=model_to_use,
+            messages=messages,
+            deployment=deployment,
+        )
+        
+        if result is not None:
+            return TokenCountResponse(
+                total_tokens=result.get("total_tokens", 0),
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type=result.get("tokenizer_used", ""),
+                original_response=result,
+            )
+        
+        return None
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:

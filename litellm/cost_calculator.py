@@ -2,8 +2,9 @@
 ## File for 'response_cost' calculation in Logging
 import time
 from functools import lru_cache
-from typing import Any, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
 
+from httpx import Response
 from pydantic import BaseModel
 
 import litellm
@@ -28,8 +29,8 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.azure.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
 )
-from litellm.llms.bedrock.image.cost_calculator import (
-    cost_calculator as bedrock_image_cost_calculator,
+from litellm.llms.bedrock.cost_calculation import (
+    cost_per_token as bedrock_cost_per_token,
 )
 from litellm.llms.databricks.cost_calculator import (
     cost_per_token as databricks_cost_per_token,
@@ -45,6 +46,9 @@ from litellm.llms.openai.cost_calculation import (
     cost_per_second as openai_cost_per_second,
 )
 from litellm.llms.openai.cost_calculation import cost_per_token as openai_cost_per_token
+from litellm.llms.perplexity.cost_calculator import (
+    cost_per_token as perplexity_cost_per_token,
+)
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
 from litellm.llms.vertex_ai.cost_calculator import (
     cost_per_character as google_cost_per_character,
@@ -53,8 +57,9 @@ from litellm.llms.vertex_ai.cost_calculator import (
     cost_per_token as google_cost_per_token,
 )
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
-from litellm.llms.vertex_ai.image_generation.cost_calculator import (
-    cost_calculator as vertex_ai_image_cost_calculator,
+from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
+from litellm.llms.lemonade.cost_calculator import (
+    cost_per_token as lemonade_cost_per_token,
 )
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
@@ -89,6 +94,13 @@ from litellm.utils import (
     _cached_get_model_info_helper,
     token_counter,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LitellmLoggingObject,
+    )
+else:
+    LitellmLoggingObject = Any
 
 
 def _cost_per_token_custom_pricing_helper(
@@ -139,6 +151,8 @@ def cost_per_token(  # noqa: PLR0915
     ### CALL TYPE ###
     call_type: CallTypesLiteral = "completion",
     audio_transcription_file_duration: float = 0.0,  # for audio transcription calls - the file time in seconds
+    ### SERVICE TIER ###
+    service_tier: Optional[str] = None,  # for OpenAI service tier pricing
 ) -> Tuple[float, float]:  # type: ignore
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -269,6 +283,7 @@ def cost_per_token(  # noqa: PLR0915
                 model=model_without_prefix,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
+                service_tier=service_tier,
             )
 
         return prompt_cost, completion_cost
@@ -315,8 +330,10 @@ def cost_per_token(  # noqa: PLR0915
             )
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "bedrock":
+        return bedrock_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "openai":
-        return openai_cost_per_token(model=model, usage=usage_block)
+        return openai_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "fireworks_ai":
@@ -329,6 +346,17 @@ def cost_per_token(  # noqa: PLR0915
         return gemini_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "deepseek":
         return deepseek_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "perplexity":
+        return perplexity_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "xai":
+        return xai_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "lemonade":
+        return lemonade_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "dashscope":
+        from litellm.llms.dashscope.cost_calculator import (
+            cost_per_token as dashscope_cost_per_token,
+        )
+        return dashscope_cost_per_token(model=model, usage=usage_block)
     else:
         model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
@@ -561,6 +589,42 @@ def _infer_call_type(
     return call_type
 
 
+def _store_cost_breakdown_in_logging_obj(
+    litellm_logging_obj: Optional[LitellmLoggingObject],
+    prompt_tokens_cost_usd_dollar: float,
+    completion_tokens_cost_usd_dollar: float,
+    cost_for_built_in_tools_cost_usd_dollar: float,
+    total_cost_usd_dollar: float,
+) -> None:
+    """
+    Helper function to store cost breakdown in the logging object.
+    
+    Args:
+        litellm_logging_obj: The logging object to store breakdown in
+        call_type: Type of call (completion, etc.)
+        prompt_tokens_cost_usd_dollar: Cost of input tokens
+        completion_tokens_cost_usd_dollar: Cost of completion tokens (includes reasoning if applicable)
+        cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
+        total_cost_usd_dollar: Total cost of request
+    """
+    if (litellm_logging_obj is None):
+        return
+    
+    try:
+        # Store the cost breakdown - reasoning cost is 0 since it's already included in completion cost
+        litellm_logging_obj.set_cost_breakdown(
+            input_cost=prompt_tokens_cost_usd_dollar,
+            output_cost=completion_tokens_cost_usd_dollar,
+            total_cost=total_cost_usd_dollar,
+            cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools_cost_usd_dollar
+        )
+        
+    except Exception as breakdown_error:
+        verbose_logger.debug(f"Error storing cost breakdown: {str(breakdown_error)}")
+        # Don't fail the main cost calculation if breakdown storage fails
+        pass
+
+
 def completion_cost(  # noqa: PLR0915
     completion_response=None,
     model: Optional[str] = None,
@@ -585,6 +649,9 @@ def completion_cost(  # noqa: PLR0915
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     litellm_model_name: Optional[str] = None,
     router_model_id: Optional[str] = None,
+    litellm_logging_obj: Optional[LitellmLoggingObject] = None,
+    ### SERVICE TIER ###
+    service_tier: Optional[str] = None,  # for OpenAI service tier pricing
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -637,6 +704,10 @@ def completion_cost(  # noqa: PLR0915
             completion_response=completion_response
         )
         rerank_billed_units: Optional[RerankBilledUnits] = None
+        
+        # Extract service_tier from optional_params if not provided directly
+        if service_tier is None and optional_params is not None:
+            service_tier = optional_params.get("service_tier")
 
         selected_model = _select_model_name_for_cost_calc(
             model=model,
@@ -650,9 +721,10 @@ def completion_cost(  # noqa: PLR0915
         potential_model_names = [selected_model]
         if model is not None:
             potential_model_names.append(model)
+
         for idx, model in enumerate(potential_model_names):
             try:
-                verbose_logger.info(
+                verbose_logger.debug(
                     f"selected model name for cost calculation: {model}"
                 )
 
@@ -748,32 +820,15 @@ def completion_cost(  # noqa: PLR0915
                         )
                 if CostCalculatorUtils._call_type_has_image_response(call_type):
                     ### IMAGE GENERATION COST CALCULATION ###
-                    if custom_llm_provider == "vertex_ai":
-                        if isinstance(completion_response, ImageResponse):
-                            return vertex_ai_image_cost_calculator(
-                                model=model,
-                                image_response=completion_response,
-                            )
-                    elif custom_llm_provider == "bedrock":
-                        if isinstance(completion_response, ImageResponse):
-                            return bedrock_image_cost_calculator(
-                                model=model,
-                                size=size,
-                                image_response=completion_response,
-                                optional_params=optional_params,
-                            )
-                        raise TypeError(
-                            "completion_response must be of type ImageResponse for bedrock image cost calculation"
-                        )
-                    else:
-                        return default_image_cost_calculator(
-                            model=model,
-                            quality=quality,
-                            custom_llm_provider=custom_llm_provider,
-                            n=n,
-                            size=size,
-                            optional_params=optional_params,
-                        )
+                    return CostCalculatorUtils.route_image_generation_cost_calculator(
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                        completion_response=completion_response,
+                        quality=quality,
+                        n=n,
+                        size=size,
+                        optional_params=optional_params,
+                    )
                 elif (
                     call_type == CallTypes.speech.value
                     or call_type == CallTypes.aspeech.value
@@ -826,6 +881,14 @@ def completion_cost(  # noqa: PLR0915
                         combined_usage_object=cost_per_token_usage_object,
                         custom_llm_provider=custom_llm_provider,
                         litellm_model_name=model,
+                    )
+                elif call_type == CallTypes.call_mcp_tool.value:
+                    from litellm.proxy._experimental.mcp_server.cost_calculator import (
+                        MCPCostCalculator,
+                    )
+
+                    return MCPCostCalculator.calculate_mcp_tool_call_cost(
+                        litellm_logging_obj=litellm_logging_obj
                     )
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
@@ -896,11 +959,12 @@ def completion_cost(  # noqa: PLR0915
                     call_type=cast(CallTypesLiteral, call_type),
                     audio_transcription_file_duration=audio_transcription_file_duration,
                     rerank_billed_units=rerank_billed_units,
+                    service_tier=service_tier,
                 )
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 )
-                _final_cost += (
+                cost_for_built_in_tools = (
                     StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
                         model=model,
                         response_object=completion_response,
@@ -909,6 +973,17 @@ def completion_cost(  # noqa: PLR0915
                         custom_llm_provider=custom_llm_provider,
                     )
                 )
+                _final_cost += cost_for_built_in_tools
+                
+                # Store cost breakdown in logging object if available
+                _store_cost_breakdown_in_logging_obj(
+                    litellm_logging_obj=litellm_logging_obj,
+                    prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
+                    completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
+                    cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
+                    total_cost_usd_dollar=_final_cost
+                )
+                
                 return _final_cost
             except Exception as e:
                 verbose_logger.debug(
@@ -959,6 +1034,7 @@ def response_cost_calculator(
         ResponsesAPIResponse,
         LiteLLMRealtimeStreamLoggingObject,
         OpenAIModerationResponse,
+        Response,
     ],
     model: str,
     custom_llm_provider: Optional[str],
@@ -988,6 +1064,9 @@ def response_cost_calculator(
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     litellm_model_name: Optional[str] = None,
     router_model_id: Optional[str] = None,
+    litellm_logging_obj: Optional[LitellmLoggingObject] = None,
+    ### SERVICE TIER ###
+    service_tier: Optional[str] = None,  # for OpenAI service tier pricing
 ) -> float:
     """
     Returns
@@ -1020,6 +1099,8 @@ def response_cost_calculator(
                 standard_built_in_tools_params=standard_built_in_tools_params,
                 litellm_model_name=litellm_model_name,
                 router_model_id=router_model_id,
+                litellm_logging_obj=litellm_logging_obj,
+                service_tier=service_tier,
             )
         return response_cost
     except Exception as e:
@@ -1171,7 +1252,7 @@ def batch_cost_calculator(
         model=model, custom_llm_provider=custom_llm_provider
     )
 
-    verbose_logger.info(
+    verbose_logger.debug(
         "Calculating batch cost per token. model=%s, custom_llm_provider=%s",
         model,
         custom_llm_provider,
@@ -1209,35 +1290,14 @@ def batch_cost_calculator(
     return total_prompt_cost, total_completion_cost
 
 
-class RealtimeAPITokenUsageProcessor:
-    @staticmethod
-    def collect_usage_from_realtime_stream_results(
-        results: OpenAIRealtimeStreamList,
-    ) -> List[Usage]:
-        """
-        Collect usage from realtime stream results
-        """
-        response_done_events: List[OpenAIRealtimeStreamResponseBaseObject] = cast(
-            List[OpenAIRealtimeStreamResponseBaseObject],
-            [result for result in results if result["type"] == "response.done"],
-        )
-        usage_objects: List[Usage] = []
-        for result in response_done_events:
-            usage_object = (
-                ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                    result["response"].get("usage", {})
-                )
-            )
-            usage_objects.append(usage_object)
-        return usage_objects
-
+class BaseTokenUsageProcessor:
     @staticmethod
     def combine_usage_objects(usage_objects: List[Usage]) -> Usage:
         """
         Combine multiple Usage objects into a single Usage object, checking model keys for nested values.
         """
         from litellm.types.utils import (
-            CompletionTokensDetails,
+            CompletionTokensDetailsWrapper,
             PromptTokensDetailsWrapper,
             Usage,
         )
@@ -1266,13 +1326,17 @@ class RealtimeAPITokenUsageProcessor:
                     combined.prompt_tokens_details = PromptTokensDetailsWrapper()
 
                 # Check what keys exist in the model's prompt_tokens_details
-                for attr in dir(usage.prompt_tokens_details):
-                    if not attr.startswith("_") and not callable(
-                        getattr(usage.prompt_tokens_details, attr)
+                for attr in usage.prompt_tokens_details.model_fields:
+                    if (
+                        hasattr(usage.prompt_tokens_details, attr)
+                        and not attr.startswith("_")
+                        and not callable(getattr(usage.prompt_tokens_details, attr))
                     ):
-                        current_val = getattr(combined.prompt_tokens_details, attr, 0)
-                        new_val = getattr(usage.prompt_tokens_details, attr, 0)
-                        if new_val is not None:
+                        current_val = (
+                            getattr(combined.prompt_tokens_details, attr, 0) or 0
+                        )
+                        new_val = getattr(usage.prompt_tokens_details, attr, 0) or 0
+                        if new_val is not None and isinstance(new_val, (int, float)):
                             setattr(
                                 combined.prompt_tokens_details,
                                 attr,
@@ -1288,10 +1352,12 @@ class RealtimeAPITokenUsageProcessor:
                     not hasattr(combined, "completion_tokens_details")
                     or not combined.completion_tokens_details
                 ):
-                    combined.completion_tokens_details = CompletionTokensDetails()
+                    combined.completion_tokens_details = (
+                        CompletionTokensDetailsWrapper()
+                    )
 
                 # Check what keys exist in the model's completion_tokens_details
-                for attr in dir(usage.completion_tokens_details):
+                for attr in usage.completion_tokens_details.model_fields:
                     if not attr.startswith("_") and not callable(
                         getattr(usage.completion_tokens_details, attr)
                     ):
@@ -1299,7 +1365,8 @@ class RealtimeAPITokenUsageProcessor:
                             combined.completion_tokens_details, attr, 0
                         )
                         new_val = getattr(usage.completion_tokens_details, attr, 0)
-                        if new_val is not None:
+
+                        if new_val is not None and current_val is not None:
                             setattr(
                                 combined.completion_tokens_details,
                                 attr,
@@ -1307,6 +1374,29 @@ class RealtimeAPITokenUsageProcessor:
                             )
 
         return combined
+
+
+class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
+    @staticmethod
+    def collect_usage_from_realtime_stream_results(
+        results: OpenAIRealtimeStreamList,
+    ) -> List[Usage]:
+        """
+        Collect usage from realtime stream results
+        """
+        response_done_events: List[OpenAIRealtimeStreamResponseBaseObject] = cast(
+            List[OpenAIRealtimeStreamResponseBaseObject],
+            [result for result in results if result["type"] == "response.done"],
+        )
+        usage_objects: List[Usage] = []
+        for result in response_done_events:
+            usage_object = (
+                ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                    result["response"].get("usage", {})
+                )
+            )
+            usage_objects.append(usage_object)
+        return usage_objects
 
     @staticmethod
     def collect_and_combine_usage_from_realtime_stream_results(

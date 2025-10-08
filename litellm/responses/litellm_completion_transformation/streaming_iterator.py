@@ -6,8 +6,10 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
+    ReasoningSummaryTextDeltaEvent,
     ResponseCompletedEvent,
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
@@ -33,6 +35,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         litellm_custom_stream_wrapper: litellm.CustomStreamWrapper,
         request_input: Union[str, ResponseInputParam],
         responses_api_request: ResponsesAPIOptionalRequestParams,
+        custom_llm_provider: Optional[str] = None,
+        litellm_metadata: Optional[dict] = None,
     ):
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = (
             litellm_custom_stream_wrapper
@@ -41,8 +45,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.responses_api_request: ResponsesAPIOptionalRequestParams = (
             responses_api_request
         )
+        self.custom_llm_provider: Optional[str] = custom_llm_provider
+        self.litellm_metadata: Optional[dict] = litellm_metadata or {}
         self.collected_chat_completion_chunks: List[ModelResponseStream] = []
         self.finished: bool = False
+        self.litellm_logging_obj = litellm_custom_stream_wrapper.logging_obj
 
     async def __anext__(
         self,
@@ -115,15 +122,34 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         """
         Transform a chat completion chunk to a response API chunk.
 
-        This currently only handles emitting the OutputTextDeltaEvent, which is used by other tools using the responses API.
+        This currently handles emitting the OutputTextDeltaEvent, which is used by other tools using the responses API
+        and the ReasoningSummaryTextDeltaEvent, which is used by the responses API to emit reasoning content.
         """
-        return OutputTextDeltaEvent(
-            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
-            item_id=chunk.id,
-            output_index=0,
-            content_index=0,
-            delta=self._get_delta_string_from_streaming_choices(chunk.choices),
-        )
+        if (
+            chunk.choices
+            and hasattr(chunk.choices[0].delta, "reasoning_content")
+            and chunk.choices[0].delta.reasoning_content
+        ):
+            reasoning_content = chunk.choices[0].delta.reasoning_content
+
+            return ReasoningSummaryTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+                item_id=f"rs_{hash(str(reasoning_content))}",
+                output_index=0,
+                delta=reasoning_content,
+            )
+        else:
+            delta_content = self._get_delta_string_from_streaming_choices(chunk.choices)
+            if delta_content:
+                return OutputTextDeltaEvent(
+                    type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                    item_id=chunk.id,
+                    output_index=0,
+                    content_index=0,
+                    delta=delta_content,
+                )
+
+        return None
 
     def _get_delta_string_from_streaming_choices(
         self, choices: List[StreamingChoices]
@@ -142,16 +168,33 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _emit_response_completed_event(self) -> Optional[ResponseCompletedEvent]:
         litellm_model_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
-        ] = stream_chunk_builder(chunks=self.collected_chat_completion_chunks)
+        ] = stream_chunk_builder(chunks=self.collected_chat_completion_chunks, logging_obj=self.litellm_logging_obj)
         if litellm_model_response and isinstance(litellm_model_response, ModelResponse):
+            # Add cost to usage object if include_cost_in_streaming_usage is True
+            if litellm.include_cost_in_streaming_usage and self.litellm_logging_obj is not None:
+                usage = getattr(litellm_model_response, "usage", None)
+                if usage is not None:
+                    setattr(
+                        usage, "cost", self.litellm_logging_obj._response_cost_calculator(result=litellm_model_response)
+                    )
+            
+            # Transform the response
+            responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input=self.request_input,
+                chat_completion_response=litellm_model_response,
+                responses_api_request=self.responses_api_request,
+            )
+            
+            # Encode the response ID to match non-streaming behavior
+            encoded_response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                responses_api_response=responses_api_response,
+                custom_llm_provider=self.custom_llm_provider,
+                litellm_metadata=self.litellm_metadata,
+            )
 
             return ResponseCompletedEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-                response=LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                    request_input=self.request_input,
-                    chat_completion_response=litellm_model_response,
-                    responses_api_request=self.responses_api_request,
-                ),
+                response=encoded_response,
             )
         else:
             return None

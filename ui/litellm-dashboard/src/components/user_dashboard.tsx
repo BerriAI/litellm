@@ -9,12 +9,12 @@ import {
   organizationListCall,
   DEFAULT_ORGANIZATION,
   keyInfoCall,
-  getProxyBaseUrl
+  getProxyBaseUrl,
 } from "./networking";
 import { fetchTeams } from "./common_components/fetch_teams";
 import { Grid, Col, Card, Text, Title } from "@tremor/react";
-import CreateKey from "./create_key_button";
-import ViewKeyTable from "./view_key_table";
+import CreateKey from "./organisms/create_key_button";
+import ViewKeyTable from "./templates/view_key_table";
 import ViewUserSpend from "./view_user_spend";
 import ViewUserTeam from "./view_user_team";
 import DashboardTeam from "./dashboard_default_team";
@@ -24,6 +24,7 @@ import { Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 import { clearTokenCookies } from "@/utils/cookieUtils";
+import { clearMCPAuthTokens } from "./mcp_tools/mcp_auth_storage";
 
 export interface ProxySettings {
   PROXY_BASE_URL: string | null;
@@ -34,19 +35,16 @@ export interface ProxySettings {
   NUM_SPEND_LOGS_ROWS: number;
 }
 
-
 export type UserInfo = {
   models: string[];
   max_budget?: number | null;
   spend: number;
-}
+};
 
 function getCookie(name: string) {
-  console.log("COOKIES", document.cookie)
-  const cookieValue = document.cookie
-      .split('; ')
-      .find(row => row.startsWith(name + '='));
-  return cookieValue ? cookieValue.split('=')[1] : null;
+  console.log("COOKIES", document.cookie);
+  const cookieValue = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
+  return cookieValue ? cookieValue.split("=")[1] : null;
 }
 
 interface UserDashboardProps {
@@ -62,7 +60,7 @@ interface UserDashboardProps {
   premiumUser: boolean;
   organizations: Organization[] | null;
   addKey: (data: any) => void;
-  createClicked: boolean
+  createClicked: boolean;
 }
 
 type TeamInterface = {
@@ -84,17 +82,15 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   premiumUser,
   organizations,
   addKey,
-  createClicked
+  createClicked,
 }) => {
-  const [userSpendData, setUserSpendData] = useState<UserInfo | null>(
-    null
-  );
+  const [userSpendData, setUserSpendData] = useState<UserInfo | null>(null);
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
 
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams()!;
 
-  const token = getCookie('token');
+  const token = getCookie("token");
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -114,6 +110,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     window.addEventListener("beforeunload", function () {
       // Clear session storage
       sessionStorage.clear();
+      // Note: MCP auth tokens are persistent and should not be cleared on page refresh
+      // They are only cleared on logout
     });
   }
 
@@ -178,67 +176,42 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       if (cachedUserModels) {
         setUserModels(JSON.parse(cachedUserModels));
       } else {
-        console.log(`currentOrg: ${JSON.stringify(currentOrg)}`)
+        console.log(`currentOrg: ${JSON.stringify(currentOrg)}`);
         const fetchData = async () => {
           try {
             const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
             setProxySettings(proxy_settings);
 
-            const response = await userInfoCall(
-              accessToken,
-              userID,
-              userRole,
-              false,
-              null,
-              null
-            );
-            
+            const response = await userInfoCall(accessToken, userID, userRole, false, null, null);
 
             setUserSpendData(response["user_info"]);
-            console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
-            
+            console.log(`userSpendData: ${JSON.stringify(userSpendData)}`);
 
             // set keys for admin and users
             if (!response?.teams[0].keys) {
-              setKeys(response["keys"]); 
+              setKeys(response["keys"]);
             } else {
               setKeys(
                 response["keys"].concat(
                   response.teams
                     .filter((team: any) => userRole === "Admin" || team.user_id === userID)
-                    .flatMap((team: any) => team.keys)
-                )
+                    .flatMap((team: any) => team.keys),
+                ),
               );
-              
             }
 
-            sessionStorage.setItem(
-              "userData" + userID,
-              JSON.stringify(response["keys"])
-            );
-            sessionStorage.setItem(
-              "userSpendData" + userID,
-              JSON.stringify(response["user_info"])
-            );
+            sessionStorage.setItem("userData" + userID, JSON.stringify(response["keys"]));
+            sessionStorage.setItem("userSpendData" + userID, JSON.stringify(response["user_info"]));
 
-            const model_available = await modelAvailableCall(
-              accessToken,
-              userID,
-              userRole
-            );
+            const model_available = await modelAvailableCall(accessToken, userID, userRole);
             // loop through model_info["data"] and create an array of element.model_name
-            let available_model_names = model_available["data"].map(
-              (element: { id: string }) => element.id
-            );
+            let available_model_names = model_available["data"].map((element: { id: string }) => element.id);
             console.log("available_model_names:", available_model_names);
             setUserModels(available_model_names);
 
             console.log("userModels:", userModels);
 
-            sessionStorage.setItem(
-              "userModels" + userID,
-              JSON.stringify(available_model_names)
-            );
+            sessionStorage.setItem("userModels" + userID, JSON.stringify(available_model_names));
           } catch (error: any) {
             console.error("There was an error fetching the data", error);
             if (error.message.includes("Invalid proxy server token passed")) {
@@ -253,7 +226,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     }
   }, [userID, token, accessToken, keys, userRole]);
 
-
   useEffect(() => {
     // check key health - if it's invalid, redirect to login
     if (accessToken) {
@@ -266,39 +238,32 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             gotoLogin();
           }
         }
-      }
+      };
       fetchKeyInfo();
     }
   }, [accessToken]);
 
   useEffect(() => {
-    console.log(`currentOrg: ${JSON.stringify(currentOrg)}, accessToken: ${accessToken}, userID: ${userID}, userRole: ${userRole}`)
+    console.log(
+      `currentOrg: ${JSON.stringify(currentOrg)}, accessToken: ${accessToken}, userID: ${userID}, userRole: ${userRole}`,
+    );
     if (accessToken) {
-      console.log(`fetching teams`)
+      console.log(`fetching teams`);
       fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
     }
   }, [currentOrg]);
 
   useEffect(() => {
     // This code will run every time selectedTeam changes
-    if (
-      keys !== null &&
-      selectedTeam !== null &&
-      selectedTeam !== undefined &&
-      selectedTeam.team_id !== null
-    ) {
+    if (keys !== null && selectedTeam !== null && selectedTeam !== undefined && selectedTeam.team_id !== null) {
       let sum = 0;
-      console.log(`keys: ${JSON.stringify(keys)}`)
+      console.log(`keys: ${JSON.stringify(keys)}`);
       for (const key of keys) {
-        if (
-          selectedTeam.hasOwnProperty("team_id") &&
-          key.team_id !== null &&
-          key.team_id === selectedTeam.team_id
-        ) {
+        if (selectedTeam.hasOwnProperty("team_id") && key.team_id !== null && key.team_id === selectedTeam.team_id) {
           sum += key.spend;
         }
       }
-      console.log(`sum: ${sum}`)
+      console.log(`sum: ${sum}`);
       setTeamSpend(sum);
     } else if (keys !== null) {
       // sum the keys which don't have team-id set (default team)
@@ -310,11 +275,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     }
   }, [selectedTeam]);
 
-
   if (invitation_id != null) {
-    return (
-      <Onboarding></Onboarding>
-    )
+    return <Onboarding></Onboarding>;
   }
 
   function gotoLogin() {
@@ -324,21 +286,19 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     const baseUrl = getProxyBaseUrl();
 
     console.log("proxyBaseUrl:", baseUrl);
-    
-    const url = baseUrl
-      ? `${baseUrl}/sso/key/generate`
-      : `/sso/key/generate`;
+
+    const url = baseUrl ? `${baseUrl}/sso/key/generate` : `/sso/key/generate`;
 
     console.log("Full URL:", url);
-    window.location.href = url; 
+    window.location.href = url;
 
     return null;
   }
 
   if (token == null) {
-    // user is not logged in as yet 
+    // user is not logged in as yet
     console.log("All cookies before redirect:", document.cookie);
-    
+
     // Clear token cookies using the utility function
     gotoLogin();
     return null;
@@ -349,35 +309,32 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       console.log("Decoded token:", decoded);
       const expTime = decoded.exp;
       const currentTime = Math.floor(Date.now() / 1000);
-      
+
       if (expTime && currentTime >= expTime) {
         console.log("Token expired, redirecting to login");
-        
+
         gotoLogin();
-        
+
         return null;
       }
     } catch (error) {
       console.error("Error decoding token:", error);
       // If there's an error decoding the token, consider it invalid
       clearTokenCookies();
-      
+
       gotoLogin();
-      
+
       return null;
     }
-    
+
     if (accessToken == null) {
       return null;
     }
   }
 
   if (userID == null) {
-    return (
-      <h1>User ID is not set</h1>
-    );
+    return <h1>User ID is not set</h1>;
   }
-
 
   if (userRole == null) {
     setUserRole("App Owner");
@@ -399,7 +356,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
-        <CreateKey
+          <CreateKey
             key={selectedTeam ? selectedTeam.team_id : null}
             userID={userID}
             team={selectedTeam as Team | null}
@@ -427,6 +384,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             setCurrentOrg={setCurrentOrg}
             organizations={organizations}
             createClicked={createClicked}
+            setAccessToken={setAccessToken}
           />
         </Col>
       </Grid>

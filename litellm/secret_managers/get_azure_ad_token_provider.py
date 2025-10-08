@@ -6,7 +6,10 @@ from litellm.types.secret_managers.get_azure_ad_token_provider import (
 )
 
 
-def get_azure_ad_token_provider(azure_scope: Optional[str] = None) -> Callable[[], str]:
+def get_azure_ad_token_provider(
+    azure_scope: Optional[str] = None,
+    azure_credential: Optional[AzureCredentialType] = None,
+) -> Callable[[], str]:
     """
     Get Azure AD token provider based on Service Principal with Secret workflow.
 
@@ -27,19 +30,28 @@ def get_azure_ad_token_provider(azure_scope: Optional[str] = None) -> Callable[[
     from azure.identity import (
         CertificateCredential,
         ClientSecretCredential,
+        DefaultAzureCredential,
         ManagedIdentityCredential,
         get_bearer_token_provider,
     )
 
     if azure_scope is None:
-        azure_scope = os.environ.get("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default")
+        azure_scope = (
+            os.environ.get("AZURE_SCOPE")
+            or "https://cognitiveservices.azure.com/.default"
+        )
 
-    cred: str = os.environ.get("AZURE_CREDENTIAL", AzureCredentialType.ClientSecretCredential)
+    cred: str = (
+        azure_credential.value if azure_credential else None
+        or os.environ.get("AZURE_CREDENTIAL", AzureCredentialType.ClientSecretCredential)
+        or AzureCredentialType.ClientSecretCredential
+    )
     credential: Optional[
         Union[
             ClientSecretCredential,
             ManagedIdentityCredential,
             CertificateCredential,
+            DefaultAzureCredential,
             Any,
         ]
     ] = None
@@ -52,15 +64,28 @@ def get_azure_ad_token_provider(azure_scope: Optional[str] = None) -> Callable[[
     elif cred == AzureCredentialType.ManagedIdentityCredential:
         credential = ManagedIdentityCredential(client_id=os.environ["AZURE_CLIENT_ID"])
     elif cred == AzureCredentialType.CertificateCredential:
-        credential = CertificateCredential(
-            client_id=os.environ["AZURE_CLIENT_ID"],
-            tenant_id=os.environ["AZURE_TENANT_ID"],
-            certificate_path=os.environ["AZURE_CERTIFICATE_PATH"],
-        )
+        if os.getenv("AZURE_CERTIFICATE_PASSWORD"):
+            credential = CertificateCredential(
+                client_id=os.environ["AZURE_CLIENT_ID"],
+                tenant_id=os.environ["AZURE_TENANT_ID"],
+                certificate_path=os.environ["AZURE_CERTIFICATE_PATH"],
+                password=os.environ["AZURE_CERTIFICATE_PASSWORD"],
+            )
+        else:
+            credential = CertificateCredential(
+                client_id=os.environ["AZURE_CLIENT_ID"],
+                tenant_id=os.environ["AZURE_TENANT_ID"],
+                certificate_path=os.environ["AZURE_CERTIFICATE_PATH"],
+            )
+    elif cred == AzureCredentialType.DefaultAzureCredential:
+        # DefaultAzureCredential doesn't require explicit environment variables
+        # It automatically discovers credentials from the environment (managed identity, CLI, etc.)
+        credential = DefaultAzureCredential()
     else:
         cred_cls = getattr(identity, cred)
         credential = cred_cls()
 
     if credential is None:
         raise ValueError("No credential provided")
+
     return get_bearer_token_provider(credential, azure_scope)

@@ -97,3 +97,20 @@ def test_openrouter_extra_body_transformation():
     assert transformed_request["messages"] == [
         {"role": "user", "content": "Hello, world!"}
     ]
+
+
+def test_openrouter_cache_control_flag_removal():
+    transformed_request = OpenrouterConfig().transform_request(
+        model="openrouter/deepseek/deepseek-chat",
+        messages=[
+            {
+                "role": "user",
+                "content": "Hello, world!",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert transformed_request["messages"][0].get("cache_control") is None

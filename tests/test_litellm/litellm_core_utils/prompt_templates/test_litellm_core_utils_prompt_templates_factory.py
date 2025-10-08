@@ -83,6 +83,37 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
     )
 
 
+def test_convert_to_azure_openai_messages():
+    """Test coverting image_url to azure_openai spec"""
+
+    from typing import List
+
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_azure_openai_messages,
+    )
+    from litellm.types.llms.openai import AllMessageValues
+
+    input: List[AllMessageValues] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {"type": "image_url", "image_url": "www.mock.com"},
+            ],
+        }
+    ]
+
+    expected_content = [
+        {"type": "text", "text": "What is in this image?"},
+        {"type": "image_url", "image_url": {"url": "www.mock.com"}},
+    ]
+
+    output = convert_to_azure_openai_messages(input)
+
+    content = output[0].get("content")
+    assert content == expected_content
+
+
 def test_bedrock_validate_format_image_or_video():
     """Test the _validate_format method for images, videos, and documents"""
 
@@ -107,6 +138,70 @@ def test_bedrock_validate_format_image_or_video():
     for format in valid_video_formats:
         result = BedrockImageProcessor._validate_format(f"video/{format}", format)
         assert result == format, f"Expected {format}, got {result}"
+
+    # Test valid document formats
+    valid_document_formats = {
+        "application/pdf": "pdf",
+        "text/csv": "csv",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    }
+    for mime, expected in valid_document_formats.items():
+        print("testing mime", mime, "expected", expected)
+        result = BedrockImageProcessor._validate_format(
+            mime, mime.split("/")[1]
+        )
+        assert result == expected, f"Expected {expected}, got {result}"
+
+
+def test_bedrock_get_document_format_fallback_mimes():
+    """
+    Test the _get_document_format method with fallback MIME types for DOCX and XLSX.
+    
+    This tests the fallback mechanism when mimetypes.guess_all_extensions returns empty results,
+    which can happen in Docker containers where mimetypes depends on OS-installed MIME types.
+    """
+    from unittest.mock import patch
+
+    # Test DOCX fallback
+    docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    supported_formats = ["pdf", "docx", "xlsx", "csv"]
+    
+    # Mock mimetypes.guess_all_extensions to return empty list (simulating Docker container scenario)
+    with patch('mimetypes.guess_all_extensions', return_value=[]):
+        result = BedrockImageProcessor._get_document_format(
+            mime_type=docx_mime,
+            supported_doc_formats=supported_formats
+        )
+        assert result == "docx", f"Expected 'docx', got '{result}'"
+    
+    # Test XLSX fallback  
+    xlsx_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    
+    with patch('mimetypes.guess_all_extensions', return_value=[]):
+        result = BedrockImageProcessor._get_document_format(
+            mime_type=xlsx_mime,
+            supported_doc_formats=supported_formats
+        )
+        assert result == "xlsx", f"Expected 'xlsx', got '{result}'"
+
+
+def test_bedrock_get_document_format_mimetypes_success():
+    """
+    Test the _get_document_format method when mimetypes.guess_all_extensions works normally.
+    """
+    docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    supported_formats = ["pdf", "docx", "xlsx", "csv"]
+    
+    # Test normal mimetypes behavior (should not hit fallback)
+    result = BedrockImageProcessor._get_document_format(
+        mime_type=docx_mime,
+        supported_doc_formats=supported_formats
+    )
+    assert result == "docx", f"Expected 'docx', got '{result}'"
+
+
+
 
 
 # def test_ollama_pt_consecutive_system_messages():
@@ -288,3 +383,191 @@ def test_bedrock_validate_format_image_or_video():
 #     assert "### System:\nBe helpful\n\n" in result["prompt"]
 #     assert "### Assistant:\nI see a cat in the image.\n\n" in result["prompt"]
 #     assert result["images"] == ["http://example.com/image.jpg"]
+
+
+def test_vertex_ai_transform_empty_function_call_arguments():
+    """
+    Test that the _transform_parts method handles empty function call arguments correctly
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        VertexFunctionCall,
+        _gemini_tool_call_invoke_helper,
+    )
+
+    function_call = {
+        "name": "get_weather",
+        "arguments": "",
+    }
+    result: VertexFunctionCall = _gemini_tool_call_invoke_helper(function_call)
+    print(result)
+    assert result["args"] == {
+        "type": "object",
+    }
+
+
+@pytest.mark.asyncio
+async def test_bedrock_process_image_async_factory():
+    """
+    Test that the _process_image_async_factory method handles image input correctly
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockImageProcessor,
+    )
+
+    image_url = "data:application/pdf; qs=0.001;base64,JVBERi0xLjQKJcOkw7zDtsOfCjIgMCBvYmoKPDwvTGVuZ3RoIDMgMCBSL0ZpbHRlci9GbGF0ZURlY29kZT4"
+
+    content_block = await BedrockImageProcessor.process_image_async(
+        image_url=image_url, format=None
+    )
+    print(f"content_block: {content_block}")
+
+
+def test_unpack_defs_resolves_nested_ref_inside_anyof_items():
+    """Ensure unpack_defs correctly resolves $ref inside items within anyOf (Issue #11372)."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+
+    # Define a minimal schema reproducing the bug scenario
+    schema = {
+        "type": "object",
+        "properties": {
+            "vatAmounts": {
+                "anyOf": [
+                    {  # List of VatAmount
+                        "type": "array",
+                        "items": {"$ref": "#/$defs/VatAmount"},
+                    },
+                    {"type": "null"},
+                ],
+                "title": "Vat Amounts",
+            }
+        },
+        "$defs": {
+            "VatAmount": {
+                "type": "object",
+                "properties": {
+                    "vatRate": {"type": "number"},
+                    "vatAmount": {"type": "number"},
+                },
+                "required": ["vatRate", "vatAmount"],
+                "title": "VatAmount",
+            }
+        },
+    }
+
+    # Perform unpacking
+    unpack_defs(schema, schema["$defs"])
+
+    # Extract the items schema after unpacking
+    items_schema = schema["properties"]["vatAmounts"]["anyOf"][0]["items"]
+
+    # Assertions: items_schema should now be the resolved object, not an empty dict
+    assert isinstance(
+        items_schema, dict
+    ), "Items schema should be a dict after unpacking"
+    assert items_schema.get("type") == "object"
+    # Ensure essential properties are present
+    assert set(items_schema.get("properties", {}).keys()) == {"vatRate", "vatAmount"}
+
+
+def test_convert_gemini_messages():
+    """
+    Handle 'content' not being present in the message - https://github.com/BerriAI/litellm/issues/13169
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_result,
+    )
+    from litellm.types.llms.openai import ChatCompletionToolMessage
+
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_d5b2e3fe-d2c0-451d-b034-cf4fbb22e66c",
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_d5b2e3fe-d2c0-451d-b034-cf4fbb22e66c",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "tool_MAX_Data__get_issues", "arguments": "{}"},
+            }
+        ],
+    }
+
+    convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+
+def test_bedrock_tools_unpack_defs():
+    """
+    Test that the unpack_defs method handles nested $ref inside anyOf items correctly
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    circularRefSchema = {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["doc"]},
+            "content": {"type": "array", "items": {"$ref": "#/$defs/node"}},
+        },
+        "required": ["type", "content"],
+        "additionalProperties": False,
+        "$defs": {
+            "node": {
+                "type": "object",
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string", "enum": ["bulletList"]},
+                            "content": {
+                                "type": "array",
+                                "items": {"$ref": "#/$defs/listItem"},
+                            },
+                        },
+                        "required": ["type"],
+                        "additionalProperties": True,
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string", "enum": ["orderedList"]},
+                            "content": {
+                                "type": "array",
+                                "items": {"$ref": "#/$defs/listItem"},
+                            },
+                        },
+                        "required": ["type"],
+                        "additionalProperties": True,
+                    },
+                ],
+            },
+            "listItem": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": ["listItem"]},
+                    "content": {"type": "array", "items": {"$ref": "#/$defs/node"}},
+                },
+                "required": ["type"],
+                "additionalProperties": True,
+            },
+        },
+    }
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "json_schema",
+                "description": "Process the content using json schema validation",
+                "parameters": circularRefSchema,
+            },
+        }
+    ]
+
+    _bedrock_tools_pt(tools=tools)
+
+

@@ -12,7 +12,10 @@ if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
-    from litellm.integrations.prometheus import PrometheusLogger
+    try:
+        from litellm_enterprise.integrations.prometheus import PrometheusLogger
+    except Exception:
+        PrometheusLogger = None
 else:
     LitellmRouter = Any
     PrometheusLogger = Any
@@ -22,7 +25,7 @@ async def router_cooldown_event_callback(
     litellm_router_instance: LitellmRouter,
     deployment_id: str,
     exception_status: Union[str, int],
-    cooldown_time: float,
+    cooldown_time: Optional[float],
 ):
     """
     Callback triggered when a deployment is put into cooldown by litellm
@@ -86,7 +89,13 @@ def _get_prometheus_logger_from_callbacks() -> Optional[PrometheusLogger]:
     """
     Checks if prometheus is a initalized callback, if yes returns it
     """
-    from litellm.integrations.prometheus import PrometheusLogger
+    try:
+        from litellm_enterprise.integrations.prometheus import PrometheusLogger
+    except Exception:
+        PrometheusLogger = None
+
+    if PrometheusLogger is None:
+        return None
 
     for _callback in litellm._async_success_callback:
         if isinstance(_callback, PrometheusLogger):

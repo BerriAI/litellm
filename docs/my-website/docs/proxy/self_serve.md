@@ -161,6 +161,11 @@ Here's the available UI roles for a LiteLLM Internal User:
   - `internal_user`: can login, view/create/delete their own keys, view their spend. **Cannot** add new users.
   - `internal_user_viewer`: can login, view their own keys, view their own spend. **Cannot** create/delete keys, add new users.
 
+**Team Roles:**
+  - `admin`: can add new members to the team, can control Team Permissions, can add team-only models (useful for onboarding a team's finetuned models).
+  - `user`: can login, view their own keys, view their own spend. **Cannot** create/delete keys (controllable via Team Permissions), add new users.
+
+
 ## Auto-add SSO users to teams
 
 This walks through setting up sso auto-add for **Okta, Google SSO**
@@ -207,35 +212,7 @@ Follow this [tutorial for auto-adding sso users to teams with Microsoft Entra ID
 
 ### Debugging SSO JWT fields 
 
-If you need to inspect the JWT fields received from your SSO provider by LiteLLM, follow these instructions. This guide walks you through setting up a debug callback to view the JWT data during the SSO process.
-
-
-<Image img={require('../../img/debug_sso.png')}  style={{ width: '500px', height: 'auto' }} />
-<br />
-
-1. Add `/sso/debug/callback` as a redirect URL in your SSO provider 
-
-  In your SSO provider's settings, add the following URL as a new redirect (callback) URL:
-
-  ```bash showLineNumbers title="Redirect URL"
-  http://<proxy_base_url>/sso/debug/callback
-  ```
-
-
-2. Navigate to the debug login page on your browser 
-
-    Navigate to the following URL on your browser:
-
-    ```bash showLineNumbers title="URL to navigate to"
-    https://<proxy_base_url>/sso/debug/login
-    ```
-
-    This will initiate the standard SSO flow. You will be redirected to your SSO provider's login screen, and after successful authentication, you will be redirected back to LiteLLM's debug callback route.
-
-
-3. View the JWT fields 
-
-Once redirected, you should see a page called "SSO Debug Information". This page displays the JWT fields received from your SSO provider (as shown in the image above)
+[**Go Here**](./admin_ui_sso.md#debugging-sso-jwt-fields)
 
 
 ## Advanced
@@ -250,7 +227,7 @@ export PROXY_LOGOUT_URL="https://www.google.com"
 <Image img={require('../../img/ui_logout.png')}  style={{ width: '400px', height: 'auto' }} />
 
 
-### Set max budget for internal users 
+### Set default max budget for internal users 
 
 Automatically apply budget per internal user when they sign up. By default the table will be checked every 10 minutes, for users to reset. To modify this, [see this](./users.md#reset-budgets)
 
@@ -262,6 +239,10 @@ litellm_settings:
 
 This sets a max budget of $10 USD for internal users when they sign up. 
 
+You can also manage these settings visually in the UI:
+
+<Image img={require('../../img/default_user_settings_admin_ui.png')}  style={{ width: '700px', height: 'auto' }} />
+
 This budget only applies to personal keys created by that user - seen under `Default Team` on the UI. 
 
 <Image img={require('../../img/max_budget_for_internal_users.png')}  style={{ width: '500px', height: 'auto' }} />
@@ -272,6 +253,96 @@ This budget does not apply to keys created under non-default teams.
 ### Set max budget for teams
 
 [**Go Here**](./team_budgets.md)
+
+### Default Team
+
+<Tabs>
+<TabItem value="ui" label="UI">
+
+Go to `Internal Users` -> `Default User Settings` and set the default team to the team you just created. 
+
+Let's also set the default models to `no-default-models`. This means a user can only create keys within a team.
+
+<Image img={require('../../img/default_user_settings_with_default_team.png')}  style={{ width: '1000px', height: 'auto' }} />
+
+</TabItem>
+<TabItem value="yaml" label="YAML">
+
+:::info
+Team must be created before setting it as the default team. 
+:::
+
+```yaml
+litellm_settings:
+  default_internal_user_params:    # Default Params used when a new user signs in Via SSO
+      user_role: "internal_user"     # one of "internal_user", "internal_user_viewer", 
+      models: ["no-default-models"] # Optional[List[str]], optional): models to be used by the user
+      teams: # Optional[List[NewUserRequestTeam]], optional): teams to be used by the user
+        - team_id: "team_id_1" # Required[str]: team_id to be used by the user
+          user_role: "user" # Optional[str], optional): Default role in the team. Values: "user" or "admin". Defaults to "user"
+```
+
+</TabItem>
+</Tabs>
+
+### Team Member Budgets
+
+Set a max budget for a team member. 
+
+You can do this when creating a new team, or by updating an existing team. 
+
+<Tabs>
+<TabItem value="ui" label="UI">
+
+<Image img={require('../../img/create_default_team.png')}  style={{ width: '600px', height: 'auto' }} />
+
+</TabItem>
+<TabItem value="api" label="API">
+
+```bash
+curl -X POST '<PROXY_BASE_URL>/team/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-D '{
+    "team_alias": "team_1",
+    "budget_duration": "10d",
+    "team_member_budget": 10
+}'
+```
+
+</TabItem>
+</Tabs>
+
+### Team Member Rate Limits
+
+Set a default tpm/rpm limit for an individual team member. 
+
+You can do this when creating a new team, or by updating an existing team. 
+
+
+<Tabs>
+<TabItem value="ui" label="UI">
+
+<Image img={require('../../img/create_team_member_rate_limits.png')}  style={{ width: '600px', height: 'auto' }} />
+
+</TabItem>
+<TabItem value="api" label="API">
+
+```bash
+curl -X POST '<PROXY_BASE_URL>/team/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-D '{
+    "team_alias": "team_1",
+    "team_member_rpm_limit": 100,
+    "team_member_tpm_limit": 1000
+}'
+```
+
+</TabItem>
+</Tabs>
+
+
 
 ### Set default params for new teams
 
@@ -314,6 +385,10 @@ litellm_settings:
     max_budget: 100                # Optional[float], optional): $100 budget for a new SSO sign in user
     budget_duration: 30d           # Optional[str], optional): 30 days budget_duration for a new SSO sign in user
     models: ["gpt-3.5-turbo"]      # Optional[List[str]], optional): models to be used by a new SSO sign in user
+    teams: # Optional[List[NewUserRequestTeam]], optional): teams to be used by the user
+      - team_id: "team_id_1" # Required[str]: team_id to be used by the user
+        max_budget_in_team: 100 # Optional[float], optional): $100 budget for the team. Defaults to None.
+        user_role: "user" # Optional[str], optional): "user" or "admin". Defaults to "user"
   
   default_team_params:             # Default Params to apply when litellm auto creates a team from SSO IDP provider
     max_budget: 100                # Optional[float], optional): $100 budget for the team
@@ -335,3 +410,7 @@ litellm_settings:
     personal_key_generation: # maps to 'Default Team' on UI 
       allowed_user_roles: ["proxy_admin"]
 ```
+
+## Further Reading
+
+- [Onboard Users for AI Exploration](../tutorials/default_team_self_serve)

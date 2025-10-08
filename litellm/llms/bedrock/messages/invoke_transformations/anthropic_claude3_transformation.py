@@ -12,7 +12,9 @@ from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
+from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import GenericStreamingChunk
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import ModelResponseStream
 
@@ -24,12 +26,13 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class AmazonAnthropicClaude3MessagesConfig(
+class AmazonAnthropicClaudeMessagesConfig(
     AnthropicMessagesConfig,
     AmazonInvokeConfig,
 ):
     """
     Call Claude model family in the /v1/messages API spec
+    Supports anthropic_beta parameter for beta features.
     """
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
@@ -56,6 +59,7 @@ class AmazonAnthropicClaude3MessagesConfig(
         optional_params: dict,
         request_data: dict,
         api_base: str,
+        api_key: Optional[str] = None,
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
@@ -66,6 +70,7 @@ class AmazonAnthropicClaude3MessagesConfig(
             optional_params=optional_params,
             request_data=request_data,
             api_base=api_base,
+            api_key=api_key,
             model=model,
             stream=stream,
             fake_stream=fake_stream,
@@ -113,9 +118,9 @@ class AmazonAnthropicClaude3MessagesConfig(
 
         # 1. anthropic_version is required for all claude models
         if "anthropic_version" not in anthropic_messages_request:
-            anthropic_messages_request[
-                "anthropic_version"
-            ] = self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
+            anthropic_messages_request["anthropic_version"] = (
+                self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
+            )
 
         # 2. `stream` is not allowed in request body for bedrock invoke
         if "stream" in anthropic_messages_request:
@@ -124,6 +129,12 @@ class AmazonAnthropicClaude3MessagesConfig(
         # 3. `model` is not allowed in request body for bedrock invoke
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
+            
+        # 4. Handle anthropic_beta from user headers
+        anthropic_beta_list = get_anthropic_beta_from_headers(headers)
+        if anthropic_beta_list:
+            anthropic_messages_request["anthropic_beta"] = anthropic_beta_list
+            
         return anthropic_messages_request
 
     def get_async_streaming_response_iterator(
@@ -139,7 +150,35 @@ class AmazonAnthropicClaude3MessagesConfig(
         completion_stream = aws_decoder.aiter_bytes(
             httpx_response.aiter_bytes(chunk_size=aws_decoder.DEFAULT_CHUNK_SIZE)
         )
-        return completion_stream
+        # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
+        return self.bedrock_sse_wrapper(
+            completion_stream=completion_stream, 
+            litellm_logging_obj=litellm_logging_obj,
+            request_body=request_body,
+        )
+
+    async def bedrock_sse_wrapper(
+        self,
+        completion_stream: AsyncIterator[
+            Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]
+        ],
+        litellm_logging_obj: LiteLLMLoggingObj,
+        request_body: dict,
+    ):
+        """
+        Bedrock invoke does not return SSE formatted data. This function is a wrapper to ensure litellm chunks are SSE formatted.
+        """
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            BaseAnthropicMessagesStreamingIterator,
+        )
+        handler = BaseAnthropicMessagesStreamingIterator(
+            litellm_logging_obj=litellm_logging_obj,
+            request_body=request_body,
+        )
+        
+        async for chunk in handler.async_sse_wrapper(completion_stream):
+            yield chunk
+        
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
@@ -159,8 +198,22 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
         """
         Parse the chunk data into anthropic /messages format
 
-        No transformation is needed for anthropic /messages format
-
-        since bedrock invoke returns the response in the correct format
+        Bedrock returns usage metrics using camelCase keys. Convert these to
+        the Anthropic `/v1/messages` specification so callers receive a
+        consistent response shape when streaming.
         """
+        amazon_bedrock_invocation_metrics = chunk_data.pop(
+            "amazon-bedrock-invocationMetrics", {}
+        )
+        if amazon_bedrock_invocation_metrics:
+            anthropic_usage = {}
+            if "inputTokenCount" in amazon_bedrock_invocation_metrics:
+                anthropic_usage["input_tokens"] = amazon_bedrock_invocation_metrics[
+                    "inputTokenCount"
+                ]
+            if "outputTokenCount" in amazon_bedrock_invocation_metrics:
+                anthropic_usage["output_tokens"] = amazon_bedrock_invocation_metrics[
+                    "outputTokenCount"
+                ]
+            chunk_data["usage"] = anthropic_usage
         return chunk_data

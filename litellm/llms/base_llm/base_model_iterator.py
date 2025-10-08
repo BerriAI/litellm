@@ -37,10 +37,8 @@ class BaseModelResponseIterator:
     def __iter__(self):
         return self
 
-    def _handle_string_chunk(
-        self, str_line: str
-    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
-        # chunk is a str at this point
+    @staticmethod
+    def _string_to_dict_parser(str_line: str) -> Optional[dict]:
         stripped_json_chunk: Optional[dict] = None
         stripped_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(
             str_line
@@ -52,7 +50,15 @@ class BaseModelResponseIterator:
                 stripped_json_chunk = None
         except json.JSONDecodeError:
             stripped_json_chunk = None
+        return stripped_json_chunk
 
+    def _handle_string_chunk(
+        self, str_line: str
+    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
+        # chunk is a str at this point
+        stripped_json_chunk = BaseModelResponseIterator._string_to_dict_parser(
+            str_line=str_line
+        )
         if "[DONE]" in str_line:
             return GenericStreamingChunk(
                 text="",

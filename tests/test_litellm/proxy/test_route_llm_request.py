@@ -49,7 +49,7 @@ async def test_route_request_dynamic_credentials(route_type):
 @pytest.mark.asyncio
 async def test_route_request_no_model_required():
     """Test route types that don't require model parameter"""
-    test_cases = ["amoderation", "aget_responses", "adelete_responses"]
+    test_cases = ["amoderation", "aget_responses", "adelete_responses", "avector_store_create", "avector_store_search"]
 
     for route_type in test_cases:
         # Test data without model parameter
@@ -72,7 +72,7 @@ async def test_route_request_no_model_required():
 @pytest.mark.asyncio
 async def test_route_request_no_model_required_with_router_settings():
     """Test route types that don't require model parameter with router settings"""
-    test_cases = ["amoderation", "aget_responses", "adelete_responses"]
+    test_cases = ["amoderation", "aget_responses", "adelete_responses", "avector_store_create", "avector_store_search"]
 
     for route_type in test_cases:
         # Test data with model parameter (it will be ignored for these route types)
@@ -102,3 +102,25 @@ async def test_route_request_no_model_required_with_router_settings():
 
         # Reset the mock for the next route
         llm_router.reset_mock()
+
+
+@pytest.mark.asyncio
+async def test_route_request_no_model_required_with_router_settings_and_no_router():
+    """Test route types that don't require model parameter with router settings and no router"""
+    from unittest.mock import patch
+
+    import litellm
+    from litellm.proxy.route_llm_request import route_request
+
+    data = {
+        "model": "my-model-id",
+        "api_key": "my-api-key",
+        "messages": [{"role": "user", "content": "what llm are you"}],
+    }
+
+    with patch.object(
+        litellm, "acompletion", return_value="fake_response"
+    ) as mock_completion:
+        response = await route_request(data, None, "gpt-3.5-turbo", "acompletion")
+
+        mock_completion.assert_called_once_with(**data)
