@@ -501,13 +501,13 @@ if MCP_AVAILABLE:
                 )
 
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
-                
+
                 filtered_tools = await filter_tools_by_key_team_permissions(
                     tools=filtered_tools,
                     server_id=server_id,
                     user_api_key_auth=user_api_key_auth,
                 )
-                
+
                 all_tools.extend(filtered_tools)
 
                 verbose_logger.debug(
@@ -522,6 +522,7 @@ if MCP_AVAILABLE:
         verbose_logger.info(
             f"Successfully fetched {len(all_tools)} tools total from all MCP servers"
         )
+
         return all_tools
 
     async def filter_tools_by_key_team_permissions(
@@ -531,7 +532,7 @@ if MCP_AVAILABLE:
     ) -> List[MCPTool]:
         """
         Filter tools based on key/team mcp_tool_permissions.
-        
+
         Note: Tool names in the DB are stored without server prefixes,
         but tool names from MCP servers are prefixed. We need to strip
         the prefix before comparing.
@@ -553,7 +554,7 @@ if MCP_AVAILABLE:
         else:
             # No restrictions, return all tools
             filtered_tools = tools
-        
+
         return filtered_tools
 
     async def _list_mcp_tools(
@@ -598,30 +599,7 @@ if MCP_AVAILABLE:
             )
             # Continue with empty managed tools list instead of failing completely
 
-        # Get tools from local registry
-        local_tools = []
-        try:
-            local_tools_raw = global_mcp_tool_registry.list_tools()
-
-            # Convert local tools to MCPTool format
-            for tool in local_tools_raw:
-                # Convert from litellm.types.mcp_server.tool_registry.MCPTool to mcp.types.Tool
-                mcp_tool = MCPTool(
-                    name=tool.name,
-                    description=tool.description,
-                    inputSchema=tool.input_schema,
-                )
-                local_tools.append(mcp_tool)
-        except Exception as e:
-            verbose_logger.exception(
-                f"Error getting tools from local registry: {str(e)}"
-            )
-            # Continue with empty local tools list instead of failing completely
-
-        # Combine all tools
-        all_tools = managed_tools + local_tools
-
-        return all_tools
+        return managed_tools
 
     @client
     async def call_mcp_tool(
