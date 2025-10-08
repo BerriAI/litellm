@@ -153,7 +153,7 @@ def test_async_moderation_hook_allow(mock_post):
     """Test moderation hook where response action is 'ALLOW'."""
     mock_response = Mock()
     mock_response.status_code = 200
-    mock_response.json.return_value = {"action": "ALLOW"}
+    mock_response.json.return_value = {"action": "ALLOW", "statusCode":200}
     mock_post.return_value = mock_response
 
     guardrail = ZscalerAIGuard(
