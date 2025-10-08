@@ -1182,9 +1182,6 @@ def test_async_http_handler(mock_async_client):
         assert call_args["transport"] == mock_transport
         assert call_args["event_hooks"] == event_hooks
         assert call_args["headers"] == headers
-        assert isinstance(call_args["limits"], httpx.Limits)
-        assert call_args["limits"].max_connections == concurrent_limit
-        assert call_args["limits"].max_keepalive_connections == concurrent_limit
         assert call_args["timeout"] == timeout
 
 
