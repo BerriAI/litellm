@@ -3,7 +3,7 @@ This module is used to generate MCP tools from OpenAPI specs.
 """
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import httpx
 
@@ -104,9 +104,23 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def create_tool_function(
-    path: str, method: str, operation: Dict[str, Any], base_url: str
+    path: str,
+    method: str,
+    operation: Dict[str, Any],
+    base_url: str,
+    headers: Optional[Dict[str, str]] = None,
 ):
-    """Create a tool function for an OpenAPI operation."""
+    """Create a tool function for an OpenAPI operation.
+
+    Args:
+        path: API endpoint path
+        method: HTTP method (get, post, put, delete, patch)
+        operation: OpenAPI operation object
+        base_url: Base URL for the API
+        headers: Optional headers to include in requests (e.g., authentication)
+    """
+    if headers is None:
+        headers = {}
 
     path_params, query_params, body_params = extract_parameters(operation)
     all_params = path_params + query_params + body_params
@@ -156,15 +170,15 @@ async def tool_function({params_str}) -> str:
     # Make HTTP request
     async with httpx.AsyncClient() as client:
         if "{method.lower()}" == "get":
-            response = await client.get(url, params=params, headers=HEADERS)
+            response = await client.get(url, params=params, headers=headers)
         elif "{method.lower()}" == "post":
-            response = await client.post(url, params=params, json=json_body, headers=HEADERS)
+            response = await client.post(url, params=params, json=json_body, headers=headers)
         elif "{method.lower()}" == "put":
-            response = await client.put(url, params=params, json=json_body, headers=HEADERS)
+            response = await client.put(url, params=params, json=json_body, headers=headers)
         elif "{method.lower()}" == "delete":
-            response = await client.delete(url, params=params, headers=HEADERS)
+            response = await client.delete(url, params=params, headers=headers)
         elif "{method.lower()}" == "patch":
-            response = await client.patch(url, params=params, json=json_body, headers=HEADERS)
+            response = await client.patch(url, params=params, json=json_body, headers=headers)
         else:
             return "Unsupported HTTP method: {method}"
         
@@ -174,7 +188,7 @@ async def tool_function({params_str}) -> str:
     # Execute the function code to create the actual function
     local_vars = {
         "httpx": httpx,
-        "HEADERS": HEADERS,
+        "headers": headers,
         "base_url": base_url,
         "path": path,
         "method": method,
