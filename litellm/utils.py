@@ -2580,8 +2580,10 @@ def get_optional_params_image_gen(
     )
     optional_params: Dict[str, Any] = {}
 
+    invalid_params = []
     ## raise exception if non-default value passed for non-openai/azure embedding calls
     def _check_valid_arg(supported_params):
+        nonlocal invalid_params
         if len(non_default_params.keys()) > 0:
             keys = list(non_default_params.keys())
             for k in keys:
@@ -2656,7 +2658,7 @@ def get_optional_params_image_gen(
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider or "",
         openai_params=openai_params,
-        additional_drop_params=additional_drop_params,
+        additional_drop_params=(additional_drop_params or []) + invalid_params,
     )
     # remove keys with None or empty dict/list values to avoid sending empty payloads
     optional_params = {
