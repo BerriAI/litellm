@@ -2885,6 +2885,20 @@ class ProxyConfig:
             dict: Updated configuration dictionary
         """
 
+        def _deep_merge_dicts(dst: dict, src: dict) -> None:
+            """
+            Deep-merge src into dst, skipping None values from src.
+            On conflicts, src (DB) wins.
+            """
+            for k, v in src.items():
+                if v is None:
+                    # Preserve existing config when DB value is None (matches prior behavior)
+                    continue
+                if isinstance(v, dict) and isinstance(dst.get(k), dict):
+                    _deep_merge_dicts(dst[k], v)
+                else:
+                    dst[k] = v
+
         if param_name == "environment_variables":
             decrypted_env_vars = self._decrypt_and_set_db_env_variables(db_param_value)
             current_config.setdefault("environment_variables", {}).update(
@@ -2905,13 +2919,10 @@ class ProxyConfig:
             return current_config
 
         # For dictionary values, update only non-none values
-        if isinstance(current_config[param_name], dict):
-            # Only keep non None values from db_param_value
-            non_none_values = {k: v for k, v in db_param_value.items() if v is not None}
-
-            # Update the config with non-none values
-            current_config[param_name].update(non_none_values)
+        if isinstance(current_config[param_name], dict) and isinstance(db_param_value, dict):
+            _deep_merge_dicts(current_config[param_name], db_param_value)
         else:
+            # Non-dict or mismatched types: DB value replaces config (unchanged behavior)
             current_config[param_name] = db_param_value
 
         return current_config
