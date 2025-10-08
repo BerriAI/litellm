@@ -94,6 +94,33 @@ def test_print_deployment(model_list):
     assert 10 * "*" in printed_deployment["litellm_params"]["api_key"]
 
 
+def test_print_deployment_with_redact_enabled(model_list):
+    """Test if sensitive credentials are masked when redact_user_api_key_info is enabled"""
+    import litellm
+
+    router = Router(model_list=model_list)
+    deployment = {
+        "model_name": "bedrock-claude",
+        "litellm_params": {
+            "model": "bedrock/anthropic.claude-v2",
+            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "aws_region_name": "us-west-2",
+        },
+    }
+
+    original_setting = litellm.redact_user_api_key_info
+    try:
+        litellm.redact_user_api_key_info = True
+        printed_deployment = router.print_deployment(deployment)
+
+        assert "*" in printed_deployment["litellm_params"]["aws_access_key_id"]
+        assert "*" in printed_deployment["litellm_params"]["aws_secret_access_key"]
+        assert "us-west-2" == printed_deployment["litellm_params"]["aws_region_name"]
+    finally:
+        litellm.redact_user_api_key_info = original_setting
+
+
 def test_completion(model_list):
     """Test if the completion function is working correctly"""
     router = Router(model_list=model_list)
