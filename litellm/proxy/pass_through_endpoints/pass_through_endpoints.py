@@ -66,7 +66,7 @@ router = APIRouter()
 pass_through_endpoint_logging = PassThroughEndpointLogging()
 
 # Global registry to track registered pass-through routes and prevent memory leaks
-_registered_pass_through_routes: Dict[str, Dict[str, str]] = {}
+_registered_pass_through_routes: Dict[str, Dict[str, Union[str, Dict[str, Any]]]] = {}
 
 
 def get_response_body(response: httpx.Response) -> Optional[dict]:
@@ -979,13 +979,6 @@ def create_pass_through_route(
                 InitPassThroughEndpointHelpers,
             )
 
-            # Construct the full target URL with subpath if needed
-            full_target = (
-                HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
-                    base_target=target, subpath=subpath, include_subpath=include_subpath
-                )
-            )
-
             if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
                 route=endpoint
             ):
@@ -994,17 +987,47 @@ def create_pass_through_route(
                     detail=f"Pass-through endpoint {endpoint} not found. This could have been deleted or not yet added to the proxy.",
                 )
 
+            passthrough_params = (
+                InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+                    route=endpoint
+                )
+            )
+            target_params = {
+                "target": target,
+                "custom_headers": custom_headers,
+                "forward_headers": _forward_headers,
+                "merge_query_params": _merge_query_params,
+                "cost_per_request": cost_per_request,
+            }
+
+            if passthrough_params is not None:
+                target_params.update(passthrough_params.get("passthrough_params", {}))
+
+            # Construct the full target URL with subpath if needed
+            full_target = (
+                HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
+                    base_target=target_params.get("target", target),
+                    subpath=subpath,
+                    include_subpath=include_subpath,
+                )
+            )
+
             return await pass_through_request(  # type: ignore
                 request=request,
                 target=full_target,
-                custom_headers=custom_headers or {},
+                custom_headers=target_params.get("custom_headers", custom_headers)
+                or {},
                 user_api_key_dict=user_api_key_dict,
-                forward_headers=_forward_headers,
-                merge_query_params=_merge_query_params,
+                forward_headers=target_params.get("forward_headers", _forward_headers),
+                merge_query_params=target_params.get(
+                    "merge_query_params", _merge_query_params
+                ),
                 query_params=query_params,
                 stream=stream,
                 custom_body=custom_body,
-                cost_per_request=cost_per_request,
+                cost_per_request=target_params.get(
+                    "cost_per_request", cost_per_request
+                ),
                 custom_llm_provider=custom_llm_provider,
             )
 
@@ -1605,6 +1628,14 @@ class InitPassThroughEndpointHelpers:
             "endpoint_id": endpoint_id,
             "path": path,
             "type": "exact",
+            "passthrough_params": {
+                "target": target,
+                "custom_headers": custom_headers,
+                "forward_headers": forward_headers,
+                "merge_query_params": merge_query_params,
+                "dependencies": dependencies,
+                "cost_per_request": cost_per_request,
+            },
         }
 
     @staticmethod
@@ -1658,6 +1689,14 @@ class InitPassThroughEndpointHelpers:
             "endpoint_id": endpoint_id,
             "path": path,
             "type": "subpath",
+            "passthrough_params": {
+                "target": target,
+                "custom_headers": custom_headers,
+                "forward_headers": forward_headers,
+                "merge_query_params": merge_query_params,
+                "dependencies": dependencies,
+                "cost_per_request": cost_per_request,
+            },
         }
 
     @staticmethod
@@ -1711,6 +1750,25 @@ class InitPassThroughEndpointHelpers:
                         return True
 
         return False
+
+    @staticmethod
+    def get_registered_pass_through_route(route: str) -> Optional[Dict[str, Any]]:
+        """Get passthrough params for a given route"""
+        for key in _registered_pass_through_routes.keys():
+            parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
+            if len(parts) == 3:
+                route_type = parts[1]
+                registered_path = parts[2]
+
+                if route_type == "exact" and route == registered_path:
+                    return _registered_pass_through_routes[key]
+                elif route_type == "subpath":
+                    if route == registered_path or route.startswith(
+                        registered_path + "/"
+                    ):
+                        return _registered_pass_through_routes[key]
+
+        return None
 
 
 def _get_combined_pass_through_endpoints(
@@ -1973,6 +2031,7 @@ async def update_pass_through_endpoints(
         field_value=pass_through_endpoint_data,
         config_type="general_settings",
     )
+
     await update_config_general_settings(
         data=updated_data, user_api_key_dict=user_api_key_dict
     )
