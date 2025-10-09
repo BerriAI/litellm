@@ -401,3 +401,24 @@ def test_provider_config_manager_bedrock_converse_like():
 #             model="gpt-3.5-turbo", provider=LlmProviders(provider)
 #         )
 #         _check_provider_config(config, provider)
+
+
+def test_litellm_proxy_responses_api_config():
+    """Test that litellm_proxy provider returns correct Responses API config"""
+    from litellm.llms.litellm_proxy.responses.transformation import (
+        LiteLLMProxyResponsesAPIConfig,
+    )
+
+    config = ProviderConfigManager.get_provider_responses_api_config(
+        model="litellm_proxy/gpt-4",
+        provider=LlmProviders.LITELLM_PROXY,
+    )
+    print(f"config: {config}")
+    assert config is not None, "Config should not be None for litellm_proxy provider"
+    assert isinstance(
+        config, LiteLLMProxyResponsesAPIConfig
+    ), f"Expected LiteLLMProxyResponsesAPIConfig, got {type(config)}"
+    assert (
+        config.custom_llm_provider == LlmProviders.LITELLM_PROXY
+    ), "custom_llm_provider should be LITELLM_PROXY"
+
