@@ -2,7 +2,7 @@
 
 import Teams from "@/components/teams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import useTeams from "@/app/(dashboard)/virtual-keys/hooks/useTeams";
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useEffect, useState } from "react";
 import { Organization } from "@/components/networking";
 import { fetchOrganizations } from "@/components/organizations";

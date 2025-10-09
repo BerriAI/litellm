@@ -4,7 +4,7 @@ import AdminPanel from "@/components/admins";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useState } from "react";
 import { Team } from "@/components/key_team_helpers/key_list";
-import useTeams from "@/app/(dashboard)/virtual-keys/hooks/useTeams";
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
 
 const AdminSettings = () => {
   const { teams, setTeams } = useTeams();

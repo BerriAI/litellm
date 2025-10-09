@@ -90,7 +90,7 @@ interface ViewKeyTableProps {
   selectedTeam: Team | null;
   setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
   data: KeyResponse[] | null;
-  setData: React.Dispatch<React.SetStateAction<any[] | null>>;
+  setData: (keys: KeyResponse[]) => void;
   teams: Team[] | null;
   premiumUser: boolean;
   currentOrg: Organization | null;
@@ -135,13 +135,6 @@ interface CombinedLimits {
   [key: string]: CombinedLimit; // Index signature allowing string keys
 }
 
-/**
- * ─────────────────────────────────────────────────────────────────────────
- * @deprecated
- * This component is being DEPRECATED in favor of src/app/(dashboard)/virtual-keys/components/VirtualKeysTable/
- * Please contribute to the new refactor.
- * ─────────────────────────────────────────────────────────────────────────
- */
 const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userID,
   userRole,
