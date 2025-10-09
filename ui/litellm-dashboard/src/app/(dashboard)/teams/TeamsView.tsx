@@ -307,6 +307,7 @@ const TeamsView: React.FC<TeamProps> = ({
                         currentOrg={currentOrg}
                         perTeamInfo={perTeamInfo}
                         userRole={userRole}
+                        userId={userID}
                         setSelectedTeamId={setSelectedTeamId}
                         setEditTeam={setEditTeam}
                         onDeleteTeam={handleDelete}
