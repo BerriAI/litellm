@@ -15,7 +15,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_ssl_configuration
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_ssl_configuration, _get_or_create_ssl_context, _clear_ssl_context_cache
 
 
 @pytest.mark.asyncio
@@ -399,3 +399,66 @@ async def test_session_validation():
     mock_valid_session = MockClientSession()
     transport3 = AsyncHTTPHandler._create_aiohttp_transport(shared_session=mock_valid_session)  # type: ignore
     assert transport3.client is mock_valid_session  # Should reuse session
+
+
+def test_ssl_context_caching():
+    """Test that SSL contexts are cached and reused for the same configuration."""
+    # Clear the cache first to ensure clean state
+    _clear_ssl_context_cache()
+    
+    # Get SSL context with the same configuration multiple times
+    cafile = certifi.where()
+    ssl_security_level = None
+    
+    # First call - should create new context
+    context1 = _get_or_create_ssl_context(cafile=cafile, ssl_security_level=ssl_security_level)
+    
+    # Second call with same parameters - should reuse cached context
+    context2 = _get_or_create_ssl_context(cafile=cafile, ssl_security_level=ssl_security_level)
+    
+    # Should be the exact same object (cached)
+    assert context1 is context2, "SSL context should be cached and reused"
+    
+    # Third call with different security level - should create new context
+    context3 = _get_or_create_ssl_context(cafile=cafile, ssl_security_level="DEFAULT@SECLEVEL=1")
+    
+    # Should be different object due to different configuration
+    assert context3 is not context1, "Different SSL configuration should create new context"
+    
+    # Fourth call with same security level as third - should reuse context3
+    context4 = _get_or_create_ssl_context(cafile=cafile, ssl_security_level="DEFAULT@SECLEVEL=1")
+    assert context4 is context3, "SSL context with same security level should be cached"
+
+
+def test_ssl_context_cache_clearing():
+    """Test that SSL context cache can be cleared."""
+    # Clear the cache first
+    _clear_ssl_context_cache()
+    
+    # Create an SSL context
+    cafile = certifi.where()
+    context1 = _get_or_create_ssl_context(cafile=cafile)
+    
+    # Clear the cache
+    _clear_ssl_context_cache()
+    
+    # Create another SSL context with same parameters
+    context2 = _get_or_create_ssl_context(cafile=cafile)
+    
+    # Should be different objects since cache was cleared
+    assert context2 is not context1, "SSL context should be recreated after cache clear"
+
+
+def test_get_ssl_configuration_caching():
+    """Test that get_ssl_configuration uses cached SSL contexts."""
+    # Clear the cache first
+    _clear_ssl_context_cache()
+    
+    # Get SSL configuration multiple times with same settings
+    config1 = get_ssl_configuration(ssl_verify=True)
+    config2 = get_ssl_configuration(ssl_verify=True)
+    
+    # Both should be SSL contexts and should be the same cached instance
+    assert isinstance(config1, ssl.SSLContext)
+    assert isinstance(config2, ssl.SSLContext)
+    assert config1 is config2, "get_ssl_configuration should return cached SSL context"
