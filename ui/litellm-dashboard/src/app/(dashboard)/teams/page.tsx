@@ -1,6 +1,6 @@
 "use client";
 
-import Teams from "@/app/(dashboard)/teams/teams";
+import TeamsView from "@/app/(dashboard)/teams/TeamsView";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useEffect, useState } from "react";
@@ -17,7 +17,7 @@ const TeamsPage = () => {
   }, [accessToken]);
 
   return (
-    <Teams
+    <TeamsView
       teams={teams}
       accessToken={accessToken}
       setTeams={setTeams}
