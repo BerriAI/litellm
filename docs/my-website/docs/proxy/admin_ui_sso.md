@@ -88,8 +88,8 @@ You can assign user roles directly from Entra ID using App Roles. LiteLLM will a
 Supported roles:
 - `proxy_admin` - Admin over the platform
 - `proxy_admin_viewer` - Can login, view all keys, view all spend (read-only)
-- `org_admin` - Admin over a specific organization
-- `internal_user` - Can login, view/create/delete their own keys, view their spend
+- `internal_user` - Normal user. Can login, view spend and depending on team-member permissions - view/create/delete their own keys.
+
 
 To set up app roles:
 1. Navigate to your App Registration on https://portal.azure.com/
