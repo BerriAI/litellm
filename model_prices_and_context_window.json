@@ -19868,6 +19868,39 @@
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true
     },
+    "together_ai/moonshotai/Kimi-K2-Instruct-0905": {
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://www.together.ai/models/kimi-k2-0905",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "together_ai/Qwen/Qwen3-Next-80B-A3B-Instruct": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://www.together.ai/models/qwen3-next-80b-a3b-instruct",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "together_ai/Qwen/Qwen3-Next-80B-A3B-Thinking": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://www.together.ai/models/qwen3-next-80b-a3b-thinking",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true
+    },
     "tts-1": {
         "input_cost_per_character": 1.5e-05,
         "litellm_provider": "openai",
