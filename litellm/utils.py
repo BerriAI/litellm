@@ -7215,6 +7215,9 @@ class ProviderConfigManager:
             return litellm.OVHCloudEmbeddingConfig()
         elif litellm.LlmProviders.COMETAPI == provider:
             return litellm.CometAPIEmbeddingConfig()
+        elif litellm.LlmProviders.SAGEMAKER == provider:
+            from litellm.llms.sagemaker.completion.transformation import SagemakerEmbeddingConfig
+            return SagemakerEmbeddingConfig.get_model_config(model)
         return None
 
     @staticmethod
