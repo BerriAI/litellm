@@ -47,6 +47,13 @@ interface KeyInfoViewProps {
   backButtonText?: string;
 }
 
+/**
+ * ─────────────────────────────────────────────────────────────────────────
+ * @deprecated
+ * This component is being DEPRECATED in favor of src/app/(dashboard)/virtual-keys/components/KeyInfoView.tsx
+ * Please contribute to the new refactor.
+ * ─────────────────────────────────────────────────────────────────────────
+ */
 export default function KeyInfoView({
   keyId,
   onClose,

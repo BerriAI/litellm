@@ -524,9 +524,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                   <Button
                     style={{ width: "150px" }}
                     onClick={() =>
-                      premiumUser === true
-                        ? setIsAddSSOModalVisible(true)
-                        : NotificationsManager.fromBackend("Only premium users can add SSO")
+                      setIsAddSSOModalVisible(true)
                     }
                   >
                     {ssoConfigured ? "Edit SSO Settings" : "Add SSO"}

@@ -1001,7 +1001,7 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
 async def test_list_tools_strips_prefix_when_matching_permissions():
     """
     Test that tool permission filtering correctly strips prefixes from tool names.
-    
+
     Tools from MCP servers are prefixed (e.g., "GITMCP-fetch_litellm_documentation"),
     but allowed tools in DB are stored without prefix (e.g., "fetch_litellm_documentation").
     The filtering should strip the prefix before comparing.
@@ -1056,7 +1056,9 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
         tool1.inputSchema = {}
 
         tool2 = MagicMock()
-        tool2.name = "GITMCP-search_litellm_documentation"  # Prefixed, not in allowed list
+        tool2.name = (
+            "GITMCP-search_litellm_documentation"  # Prefixed, not in allowed list
+        )
         tool2.description = "Search docs"
         tool2.inputSchema = {}
 
@@ -1093,3 +1095,76 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
         "GITMCP-fetch_litellm_documentation",
         "GITMCP-search_litellm_code",
     ]
+
+
+def test_filter_tools_by_allowed_tools():
+    """Test that filter_tools_by_allowed_tools filters tools correctly"""
+    from mcp.types import Tool
+
+    from litellm.proxy._experimental.mcp_server.server import (
+        filter_tools_by_allowed_tools,
+    )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mcp_server = MCPServer(
+        server_id="my_api_mcp",
+        name="my_api_mcp",
+        alias="my_api_mcp",
+        transport=MCPTransport.http,
+        allowed_tools=["getpetbyid", "my_api_mcp-findpetsbystatus"],
+        disallowed_tools=None,
+    )
+    tools_to_return = [
+        Tool(
+            name="my_api_mcp-getpetbyid",
+            title=None,
+            description="Find pet by ID",
+            inputSchema={
+                "type": "object",
+                "properties": {"petId": {"type": "integer", "description": ""}},
+                "required": ["petId"],
+            },
+            outputSchema=None,
+            annotations=None,
+        ),
+        Tool(
+            name="my_api_mcp-findpetsbystatus",
+            title=None,
+            description="Finds Pets by status",
+            inputSchema={
+                "type": "object",
+                "properties": {"status": {"type": "string", "description": ""}},
+                "required": ["status"],
+            },
+            outputSchema=None,
+            annotations=None,
+        ),
+        Tool(
+            name="my_api_mcp-addpet",
+            title=None,
+            description="Add a new pet to the store",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "body": {
+                        "type": "object",
+                        "description": "Request body",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "status": {"type": "string"},
+                        },
+                    }
+                },
+                "required": ["body"],
+            },
+            outputSchema=None,
+            annotations=None,
+        ),
+    ]
+
+    filtered_tools = filter_tools_by_allowed_tools(tools_to_return, mcp_server)
+
+    assert len(filtered_tools) == 2
+    assert filtered_tools[0].name == "my_api_mcp-getpetbyid"
+    assert filtered_tools[1].name == "my_api_mcp-findpetsbystatus"
