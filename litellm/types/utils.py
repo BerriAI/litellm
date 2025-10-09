@@ -2254,7 +2254,6 @@ class CustomPricingLiteLLMParams(BaseModel):
     input_cost_per_token_cache_hit: Optional[float] = None
     input_cost_per_token_above_128k_tokens: Optional[float] = None
     input_cost_per_token_above_200k_tokens: Optional[float] = None
-    input_cost_per_character_above_128k_tokens: Optional[float] = None
     input_cost_per_query: Optional[float] = None
     input_cost_per_image: Optional[float] = None
     input_cost_per_image_above_128k_tokens: Optional[float] = None

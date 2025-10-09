@@ -186,6 +186,7 @@ class OCIChatConfig(BaseConfig):
         if vendor == OCIVendors.COHERE:
             open_ai_to_oci_param_map = self.openai_to_oci_cohere_param_map
             open_ai_to_oci_param_map.pop("tool_choice")
+            open_ai_to_oci_param_map.pop("max_retries")
         else:
             open_ai_to_oci_param_map = self.openai_to_oci_generic_param_map
         for key, value in open_ai_to_oci_param_map.items():
@@ -473,6 +474,10 @@ class OCIChatConfig(BaseConfig):
                         text_content += content_item.get("text", "")
                 content = text_content
             
+            # Ensure content is a string
+            if not isinstance(content, str):
+                content = str(content) if content is not None else ""
+            
             # Handle tool calls
             tool_calls: Optional[List[CohereToolCall]] = None
             if role == "assistant" and "tool_calls" in msg and msg.get("tool_calls"):  # type: ignore[union-attr,typeddict-item]
@@ -489,7 +494,7 @@ class OCIChatConfig(BaseConfig):
                         arguments = raw_arguments
                     
                     tool_calls.append(CohereToolCall(
-                        name=tool_call.get("function", {}).get("name", ""),
+                        name=str(tool_call.get("function", {}).get("name", "")),
                         parameters=arguments
                     ))
             
@@ -502,7 +507,7 @@ class OCIChatConfig(BaseConfig):
                 chat_history.append(CohereMessage(
                     role="TOOL", 
                     message=content,
-                    toolCallId=msg.get("tool_call_id", "")
+                    toolCalls=None  # Tool messages don't have tool calls
                 ))
         
         return chat_history
