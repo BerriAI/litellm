@@ -26,6 +26,9 @@ class MCPServer(BaseModel):
     )
     allowed_tools: Optional[List[str]] = None
     disallowed_tools: Optional[List[str]] = None
+    allowed_params: Optional[Dict[str, List[str]]] = (
+        None  # map of tool names to allowed parameter lists
+    )
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
