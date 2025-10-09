@@ -276,49 +276,221 @@ This means if you need to track user spend, and are giving end users API keys, y
 
 ## Daily Spend Breakdown API
 
-Retrieve granular daily usage data for a user (by model, provider, and API key) with a single endpoint.
+Retrieve granular daily usage data for a user / teams / tags (by model, provider, and API key) with a single endpoint.
+
+<Tabs>
+<TabItem value="teams" label="By Teams">
 
 Example Request:
 
-```shell title="Daily Spend Breakdown API" showLineNumbers
-curl -L -X GET 'http://localhost:4000/user/daily/activity?start_date=2025-03-20&end_date=2025-03-27' \
+```shell title="Daily Spend Breakdown API - Teams" showLineNumbers
+curl -L -X GET 'http://localhost:4000/team/daily/activity?start_date=2025-03-20&end_date=2025-03-27&team_ids=team-123' \
 -H 'Authorization: Bearer sk-...'
 ```
 
-```json title="Daily Spend Breakdown API Response" showLineNumbers
+```json title="Daily Spend Breakdown API Response - Teams" showLineNumbers
 {
-    "results": [
-        {
-            "date": "2025-03-27",
-            "metrics": {
-                "spend": 0.0177072,
-                "prompt_tokens": 111,
-                "completion_tokens": 1711,
-                "total_tokens": 1822,
-                "api_requests": 11
-            },
-            "breakdown": {
-                "models": {
-                    "gpt-4o-mini": {
-                        "spend": 1.095e-05,
-                        "prompt_tokens": 37,
-                        "completion_tokens": 9,
-                        "total_tokens": 46,
-                        "api_requests": 1
-                },
-                "providers": { "openai": { ... }, "azure_ai": { ... } },
-                "api_keys": { "3126b6eaf1...": { ... } }
+  "results": [
+    {
+      "date": "2025-03-23",
+      "metrics": {
+        "spend": 0.0346215,
+        "prompt_tokens": 1253,
+        "completion_tokens": 5457,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "total_tokens": 6710,
+        "successful_requests": 3,
+        "failed_requests": 0,
+        "api_requests": 3
+      },
+      "breakdown": {
+        "mcp_servers": {},
+        "models": {
+          "codex-mini-latest": {
+            "metrics": { "spend": 0.0346215, "prompt_tokens": 1253, "completion_tokens": 5457, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 6710, "successful_requests": 3, "failed_requests": 0, "api_requests": 3 },
+            "metadata": {},
+            "api_key_breakdown": {
+              "4d90286aba3a20c7aaf5f1366b6ddf2c4941c57d86156b074f5606d0c407f3e6": {
+                "metrics": { "spend": 0.0346215, "prompt_tokens": 1253, "completion_tokens": 5457, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 6710, "successful_requests": 3, "failed_requests": 0, "api_requests": 3 },
+                "metadata": { "key_alias": "hello!", "team_id": "84aba34f-6ea2-4471-8b80-e6be3825a86b" }
+              }
             }
+          }
+        },
+        "model_groups": { "codex-mini": { /* similar structure */ } },
+        "providers": { "openai": { /* similar structure */ } },
+        "api_keys": {
+          "4d90286aba3a20c7aaf5f1366b6ddf2c4941c57d86156b074f5606d0c407f3e6": {
+            "metrics": { "spend": 0.0346215, "prompt_tokens": 1253, "completion_tokens": 5457, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 6710, "successful_requests": 3, "failed_requests": 0, "api_requests": 3 },
+            "metadata": { "key_alias": "hello!", "team_id": "84aba34f-6ea2-4471-8b80-e6be3825a86b" }
+          }
+        },
+        "entities": {
+          "84aba34f-6ea2-4471-8b80-e6be3825a86b": {
+            "metrics": { "spend": 0.0346215, "prompt_tokens": 1253, "completion_tokens": 5457, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "total_tokens": 6710, "successful_requests": 3, "failed_requests": 0, "api_requests": 3 },
+            "metadata": { "team_alias": "team_1" },
+            "api_key_breakdown": { /* similar structure */ }
+          }
         }
-    ],
-    "metadata": {
-        "total_spend": 0.7274667,
-        "total_prompt_tokens": 280990,
-        "total_completion_tokens": 376674,
-        "total_api_requests": 14
+      }
     }
+  ],
+  "metadata": {
+    "total_spend": 0.0346215,
+    "total_prompt_tokens": 1253,
+    "total_completion_tokens": 5457,
+    "total_cache_read_input_tokens": 0,
+    "total_cache_creation_input_tokens": 0,
+    "total_tokens": 6710,
+    "total_successful_requests": 3,
+    "total_failed_requests": 0,
+    "total_api_requests": 3,
+    "page": 1,
+    "total_pages": 1,
+    "has_more": false
+  }
 }
 ```
+
+</TabItem>
+<TabItem value="users" label="By Users">
+
+Example Request:
+
+```shell title="Daily Spend Breakdown API - Users" showLineNumbers
+curl -L -X GET 'http://localhost:4000/user/daily/activity?start_date=2025-03-20&end_date=2025-03-27&user_ids=user-123' \
+-H 'Authorization: Bearer sk-...'
+```
+
+```json title="Daily Spend Breakdown API Response - Users" showLineNumbers
+{
+  "results": [
+    {
+      "date": "2025-11-10",
+      "metrics": {
+        "spend": 0.012345,
+        "prompt_tokens": 500,
+        "completion_tokens": 1200,
+        "total_tokens": 1700,
+        "successful_requests": 5,
+        "failed_requests": 0,
+        "api_requests": 5
+      },
+      "breakdown": {
+        "mcp_servers": {},
+        "models": {
+          "gpt-3.5-turbo": {
+            "metrics": { "spend": 0.012345, "prompt_tokens": 500, "completion_tokens": 1200, "total_tokens": 1700, "successful_requests": 5, "failed_requests": 0, "api_requests": 5 },
+            "metadata": {},
+            "api_key_breakdown": {
+              "sk-1234567890abcdef": {
+                "metrics": { "spend": 0.012345, "prompt_tokens": 500, "completion_tokens": 1200, "total_tokens": 1700, "successful_requests": 5, "failed_requests": 0, "api_requests": 5 },
+                "metadata": { "key_alias": "user-key", "team_id": "team-123" }
+              }
+            }
+          }
+        },
+        "model_groups": { "gpt-3.5": { /* similar structure */ } },
+        "providers": { "openai": { /* similar structure */ } },
+        "api_keys": {
+          "sk-1234567890abcdef": {
+            "metrics": { "spend": 0.012345, "prompt_tokens": 500, "completion_tokens": 1200, "total_tokens": 1700, "successful_requests": 5, "failed_requests": 0, "api_requests": 5 },
+            "metadata": { "key_alias": "user-key", "team_id": "team-123" }
+          }
+        },
+        "entities": {}
+      }
+    }
+  ],
+  "metadata": {
+    "total_spend": 0.012345,
+    "total_prompt_tokens": 500,
+    "total_completion_tokens": 1200,
+    "total_tokens": 1700,
+    "total_api_requests": 5,
+    "total_successful_requests": 5,
+    "total_failed_requests": 0,
+    "page": 1,
+    "total_pages": 1,
+    "has_more": false
+  }
+}
+```
+
+</TabItem>
+<TabItem value="tags" label="By Tags">
+
+Example Request:
+
+```shell title="Daily Spend Breakdown API - Tags" showLineNumbers
+curl -L -X GET 'http://localhost:4000/tag/daily/activity?start_date=2025-03-20&end_date=2025-03-27&tags=production' \
+-H 'Authorization: Bearer sk-...'
+```
+
+```json title="Daily Spend Breakdown API Response - Tags" showLineNumbers
+{
+  "results": [
+    {
+      "date": "2025-03-23",
+      "metrics": {
+        "spend": 0.0346215,
+        "prompt_tokens": 1253,
+        "completion_tokens": 5457,
+        "total_tokens": 6710,
+        "successful_requests": 3,
+        "failed_requests": 0,
+        "api_requests": 3
+      },
+      "breakdown": {
+        "mcp_servers": {},
+        "models": {
+          "codex-mini-latest": {
+            "metrics": { "spend": 0.0346215, "prompt_tokens": 1253, "completion_tokens": 5457, "total_tokens": 6710, "successful_requests": 3, "failed_requests": 0, "api_requests": 3 },
+            "metadata": {},
+            "api_key_breakdown": {
+              "4d90286aba3a20c7aaf5f1366b6ddf2c4941c57d86156b074f5606d0c407f3e6": {
+                "metrics": { "spend": 0.0346215, "prompt_tokens": 1253, "completion_tokens": 5457, "total_tokens": 6710, "successful_requests": 3, "failed_requests": 0, "api_requests": 3 },
+                "metadata": { "key_alias": "hello!", "team_id": "84aba34f-6ea2-4471-8b80-e6be3825a86b" }
+              }
+            }
+          }
+        },
+        "model_groups": { "codex-mini": { /* similar structure */ } },
+        "providers": { "openai": { /* similar structure */ } },
+        "api_keys": {
+          "4d90286aba3a20c7aaf5f1366b6ddf2c4941c57d86156b074f5606d0c407f3e6": {
+            "metrics": { "spend": 0.0346215, "prompt_tokens": 1253, "completion_tokens": 5457, "total_tokens": 6710, "successful_requests": 3, "failed_requests": 0, "api_requests": 3 },
+            "metadata": { "key_alias": "hello!", "team_id": "84aba34f-6ea2-4471-8b80-e6be3825a86b" }
+          }
+        },
+        "entities": {
+          "production": {
+            "metrics": { "spend": 0.0346215, "prompt_tokens": 1253, "completion_tokens": 5457, "total_tokens": 6710, "successful_requests": 3, "failed_requests": 0, "api_requests": 3 },
+            "metadata": {},
+            "api_key_breakdown":
+          }
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "total_spend": 0.0346215,
+    "total_prompt_tokens": 1253,
+    "total_completion_tokens": 5457,
+    "total_tokens": 6710,
+    "total_api_requests": 3,
+    "total_successful_requests": 3,
+    "total_failed_requests": 0,
+    "page": 1,
+    "total_pages": 1,
+    "has_more": false
+  }
+}
+```
+
+</TabItem>
+</Tabs>
 
 ### API Reference
 
