@@ -1,6 +1,6 @@
 "use client";
 
-import Teams from "@/components/teams";
+import Teams from "@/app/(dashboard)/teams/teams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useEffect, useState } from "react";
