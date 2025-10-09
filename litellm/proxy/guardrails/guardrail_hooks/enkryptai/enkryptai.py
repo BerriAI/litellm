@@ -47,14 +47,30 @@ class EnkryptAIGuardrails(CustomGuardrail):
     def __init__(
         self,
         guardrail_name: str = "litellm_test",
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        policy_name: Optional[str] = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
-        self.api_url = "https://api.enkryptai.com/guardrails/policy/detect"
+        
+        # Set API configuration
+        self.api_key = api_key or os.getenv("ENKRYPTAI_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "EnkryptAI API key is required. Set ENKRYPTAI_API_KEY environment variable or pass api_key parameter."
+            )
+        
+        self.api_base = api_base or os.getenv(
+            "ENKRYPTAI_API_BASE", "https://api.enkryptai.com"
+        )
+        self.api_url = f"{self.api_base}/guardrails/policy/detect"
+        
+        # Policy name can be passed as parameter or use guardrail_name
+        self.policy_name = policy_name
         self.guardrail_name = guardrail_name
-        self.api_key = os.getenv("ENKRYPTAI_API_KEY")
         self.guardrail_provider = "enkryptai"
         
         # store kwargs as optional_params
@@ -71,8 +87,9 @@ class EnkryptAIGuardrails(CustomGuardrail):
         super().__init__(**kwargs)
 
         verbose_proxy_logger.debug(
-            "EnkryptAI Guardrail initialized with guardrail_name: %s",
+            "EnkryptAI Guardrail initialized with guardrail_name: %s, policy_name: %s",
             self.guardrail_name,
+            self.policy_name,
         )
 
     async def _call_enkryptai_guardrails(
@@ -98,9 +115,12 @@ class EnkryptAIGuardrails(CustomGuardrail):
         
         headers = {
             "Content-Type": "application/json",
-            "X-Enkrypt-Policy": self.guardrail_name,
             "apikey": self.api_key
         }
+        
+        # Add policy header if policy_name is set
+        if self.policy_name:
+            headers["x-enkrypt-policy"] = self.policy_name
         
         verbose_proxy_logger.debug(
             "EnkryptAI request to %s with payload: %s",
