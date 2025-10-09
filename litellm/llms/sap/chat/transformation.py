@@ -11,7 +11,7 @@ from litellm.utils import CustomStreamWrapper
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from .handler import OptionalDependencyError
+from .handler import OptionalDependencyError, GenAIHubOrchestrationError
 
 try:
     from gen_ai_hub.orchestration.models.config import OrchestrationConfig
@@ -21,6 +21,11 @@ try:
         MessageToolCall,
         FunctionCall,
     )
+    from gen_ai_hub.orchestration.models.multimodal_items import (
+        TextPart,
+        ImagePart,
+        ImageUrl,
+    )
     from gen_ai_hub.orchestration.models.llm import LLM
     from gen_ai_hub.orchestration.models.template import Template
     from gen_ai_hub.orchestration.models.response_format import (
@@ -29,6 +34,7 @@ try:
         ResponseFormatText,
     )
     from gen_ai_hub.orchestration.models.tools import FunctionTool
+    from dacite import from_dict
 
     _gen_ai_hub_import_error = None
 except ImportError as err:
@@ -38,7 +44,34 @@ except ImportError as err:
     Template = Any  # type: ignore
     ResponseFormatJsonSchema = Any  # type: ignore
     FunctionTool = Any  # type: ignore
+    TextPart = Any  # type: ignore
+    ImagePart = Any  # type: ignore
+    ImageUrl = Any  # type: ignore
+    from_dict = Any  # type: ignore
     _gen_ai_hub_import_error = err
+
+
+def modify_content_to_sdk_types(item: str | dict):
+    if isinstance(item, dict) and item.get("type", None) == "image_url":
+        return ImagePart(image_url=ImageUrl(url=item["image_url"].get("url")))
+    elif (isinstance(item, dict) and item.get("type") == "text") or isinstance(
+        item, str
+    ):
+        return TextPart(text=item["text"])
+    else:
+        raise GenAIHubOrchestrationError(
+            status_code=400, message=f"Unsupported content type: {item.get('type')}"
+        )
+
+
+def check_content(content):
+    if isinstance(content, list):
+        return [modify_content_to_sdk_types(item) for item in content]
+    if isinstance(content, dict):
+        return modify_content_to_sdk_types(content)
+    if content is None:
+        return ""
+    return content
 
 
 class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
@@ -131,29 +164,20 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         messages_ = []
         for message in messages:
             if message.get("role") == "tool":
-                content = message.get("content")
+                content = check_content(message.get("content"))
                 tool_call_id = message.get("tool_call_id")
                 messages_.append(
                     ToolMessage(tool_call_id=tool_call_id, content=content)
                 )
 
             elif message.get("role") == "assistant" and message.get("tool_calls"):
-                content = message.get("content")
+                content = check_content(message.get("content"))
                 tool_calls_list = message.get("tool_calls", [])
                 if tool_calls_list:
                     tool_calls = []
                     for tool_call in tool_calls_list:
                         tool_calls.append(
-                            MessageToolCall(
-                                id=tool_call.get("id"),
-                                type=tool_call.get("type", "function"),
-                                function=FunctionCall(
-                                    name=tool_call["function"]["name"],
-                                    arguments=tool_call["function"].get(
-                                        "arguments", {}
-                                    ),
-                                ),
-                            )
+                            from_dict(data_class=MessageToolCall, data=tool_call)
                         )
                     messages_.append(
                         Message(
@@ -162,10 +186,14 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                     )
             elif message.get("role") == "assistant":
                 messages_.append(
-                    Message(role=message["role"], content=message.get("content"))
+                    Message(
+                        role=message["role"],
+                        content=check_content(message.get("content")),
+                    )
                 )
             else:
-                messages_.append(Message(**message))
+                message_ = {**message, "content": check_content(message.get("content"))}
+                messages_.append(Message(**message_))
         model_version = optional_params.pop("model_version", "latest")
         tools_input = optional_params.pop("tools", None)
         tools = []
