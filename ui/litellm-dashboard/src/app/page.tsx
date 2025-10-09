@@ -379,7 +379,6 @@ export default function CreateKeyPage() {
                   <Teams
                     teams={teams}
                     setTeams={setTeams}
-                    searchParams={searchParams}
                     accessToken={accessToken}
                     userID={userID}
                     userRole={userRole}
