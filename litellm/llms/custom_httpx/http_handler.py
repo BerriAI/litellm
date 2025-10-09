@@ -12,7 +12,12 @@ from httpx._types import RequestFiles
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+from litellm.constants import (
+    _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    AIOHTTP_CONNECTOR_LIMIT,
+    AIOHTTP_KEEPALIVE_TIMEOUT,
+    AIOHTTP_TTL_DNS_CACHE,
+)
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
 
