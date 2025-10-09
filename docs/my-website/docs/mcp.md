@@ -2,7 +2,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# /mcp - Model Context Protocol
+# MCP Overview
 
 LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint for all MCP tools and control MCP access by Key, Team. 
 
@@ -265,8 +265,203 @@ litellm_settings:
 </TabItem>
 </Tabs>
 
-## MCP Tool Filtering
+## Converting OpenAPI Specs to MCP Servers
 
+LiteLLM can automatically convert OpenAPI specifications into MCP servers, allowing you to expose any REST API as MCP tools. This is useful when you have existing APIs with OpenAPI/Swagger documentation and want to make them available as MCP tools.
+
+### Benefits
+
+- **Rapid Integration**: Convert existing APIs to MCP tools without writing custom MCP server code
+- **Automatic Tool Generation**: LiteLLM automatically generates MCP tools from your OpenAPI spec
+- **Unified Interface**: Use the same MCP interface for both native MCP servers and OpenAPI-based APIs
+- **Easy Testing**: Test and iterate on API integrations quickly
+
+### Configuration
+
+Add your OpenAPI-based MCP server to your `config.yaml`:
+
+```yaml title="config.yaml - OpenAPI to MCP" showLineNumbers
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: sk-xxxxxxx
+
+mcp_servers:
+  # OpenAPI Spec Example - Petstore API
+  petstore_mcp:
+    url: "https://petstore.swagger.io/v2"
+    spec_path: "/path/to/openapi.json"
+    auth_type: "none"
+  
+  # OpenAPI Spec with API Key Authentication
+  my_api_mcp:
+    url: "http://0.0.0.0:8090"
+    spec_path: "/path/to/openapi.json"
+    auth_type: "api_key"
+    auth_value: "your-api-key-here"
+  
+  # OpenAPI Spec with Bearer Token
+  secured_api_mcp:
+    url: "https://api.example.com"
+    spec_path: "/path/to/openapi.json" 
+    auth_type: "bearer_token"
+    auth_value: "your-bearer-token"
+```
+
+### Configuration Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `url` | Yes | The base URL of your API endpoint |
+| `spec_path` | Yes | Path or URL to your OpenAPI specification file (JSON or YAML) |
+| `auth_type` | No | Authentication type: `none`, `api_key`, `bearer_token`, `basic`, `authorization` |
+| `auth_value` | No | Authentication value (required if `auth_type` is set) |
+| `description` | No | Optional description for the MCP server |
+| `allowed_tools` | No | List of specific tools to allow (see [MCP Tool Filtering](#mcp-tool-filtering)) |
+| `disallowed_tools` | No | List of specific tools to block (see [MCP Tool Filtering](#mcp-tool-filtering)) |
+
+### Usage Example
+
+Once configured, you can use the OpenAPI-based MCP server just like any other MCP server:
+
+<Tabs>
+<TabItem value="fastmcp" label="Python FastMCP">
+
+```python title="Using OpenAPI-based MCP Server" showLineNumbers
+from fastmcp import Client
+import asyncio
+
+# Standard MCP configuration
+config = {
+    "mcpServers": {
+        "petstore": {
+            "url": "http://localhost:4000/petstore_mcp/mcp",
+            "headers": {
+                "x-litellm-api-key": "Bearer sk-1234"
+            }
+        }
+    }
+}
+
+# Create a client that connects to the server
+client = Client(config)
+
+async def main():
+    async with client:
+        # List available tools generated from OpenAPI spec
+        tools = await client.list_tools()
+        print(f"Available tools: {[tool.name for tool in tools]}")
+
+        # Example: Get a pet by ID (from Petstore API)
+        response = await client.call_tool(
+            name="getpetbyid", 
+            arguments={"petId": "1"}
+        )
+        print(f"Response:\n{response}\n")
+
+        # Example: Find pets by status
+        response = await client.call_tool(
+            name="findpetsbystatus", 
+            arguments={"status": "available"}
+        )
+        print(f"Response:\n{response}\n")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+</TabItem>
+
+<TabItem value="cursor" label="Cursor IDE">
+
+```json title="Cursor MCP Configuration for OpenAPI Server" showLineNumbers
+{
+  "mcpServers": {
+    "Petstore": {
+      "url": "http://localhost:4000/petstore_mcp/mcp",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
+      }
+    }
+  }
+}
+```
+
+</TabItem>
+
+<TabItem value="openai" label="OpenAI Responses API">
+
+```bash title="Using OpenAPI MCP Server with OpenAI" showLineNumbers
+curl --location 'https://api.openai.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $OPENAI_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "petstore",
+            "server_url": "http://localhost:4000/petstore_mcp/mcp",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+            }
+        }
+    ],
+    "input": "Find all available pets in the petstore",
+    "tool_choice": "required"
+}'
+```
+
+</TabItem>
+</Tabs>
+
+### How It Works
+
+1. **Spec Loading**: LiteLLM loads your OpenAPI specification from the provided `spec_path`
+2. **Tool Generation**: Each API endpoint in the spec becomes an MCP tool
+3. **Parameter Mapping**: OpenAPI parameters are automatically mapped to MCP tool parameters
+4. **Request Handling**: When a tool is called, LiteLLM converts the MCP request to the appropriate HTTP request
+5. **Response Translation**: API responses are converted back to MCP format
+
+### OpenAPI Spec Requirements
+
+Your OpenAPI specification should follow standard OpenAPI/Swagger conventions:
+- **Supported versions**: OpenAPI 3.0.x, OpenAPI 3.1.x, Swagger 2.0
+- **Required fields**: `paths`, `info` sections should be properly defined
+- **Operation IDs**: Each operation should have a unique `operationId` (this becomes the tool name)
+- **Parameters**: Request parameters should be properly documented with types and descriptions
+
+### Example OpenAPI Spec Structure
+
+```yaml title="sample-openapi.yaml" showLineNumbers
+openapi: 3.0.0
+info:
+  title: My API
+  version: 1.0.0
+paths:
+  /pets/{petId}:
+    get:
+      operationId: getPetById
+      summary: Get a pet by ID
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+```
+
+## Allow/Disallow MCP Tools
+  
 Control which tools are available from your MCP servers. You can either allow only specific tools or block dangerous ones.
 
 <Tabs>
@@ -325,210 +520,118 @@ mcp_servers:
 - If you specify both `allowed_tools` and `disallowed_tools`, the allowed list takes priority
 - Tool names are case-sensitive
 
-## Using your MCP
+---
 
-### Use on LiteLLM UI 
+## Allow/Disallow MCP Tool Parameters
 
-Follow this walkthrough to use your MCP on LiteLLM UI
+Control which parameters are allowed for specific MCP tools using the `allowed_params` configuration. This provides fine-grained control over tool usage by restricting the parameters that can be passed to each tool.
 
-<iframe width="840" height="500" src="https://www.loom.com/embed/57e0763267254bc79dbe6658d0b8758c" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+### Configuration
 
-### Use with Responses API
+`allowed_params` is a dictionary that maps tool names to lists of allowed parameter names. When configured, only the specified parameters will be accepted for that tool - any other parameters will be rejected with a 403 error.
 
-Replace `http://localhost:4000` with your LiteLLM Proxy base URL.
-
-Demo Video Using Responses API with LiteLLM Proxy: [Demo video here](https://www.loom.com/share/34587e618c5c47c0b0d67b4e4d02718f?sid=2caf3d45-ead4-4490-bcc1-8d6dd6041c02)
-
-
-<Tabs>
-<TabItem value="curl" label="cURL">
-
-```bash title="cURL Example" showLineNumbers
-curl --location 'http://localhost:4000/v1/responses' \
---header 'Content-Type: application/json' \
---header "Authorization: Bearer sk-1234" \
---data '{
-    "model": "gpt-5",
-    "input": [
-    {
-      "role": "user",
-      "content": "give me TLDR of what BerriAI/litellm repo is about",
-      "type": "message"
-    }
-  ],
-    "tools": [
-        {
-            "type": "mcp",
-            "server_label": "litellm",
-            "server_url": "litellm_proxy",
-            "require_approval": "never"
-        }
-    ],
-    "stream": true,
-    "tool_choice": "required"
-}'
+```yaml title="config.yaml with allowed_params" showLineNumbers
+mcp_servers:
+  deepwiki_mcp:
+    url: https://mcp.deepwiki.com/mcp
+    transport: "http"
+    auth_type: "none"
+    allowed_params:
+      # Tool name: list of allowed parameters
+      read_wiki_contents: ["status"]
+  
+  my_api_mcp:
+    url: "https://my-api-server.com"
+    auth_type: "api_key"
+    auth_value: "my-key"
+    allowed_params:
+      # Using unprefixed tool name
+      getpetbyid: ["status"]
+      # Using prefixed tool name (both formats work)
+      my_api_mcp-findpetsbystatus: ["status", "limit"]
+      # Another tool with multiple allowed params
+      create_issue: ["title", "body", "labels"]
 ```
 
-</TabItem>
-<TabItem value="python" label="Python SDK">
+### How It Works
 
-```python title="Python SDK Example" showLineNumbers
-"""
-Use LiteLLM Proxy MCP Gateway to call MCP tools.
+1. **Tool-specific filtering**: Each tool can have its own list of allowed parameters
+2. **Flexible naming**: Tool names can be specified with or without the server prefix (e.g., both `"getpetbyid"` and `"my_api_mcp-getpetbyid"` work)
+3. **Whitelist approach**: Only parameters in the allowed list are permitted
+4. **Unlisted tools**: If `allowed_params` is not set, all parameters are allowed
+5. **Error handling**: Requests with disallowed parameters receive a 403 error with details about which parameters are allowed
 
-When using LiteLLM Proxy, you can use the same MCP tools across all your LLM providers.
-"""
-import openai
+### Example Request Behavior
 
-client = openai.OpenAI(
-    api_key="sk-1234", # paste your litellm proxy api key here
-    base_url="http://localhost:4000" # paste your litellm proxy base url here
-)
-print("Making API request to Responses API with MCP tools")
+With the configuration above, here's how requests would be handled:
 
-response = client.responses.create(
-    model="gpt-5",
-    input=[
-        {
-            "role": "user",
-            "content": "give me TLDR of what BerriAI/litellm repo is about",
-            "type": "message"
-        }
-    ],
-    tools=[
-        {
-            "type": "mcp",
-            "server_label": "litellm",
-            "server_url": "litellm_proxy",
-            "require_approval": "never"
-        }
-    ],
-    stream=True,
-    tool_choice="required"
-)
-
-for chunk in response:
-    print("response chunk: ", chunk)
-```
-
-</TabItem>
-</Tabs>
-
-#### Specifying MCP Tools
-
-You can specify which MCP tools are available by using the `allowed_tools` parameter. This allows you to restrict access to specific tools within an MCP server.
-
-To get the list of allowed tools when using LiteLLM MCP Gateway, you can naigate to the LiteLLM UI on MCP Servers > MCP Tools > Click the Tool > Copy Tool Name.
-
-<Tabs>
-<TabItem value="curl" label="cURL">
-
-```bash title="cURL Example with allowed_tools" showLineNumbers
-curl --location 'http://localhost:4000/v1/responses' \
---header 'Content-Type: application/json' \
---header "Authorization: Bearer sk-1234" \
---data '{
-    "model": "gpt-5",
-    "input": [
-    {
-      "role": "user",
-      "content": "give me TLDR of what BerriAI/litellm repo is about",
-      "type": "message"
-    }
-  ],
-    "tools": [
-        {
-            "type": "mcp",
-            "server_label": "litellm",
-            "server_url": "litellm_proxy/mcp",
-            "require_approval": "never",
-            "allowed_tools": ["GitMCP-fetch_litellm_documentation"]
-        }
-    ],
-    "stream": true,
-    "tool_choice": "required"
-}'
-```
-
-</TabItem>
-<TabItem value="python" label="Python SDK">
-
-```python title="Python SDK Example with allowed_tools" showLineNumbers
-import openai
-
-client = openai.OpenAI(
-    api_key="sk-1234",
-    base_url="http://localhost:4000"
-)
-
-response = client.responses.create(
-    model="gpt-5",
-    input=[
-        {
-            "role": "user",
-            "content": "give me TLDR of what BerriAI/litellm repo is about",
-            "type": "message"
-        }
-    ],
-    tools=[
-        {
-            "type": "mcp",
-            "server_label": "litellm",
-            "server_url": "litellm_proxy/mcp",
-            "require_approval": "never",
-            "allowed_tools": ["GitMCP-fetch_litellm_documentation"]
-        }
-    ],
-    stream=True,
-    tool_choice="required"
-)
-
-print(response)
-```
-
-</TabItem>
-</Tabs>
-
-### Use with Cursor IDE
-
-Use tools directly from Cursor IDE with LiteLLM MCP:
-
-**Setup Instructions:**
-
-1. **Open Cursor Settings**: Use `⇧+⌘+J` (Mac) or `Ctrl+Shift+J` (Windows/Linux)
-2. **Navigate to MCP Tools**: Go to the "MCP Tools" tab and click "New MCP Server"
-3. **Add Configuration**: Copy and paste the JSON configuration below, then save with `Cmd+S` or `Ctrl+S`
-
-```json title="Basic Cursor MCP Configuration" showLineNumbers
+**✅ Allowed Request:**
+```json
 {
-  "mcpServers": {
-    "LiteLLM": {
-      "url": "litellm_proxy",
-      "headers": {
-        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
-      }
-    }
+  "tool": "read_wiki_contents",
+  "arguments": {
+    "status": "active"
   }
 }
 ```
 
-#### How it works when server_url="litellm_proxy"
+**❌ Rejected Request:**
+```json
+{
+  "tool": "read_wiki_contents",
+  "arguments": {
+    "status": "active",
+    "limit": 10  // This parameter is not allowed
+  }
+}
+```
 
-When server_url="litellm_proxy", LiteLLM bridges non-MCP providers to your MCP tools.
+**Error Response:**
+```json
+{
+  "error": "Parameters ['limit'] are not allowed for tool read_wiki_contents. Allowed parameters: ['status']. Contact proxy admin to allow these parameters."
+}
+```
 
-- Tool Discovery: LiteLLM fetches MCP tools and converts them to OpenAI-compatible definitions
-- LLM Call: Tools are sent to the LLM with your input; LLM selects which tools to call
-- Tool Execution: LiteLLM automatically parses arguments, routes calls to MCP servers, executes tools, and retrieves results
-- Response Integration: Tool results are sent back to LLM for final response generation
-- Output: Complete response combining LLM reasoning with tool execution results
+### Use Cases
 
-This enables MCP tool usage with any LiteLLM-supported provider, regardless of native MCP support.
+- **Security**: Prevent users from accessing sensitive parameters or dangerous operations
+- **Cost control**: Restrict expensive parameters (e.g., limiting result counts)
+- **Compliance**: Enforce parameter usage policies for regulatory requirements
+- **Staged rollouts**: Gradually enable parameters as tools are tested
+- **Multi-tenant isolation**: Different parameter access for different user groups
 
-#### Auto-execution for require_approval: "never"
+### Combining with Tool Filtering
 
-Setting require_approval: "never" triggers automatic tool execution, returning the final response in a single API call without additional user interaction.
+`allowed_params` works alongside `allowed_tools` and `disallowed_tools` for complete control:
 
+```yaml title="Combined filtering example" showLineNumbers
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: oauth2
+    authorization_url: https://github.com/login/oauth/authorize
+    token_url: https://github.com/login/oauth/access_token
+    client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
+    client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
+    scopes: ["public_repo", "user:email"]
+    # Only allow specific tools
+    allowed_tools: ["create_issue", "list_issues", "search_issues"]
+    # Block dangerous operations
+    disallowed_tools: ["delete_repo"]
+    # Restrict parameters per tool
+    allowed_params:
+      create_issue: ["title", "body", "labels"]
+      list_issues: ["state", "sort", "perPage"]
+      search_issues: ["query", "sort", "order", "perPage"]
+```
 
+This configuration ensures that:
+1. Only the three listed tools are available
+2. The `delete_repo` tool is explicitly blocked
+3. Each tool can only use its specified parameters
+
+---
 
 ## MCP Server Access Control
 
@@ -1507,221 +1610,6 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
     "tool_choice": "required"
 }'
 ```
-
-
-
-## MCP Cost Tracking
-
-LiteLLM provides two ways to track costs for MCP tool calls:
-
-| Method | When to Use | What It Does |
-|--------|-------------|--------------|
-| **Config-based Cost Tracking** | Simple cost tracking with fixed costs per tool/server | Automatically tracks costs based on configuration |
-| **Custom Post-MCP Hook** | Dynamic cost tracking with custom logic | Allows custom cost calculations and response modifications |
-
-### Config-based Cost Tracking
-
-Configure fixed costs for MCP servers directly in your config.yaml:
-
-```yaml title="config.yaml" showLineNumbers
-model_list:
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: sk-xxxxxxx
-
-mcp_servers:
-  zapier_server:
-    url: "https://actions.zapier.com/mcp/sk-xxxxx/sse"
-    mcp_info:
-      mcp_server_cost_info:
-        # Default cost for all tools in this server
-        default_cost_per_query: 0.01
-        # Custom cost for specific tools
-        tool_name_to_cost_per_query:
-          send_email: 0.05
-          create_document: 0.03
-          
-  expensive_api_server:
-    url: "https://api.expensive-service.com/mcp"
-    mcp_info:
-      mcp_server_cost_info:
-        default_cost_per_query: 1.50
-```
-
-### Custom Post-MCP Hook
-
-Use this when you need dynamic cost calculation or want to modify the MCP response before it's returned to the user.
-
-#### 1. Create a custom MCP hook file
-
-```python title="custom_mcp_hook.py" showLineNumbers
-from typing import Optional
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.mcp import MCPPostCallResponseObject
-
-
-class CustomMCPCostTracker(CustomLogger):
-    """
-    Custom handler for MCP cost tracking and response modification
-    """
-    
-    async def async_post_mcp_tool_call_hook(
-        self, 
-        kwargs, 
-        response_obj: MCPPostCallResponseObject, 
-        start_time, 
-        end_time
-    ) -> Optional[MCPPostCallResponseObject]:
-        """
-        Called after each MCP tool call. 
-        Modify costs and response before returning to user.
-        """
-        
-        # Extract tool information from kwargs
-        tool_name = kwargs.get("name", "")
-        server_name = kwargs.get("server_name", "")
-        
-        # Calculate custom cost based on your logic
-        custom_cost = 42.00
-        
-        # Set the response cost
-        response_obj.hidden_params.response_cost = custom_cost
-        
-  
-      
-        return response_obj
-    
-
-# Create instance for LiteLLM to use
-custom_mcp_cost_tracker = CustomMCPCostTracker()
-```
-
-#### 2. Configure in config.yaml
-
-```yaml title="config.yaml" showLineNumbers
-model_list:
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: sk-xxxxxxx
-
-# Add your custom MCP hook
-callbacks:
-  - custom_mcp_hook.custom_mcp_cost_tracker
-
-mcp_servers:
-  zapier_server:
-    url: "https://actions.zapier.com/mcp/sk-xxxxx/sse"
-```
-
-#### 3. Start the proxy
-
-```shell
-$ litellm --config /path/to/config.yaml 
-```
-
-When MCP tools are called, your custom hook will:
-1. Calculate costs based on your custom logic
-2. Modify the response if needed
-3. Track costs in LiteLLM's logging system
-
-## MCP Guardrails
-
-LiteLLM supports applying guardrails to MCP tool calls to ensure security and compliance. You can configure guardrails to run before or during MCP calls to validate inputs and block or mask sensitive information.
-
-### Supported MCP Guardrail Modes
-
-MCP guardrails support the following modes:
-
-- `pre_mcp_call`: Run **before** MCP call, on **input**. Use this mode when you want to apply validation/masking/blocking for MCP requests
-- `during_mcp_call`: Run **during** MCP call execution. Use this mode for real-time monitoring and intervention
-
-### Configuration Examples
-
-Configure guardrails to run before MCP tool calls to validate and sanitize inputs:
-
-```yaml title="config.yaml" showLineNumbers
-guardrails:
-  - guardrail_name: "mcp-input-validation"
-    litellm_params:
-      guardrail: presidio  # or other supported guardrails
-      mode: "pre_mcp_call" # or during_mcp_call
-      pii_entities_config:
-        CREDIT_CARD: "BLOCK"  # Will block requests containing credit card numbers
-        EMAIL_ADDRESS: "MASK"  # Will mask email addresses
-        PHONE_NUMBER: "MASK"   # Will mask phone numbers
-      default_on: true
-```
-
-
-### Usage Examples
-
-#### Testing Pre-MCP Call Guardrails
-
-Test your MCP guardrails with a request that includes sensitive information:
-
-```bash title="Test MCP Guardrail" showLineNumbers
-curl http://localhost:4000/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-      {"role": "user", "content": "My credit card is 4111-1111-1111-1111 and my email is john@example.com"}
-    ],
-    "guardrails": ["mcp-input-validation"]
-  }'
-```
-
-The request will be processed as follows:
-1. Credit card number will be blocked (request rejected)
-2. Email address will be masked (e.g., replaced with `<EMAIL_ADDRESS>`)
-
-#### Using with MCP Tools
-
-When using MCP tools, guardrails will be applied to the tool inputs:
-
-```python title="Python Example with MCP Guardrails" showLineNumbers
-import openai
-
-client = openai.OpenAI(
-    api_key="your-api-key",
-    base_url="http://localhost:4000"
-)
-
-# This request will trigger MCP guardrails
-response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages=[
-        {"role": "user", "content": "Send an email to 555-123-4567 with my SSN 123-45-6789"}
-    ],
-    tools=[{"type": "mcp", "server_label": "litellm", "server_url": "litellm_proxy"}],
-    guardrails=["mcp-input-validation"]
-)
-```
-
-### Supported Guardrail Providers
-
-MCP guardrails work with all LiteLLM-supported guardrail providers:
-
-- **Presidio**: PII detection and masking
-- **Bedrock**: AWS Bedrock guardrails
-- **Lakera**: Content moderation
-- **Aporia**: Custom guardrails
-- **Custom**: Your own guardrail implementations
-
-## MCP Permission Management
-
-LiteLLM supports managing permissions for MCP Servers by Keys, Teams, Organizations (entities) on LiteLLM. When a MCP client attempts to list tools, LiteLLM will only return the tools the entity has permissions to access.
-
-When Creating a Key, Team, or Organization, you can select the allowed MCP Servers that the entity has access to.
-
-<Image 
-  img={require('../img/mcp_key.png')}
-  style={{width: '80%', display: 'block', margin: '0'}}
-/>
-
 
 ## LiteLLM Proxy - Walk through MCP Gateway
 LiteLLM exposes an MCP Gateway for admins to add all their MCP servers to LiteLLM. The key benefits of using LiteLLM Proxy with MCP are:
