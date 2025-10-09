@@ -5,7 +5,12 @@ from starlette.requests import Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import LiteLLM_TeamTable, SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_TeamTable,
+    LitellmUserRoles,
+    SpecialHeaders,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
@@ -109,10 +114,21 @@ class MCPRequestHandler:
         request.body = mock_body  # type: ignore
         if ".well-known" in str(request.url):  # public routes
             validated_user_api_key_auth = UserAPIKeyAuth()
+        elif litellm_api_key == "":
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=401,
+                detail="LiteLLM API key is missing. Please add it or use OAuth authentication.",
+                headers={
+                    "WWW-Authenticate": f'Bearer resource_metadata=f"{request.base_url}/.well-known/oauth-protected-resource"',
+                },
+            )
         else:
             validated_user_api_key_auth = await user_api_key_auth(
                 api_key=litellm_api_key, request=request
             )
+
         return (
             validated_user_api_key_auth,
             mcp_auth_header,
@@ -344,14 +360,14 @@ class MCPRequestHandler:
             proxy_logging_obj,
             user_api_key_cache,
         )
-        
+
         if not user_api_key_auth:
             return None
-        
+
         # Already loaded
         if user_api_key_auth.object_permission:
             return user_api_key_auth.object_permission
-        
+
         # Need to fetch from DB
         if user_api_key_auth.object_permission_id and prisma_client:
             return await get_object_permission(
@@ -361,7 +377,7 @@ class MCPRequestHandler:
                 parent_otel_span=user_api_key_auth.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
             )
-        
+
         return None
 
     @staticmethod
@@ -369,16 +385,19 @@ class MCPRequestHandler:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ):
         """Helper to get team object_permission from cache or DB."""
-        from litellm.proxy.auth.auth_checks import get_object_permission, get_team_object
+        from litellm.proxy.auth.auth_checks import (
+            get_object_permission,
+            get_team_object,
+        )
         from litellm.proxy.proxy_server import (
             prisma_client,
             proxy_logging_obj,
             user_api_key_cache,
         )
-        
+
         if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
             return None
-        
+
         # First get the team object (which may have object_permission already loaded)
         team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
             team_id=user_api_key_auth.team_id,
@@ -387,14 +406,14 @@ class MCPRequestHandler:
             parent_otel_span=user_api_key_auth.parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
-        
+
         if not team_obj:
             return None
-        
+
         # Already loaded
         if team_obj.object_permission:
             return team_obj.object_permission
-        
+
         # Need to fetch from DB using object_permission_id
         if team_obj.object_permission_id:
             return await get_object_permission(
@@ -404,7 +423,7 @@ class MCPRequestHandler:
                 parent_otel_span=user_api_key_auth.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
             )
-        
+
         return None
 
     @staticmethod
@@ -415,26 +434,38 @@ class MCPRequestHandler:
         """
         Get list of allowed tool names for a specific server based on key/team permissions.
         Follows same inheritance logic as get_allowed_mcp_servers.
-        
+
         Args:
             server_id: Server ID to check permissions for
             user_api_key_auth: User auth
-            
+
         Returns:
             List[str] if restrictions exist, None if no restrictions (allow all)
         """
         if not user_api_key_auth:
             return None
-        
+
         try:
             # Get key and team object permissions
-            key_obj_perm = await MCPRequestHandler._get_key_object_permission(user_api_key_auth)
-            team_obj_perm = await MCPRequestHandler._get_team_object_permission(user_api_key_auth)
-            
+            key_obj_perm = await MCPRequestHandler._get_key_object_permission(
+                user_api_key_auth
+            )
+            team_obj_perm = await MCPRequestHandler._get_team_object_permission(
+                user_api_key_auth
+            )
+
             # Extract tool permissions for this server
-            key_tools = key_obj_perm.mcp_tool_permissions.get(server_id) if key_obj_perm and key_obj_perm.mcp_tool_permissions else None
-            team_tools = team_obj_perm.mcp_tool_permissions.get(server_id) if team_obj_perm and team_obj_perm.mcp_tool_permissions else None
-            
+            key_tools = (
+                key_obj_perm.mcp_tool_permissions.get(server_id)
+                if key_obj_perm and key_obj_perm.mcp_tool_permissions
+                else None
+            )
+            team_tools = (
+                team_obj_perm.mcp_tool_permissions.get(server_id)
+                if team_obj_perm and team_obj_perm.mcp_tool_permissions
+                else None
+            )
+
             # Apply same inheritance logic as get_allowed_mcp_servers
             if team_tools:
                 if key_tools:
@@ -446,7 +477,7 @@ class MCPRequestHandler:
             else:
                 # No team restrictions → use key restrictions
                 return key_tools
-                
+
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed tools for server: {str(e)}")
             return None
@@ -459,12 +490,12 @@ class MCPRequestHandler:
     ) -> bool:
         """
         Check if a specific tool is allowed for a server based on key/team permissions.
-        
+
         Args:
             tool_name: Name of the tool to check
             server_id: Server ID
             user_api_key_auth: User auth
-            
+
         Returns:
             True if allowed, False if blocked
         """
@@ -472,15 +503,15 @@ class MCPRequestHandler:
             server_id=server_id,
             user_api_key_auth=user_api_key_auth,
         )
-        
+
         # None means no restrictions (allow all)
         if allowed_tools is None:
             return True
-        
+
         # Empty list means no tools allowed
         if not allowed_tools:
             return False
-        
+
         # Check if tool is in allowed list
         return tool_name in allowed_tools
 
@@ -555,7 +586,7 @@ class MCPRequestHandler:
     ) -> List[str]:
         """
         Get allowed MCP servers for a team.
-        
+
         Uses the helper _get_team_object_permission which:
         1. First checks if object_permission is already loaded on the team
         2. If not, fetches from DB using object_permission_id if it exists
@@ -571,7 +602,7 @@ class MCPRequestHandler:
             object_permissions = await MCPRequestHandler._get_team_object_permission(
                 user_api_key_auth
             )
-            
+
             if object_permissions is None:
                 return []
 
