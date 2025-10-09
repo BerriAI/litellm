@@ -158,15 +158,12 @@ LiteLLM supports the following app roles (case-insensitive):
 1. Navigate to your App Registration on https://portal.azure.com/
 2. Go to **App roles** > **Create app role**
 
-<Image img={require('../../img/entra_app_roles_1.png')}  style={{ width: '800px', height: 'auto' }} />
-
 3. Configure the app role:
    - **Display name**: Proxy Admin (or your preferred display name)
    - **Value**: `proxy_admin` (use one of the supported role values above)
    - **Description**: Administrator access to LiteLLM proxy
    - **Allowed member types**: Users/Groups
 
-<Image img={require('../../img/entra_app_roles_2.png')}  style={{ width: '800px', height: 'auto' }} />
 
 4. Click **Apply** to save the role
 
@@ -177,7 +174,6 @@ LiteLLM supports the following app roles (case-insensitive):
 3. Go to **Users and groups** > **Add user/group**
 4. Select the user and assign them to one of the app roles you created
 
-<Image img={require('../../img/entra_app_roles_3.png')}  style={{ width: '800px', height: 'auto' }} />
 
 ### 4.4 Test the Role Assignment
 
