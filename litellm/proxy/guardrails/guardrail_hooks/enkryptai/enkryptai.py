@@ -8,14 +8,12 @@
 import os
 from datetime import datetime
 from typing import (
-    TYPE_CHECKING,
     Any,
     AsyncGenerator,
     Dict,
     List,
     Literal,
     Optional,
-    Type,
     Union,
 )
 
@@ -36,9 +34,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIResponse,
 )
 from litellm.types.utils import GuardrailStatus, ModelResponseStream
-
-if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_NAME = "enkryptai"
 
@@ -485,7 +480,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
             yield item
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model():
         from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
             EnkryptAIGuardrailConfigModel,
         )
