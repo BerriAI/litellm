@@ -50,7 +50,7 @@ interface PerTeamInfo {
   team_info: TeamInfo;
 }
 
-const Teams: React.FC<TeamProps> = ({
+const TeamsView: React.FC<TeamProps> = ({
   teams,
   accessToken,
   setTeams,
@@ -360,4 +360,4 @@ const Teams: React.FC<TeamProps> = ({
   );
 };
 
-export default Teams;
+export default TeamsView;
