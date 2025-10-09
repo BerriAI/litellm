@@ -216,6 +216,7 @@ class MCPServerManager:
                 extra_headers=server_config.get("extra_headers", None),
                 allowed_tools=server_config.get("allowed_tools", None),
                 disallowed_tools=server_config.get("disallowed_tools", None),
+                allowed_params=server_config.get("allowed_params", None),
                 access_groups=server_config.get("access_groups", None),
             )
             self.config_mcp_servers[server_id] = new_server
@@ -771,6 +772,58 @@ class MCPServerManager:
             )
         return True
 
+    def validate_allowed_params(
+        self, tool_name: str, arguments: Dict[str, Any], server: MCPServer
+    ) -> None:
+        """
+        Filter arguments to only include allowed parameters for the given tool.
+
+        Args:
+            tool_name: Name of the tool (with or without prefix)
+            arguments: Dictionary of arguments to filter
+            server: MCPServer configuration
+
+        Returns:
+            Filtered dictionary containing only allowed parameters
+
+        Raises:
+            HTTPException: If allowed_params is configured for this tool but arguments contain disallowed params
+        """
+        from litellm.proxy._experimental.mcp_server.utils import (
+            get_server_name_prefix_tool_mcp,
+        )
+
+        # If no allowed_params configured, return all arguments
+        if not server.allowed_params:
+            return
+
+        # Get the unprefixed tool name to match against config
+        unprefixed_tool_name, _ = get_server_name_prefix_tool_mcp(tool_name)
+
+        # Check both prefixed and unprefixed tool names
+        allowed_params_list = server.allowed_params.get(
+            tool_name
+        ) or server.allowed_params.get(unprefixed_tool_name)
+
+        # If this tool doesn't have allowed_params specified, allow all params
+        if allowed_params_list is None:
+            return None
+
+        # Filter arguments to only include allowed parameters
+        disallowed_params = [
+            param for param in arguments.keys() if param not in allowed_params_list
+        ]
+
+        if disallowed_params:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Parameters {disallowed_params} are not allowed for tool {tool_name}. "
+                    f"Allowed parameters: {allowed_params_list}. "
+                    f"Contact proxy admin to allow these parameters."
+                },
+            )
+
     async def check_tool_permission_for_key_team(
         self,
         tool_name: str,
@@ -894,6 +947,13 @@ class MCPServerManager:
             tool_name=name,
             server=server,
             user_api_key_auth=user_api_key_auth,
+        )
+
+        ## filter parameters based on allowed_params configuration
+        self.validate_allowed_params(
+            tool_name=name,
+            arguments=arguments,
+            server=server,
         )
 
         pre_hook_kwargs = {
