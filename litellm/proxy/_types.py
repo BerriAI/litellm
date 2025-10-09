@@ -775,6 +775,7 @@ class KeyRequestBase(GenerateRequestBase):
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
+    allowed_passthrough_routes: Optional[list] = []
     rpm_limit_type: Optional[
         Literal["guaranteed_throughput", "best_effort_throughput"]
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
@@ -1442,7 +1443,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
         "1234567890": ["tool_name_1", "tool_name_2"]
     }
     """
-    
+
     vector_stores: Optional[List[str]] = []
 
 
@@ -3105,6 +3106,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "enforced_params",
     "temp_budget_increase",
     "temp_budget_expiry",
+    "allowed_passthrough_routes",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
