@@ -52,14 +52,11 @@ class RouteChecks:
         if len(valid_token.allowed_routes) == 0:
             return True
 
-        # explicit check for allowed routes
-        if route in valid_token.allowed_routes:
-            return True
-
-        # check if any allowed_route is a prefix of the actual route
-        # e.g., allowed_route="/fake-openai-proxy-6" matches route="/fake-openai-proxy-6/v1/chat/completions"
+        # explicit check for allowed routes (exact match or prefix match)
         for allowed_route in valid_token.allowed_routes:
-            if route.startswith(allowed_route + "/") or route == allowed_route:
+            if RouteChecks._route_matches_allowed_route(
+                route=route, allowed_route=allowed_route
+            ):
                 return True
 
         ## check if 'allowed_route' is a field name in LiteLLMRoutes
@@ -204,18 +201,19 @@ class RouteChecks:
             pass
         elif route.startswith("/v1/mcp/") or route.startswith("/mcp-rest/"):
             pass  # authN/authZ handled by api itself
+        elif RouteChecks.check_passthrough_route_access(
+            route=route, user_api_key_dict=valid_token
+        ):
+            pass
         elif valid_token.allowed_routes is not None:
             # check if route is in allowed_routes (exact match or prefix match)
             route_allowed = False
-            if route in valid_token.allowed_routes:
-                route_allowed = True
-            else:
-                # check if any allowed_route is a prefix of the actual route
-                # e.g., allowed_route="/fake-openai-proxy-6" matches route="/fake-openai-proxy-6/v1/chat/completions"
-                for allowed_route in valid_token.allowed_routes:
-                    if route.startswith(allowed_route + "/") or route == allowed_route:
-                        route_allowed = True
-                        break
+            for allowed_route in valid_token.allowed_routes:
+                if RouteChecks._route_matches_allowed_route(
+                    route=route, allowed_route=allowed_route
+                ):
+                    route_allowed = True
+                    break
 
             if route_allowed:
                 pass
@@ -383,6 +381,32 @@ class RouteChecks:
             return route == pattern
 
     @staticmethod
+    def _route_matches_allowed_route(route: str, allowed_route: str) -> bool:
+        """
+        Check if route matches the allowed_route pattern.
+        Supports both exact match and prefix match.
+
+        Examples:
+        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-6" -> True (exact match)
+        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-6/v1/chat/completions" -> True (prefix match)
+        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-600" -> False (not a valid prefix)
+
+        Args:
+            route: The actual route being accessed
+            allowed_route: The allowed route pattern
+
+        Returns:
+            bool: True if route matches (exact or prefix), False otherwise
+        """
+        # Exact match
+        if route == allowed_route:
+            return True
+        # Prefix match - ensure we add "/" to prevent false matches like /fake-openai-proxy-600
+        if route.startswith(allowed_route + "/"):
+            return True
+        return False
+
+    @staticmethod
     def check_route_access(route: str, allowed_routes: List[str]) -> bool:
         """
         Check if a route has access by checking both exact matches and patterns
@@ -426,6 +450,33 @@ class RouteChecks:
             for allowed_route in allowed_routes
         ):
             return True
+
+        return False
+
+    @staticmethod
+    def check_passthrough_route_access(
+        route: str, user_api_key_dict: UserAPIKeyAuth
+    ) -> bool:
+        """
+        Check if route is a passthrough route.
+        Supports both exact match and prefix match.
+        """
+        metadata = user_api_key_dict.metadata
+        if metadata is None:
+            return False
+        if "allowed_passthrough_routes" not in metadata:
+            return False
+        if metadata["allowed_passthrough_routes"] is None:
+            return False
+
+        allowed_passthrough_routes = metadata["allowed_passthrough_routes"]
+
+        # Check if route matches any allowed passthrough route (exact or prefix match)
+        for allowed_route in allowed_passthrough_routes:
+            if RouteChecks._route_matches_allowed_route(
+                route=route, allowed_route=allowed_route
+            ):
+                return True
 
         return False
 
