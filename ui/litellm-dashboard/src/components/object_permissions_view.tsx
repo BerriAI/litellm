@@ -7,6 +7,7 @@ interface ObjectPermission {
   object_permission_id: string;
   mcp_servers: string[];
   mcp_access_groups?: string[];
+  mcp_tool_permissions?: Record<string, string[]>;
   vector_stores: string[];
 }
 
@@ -26,11 +27,17 @@ export function ObjectPermissionsView({
   const vectorStores = objectPermission?.vector_stores || [];
   const mcpServers = objectPermission?.mcp_servers || [];
   const mcpAccessGroups = objectPermission?.mcp_access_groups || [];
+  const mcpToolPermissions = objectPermission?.mcp_tool_permissions || {};
 
   const content = (
     <div className={variant === "card" ? "grid grid-cols-1 md:grid-cols-2 gap-6" : "space-y-4"}>
       <VectorStorePermissions vectorStores={vectorStores} accessToken={accessToken} />
-      <MCPServerPermissions mcpServers={mcpServers} mcpAccessGroups={mcpAccessGroups} accessToken={accessToken} />
+      <MCPServerPermissions 
+        mcpServers={mcpServers} 
+        mcpAccessGroups={mcpAccessGroups} 
+        mcpToolPermissions={mcpToolPermissions}
+        accessToken={accessToken} 
+      />
     </div>
   );
 

@@ -54,7 +54,7 @@ rich==13.7.1 # for litellm proxy cli
 jinja2==3.1.6 # for prompt templates
 aiohttp==3.12.14 # for network calls
 aioboto3==13.4.0 # for async sagemaker calls
-tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
+tenacity==8.5.0  # for retrying requests, when litellm.num_retries set
 pydantic==2.10.2 # proxy + openai req.
 jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API

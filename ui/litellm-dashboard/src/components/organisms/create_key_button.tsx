@@ -132,6 +132,13 @@ export const fetchUserModels = async (
   }
 };
 
+/**
+ * ─────────────────────────────────────────────────────────────────────────
+ * @deprecated
+ * This component is being DEPRECATED in favor of src/app/(dashboard)/virtual-keys/components/CreateKey.tsx
+ * Please contribute to the new refactor.
+ * ─────────────────────────────────────────────────────────────────────────
+ */
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
   team,
@@ -382,6 +389,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       if (Object.keys(modelAliases).length > 0) {
         formValues.aliases = JSON.stringify(modelAliases);
       }
+
 
       let response;
       if (keyOwner === "service_account") {
@@ -994,6 +1002,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         />
                       </Form.Item>
 
+                      {/* Hidden field to register mcp_tool_permissions with the form */}
+                      <Form.Item name="mcp_tool_permissions" initialValue={{}} hidden>
+                        <Input type="hidden" />
+                      </Form.Item>
+
                       <Form.Item 
                         noStyle
                         shouldUpdate={(prevValues, currentValues) => 
@@ -1007,7 +1020,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                               accessToken={accessToken}
                               selectedServers={form.getFieldValue("allowed_mcp_servers_and_groups")?.servers || []}
                               toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
-                              onChange={(toolPerms) => form.setFieldValue("mcp_tool_permissions", toolPerms)}
+                              onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
                             />
                           </div>
                         )}

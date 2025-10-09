@@ -191,7 +191,7 @@ print(json.loads(completion.choices[0].message.content))
 model_list:
   - model_name: gemini-2.5-pro
     litellm_params:
-      model: vertex_ai/gemini-1.5-pro
+      model: vertex_ai/gemini-2.5-pro
       vertex_project: "project-id"
       vertex_location: "us-central1"
       vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
@@ -277,7 +277,7 @@ except JSONSchemaValidationError as e:
 model_list:
   - model_name: gemini-2.5-pro
     litellm_params:
-      model: vertex_ai/gemini-1.5-pro
+      model: vertex_ai/gemini-2.5-pro
       vertex_project: "project-id"
       vertex_location: "us-central1"
       vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
@@ -981,11 +981,158 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 ### **Context Caching**
 
-Use Vertex AI context caching is supported by calling provider api directly. (Unified Endpoint support coming soon.).
+#### Unified Endpoint
+
+Use Vertex AI context caching in the same way as [**Google AI Studio -  Context Caching**](../providers/gemini.md#context-caching)
+
+
+##### Example usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion 
+
+for _ in range(2): 
+    resp = completion(
+        model="vertex_ai/gemini-2.5-pro",
+        messages=[
+        # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement" * 4000,
+                        "cache_control": {"type": "ephemeral"}, # 👈 KEY CHANGE
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }]
+    )
+
+    print(resp.usage) # 👈 2nd usage block will be less, since cached tokens used
+```
+
+</TabItem>
+<TabItem value="sdk-ttl" label="SDK with Custom TTL">
+
+```python
+from litellm import completion 
+
+# Cache for 2 hours (7200 seconds)
+resp = completion(
+    model="vertex_ai/gemini-2.5-pro",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 4000,
+                    "cache_control": {
+                        "type": "ephemeral", 
+                        "ttl": "7200s"  # 👈 Cache for 2 hours
+                    },
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "3600s"  # 👈 This TTL will be ignored (first one is used)
+                    },
+                }
+            ],
+        }
+    ]
+)
+
+print(resp.usage)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: vertex_ai/gemini-2.5-pro
+      vertex_project: "project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "gemini-2.5-flash",
+    "messages": [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Long cache message (must be >= 1024 tokens)",
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "7200s"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What is the text about?"
+                }
+            ]
+        }
+    ]
+}'
+
+```
+
+</TabItem>
+</Tabs>
+
+#### Calling provider api directly
 
 [**Go straight to provider**](../pass_through/vertex_ai.md#context-caching)
 
-#### 1. Create the Cache
+##### 1. Create the Cache
 
 First, create the cache by sending a `POST` request to the `cachedContents` endpoint via the LiteLLM proxy.
 
@@ -1011,7 +1158,7 @@ curl http://0.0.0.0:4000/vertex_ai/v1/projects/{project_id}/locations/{location}
 </TabItem>
 </Tabs>
 
-#### 2. Get the Cache Name from the Response
+##### 2. Get the Cache Name from the Response
 
 Vertex AI will return a response containing the `name` of the cached content. This name is the identifier for your cached data.
 
@@ -1030,7 +1177,7 @@ Vertex AI will return a response containing the `name` of the cached content. Th
 }
 ```
 
-#### 3. Use the Cached Content
+##### 3. Use the Cached Content
 
 Use the `name` from the response as `cachedContent` or `cached_content` in subsequent API calls to reuse the cached information. This is passed in the body of your request to `/chat/completions`.
 

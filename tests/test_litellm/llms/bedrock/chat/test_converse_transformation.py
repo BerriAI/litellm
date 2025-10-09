@@ -33,7 +33,7 @@ def test_transform_usage():
     openai_usage = config._transform_usage(usage)
     assert (
         openai_usage.prompt_tokens
-        == usage["inputTokens"] + usage["cacheReadInputTokens"]
+        == usage["inputTokens"] + usage["cacheReadInputTokens"] + usage["cacheWriteInputTokens"]
     )
     assert openai_usage.completion_tokens == usage["outputTokens"]
     assert openai_usage.total_tokens == usage["totalTokens"]
@@ -1620,7 +1620,9 @@ async def test_no_cache_control_no_cache_point():
 
 def test_guarded_text_wraps_in_guardrail_converse_content():
     """Test that guarded_text content type gets wrapped in guardContent blocks."""
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
 
     messages = [
         {
@@ -1711,7 +1713,9 @@ def test_guarded_text_with_system_messages():
 
 def test_guarded_text_with_mixed_content_types():
     """Test guarded_text with mixed content types including images."""
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
 
     messages = [
         {
@@ -1752,7 +1756,9 @@ def test_guarded_text_with_mixed_content_types():
 @pytest.mark.asyncio
 async def test_async_guarded_text():
     """Test async version of guarded_text processing."""
-    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+    )
 
     messages = [
         {
@@ -1789,7 +1795,9 @@ async def test_async_guarded_text():
 
 def test_guarded_text_with_tool_calls():
     """Test guarded_text with tool calls in the conversation."""
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
 
     messages = [
         {

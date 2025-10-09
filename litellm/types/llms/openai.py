@@ -992,6 +992,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     prompt_cache_key: Optional[str]
     stream_options: Optional[dict]
     top_logprobs: Optional[int]
+    partial_images: Optional[int]  # Number of partial images to generate (1-3) for streaming image generation
 
 
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
@@ -1128,6 +1129,9 @@ class ResponsesAPIStreamEvents(str, Enum):
     MCP_CALL_ARGUMENTS_DONE = "response.mcp_call_arguments.done"
     MCP_CALL_COMPLETED = "response.mcp_call.completed"
     MCP_CALL_FAILED = "response.mcp_call.failed"
+
+    # Image generation events
+    IMAGE_GENERATION_PARTIAL_IMAGE = "image_generation.partial_image"
 
     # Error event
     ERROR = "error"
@@ -1352,6 +1356,12 @@ class MCPCallFailedEvent(BaseLiteLLMOpenAIResponseObject):
     output_index: int
 
 
+class ImageGenerationPartialImageEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE]
+    partial_image_index: int
+    b64_json: str
+
+
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.ERROR]
     code: Optional[str]
@@ -1400,6 +1410,7 @@ ResponsesAPIStreamingResponse = Annotated[
         MCPCallArgumentsDoneEvent,
         MCPCallCompletedEvent,
         MCPCallFailedEvent,
+        ImageGenerationPartialImageEvent,
         ErrorEvent,
         GenericEvent,
     ],

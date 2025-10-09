@@ -1,63 +1,16 @@
 model_list:
-  - model_name: bedrock/batch-anthropic.claude-3-5-sonnet-20240620-v1:0
+  - model_name: db-openai-endpoint
     litellm_params:
-      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
-      #########################################################
-      ########## batch specific params ########################
-      s3_bucket_name: litellm-proxy
-      s3_region_name: us-west-2
-      s3_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-      s3_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-      aws_batch_role_arn: arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV
-    model_info: 
-      mode: batch
-  - model_name: anthropic/*
-    litellm_params:
-      model: anthropic/*
-      api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: openai/*
-    litellm_params:
-      model: openai/*
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: gemini/*
-    litellm_params:
-      model: gemini/*
-      api_key: os.environ/GEMINI_API_KEY
-  - model_name: vertex_ai/*
-    litellm_params:
-      model: vertex_ai/*
-  - model_name: "grok-4"
-    model_info:
-      mode: completion
-    litellm_params:
-      model: oci/xai.grok-4
-      oci_key: ocid1.api_key.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk
-      oci_region: us-phoenix-1
-      oci_user: ocid1.user.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk
-      oci_fingerprint: aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:77:88:99:00
-      oci_tenancy: ocid1.tenancy.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk
-      oci_key_file: /path/to/oci_api_key.pem
-      oci_compartment_id: ocid1.compartment.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk
-      drop_params: True
+      model: openai/gm
+      api_key: hi
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-
-guardrails:
-  - guardrail_name: "bedrock-pre-guard"
-    litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
-      mode: "during_call"
-      guardrailIdentifier: ff6ujrregl1q
-      guardrailVersion: "DRAFT"
 
 litellm_settings:
-  callbacks: ["datadog"]
-  include_cost_in_streaming_usage: true
-  datadog_params:
-    turn_off_message_logging: true
-  datadog_llm_observability_params:
-    turn_off_message_logging: true
-
-  cache: True
-  cache_params:
-    type: redis
-    redis_startup_nodes: [{"host": "127.0.0.1", "port": "7000"}, {"host": "127.0.0.1", "port": "7001"}, {"host": "127.0.0.1", "port": "7002"}, {"host": "127.0.0.1", "port": "7003"}] 
+  callbacks: ["dynamic_rate_limiter_v3"]
+  priority_reservation: 
+    "prod": 0.9  # 90% reserved for production (9 RPM)
+    "dev": 0.1   # 10% reserved for development (1 RPM)
+  priority_reservation_settings:
+    default_priority: 0.2  # Weight (0%) assigned to keys without explicit priority metadata
+    saturation_threshold: 0.50 #  A model is saturated if it has hit 50% of its RPM limit

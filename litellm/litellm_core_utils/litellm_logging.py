@@ -81,12 +81,12 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.rerank import RerankResponse
-from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
     CachingDetails,
     CallTypes,
     CostBreakdown,
     CostResponseTypes,
+    CustomPricingLiteLLMParams,
     DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
     GuardrailStatus,

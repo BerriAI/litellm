@@ -878,7 +878,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
-            cache_creation_tokens=cache_read_input_tokens,
+            cache_creation_tokens=cache_creation_input_tokens,
             cache_creation_token_details=cache_creation_token_details,
         )
         completion_token_details = (

@@ -20,11 +20,12 @@ import ViewUserTeam from "./view_user_team";
 import DashboardTeam from "./dashboard_default_team";
 import Onboarding from "../app/onboarding/page";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Team } from "./key_team_helpers/key_list";
+import { KeyResponse, Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearMCPAuthTokens } from "./mcp_tools/mcp_auth_storage";
+import { Setter } from "@/types";
 
 export interface ProxySettings {
   PROXY_BASE_URL: string | null;
@@ -56,7 +57,7 @@ interface UserDashboardProps {
   setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
   setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
-  setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setKeys: (keys: KeyResponse[]) => void;
   premiumUser: boolean;
   organizations: Organization[] | null;
   addKey: (data: any) => void;

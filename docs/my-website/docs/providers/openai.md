@@ -171,6 +171,7 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 | gpt-5-2025-08-07 | `response = completion(model="gpt-5-2025-08-07", messages=messages)` |
 | gpt-5-mini-2025-08-07 | `response = completion(model="gpt-5-mini-2025-08-07", messages=messages)` |
 | gpt-5-nano-2025-08-07 | `response = completion(model="gpt-5-nano-2025-08-07", messages=messages)` |
+| gpt-5-pro | `response = completion(model="gpt-5-pro", messages=messages)` |
 | gpt-4.1 | `response = completion(model="gpt-4.1", messages=messages)` |
 | gpt-4.1-mini | `response = completion(model="gpt-4.1-mini", messages=messages)` |
 | gpt-4.1-nano | `response = completion(model="gpt-4.1-nano", messages=messages)` |
@@ -749,4 +750,24 @@ In your logs you should see the forwarded org id
 ```bash
 LiteLLM:DEBUG: utils.py:255 - Request to litellm:
 LiteLLM:DEBUG: utils.py:255 - litellm.acompletion(... organization='my-special-org',)
+```
+
+## GPT-5 Pro Special Notes
+
+GPT-5 Pro is OpenAI's most advanced reasoning model with unique characteristics:
+
+- **Responses API Only**: GPT-5 Pro is only available through the `/v1/responses` endpoint
+- **No Streaming**: Does not support streaming responses
+- **High Reasoning**: Designed for complex reasoning tasks with highest effort reasoning
+- **Context Window**: 400,000 tokens input, 272,000 tokens output
+- **Pricing**: $15.00 input / $120.00 output per 1M tokens (Standard), $7.50 input / $60.00 output (Batch)
+- **Tools**: Supports Web Search, File Search, Image Generation, MCP (but not Code Interpreter or Computer Use)
+- **Modalities**: Text and Image input, Text output only
+
+```python
+# GPT-5 Pro usage example
+response = completion(
+    model="gpt-5-pro", 
+    messages=[{"role": "user", "content": "Solve this complex reasoning problem..."}]
+)
 ```

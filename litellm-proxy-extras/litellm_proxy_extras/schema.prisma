@@ -156,6 +156,7 @@ model LiteLLM_ObjectPermissionTable {
   object_permission_id  String         @id @default(uuid())
   mcp_servers           String[]       @default([])
   mcp_access_groups     String[]       @default([])
+  mcp_tool_permissions  Json?          // Tool-level permissions for MCP servers. Format: {"server_id": ["tool_name_1", "tool_name_2"]}
   vector_stores         String[]       @default([])
   teams                 LiteLLM_TeamTable[]
   verification_tokens   LiteLLM_VerificationToken[]

@@ -267,7 +267,11 @@ def test_gemini_image_generation():
     assert len(response.choices[0].message.images) > 0
     assert response.choices[0].message.images[0]["image_url"] is not None
     assert response.choices[0].message.images[0]["image_url"]["url"] is not None
-    assert response.choices[0].message.images[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert (
+        response.choices[0]
+        .message.images[0]["image_url"]["url"]
+        .startswith("data:image/png;base64,")
+    )
 
 
 def test_gemini_2_5_flash_image_preview():
@@ -772,7 +776,8 @@ def test_system_message_with_no_user_message():
     assert response is not None
 
     assert response.choices[0].message.content is not None
-  
+
+
 def get_current_weather(location, unit="fahrenheit"):
     """Get the current weather in a given location"""
     if "tokyo" in location.lower():
@@ -889,9 +894,9 @@ def test_gemini_reasoning_effort_minimal():
 
     # Test with different Gemini models to verify model-specific mapping
     test_cases = [
-        ("gemini/gemini-2.5-flash", 1),      # Flash: minimum 1 token
-        ("gemini/gemini-2.5-pro", 128),      # Pro: minimum 128 tokens  
-        ("gemini/gemini-2.5-flash-lite", 512), # Flash-Lite: minimum 512 tokens
+        ("gemini/gemini-2.5-flash", 1),  # Flash: minimum 1 token
+        ("gemini/gemini-2.5-pro", 128),  # Pro: minimum 128 tokens
+        ("gemini/gemini-2.5-flash-lite", 512),  # Flash-Lite: minimum 512 tokens
     ]
 
     for model, expected_min_budget in test_cases:
@@ -904,24 +909,32 @@ def test_gemini_reasoning_effort_minimal():
                 "reasoning_effort": "minimal",
             },
         )
-        
+
         # Verify that the thinking config is set correctly
         request_body = raw_request["raw_request_body"]
-        assert "generationConfig" in request_body, f"Model {model} should have generationConfig"
-        
+        assert (
+            "generationConfig" in request_body
+        ), f"Model {model} should have generationConfig"
+
         generation_config = request_body["generationConfig"]
-        assert "thinkingConfig" in generation_config, f"Model {model} should have thinkingConfig"
-        
+        assert (
+            "thinkingConfig" in generation_config
+        ), f"Model {model} should have thinkingConfig"
+
         thinking_config = generation_config["thinkingConfig"]
-        assert "thinkingBudget" in thinking_config, f"Model {model} should have thinkingBudget"
-        
+        assert (
+            "thinkingBudget" in thinking_config
+        ), f"Model {model} should have thinkingBudget"
+
         actual_budget = thinking_config["thinkingBudget"]
-        assert actual_budget == expected_min_budget, \
-            f"Model {model} should map 'minimal' to {expected_min_budget} tokens, got {actual_budget}"
-        
+        assert (
+            actual_budget == expected_min_budget
+        ), f"Model {model} should map 'minimal' to {expected_min_budget} tokens, got {actual_budget}"
+
         # Verify that includeThoughts is True for minimal reasoning effort
-        assert thinking_config.get("includeThoughts", True), \
-            f"Model {model} should have includeThoughts=True for minimal reasoning effort"
+        assert thinking_config.get(
+            "includeThoughts", True
+        ), f"Model {model} should have includeThoughts=True for minimal reasoning effort"
 
     # Test with unknown model (should use generic fallback)
     try:
@@ -933,13 +946,14 @@ def test_gemini_reasoning_effort_minimal():
                 "reasoning_effort": "minimal",
             },
         )
-        
+
         request_body = raw_request["raw_request_body"]
         generation_config = request_body["generationConfig"]
         thinking_config = generation_config["thinkingConfig"]
         # Should use generic fallback (128 tokens)
-        assert thinking_config["thinkingBudget"] == 128, \
-            "Unknown model should use generic fallback of 128 tokens"
+        assert (
+            thinking_config["thinkingBudget"] == 128
+        ), "Unknown model should use generic fallback of 128 tokens"
     except Exception as e:
         # If return_raw_request doesn't work for unknown models, that's okay
         # The important part is that our known models work correctly

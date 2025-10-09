@@ -1792,7 +1792,6 @@ class VertexLLM(VertexBase):
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ) -> CustomStreamWrapper:
-        request_body = await async_transform_request_body(**data)  # type: ignore
 
         should_use_v1beta1_features = self.is_using_v1beta1_features(
             optional_params=optional_params
@@ -1825,6 +1824,13 @@ class VertexLLM(VertexBase):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
+
+        request_body = await async_transform_request_body(
+            **data,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_auth_header=auth_header)  # type: ignore
+
 
         ## LOGGING
         logging_obj.pre_call(
@@ -1913,7 +1919,12 @@ class VertexLLM(VertexBase):
             litellm_params=litellm_params,
         )
 
-        request_body = await async_transform_request_body(**data)  # type: ignore
+        request_body = await async_transform_request_body(
+            **data,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_auth_header=auth_header)  # type: ignore
+
         _async_client_params = {}
         if timeout:
             _async_client_params["timeout"] = timeout
@@ -2088,7 +2099,11 @@ class VertexLLM(VertexBase):
         )
 
         ## TRANSFORMATION ##
-        data = sync_transform_request_body(**transform_request_params)
+        data = sync_transform_request_body(
+            **transform_request_params,
+            vertex_project=vertex_project, 
+            vertex_location=vertex_location,
+            vertex_auth_header=auth_header)
 
         ## LOGGING
         logging_obj.pre_call(

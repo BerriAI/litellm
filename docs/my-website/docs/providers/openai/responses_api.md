@@ -37,6 +37,29 @@ for event in response:
     print(event)
 ```
 
+#### Image Generation with Streaming
+```python showLineNumbers title="OpenAI Streaming Image Generation"
+import litellm
+import base64
+
+# Streaming image generation with partial images
+stream = litellm.responses(
+    model="gpt-4.1",  # Use an actual image generation model
+    input="Generate a gorgeous image of a river made of white owl feathers",
+    stream=True,
+    tools=[{"type": "image_generation", "partial_images": 2}],
+
+)
+
+for event in stream:
+    if event.type == "response.image_generation_call.partial_image":
+        idx = event.partial_image_index
+        image_base64 = event.partial_image_b64
+        image_bytes = base64.b64decode(image_base64)
+        with open(f"river{idx}.png", "wb") as f:
+            f.write(image_bytes)
+```
+
 #### GET a Response
 ```python showLineNumbers title="Get Response by ID"
 import litellm
@@ -148,6 +171,33 @@ response = client.responses.create(
 
 for event in response:
     print(event)
+```
+
+#### Image Generation with Streaming
+```python showLineNumbers title="OpenAI Proxy Streaming Image Generation"
+from openai import OpenAI
+import base64
+
+# Initialize client with your proxy URL
+client = OpenAI(api_key="sk-1234", base_url="http://localhost:4000")
+
+stream = client.responses.create(
+    model="gpt-4.1",
+    input="Draw a gorgeous image of a river made of white owl feathers, snaking its way through a serene winter landscape",
+    stream=True,
+    tools=[{"type": "image_generation", "partial_images": 2}],
+)
+
+
+for event in stream:
+    print(f"event: {event}")
+    if event.type == "response.image_generation_call.partial_image":
+        idx = event.partial_image_index
+        image_base64 = event.partial_image_b64
+        image_bytes = base64.b64decode(image_base64)
+        with open(f"river{idx}.png", "wb") as f:
+            f.write(image_bytes)
+
 ```
 
 #### GET a Response
