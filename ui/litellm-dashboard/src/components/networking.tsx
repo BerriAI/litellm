@@ -34,18 +34,34 @@ if (isLocal != true) {
   console.log = function () {};
 }
 
+const getWindowLocation = () => {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return window.location;
+};
+
 const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string | null = null) => {
   /**
    * Special function for updating the proxy base url. Should only be called by getUiConfig.
    */
-  const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : window.location.origin;
-  let initialProxyBaseUrl = receivedProxyBaseUrl || defaultProxyBaseUrl;
+  const browserLocation = getWindowLocation();
+  const resolvedDefaultProxyBaseUrl = isLocal ? "http://localhost:4000" : browserLocation?.origin ?? null;
+  let initialProxyBaseUrl = receivedProxyBaseUrl || resolvedDefaultProxyBaseUrl;
   console.log("proxyBaseUrl:", proxyBaseUrl);
   console.log("serverRootPath:", serverRootPath);
+
+  if (!initialProxyBaseUrl) {
+    proxyBaseUrl = proxyBaseUrl ?? null;
+    console.log("Updated proxyBaseUrl:", proxyBaseUrl);
+    return;
+  }
+
   if (serverRootPath.length > 0 && !initialProxyBaseUrl.endsWith(serverRootPath) && serverRootPath != "/") {
     initialProxyBaseUrl += serverRootPath;
-    proxyBaseUrl = initialProxyBaseUrl;
   }
+
+  proxyBaseUrl = initialProxyBaseUrl;
   console.log("Updated proxyBaseUrl:", proxyBaseUrl);
 };
 
@@ -54,7 +70,11 @@ const updateServerRootPath = (receivedServerRootPath: string) => {
 };
 
 export const getProxyBaseUrl = (): string => {
-  return proxyBaseUrl ? proxyBaseUrl : window.location.origin;
+  if (proxyBaseUrl) {
+    return proxyBaseUrl;
+  }
+  const browserLocation = getWindowLocation();
+  return browserLocation?.origin ?? "";
 };
 
 const HTTP_REQUEST = {
@@ -159,7 +179,10 @@ const handleError = async (errorData: string) => {
       NotificationsManager.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
       clearTokenCookies();
-      window.location.href = window.location.pathname;
+      const browserLocation = getWindowLocation();
+      if (browserLocation) {
+        window.location.href = browserLocation.pathname;
+      }
     }
     lastErrorTime = currentTime;
   } else {

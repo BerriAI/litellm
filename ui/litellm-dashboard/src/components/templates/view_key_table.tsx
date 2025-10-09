@@ -90,7 +90,7 @@ interface ViewKeyTableProps {
   selectedTeam: Team | null;
   setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
   data: KeyResponse[] | null;
-  setData: React.Dispatch<React.SetStateAction<any[] | null>>;
+  setData: (keys: KeyResponse[]) => void;
   teams: Team[] | null;
   premiumUser: boolean;
   currentOrg: Organization | null;
