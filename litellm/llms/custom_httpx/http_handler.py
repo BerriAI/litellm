@@ -16,6 +16,10 @@ from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
 
+# Shared SSL contexts to avoid repeated cert file reads and SSL context creation
+# This is especially important in containerized environments where CA cert access is slow
+_SSL_CONTEXT_CACHE: Dict[str, ssl.SSLContext] = {}
+
 if TYPE_CHECKING:
     from litellm import LlmProviders
     from litellm.litellm_core_utils.litellm_logging import (
@@ -38,6 +42,56 @@ headers = {
 
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
+
+
+def _get_or_create_ssl_context(
+    cafile: Optional[str] = None,
+    ssl_security_level: Optional[str] = None,
+) -> ssl.SSLContext:
+    """
+    Get or create a cached SSL context to avoid repeated cert file reads.
+    
+    This optimization is particularly important in containerized environments where
+    reading CA certificate files from layered filesystems can be slow.
+    
+    Args:
+        cafile: Path to CA certificate bundle file
+        ssl_security_level: SSL security level/ciphers configuration
+        
+    Returns:
+        ssl.SSLContext: Cached or newly created SSL context
+    """
+    # Create cache key based on configuration
+    cache_key = f"{cafile}:{ssl_security_level}"
+    
+    # Return cached context if available
+    if cache_key in _SSL_CONTEXT_CACHE:
+        verbose_logger.debug(f"Reusing cached SSL context for key: {cache_key}")
+        return _SSL_CONTEXT_CACHE[cache_key]
+    
+    # Create new SSL context
+    verbose_logger.debug(f"Creating new SSL context for key: {cache_key}")
+    ssl_context = ssl.create_default_context(cafile=cafile)
+    
+    # Apply security level if specified
+    if ssl_security_level and isinstance(ssl_security_level, str):
+        ssl_context.set_ciphers(ssl_security_level)
+    
+    # Cache the context for reuse
+    _SSL_CONTEXT_CACHE[cache_key] = ssl_context
+    
+    return ssl_context
+
+
+def _clear_ssl_context_cache() -> None:
+    """
+    Clear the SSL context cache. 
+    
+    This can be useful for testing or when SSL configuration changes at runtime.
+    """
+    global _SSL_CONTEXT_CACHE
+    _SSL_CONTEXT_CACHE.clear()
+    verbose_logger.debug("Cleared SSL context cache")
 
 
 def get_ssl_configuration(
@@ -93,11 +147,11 @@ def get_ssl_configuration(
             cafile = certifi.where()
 
     if ssl_verify is not False:
-        custom_ssl_context = ssl.create_default_context(cafile=cafile)
-        # If security level is set, apply it to the SSL context
-        if ssl_security_level and isinstance(ssl_security_level, str):
-            # Create a custom SSL context with reduced security level
-            custom_ssl_context.set_ciphers(ssl_security_level)
+        # Use cached SSL context to avoid repeated cert file reads
+        custom_ssl_context = _get_or_create_ssl_context(
+            cafile=cafile,
+            ssl_security_level=ssl_security_level
+        )
 
         # Use our custom SSL context instead of the original ssl_verify value
         return custom_ssl_context
