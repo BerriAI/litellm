@@ -23,22 +23,20 @@ def test_mcp_server_works_without_config_auth_value():
         name="Test MCP Server No Config Auth",
         server_name="test_server_no_config",
         alias="test_no_config",
-        url="https://api.example.com/mcp", 
+        url="https://api.example.com/mcp",
         transport=MCPTransport.http,
-        spec_version=MCPSpecVersion.jun_2025,
         auth_type=MCPAuth.authorization,
-        authentication_token=None  # No config auth
+        authentication_token=None,  # No config auth
     )
-    
+
     manager = MCPServerManager()
-    
+
     # Test that it works with only header auth
     client = manager._create_mcp_client(
         server=server_without_config_auth,
         mcp_auth_header="Bearer token_from_header_only",
-        protocol_version="2025-06-18"
     )
-    
+
     # Verify header token is used
     assert client._mcp_auth_value == "Bearer token_from_header_only"
     assert client.auth_type == MCPAuth.authorization

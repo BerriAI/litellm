@@ -43,9 +43,12 @@ from openai.types.responses.response import (
 
 # Handle OpenAI SDK version compatibility for Text type
 try:
-    from openai.types.responses.response_create_params import (
-        Text as ResponseText,  # type: ignore
+    # fmt: off
+    from openai.types.responses.response_create_params import ( # type: ignore[attr-defined]
+        Text as ResponseText,  # type: ignore[attr-defined]
     )
+
+    # fmt: on
 except (ImportError, AttributeError):
     # Fall back to the concrete config type available in all SDK versions
     from openai.types.responses.response_text_config_param import (
@@ -723,6 +726,7 @@ ValidUserMessageContentTypes = [
     "input_audio",
     "audio_url",
     "document",
+    "guarded_text",
     "video_url",
     "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
@@ -988,6 +992,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     prompt_cache_key: Optional[str]
     stream_options: Optional[dict]
     top_logprobs: Optional[int]
+    partial_images: Optional[int]  # Number of partial images to generate (1-3) for streaming image generation
 
 
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
@@ -1028,6 +1033,9 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
 
     total_tokens: int
     """The total number of tokens used."""
+
+    cost: Optional[float] = None
+    """The cost of the request."""
 
     model_config = {"extra": "allow"}
 
@@ -1121,6 +1129,9 @@ class ResponsesAPIStreamEvents(str, Enum):
     MCP_CALL_ARGUMENTS_DONE = "response.mcp_call_arguments.done"
     MCP_CALL_COMPLETED = "response.mcp_call.completed"
     MCP_CALL_FAILED = "response.mcp_call.failed"
+
+    # Image generation events
+    IMAGE_GENERATION_PARTIAL_IMAGE = "image_generation.partial_image"
 
     # Error event
     ERROR = "error"
@@ -1307,7 +1318,7 @@ class MCPListToolsFailedEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
 
 
-# MCP Call Events  
+# MCP Call Events
 class MCPCallInProgressEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS]
     sequence_number: int
@@ -1343,6 +1354,12 @@ class MCPCallFailedEvent(BaseLiteLLMOpenAIResponseObject):
     sequence_number: int
     item_id: str
     output_index: int
+
+
+class ImageGenerationPartialImageEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE]
+    partial_image_index: int
+    b64_json: str
 
 
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1393,6 +1410,7 @@ ResponsesAPIStreamingResponse = Annotated[
         MCPCallArgumentsDoneEvent,
         MCPCallCompletedEvent,
         MCPCallFailedEvent,
+        ImageGenerationPartialImageEvent,
         ErrorEvent,
         GenericEvent,
     ],

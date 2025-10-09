@@ -15,8 +15,8 @@ class LMStudioChatConfig(OpenAIGPTConfig):
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("LM_STUDIO_API_BASE")  # type: ignore
         dynamic_api_key = (
-            api_key or get_secret_str("LM_STUDIO_API_KEY") or " "
-        )  # vllm does not require an api key
+            api_key or get_secret_str("LM_STUDIO_API_KEY") or "fake-api-key"
+        )  # LM Studio does not require an api key, but OpenAI client requires non-None value
         return api_base, dynamic_api_key
     
     def map_openai_params(

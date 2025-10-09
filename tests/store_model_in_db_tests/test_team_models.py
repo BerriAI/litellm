@@ -3,9 +3,9 @@ import asyncio
 import aiohttp
 import json
 from openai import AsyncOpenAI
-import uuid
+from litellm._uuid import uuid
 from httpx import AsyncClient
-import uuid
+from litellm._uuid import uuid
 import os
 
 TEST_MASTER_KEY = "sk-1234"

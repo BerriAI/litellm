@@ -24,6 +24,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "aresponses": "/responses",
     "alist_input_items": "/responses/{response_id}/input_items",
     "aimage_edit": "/images/edits",
+    "acancel_responses": "/responses/{response_id}/cancel",
 }
 
 
@@ -70,6 +71,8 @@ async def route_request(
         "aresponses",
         "aget_responses",
         "adelete_responses",
+        "acancel_responses",
+        "acreate_response_reply",
         "alist_input_items",
         "_arealtime",  # private function for realtime API
         "aimage_edit",
@@ -86,6 +89,11 @@ async def route_request(
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
 
+    # Preprocess Google GenAI generate content requests
+    if route_type in ["agenerate_content", "agenerate_content_stream"]:
+        # Map generationConfig to config parameter for Google GenAI compatibility
+        if "generationConfig" in data and "config" not in data:
+            data["config"] = data.pop("generationConfig")
     if "api_key" in data or "api_base" in data:
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)
@@ -122,7 +130,7 @@ async def route_request(
 
         elif (
             data["model"] in router_model_names
-            or data["model"] in llm_router.get_model_ids()
+            or llm_router.has_model_id(data["model"])
         ):
             return getattr(llm_router, f"{route_type}")(**data)
 
@@ -149,6 +157,7 @@ async def route_request(
                 "amoderation",
                 "aget_responses",
                 "adelete_responses",
+                "acancel_responses",
                 "alist_input_items",
                 "avector_store_create",
                 "avector_store_search",

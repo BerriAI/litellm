@@ -6,6 +6,8 @@ import pytest
 
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.types.integrations.langfuse_otel import LangfuseOtelConfig
+from litellm.types.llms.openai import ResponsesAPIResponse
+from datetime import datetime
 
 
 class TestLangfuseOtelIntegration:
@@ -241,6 +243,134 @@ class TestLangfuseOtelIntegration:
             _ = LangfuseOtelLogger.get_langfuse_otel_config()
 
             assert os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") == "https://otel-host.com/api/public/otel"
+
+
+class TestLangfuseOtelResponsesAPI:
+    """Test suite for Langfuse OTEL integration with ResponsesAPI"""
+
+    def test_langfuse_otel_with_responses_api(self):
+        """Test that Langfuse OTEL logger works with ResponsesAPI responses and logs metadata."""
+        # Create a mock ResponsesAPIResponse
+        mock_response = ResponsesAPIResponse(
+            id="response-123",
+            created_at=1234567890,
+            output=[
+                {
+                    "type": "message",
+                    "content": [{"type": "text", "text": "Hello from responses API"}]
+                }
+            ],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            top_p=1.0
+        )
+        
+        # Create kwargs with metadata that should be logged
+        test_metadata = {
+            "user_id": "test123", 
+            "session_id": "abc456", 
+            "custom_field": "test_value",
+            "generation_name": "responses_test_generation",
+            "trace_name": "responses_api_trace"
+        }
+        
+        kwargs = {
+            "call_type": "responses",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "model": "gpt-4o",
+            "optional_params": {},
+            "litellm_params": {"metadata": test_metadata}
+        }
+        
+        mock_span = MagicMock()
+        
+        with patch('litellm.integrations.arize._utils.set_attributes') as mock_set_attributes:
+            with patch('litellm.integrations.arize._utils.safe_set_attribute') as mock_safe_set_attribute:
+                logger = LangfuseOtelLogger()
+                logger.set_langfuse_otel_attributes(mock_span, kwargs, mock_response)
+                
+                # Verify that set_attributes was called for general attributes
+                mock_set_attributes.assert_called_once_with(mock_span, kwargs, mock_response)
+                
+                # Verify that Langfuse-specific attributes were set
+                mock_safe_set_attribute.assert_any_call(
+                    mock_span, "langfuse.generation.name", "responses_test_generation"
+                )
+                mock_safe_set_attribute.assert_any_call(
+                    mock_span, "langfuse.trace.name", "responses_api_trace"
+                )
+
+    def test_responses_api_metadata_extraction(self):
+        """Test that metadata is correctly extracted from ResponsesAPI kwargs."""
+        # Clean up any existing module mocks
+        import sys
+        if "litellm.integrations.langfuse.langfuse" in sys.modules:
+            original_module = sys.modules["litellm.integrations.langfuse.langfuse"]
+        
+        test_metadata = {
+            "user_id": "responses_user_123",
+            "session_id": "responses_session_456", 
+            "custom_metadata": {"key": "value"},
+            "generation_name": "responses_generation",
+            "trace_id": "custom_trace_id"
+        }
+        
+        kwargs = {
+            "call_type": "responses",
+            "model": "gpt-4o",
+            "litellm_params": {"metadata": test_metadata}
+        }
+        
+        extracted_metadata = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
+        
+        # Verify all expected metadata was extracted (may have additional fields from header enrichment)
+        for key, value in test_metadata.items():
+            assert extracted_metadata[key] == value
+            
+        assert extracted_metadata["user_id"] == "responses_user_123"
+        assert extracted_metadata["generation_name"] == "responses_generation"
+        assert extracted_metadata["trace_id"] == "custom_trace_id"
+
+    def test_responses_api_langfuse_specific_attributes(self):
+        """Test that ResponsesAPI metadata maps correctly to Langfuse OTEL attributes."""
+        metadata = {
+            "generation_name": "responses_gen",
+            "generation_id": "resp_gen_123",
+            "trace_name": "responses_trace",
+            "trace_user_id": "resp_user_456",
+            "session_id": "resp_session_789",
+            "tags": ["responses", "api", "test"],
+            "trace_metadata": {"source": "responses_api", "version": "1.0"}
+        }
+        
+        kwargs = {
+            "call_type": "responses",
+            "litellm_params": {"metadata": metadata}
+        }
+        
+        mock_span = MagicMock()
+        
+        with patch('litellm.integrations.arize._utils.safe_set_attribute') as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, kwargs)
+            
+            # Verify specific attributes were set
+            from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+            
+            expected_calls = [
+                (mock_span, LangfuseSpanAttributes.GENERATION_NAME.value, "responses_gen"),
+                (mock_span, LangfuseSpanAttributes.GENERATION_ID.value, "resp_gen_123"),
+                (mock_span, LangfuseSpanAttributes.TRACE_NAME.value, "responses_trace"),
+                (mock_span, LangfuseSpanAttributes.TRACE_USER_ID.value, "resp_user_456"),
+                (mock_span, LangfuseSpanAttributes.SESSION_ID.value, "resp_session_789"),
+                (mock_span, LangfuseSpanAttributes.TAGS.value, json.dumps(["responses", "api", "test"])),
+                (mock_span, LangfuseSpanAttributes.TRACE_METADATA.value, 
+                 json.dumps({"source": "responses_api", "version": "1.0"}))
+            ]
+            
+            for expected_call in expected_calls:
+                mock_safe_set_attribute.assert_any_call(*expected_call)
+
     
 
 

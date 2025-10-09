@@ -301,6 +301,76 @@ async def test_anthropic_api_prompt_caching_basic():
 
 
 @pytest.mark.asyncio()
+async def test_anthropic_api_prompt_caching_basic_with_cache_creation():
+    from uuid import uuid4
+
+    random_id = uuid4()
+
+    litellm.set_verbose = True
+    response = await litellm.acompletion(
+        model="anthropic/claude-3-5-sonnet-20240620",
+        messages=[
+            # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement {}".format(
+                            random_id
+                        )
+                        * 400,
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral", "ttl": "5m"},
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+            },
+            # The final turn is marked with cache-control, for continuing in followups.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+        ],
+        temperature=0.2,
+        max_tokens=10,
+        extra_headers={
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "prompt-caching-2024-07-31",
+        },
+    )
+
+    print("response=", response)
+
+    assert "cache_read_input_tokens" in response.usage
+    assert "cache_creation_input_tokens" in response.usage
+
+    # Assert either a cache entry was created or cache was read - changes depending on the anthropic api ttl
+    assert (response.usage.cache_read_input_tokens > 0) or (
+        response.usage.cache_creation_input_tokens > 0
+    )
+
+
+@pytest.mark.asyncio()
 async def test_anthropic_api_prompt_caching_with_content_str():
     system_message = [
         {

@@ -4,6 +4,9 @@ from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 
 
 class VolcEngineChatConfig(OpenAILikeChatConfig):
+    """
+    Reference: https://www.volcengine.com/docs/82379/1494384
+    """
     frequency_penalty: Optional[int] = None
     function_call: Optional[Union[str, dict]] = None
     functions: Optional[list] = None
@@ -81,20 +84,22 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
         )
 
         if "thinking" in optional_params:
+            """
+            The `thinking` parameters of VolcEngine model has different default values.
+            See the docs for details.
+            Refrence: https://www.volcengine.com/docs/82379/1449737#0002
+            """
             thinking_value = optional_params.pop("thinking")
 
-            # Handle disabled thinking case - don't add to extra_body if disabled
+            # Handle using thinking params case - add to extra_body if value is legal
             if (
                 thinking_value is not None
                 and isinstance(thinking_value, dict)
-                and thinking_value.get("type") == "disabled"
+                and thinking_value.get("type", None) in ["enabled", "disabled", "auto"]  # legal values, see docs
             ):
-                # Skip adding thinking parameter when it's disabled
-                pass
+                # Add thinking parameter to extra_body for all legal cases
+                optional_params.setdefault("extra_body", {})["thinking"] = thinking_value
             else:
-                # Add thinking parameter to extra_body for all other cases
-                optional_params.setdefault("extra_body", {})[
-                    "thinking"
-                ] = thinking_value
-
+                # Skip adding thinking parameter when it's not set or has invalid value
+                pass
         return optional_params

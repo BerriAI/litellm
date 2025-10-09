@@ -1,9 +1,10 @@
 import os
 from datetime import datetime as dt
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, TypedDict
+from typing import Any, Dict, List, Literal, Optional, Set
 
 from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
 
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
