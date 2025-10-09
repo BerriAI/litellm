@@ -8,8 +8,10 @@ from typing import Any, Dict
 
 from fastapi import HTTPException
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensConfig
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
 
 class BedrockCountTokensHandler(BedrockCountTokensConfig):
@@ -78,28 +80,26 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
                 model=resolved_model,
             )
 
-            # Make HTTP request
-            import httpx
+            async_client = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
 
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
+            response = await async_client.post(
                     endpoint_url,
                     headers=signed_headers,
-                    content=signed_body,
+                    data=signed_body,
                     timeout=30.0,
                 )
 
-                verbose_logger.debug(f"Response status: {response.status_code}")
+            verbose_logger.debug(f"Response status: {response.status_code}")
 
-                if response.status_code != 200:
-                    error_text = response.text
-                    verbose_logger.error(f"AWS Bedrock error: {error_text}")
-                    raise HTTPException(
-                        status_code=400,
-                        detail={"error": f"AWS Bedrock error: {error_text}"},
-                    )
+            if response.status_code != 200:
+                error_text = response.text
+                verbose_logger.error(f"AWS Bedrock error: {error_text}")
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"AWS Bedrock error: {error_text}"},
+                )
 
-                bedrock_response = response.json()
+            bedrock_response = response.json()
 
             verbose_logger.debug(f"Bedrock response: {bedrock_response}")
 

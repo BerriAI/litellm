@@ -203,6 +203,9 @@ class TestDataDogLLMObsLogger:
             assert metadata["cache_hit"] is True
             assert metadata["cache_key"] == "test-cache-key-789"
 
+            # Test 4: Verify is_streamed_request is in metadata
+            assert metadata["is_streamed_request"] is True
+
     def test_cache_metadata_fields(self, mock_env_vars, mock_response_obj):
         """Test that cache-related metadata fields are correctly tracked"""
         with patch(

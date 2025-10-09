@@ -78,7 +78,7 @@ async def make_async_calls(metadata=None, **completion_kwargs):
 
 def create_async_task(**completion_kwargs):
     completion_args = {
-        "model": "azure/chatgpt-v-3",
+        "model": "azure/gpt-4.1-nano",
         "api_version": "2024-02-01",
         "messages": [{"role": "user", "content": "This is a test"}],
         "max_tokens": 5,
@@ -97,7 +97,7 @@ def create_async_task(**completion_kwargs):
     reason="Authentication missing for openai",
 )
 async def test_helicone_logging_metadata():
-    import uuid
+    from litellm._uuid import uuid
 
     litellm.success_callback = ["helicone"]
 

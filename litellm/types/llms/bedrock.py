@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from typing_extensions import (
     TYPE_CHECKING,
@@ -88,10 +88,14 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
     text: str
 
 
+class GuardrailConverseTextBlock(TypedDict, total=False):
+    text: str
+
+
 class GuardrailConverseContentBlock(TypedDict, total=False):
     """Content block for selective guardrail evaluation in Bedrock Converse API"""
 
-    text: str
+    text: GuardrailConverseTextBlock
 
 
 class ContentBlock(TypedDict, total=False):
@@ -103,7 +107,7 @@ class ContentBlock(TypedDict, total=False):
     toolUse: ToolUseBlock
     cachePoint: CachePointBlock
     reasoningContent: BedrockConverseReasoningContentBlock
-    guardrailConverseContent: GuardrailConverseContentBlock
+    guardContent: GuardrailConverseContentBlock
 
 
 class MessageBlock(TypedDict):
@@ -227,6 +231,7 @@ class CommonRequestObject(
     toolConfig: ToolConfigBlock
     guardrailConfig: Optional[GuardrailConfigBlock]
     performanceConfig: Optional[PerformanceConfigBlock]
+    requestMetadata: Optional[Dict[str, str]]
 
 
 class RequestObject(CommonRequestObject, total=False):
@@ -324,15 +329,22 @@ class CohereEmbeddingResponse(TypedDict):
     texts: List[str]
 
 
-class AmazonTitanV2EmbeddingRequest(TypedDict):
-    inputText: str
+class AmazonTitanV2EmbeddingRequest(TypedDict, total=False):
+    inputText: Required[str]
     dimensions: int
     normalize: bool
+    embeddingTypes: List[Literal["float", "binary"]]
 
 
-class AmazonTitanV2EmbeddingResponse(TypedDict):
-    embedding: List[float]
-    inputTextTokenCount: int
+class AmazonTitanV2EmbeddingsByType(TypedDict, total=False):
+    binary: List[int]  # Array of integers for binary format
+    float: List[float]  # Array of floats for float format
+
+
+class AmazonTitanV2EmbeddingResponse(TypedDict, total=False):
+    embedding: List[float]  # Legacy field - array of floats (backward compatibility)
+    embeddingsByType: AmazonTitanV2EmbeddingsByType  # New format per AWS schema
+    inputTextTokenCount: Required[int]  # Always present in AWS response
 
 
 class AmazonTitanG1EmbeddingRequest(TypedDict):
@@ -358,6 +370,66 @@ class AmazonTitanMultimodalEmbeddingResponse(TypedDict):
     embedding: List[float]
     inputTextTokenCount: int
     message: str  # Specifies any errors that occur during generation.
+
+
+# TwelveLabs Marengo Embed 2.7 types
+TWELVELABS_EMBEDDING_INPUT_TYPES = Literal["text", "image", "video", "audio"]
+TWELVELABS_EMBEDDING_OPTIONS = Literal["visual-text", "visual-image", "audio"]
+
+
+class TwelveLabsS3Location(TypedDict, total=False):
+    uri: str
+    bucketOwner: str
+
+
+class TwelveLabsMediaSource(TypedDict, total=False):
+    base64String: str
+    s3Location: TwelveLabsS3Location
+
+
+class TwelveLabsMarengoEmbeddingRequest(TypedDict, total=False):
+    inputType: Required[TWELVELABS_EMBEDDING_INPUT_TYPES]
+    inputText: str
+    mediaSource: TwelveLabsMediaSource
+    textTruncate: Literal["end", "none"]
+    startSec: float
+    lengthSec: float
+    useFixedLengthSec: float
+    minClipSec: int
+    embeddingOption: List[TWELVELABS_EMBEDDING_OPTIONS]
+
+
+class TwelveLabsMarengoEmbeddingResponse(TypedDict):
+    embedding: List[float]
+    embeddingOption: TWELVELABS_EMBEDDING_OPTIONS
+    startSec: float
+    endSec: float
+
+
+class TwelveLabsS3OutputDataConfig(TypedDict):
+    s3Uri: str
+
+
+class TwelveLabsOutputDataConfig(TypedDict):
+    s3OutputDataConfig: TwelveLabsS3OutputDataConfig
+
+
+class TwelveLabsAsyncInvokeRequest(TypedDict):
+    modelId: str
+    modelInput: TwelveLabsMarengoEmbeddingRequest
+    outputDataConfig: TwelveLabsOutputDataConfig
+
+
+class TwelveLabsAsyncInvokeStatusResponse(TypedDict):
+    invocationArn: str
+    modelArn: str
+    status: str  # "InProgress" | "Completed" | "Failed"
+    submitTime: str
+    lastModifiedTime: str
+    endTime: Optional[str]
+    outputDataConfig: TwelveLabsOutputDataConfig
+    clientRequestToken: Optional[str]
+    failureMessage: Optional[str]
 
 
 AmazonEmbeddingRequest = Union[

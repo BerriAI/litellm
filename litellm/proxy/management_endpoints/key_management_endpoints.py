@@ -14,7 +14,6 @@ import copy
 import json
 import secrets
 import traceback
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Literal, Optional, Tuple, cast
 
@@ -22,11 +21,14 @@ import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 import litellm
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps        
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.caching import DualCache
 from litellm.constants import LENGTH_OF_LITELLM_GENERATED_KEY, UI_SESSION_TOKEN_TEAM_ID
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
+from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
     _delete_cache_key_object,
@@ -87,11 +89,49 @@ def _get_user_in_team(
     return None
 
 
+def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
+    """
+    Helper function to calculate the next rotation time for a key based on the rotation interval.
+
+    Args:
+        rotation_interval: String representing the rotation interval (e.g., '30d', '90d', '1h')
+
+    Returns:
+        datetime: The calculated next rotation time in UTC
+    """
+    now = datetime.now(timezone.utc)
+    interval_seconds = duration_in_seconds(rotation_interval)
+    return now + timedelta(seconds=interval_seconds)
+
+
+def _set_key_rotation_fields(
+    data: dict, auto_rotate: bool, rotation_interval: Optional[str]
+) -> None:
+    """
+    Helper function to set rotation fields in key data if auto_rotate is enabled.
+
+    Args:
+        data: Dictionary to update with rotation fields
+        auto_rotate: Whether auto rotation is enabled
+        rotation_interval: The rotation interval string (required if auto_rotate is True)
+    """
+    if auto_rotate and rotation_interval:
+        data.update(
+            {
+                "auto_rotate": auto_rotate,
+                "rotation_interval": rotation_interval,
+                "key_rotation_at": _calculate_key_rotation_time(rotation_interval),
+            }
+        )
+
+
 def _is_allowed_to_make_key_request(
-    user_api_key_dict: UserAPIKeyAuth, user_id: Optional[str], team_id: Optional[str]
+    user_api_key_dict: UserAPIKeyAuth,
+    user_id: Optional[str],
+    team_id: Optional[str],
 ) -> bool:
     """
-    Assert user only creates keys for themselves
+    Assert user only creates/updates keys for themselves
 
     Relevant issue: https://github.com/BerriAI/litellm/issues/7336
     """
@@ -300,6 +340,7 @@ def common_key_access_checks(
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
     llm_router: Optional[Router],
     premium_user: bool,
+    user_id: Optional[str] = None,
 ) -> Literal[True]:
     """
     Check if user is allowed to make a key request, for this key
@@ -307,7 +348,7 @@ def common_key_access_checks(
     try:
         _is_allowed_to_make_key_request(
             user_api_key_dict=user_api_key_dict,
-            user_id=data.user_id,
+            user_id=user_id or data.user_id,
             team_id=data.team_id,
         )
     except AssertionError as e:
@@ -510,6 +551,15 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                 value=getattr(data, field),
             )
 
+    for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        if getattr(data, field, None) is not None:
+            _set_object_metadata_field(
+                object_data=data,
+                field_name=field,
+                value=getattr(data, field),
+            )
+            delattr(data, field)
+
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
 
     data_json = handle_key_type(data, data_json)
@@ -588,6 +638,153 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     return response
 
 
+def check_team_key_model_specific_limits(
+    keys: List[LiteLLM_VerificationToken],
+    team_table: LiteLLM_TeamTableCachedObj,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+) -> None:
+    """
+    Check if the team key is allocating model specific limits. If so, raise an error if we're overallocating.
+    """
+    if data.model_rpm_limit is None and data.model_tpm_limit is None:
+        return
+    # get total model specific tpm/rpm limit
+    model_specific_rpm_limit: Dict[str, int] = {}
+    model_specific_tpm_limit: Dict[str, int] = {}
+
+    for key in keys:
+        if key.metadata.get("model_rpm_limit", None) is not None:
+            for model, rpm_limit in key.metadata.get("model_rpm_limit", {}).items():
+                model_specific_rpm_limit[model] = (
+                    model_specific_rpm_limit.get(model, 0) + rpm_limit
+                )
+        if key.metadata.get("model_tpm_limit", None) is not None:
+            for model, tpm_limit in key.metadata.get("model_tpm_limit", {}).items():
+                model_specific_tpm_limit[model] = (
+                    model_specific_tpm_limit.get(model, 0) + tpm_limit
+                )
+    if data.model_rpm_limit is not None:
+        for model, rpm_limit in data.model_rpm_limit.items():
+            if (
+                model_specific_rpm_limit.get(model, 0) + rpm_limit
+                > team_table.rpm_limit
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than team RPM limit={team_table.rpm_limit}",
+                )
+            elif team_table.metadata and team_table.metadata.get("model_rpm_limit"):
+                team_model_specific_rpm_limit_dict = team_table.metadata.get(
+                    "model_rpm_limit", {}
+                )
+                team_model_specific_rpm_limit = team_model_specific_rpm_limit_dict.get(
+                    model
+                )
+                if (
+                    model_specific_rpm_limit.get(model, 0) + rpm_limit
+                    > team_model_specific_rpm_limit
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than team RPM limit={team_model_specific_rpm_limit.get(model, 0)}",
+                    )
+    if data.model_tpm_limit is not None:
+        for model, tpm_limit in data.model_tpm_limit.items():
+            if (
+                team_table.tpm_limit is not None
+                and model_specific_tpm_limit.get(model, 0) + tpm_limit
+                > team_table.tpm_limit
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than team TPM limit={team_table.tpm_limit}",
+                )
+            elif team_table.metadata and team_table.metadata.get("model_tpm_limit"):
+                team_model_specific_tpm_limit_dict = team_table.metadata.get(
+                    "model_tpm_limit", {}
+                )
+                team_model_specific_tpm_limit = team_model_specific_tpm_limit_dict.get(
+                    model
+                )
+                if (
+                    team_model_specific_tpm_limit
+                    and model_specific_tpm_limit.get(model, 0) + tpm_limit
+                    > team_model_specific_tpm_limit
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than team TPM limit={team_model_specific_tpm_limit}",
+                    )
+
+
+def check_team_key_rpm_tpm_limits(
+    keys: List[LiteLLM_VerificationToken],
+    team_table: LiteLLM_TeamTableCachedObj,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+) -> None:
+    """
+    Check if the team key is allocating rpm/tpm limits. If so, raise an error if we're overallocating.
+    """
+    if keys is not None and len(keys) > 0:
+        allocated_tpm = sum(key.tpm_limit for key in keys if key.tpm_limit is not None)
+        allocated_rpm = sum(key.rpm_limit for key in keys if key.rpm_limit is not None)
+    else:
+        allocated_tpm = 0
+        allocated_rpm = 0
+    if (
+        data.tpm_limit is not None
+        and team_table.tpm_limit is not None
+        and data.tpm_limit + allocated_tpm > team_table.tpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Allocated TPM limit={allocated_tpm} + Key TPM limit={data.tpm_limit} is greater than team TPM limit={team_table.tpm_limit}",
+        )
+    if (
+        data.rpm_limit is not None
+        and team_table.rpm_limit is not None
+        and data.rpm_limit + allocated_rpm > team_table.rpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Allocated RPM limit={allocated_rpm} + Key RPM limit={data.rpm_limit} is greater than team RPM limit={team_table.rpm_limit}",
+        )
+
+
+async def _check_team_key_limits(
+    team_table: LiteLLM_TeamTableCachedObj,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    prisma_client: PrismaClient,
+) -> None:
+    """
+    Check if the team key is allocating guaranteed throughput limits. If so, raise an error if we're overallocating.
+
+    Only runs check if tpm_limit_type or rpm_limit_type is "guaranteed_throughput"
+    """
+    if (
+        data.tpm_limit_type != "guaranteed_throughput"
+        and data.rpm_limit_type != "guaranteed_throughput"
+    ):
+        return
+    # get all team keys
+    # calculate allocated tpm/rpm limit
+    # check if specified tpm/rpm limit is greater than allocated tpm/rpm limit
+
+    keys = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"team_id": team_table.team_id},
+    )
+    check_team_key_model_specific_limits(
+        keys=keys,
+        team_table=team_table,
+        data=data,
+    )
+    check_team_key_rpm_tpm_limits(
+        keys=keys,
+        team_table=team_table,
+        data=data,
+    )
+
+
 @router.post(
     "/key/generate",
     tags=["key management"],
@@ -629,6 +826,8 @@ async def generate_key_fn(
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+    - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm). Defaults to "best_effort_throughput".
+    - rpm_limit_type: Optional[str] - Type of rpm limit. Options: "best_effort_throughput" (no error if we're overallocating rpm), "guaranteed_throughput" (raise an error if we're overallocating rpm). Defaults to "best_effort_throughput".
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
     - blocked: Optional[bool] - Whether the key is blocked.
     - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
@@ -639,9 +838,12 @@ async def generate_key_fn(
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
+    - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
+    - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
+
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -661,11 +863,18 @@ async def generate_key_fn(
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     """
     try:
+        from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import (
             prisma_client,
             user_api_key_cache,
             user_custom_key_generate,
         )
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
 
         verbose_proxy_logger.debug("entered /key/generate")
 
@@ -694,7 +903,6 @@ async def generate_key_fn(
                 verbose_proxy_logger.debug(
                     f"Error getting team object in `/key/generate`: {e}"
                 )
-                team_table = None
 
         key_generation_check(
             team_table=team_table,
@@ -703,12 +911,20 @@ async def generate_key_fn(
             route=KeyManagementRoutes.KEY_GENERATE,
         )
 
+        if team_table is not None:
+            await _check_team_key_limits(
+                team_table=team_table,
+                data=data,
+                prisma_client=prisma_client,
+            )
+
         return await _common_key_generation_helper(
             data=data,
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
             team_table=team_table,
         )
+
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
@@ -762,6 +978,8 @@ async def generate_service_account_key_fn(
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+    - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput" or "guaranteed_throughput"
+    - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput" or "guaranteed_throughput"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
     - blocked: Optional[bool] - Whether the key is blocked.
     - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
@@ -770,7 +988,7 @@ async def generate_service_account_key_fn(
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -790,11 +1008,18 @@ async def generate_service_account_key_fn(
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
 
     """
+    from litellm.proxy._types import CommonProxyErrors
     from litellm.proxy.proxy_server import (
         prisma_client,
         user_api_key_cache,
         user_custom_key_generate,
     )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
 
     await validate_team_id_used_in_service_account_request(
         team_id=data.team_id,
@@ -827,6 +1052,13 @@ async def generate_service_account_key_fn(
                 f"Error getting team object in `/key/generate`: {e}"
             )
             team_table = None
+
+    if team_table is not None:
+        await _check_team_key_limits(
+            team_table=team_table,
+            data=data,
+            prisma_client=prisma_client,
+        )
 
     key_generation_check(
         team_table=team_table,
@@ -868,7 +1100,7 @@ def prepare_metadata_fields(
             if k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
                 from litellm.proxy.utils import _premium_user_check
 
-                _premium_user_check()
+                _premium_user_check(k)
                 casted_metadata[k] = v
 
     except Exception as e:
@@ -894,6 +1126,13 @@ async def _set_object_permission(
         return data_json
 
     if "object_permission" in data_json:
+        # Serialize mcp_tool_permissions JSON field to avoid GraphQL parsing issues
+        # (e.g., server IDs starting with "3e64" being interpreted as floats)
+        if "mcp_tool_permissions" in data_json["object_permission"]:
+            data_json["object_permission"]["mcp_tool_permissions"] = safe_dumps(
+                data_json["object_permission"]["mcp_tool_permissions"]
+            )
+        
         created_object_permission = (
             await prisma_client.db.litellm_objectpermissiontable.create(
                 data=data_json["object_permission"],
@@ -1054,6 +1293,8 @@ async def update_key_fn(
     - rpm_limit: Optional[int] - Requests per minute limit
     - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
     - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
+    - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput" or "guaranteed_throughput"
+    - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput" or "guaranteed_throughput"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values
     - duration: Optional[str] - Key validity duration ("30d", "1h", etc.)
     - permissions: Optional[dict] - Key-specific permissions
@@ -1067,7 +1308,9 @@ async def update_key_fn(
     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
+    - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
+    - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/update' \
@@ -1099,13 +1342,6 @@ async def update_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        common_key_access_checks(
-            user_api_key_dict=user_api_key_dict,
-            data=data,
-            llm_router=llm_router,
-            premium_user=premium_user,
-        )
-
         existing_key_row = await prisma_client.get_data(
             token=data.key, table_name="key", query_type="find_unique"
         )
@@ -1116,6 +1352,25 @@ async def update_key_fn(
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
+        ## sanity check - prevent non-proxy admin user from updating key to belong to a different user
+        if (
+            data.user_id is not None
+            and data.user_id != existing_key_row.user_id
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=f"User={data.user_id} is not allowed to update key={key} to belong to user={existing_key_row.user_id}",
+            )
+
+        common_key_access_checks(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            user_id=existing_key_row.user_id,
+            llm_router=llm_router,
+            premium_user=premium_user,
+        )
+
         # check if user has permission to update key
         await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
             user_api_key_dict=user_api_key_dict,
@@ -1125,19 +1380,38 @@ async def update_key_fn(
             user_api_key_cache=user_api_key_cache,
         )
 
-        # if team change - check if this is possible
-        if is_different_team(data=data, existing_key_row=existing_key_row):
+        # Only check team limits if key has a team_id
+        team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
+        if data.team_id is not None:
             team_obj = await get_team_object(
-                team_id=cast(str, data.team_id),
+                team_id=data.team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 check_db_only=True,
             )
+
+            if team_obj is not None:
+                await _check_team_key_limits(
+                    team_table=team_obj,
+                    data=data,
+                    prisma_client=prisma_client,
+                )
+
+        # if team change - check if this is possible
+        if is_different_team(data=data, existing_key_row=existing_key_row):
             if llm_router is None:
                 raise HTTPException(
                     status_code=400,
                     detail={
                         "error": "LLM router not found. Please set it up by passing in a valid config.yaml or adding models via the UI."
+                    },
+                )
+            # team_obj should be set since is_different_team() returns True only when data.team_id is not None
+            if team_obj is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "Team object not found for team change validation"
                     },
                 )
             validate_key_team_change(
@@ -1157,6 +1431,13 @@ async def update_key_fn(
             key_alias=non_default_values.get("key_alias", None),
             prisma_client=prisma_client,
             existing_key_token=existing_key_row.token,
+        )
+
+        # Handle rotation fields if auto_rotate is being enabled
+        _set_key_rotation_fields(
+            non_default_values,
+            non_default_values.get("auto_rotate", False),
+            non_default_values.get("rotation_interval"),
         )
 
         _data = {**non_default_values, "token": key}
@@ -1232,13 +1513,11 @@ def validate_key_team_change(
             )
 
     # Check if the key's user_id is a member of the team
+    member_object = _get_user_in_team(
+        team_table=cast(LiteLLM_TeamTableCachedObj, team), user_id=key.user_id
+    )
     if key.user_id is not None:
-        is_member = False
-        for member in team.members_with_roles:
-            if member.user_id == key.user_id:
-                is_member = True
-                break
-        if not is_member:
+        if not member_object:
             raise HTTPException(
                 status_code=403,
                 detail=f"User={key.user_id} is not a member of the team={team.team_id}. Check team members via `/team/info`.",
@@ -1265,10 +1544,17 @@ def validate_key_team_change(
         team_obj=team,
     ):
         return
+    # this teams member permissions allow updating a
+    elif TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+        team_member_object=member_object,
+        team_table=cast(LiteLLM_TeamTableCachedObj, team),
+        route=KeyManagementRoutes.KEY_UPDATE.value,
+    ):
+        return
     else:
         raise HTTPException(
             status_code=403,
-            detail=f"User={change_initiated_by.user_id} is not a Proxy Admin or Team Admin for team={team.team_id}.",
+            detail=f"User={change_initiated_by.user_id} is not a Proxy Admin or Team Admin for team={team.team_id}. Please ask your Proxy Admin to allow this action under 'Member Permissions' for this team.",
         )
 
 
@@ -1606,6 +1892,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         str
     ] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
+    auto_rotate: Optional[bool] = None,
+    rotation_interval: Optional[str] = None,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -1713,6 +2001,13 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "allowed_routes": allowed_routes or [],
             "object_permission_id": object_permission_id,
         }
+
+        # Add rotation fields if auto_rotate is enabled
+        _set_key_rotation_fields(
+            data=key_data,
+            auto_rotate=auto_rotate or False,
+            rotation_interval=rotation_interval,
+        )
 
         if (
             get_secret("DISABLE_KEY_NAME", False) is True
@@ -2538,6 +2833,79 @@ async def list_keys(
 
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in list_keys: {e}")
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"error({str(e)})"),
+                type=ProxyErrorTypes.internal_server_error,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type=ProxyErrorTypes.internal_server_error,
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+@router.get(
+    "/key/aliases",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def key_aliases() -> Dict[str, List[str]]:
+    """
+    Lists all key aliases
+
+    Returns:
+        {
+            "aliases": List[str]
+        }
+    """
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        verbose_proxy_logger.debug("Entering key_aliases function")
+
+        if prisma_client is None:
+            verbose_proxy_logger.error("Database not connected")
+            raise Exception("Database not connected")
+
+        where: Dict[str, Any] = {}
+        try:
+            where.update(_get_condition_to_filter_out_ui_session_tokens())
+        except NameError:
+            # Helper may not exist in some builds; ignore if missing
+            pass
+
+        rows = await prisma_client.db.litellm_verificationtoken.find_many(
+            where=where,
+            order=[{"key_alias": "asc"}],
+        )
+
+        seen = set()
+        aliases: List[str] = []
+        for row in rows:
+            alias = getattr(row, "key_alias", None)
+            if alias is None and isinstance(row, dict):
+                alias = row.get("key_alias")
+
+            if not alias:
+                continue
+
+            alias_str = str(alias).strip()
+            if alias_str and alias_str not in seen:
+                seen.add(alias_str)
+                aliases.append(alias_str)
+
+        verbose_proxy_logger.debug(f"Returning {len(aliases)} key aliases")
+
+        return {"aliases": aliases}
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error in key_aliases: {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"error({str(e)})"),

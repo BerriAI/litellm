@@ -104,7 +104,7 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
         api_transport="rest",
     )
 
-    model = GenerativeModel(model_name="gemini-1.5-pro")
+    model = GenerativeModel(model_name="gemini-2.5-flash-lite")
     response = model.generate_content("hi")
 
     print("response", response)
@@ -136,7 +136,7 @@ async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
         api_transport="rest",
     )
 
-    model = GenerativeModel(model_name="gemini-1.5-pro")
+    model = GenerativeModel(model_name="gemini-2.5-flash-lite")
     response = model.generate_content("hi", stream=True)
 
     for chunk in response:
@@ -192,7 +192,7 @@ async def test_vertex_ai_pass_through_endpoint_context_caching():
     ]
 
     cached_content = caching.CachedContent.create(
-        model_name="gemini-1.5-pro-001",
+        model_name="gemini-2.5-flash-lite-001",
         system_instruction=system_instruction,
         contents=contents,
         ttl=datetime.timedelta(minutes=60),

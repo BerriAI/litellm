@@ -2,7 +2,7 @@ import copy
 import json
 import mimetypes
 import re
-import uuid
+from litellm._uuid import uuid
 import xml.etree.ElementTree as ET
 from enum import Enum
 from typing import Any, List, Optional, Tuple, cast, overload
@@ -3079,7 +3079,6 @@ class BedrockConverseMessagesProcessor:
                 messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
         return messages
 
-
     @staticmethod
     async def _bedrock_converse_messages_pt_async(  # noqa: PLR0915
         messages: List,
@@ -3124,9 +3123,9 @@ class BedrockConverseMessagesProcessor:
                                 _part = BedrockContentBlock(text=element["text"])
                                 _parts.append(_part)
                             elif element["type"] == "guarded_text":
-                                # Wrap guarded_text in guardrailConverseContent block
+                                # Wrap guarded_text in guardContent block
                                 _part = BedrockContentBlock(
-                                    guardrailConverseContent={"text": element["text"]}
+                                    guardContent={"text": {"text": element["text"]}}
                                 )
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
@@ -3171,7 +3170,6 @@ class BedrockConverseMessagesProcessor:
 
                 msg_i += 1
             if user_content:
-
                 if len(contents) > 0 and contents[-1]["role"] == "user":
                     if (
                         assistant_continue_message is not None
@@ -3506,9 +3504,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "guarded_text":
-                            # Wrap guarded_text in guardrailConverseContent block
+                            # Wrap guarded_text in guardContent block
                             _part = BedrockContentBlock(
-                                guardrailConverseContent={"text": element["text"]}
+                                guardContent={"text": {"text": element["text"]}}
                             )
                             _parts.append(_part)
                         elif element["type"] == "image_url":
@@ -3554,7 +3552,6 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
 
             msg_i += 1
         if user_content:
-
             if len(contents) > 0 and contents[-1]["role"] == "user":
                 if (
                     assistant_continue_message is not None

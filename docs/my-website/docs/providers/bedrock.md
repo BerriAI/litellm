@@ -101,6 +101,7 @@ aws_profile_name: Optional[str],
 aws_role_name: Optional[str],
 aws_web_identity_token: Optional[str],
 aws_bedrock_runtime_endpoint: Optional[str],
+api_key: Optional[str],
 ```
 
 ### 2. Start the proxy 
@@ -303,6 +304,65 @@ extra_body={
 
 print(response)
 
+```
+
+</TabItem>
+</Tabs>
+
+## Usage - Request Metadata
+
+Attach metadata to Bedrock requests for logging and cost attribution.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import os
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    messages=[{"role": "user", "content": "Hello, how are you?"}],
+    requestMetadata={
+        "cost_center": "engineering",
+        "user_id": "user123"
+    }
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+**Set on yaml**
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-v1
+    litellm_params:
+      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      requestMetadata:
+        cost_center: "engineering"
+```
+
+**Set on request**
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="bedrock-claude-v1",
+    messages=[{"role": "user", "content": "Hello"}],
+    extra_body={
+        "requestMetadata": {"cost_center": "engineering"}
+    }
+)
 ```
 
 </TabItem>
@@ -1798,6 +1858,7 @@ Here's an example of using a bedrock model with LiteLLM. For a complete list, re
 | GPT-OSS 20B | `completion(model='bedrock/converse/openai.gpt-oss-20b-1:0', messages=messages)` | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | GPT-OSS 120B | `completion(model='bedrock/converse/openai.gpt-oss-120b-1:0', messages=messages)` | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Deepseek R1    | `completion(model='bedrock/us.deepseek.r1-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
+| Anthropic Claude Sonnet 4.5    | `completion(model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V3.5 Sonnet    | `completion(model='bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V3  sonnet    | `completion(model='bedrock/anthropic.claude-3-sonnet-20240229-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V3 Haiku     | `completion(model='bedrock/anthropic.claude-3-haiku-20240307-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
@@ -1821,6 +1882,7 @@ Here's an example of using a bedrock model with LiteLLM. For a complete list, re
 | Mistral 7B Instruct        | `completion(model='bedrock/mistral.mistral-7b-instruct-v0:2', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Mixtral 8x7B Instruct      | `completion(model='bedrock/mistral.mixtral-8x7b-instruct-v0:1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 
+
 ## Bedrock Embedding
 
 ### API keys
@@ -1842,11 +1904,29 @@ response = embedding(
 print(response)
 ```
 
+#### Titan V2 - encoding_format support
+```python
+from litellm import embedding
+# Float format (default)
+response = embedding(
+    model="bedrock/amazon.titan-embed-text-v2:0",
+    input=["good morning from litellm"],
+    encoding_format="float"  # Returns float array
+)
+
+# Binary format
+response = embedding(
+    model="bedrock/amazon.titan-embed-text-v2:0",
+    input=["good morning from litellm"],
+    encoding_format="base64"  # Returns base64 encoded binary
+)
+```
+
 ## Supported AWS Bedrock Embedding Models
 
 | Model Name           | Usage                               | Supported Additional OpenAI params |
 |----------------------|---------------------------------------------|-----|
-| Titan Embeddings V2 | `embedding(model="bedrock/amazon.titan-embed-text-v2:0", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_v2_transformation.py#L59) |
+| Titan Embeddings V2 | `embedding(model="bedrock/amazon.titan-embed-text-v2:0", input=input)` | `dimensions`, `encoding_format` |
 | Titan Embeddings - V1 | `embedding(model="bedrock/amazon.titan-embed-text-v1", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_g1_transformation.py#L53)
 | Titan Multimodal Embeddings | `embedding(model="bedrock/amazon.titan-embed-image-v1", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_multimodal_transformation.py#L28) |
 | Cohere Embeddings - English | `embedding(model="bedrock/cohere.embed-english-v3", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/cohere_transformation.py#L18)
@@ -1930,6 +2010,39 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
     "model": "amazon.nova-canvas-v1:0",
     "prompt": "A cute baby sea otter"
 }'
+```
+
+</TabItem>
+</Tabs>
+
+### Using Inference Profiles with Image Generation
+
+For AWS Bedrock Application Inference Profiles with image generation, use the `model_id` parameter to specify the inference profile ARN:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import image_generation
+
+response = image_generation(
+    model="bedrock/amazon.nova-canvas-v1:0",
+    model_id="arn:aws:bedrock:eu-west-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
+    prompt="A cute baby sea otter"
+)
+print(f"response: {response}")
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: nova-canvas-inference-profile
+    litellm_params:
+      model: bedrock/amazon.nova-canvas-v1:0
+      model_id: arn:aws:bedrock:eu-west-1:000000000000:application-inference-profile/a0a0a0a0a0a0
+      aws_region_name: "eu-west-1"
 ```
 
 </TabItem>
@@ -2228,6 +2341,39 @@ response = completion(
 
 
 Make the bedrock completion call
+
+---
+
+### Required AWS IAM Policy for AssumeRole
+
+To use `aws_role_name` (STS AssumeRole) with LiteLLM, your IAM user or role **must** have permission to call `sts:AssumeRole` on the target role. If you see an error like:
+
+```
+An error occurred (AccessDenied) when calling the AssumeRole operation: User: arn:aws:sts::...:assumed-role/litellm-ecs-task-role/... is not authorized to perform: sts:AssumeRole on resource: arn:aws:iam::...:role/Enterprise/BedrockCrossAccountConsumer
+```
+
+This means the IAM identity running LiteLLM does **not** have permission to assume the target role. You must update your IAM policy to allow this action.
+
+#### Example IAM Policy
+
+Replace `<TARGET_ROLE_ARN>` with the ARN of the role you want to assume (e.g., `arn:aws:iam::123456789012:role/Enterprise/BedrockCrossAccountConsumer`).
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": "<TARGET_ROLE_ARN>"
+    }
+  ]
+}
+```
+
+**Note:** The target role itself must also trust the calling IAM identity (via its trust policy) for AssumeRole to succeed. See [AWS AssumeRole docs](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-api.html) for more details.
+
+---
 
 <Tabs>
 <TabItem value="sdk" label="SDK">

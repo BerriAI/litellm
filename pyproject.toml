@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.77.2"
+version = "1.77.7"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -20,7 +20,7 @@ Documentation = "https://docs.litellm.ai"
 
 [tool.poetry.dependencies]
 python = ">=3.8.1,<4.0, !=3.9.7"
-fastuuid = ">=0.12.0"
+fastuuid = ">=0.13.0"
 httpx = ">=0.23.0"
 openai = ">=1.99.5"
 python-dotenv = ">=0.2.0"
@@ -59,9 +59,9 @@ websockets = {version = "^13.1.0", optional = true}
 boto3 = {version = "1.36.0", optional = true}
 redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
 mcp = {version = "^1.10.0", optional = true, python = ">=3.10"}
-litellm-proxy-extras = {version = "0.2.18", optional = true}
+litellm-proxy-extras = {version = "0.2.25", optional = true}
 rich = {version = "13.7.1", optional = true}
-litellm-enterprise = {version = "0.1.19", optional = true}
+litellm-enterprise = {version = "0.1.20", optional = true}
 diskcache = {version = "^5.6.1", optional = true}
 polars = {version = "^1.31.0", optional = true, python = ">=3.10"}
 semantic-router = {version = "*", optional = true, python = ">=3.9"}
@@ -114,6 +114,7 @@ semantic-router = ["semantic-router"]
 
 mlflow = ["mlflow"]
 
+
 [tool.isort]
 profile = "black"
 
@@ -156,7 +157,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.77.2"
+version = "1.77.7"
 version_files = [
     "pyproject.toml:^version"
 ]

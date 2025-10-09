@@ -38,6 +38,7 @@ class SupportedGuardrailIntegrations(Enum):
     OPENAI_MODERATION = "openai_moderation"
     NOMA = "noma"
     TOOL_PERMISSION = "tool_permission"
+    JAVELIN = "javelin"
     POINTGUARDAI = "pointguard_ai"
 
 
@@ -253,7 +254,7 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
 class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
     """Configuration parameters for the Presidio PII masking guardrail"""
 
-    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = Field(
+    pii_entities_config: Optional[Dict[Union[PiiEntityType, str], PiiAction]] = Field(
         default=None, description="Configuration for PII entity types and actions"
     )
     presidio_ad_hoc_recognizers: Optional[str] = Field(
@@ -391,6 +392,26 @@ class ToolPermissionGuardrailConfigModel(BaseModel):
     )
 
 
+class JavelinGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Javelin guardrail"""
+
+    guard_name: Optional[str] = Field(
+        default=None, description="Name of the Javelin guard to use"
+    )
+    api_version: Optional[str] = Field(
+        default="v1", description="API version for Javelin service"
+    )
+    metadata: Optional[Dict] = Field(
+        default=None, description="Additional metadata to send with requests"
+    )
+    application: Optional[str] = Field(
+        default=None, description="Application name for Javelin service"
+    )
+    config: Optional[Dict] = Field(
+        default=None, description="Additional configuration for the guardrail"
+    ) 
+
+
 class PointGuardAIGuardrailConfigModel(BaseModel):
     """Configuration parameters for the PointGuardAI guardrail"""
 
@@ -414,8 +435,7 @@ class PointGuardAIGuardrailConfigModel(BaseModel):
     )
     model_name: Optional[str] = Field(
         default=None, description="Model name"
-    )
-
+      
 
 class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
@@ -506,6 +526,7 @@ class LitellmParams(
     PillarGuardrailConfigModel,
     NomaGuardrailConfigModel,
     ToolPermissionGuardrailConfigModel,
+    JavelinGuardrailConfigModel,
     PointGuardAIGuardrailConfigModel,
     BaseLitellmParams,
 ):

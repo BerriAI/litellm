@@ -5,7 +5,6 @@ import json
 import threading
 import time
 import traceback
-import uuid
 from typing import Any, Callable, Dict, List, Optional, Union, cast
 
 import httpx
@@ -13,6 +12,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
@@ -1024,7 +1024,7 @@ class CustomStreamWrapper:
         return
 
     def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
-        if hasattr(chunk, 'id'):
+        if hasattr(chunk, "id"):
             self.response_id = chunk.id
         model_response = self.model_response_creator()
         response_obj: Dict[str, Any] = {}
@@ -1365,12 +1365,13 @@ class CustomStreamWrapper:
                 f"model_response finish reason 3: {self.received_finish_reason}; response_obj={response_obj}"
             )
             ## FUNCTION CALL PARSING
+            original_chunk = (
+                response_obj.get("original_chunk") if response_obj is not None else None
+            )
             if (
-                response_obj is not None
-                and response_obj.get("original_chunk", None) is not None
+                original_chunk is not None
             ):  # function / tool calling branch - only set for openai/azure compatible endpoints
                 # enter this branch when no content has been passed in response
-                original_chunk = response_obj.get("original_chunk", None)
                 if hasattr(original_chunk, "id"):
                     model_response = self.set_model_id(
                         original_chunk.id, model_response
@@ -1619,11 +1620,12 @@ class CustomStreamWrapper:
                             completion_start_time=datetime.datetime.now()
                         )
                     ## LOGGING
-                    executor.submit(
-                        self.run_success_logging_and_cache_storage,
-                        response,
-                        cache_hit,
-                    )  # log response
+                    if not litellm.disable_streaming_logging:
+                        executor.submit(
+                            self.run_success_logging_and_cache_storage,
+                            response,
+                            cache_hit,
+                        )  # log response
                     choice = response.choices[0]
                     if isinstance(choice, StreamingChoices):
                         self.response_uptil_now += choice.delta.get("content", "") or ""

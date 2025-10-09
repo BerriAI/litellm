@@ -9,7 +9,7 @@ API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=examp
 import asyncio
 import json
 import os
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -498,6 +498,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             "guardrail_information": standard_logging_payload.get(
                 "guardrail_information", None
             ),
+            "is_streamed_request": self._get_stream_value_from_payload(standard_logging_payload),
         }
 
         #########################################################
@@ -560,6 +561,31 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 )
 
         return latency_metrics
+
+    def _get_stream_value_from_payload(self, standard_logging_payload: StandardLoggingPayload) -> bool:
+        """
+        Extract the stream value from standard logging payload.
+
+        The stream field in StandardLoggingPayload is only set to True for completed streaming responses.
+        For non-streaming requests, it's None. The original stream parameter is in model_parameters.
+
+        Returns:
+            bool: True if this was a streaming request, False otherwise
+        """
+        # Check top-level stream field first (only True for completed streaming)
+        stream_value = standard_logging_payload.get("stream")
+        if stream_value is True:
+            return True
+
+        # Fallback to model_parameters.stream for original request parameters
+        model_params = standard_logging_payload.get("model_parameters", {})
+        if isinstance(model_params, dict):
+            stream_value = model_params.get("stream")
+            if stream_value is True:
+                return True
+
+        # Default to False for non-streaming requests
+        return False
 
     def _get_spend_metrics(
         self, standard_logging_payload: StandardLoggingPayload

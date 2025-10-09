@@ -65,7 +65,7 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIResponse,
 )
-from litellm.types.rerank import OptionalRerankParams, RerankResponse
+from litellm.types.rerank import RerankResponse
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
@@ -88,6 +88,8 @@ from litellm.utils import (
 )
 
 if TYPE_CHECKING:
+    from aiohttp import ClientSession
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 
@@ -236,11 +238,16 @@ class BaseLLMHTTPHandler:
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: bool = False,
         signed_json_body: Optional[bytes] = None,
+        shared_session: Optional["ClientSession"] = None,
     ):
         if client is None:
+            verbose_logger.debug(
+                f"Creating HTTP client with shared_session: {id(shared_session) if shared_session else None}"
+            )
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                shared_session=shared_session,
             )
         else:
             async_httpx_client = client
@@ -275,7 +282,7 @@ class BaseLLMHTTPHandler:
         self,
         model: str,
         messages: list,
-        api_base: str,
+        api_base: Optional[str],
         custom_llm_provider: str,
         model_response: ModelResponse,
         encoding,
@@ -290,6 +297,7 @@ class BaseLLMHTTPHandler:
         headers: Optional[Dict[str, Any]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         provider_config: Optional[BaseConfig] = None,
+        shared_session: Optional["ClientSession"] = None,
     ):
         json_mode: bool = optional_params.pop("json_mode", False)
         extra_body: Optional[dict] = optional_params.pop("extra_body", None)
@@ -469,7 +477,7 @@ class BaseLLMHTTPHandler:
 
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client(
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
             sync_httpx_client = client
@@ -743,7 +751,7 @@ class BaseLLMHTTPHandler:
         model_response: EmbeddingResponse,
         api_key: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        aembedding: bool = False,
+        aembedding: Optional[bool] = False,
         headers: Optional[Dict[str, Any]] = None,
     ) -> EmbeddingResponse:
         provider_config = ProviderConfigManager.get_provider_embedding_config(
@@ -885,7 +893,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         provider_config: BaseRerankConfig,
-        optional_rerank_params: OptionalRerankParams,
+        optional_rerank_params: Dict,
         timeout: Optional[Union[float, httpx.Timeout]],
         model_response: RerankResponse,
         _is_async: bool = False,
@@ -2283,7 +2291,7 @@ class BaseLLMHTTPHandler:
                     e=e,
                     provider_config=provider_config,
                 )
-        
+
         # Store the upload URL in litellm_params for the transformation method
         litellm_params_with_url = dict(litellm_params)
         litellm_params_with_url["upload_url"] = api_base
@@ -2574,11 +2582,11 @@ class BaseLLMHTTPHandler:
                     "url": transformed_request["url"],
                     "headers": transformed_request["headers"],
                 }
-                
+
                 # Only add data for non-GET requests
                 if method != "get" and transformed_request.get("data") is not None:
                     request_kwargs["data"] = transformed_request["data"]
-                
+
                 batch_response = getattr(sync_httpx_client, method)(**request_kwargs)
             elif isinstance(transformed_request, dict) and api_base:
                 # For other providers that use JSON requests
@@ -2743,12 +2751,14 @@ class BaseLLMHTTPHandler:
                     "url": transformed_request["url"],
                     "headers": transformed_request["headers"],
                 }
-                
+
                 # Only add data for non-GET requests
                 if method != "get" and transformed_request.get("data") is not None:
                     request_kwargs["data"] = transformed_request["data"]
-                
-                batch_response = await getattr(async_httpx_client, method)(**request_kwargs)
+
+                batch_response = await getattr(async_httpx_client, method)(
+                    **request_kwargs
+                )
             elif isinstance(transformed_request, dict) and api_base:
                 # For other providers that use JSON requests
                 batch_response = await async_httpx_client.get(
@@ -3091,7 +3101,10 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
 
         Handles image edit requests.
@@ -3281,7 +3294,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
         Handles image generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
