@@ -56,19 +56,25 @@ class RouteChecks:
         if route in valid_token.allowed_routes:
             return True
 
+        # check if any allowed_route is a prefix of the actual route
+        # e.g., allowed_route="/fake-openai-proxy-6" matches route="/fake-openai-proxy-6/v1/chat/completions"
+        for allowed_route in valid_token.allowed_routes:
+            if route.startswith(allowed_route + "/") or route == allowed_route:
+                return True
+
         ## check if 'allowed_route' is a field name in LiteLLMRoutes
         if any(
             allowed_route in LiteLLMRoutes._member_names_
             for allowed_route in valid_token.allowed_routes
         ):
             for allowed_route in valid_token.allowed_routes:
-                if allowed_route in LiteLLMRoutes._member_names_:                    
+                if allowed_route in LiteLLMRoutes._member_names_:
                     if RouteChecks.check_route_access(
                         route=route,
                         allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
                     ):
                         return True
-                    
+
                     ################################################
                     #  For llm_api_routes, also check registered pass-through endpoints
                     ################################################
@@ -76,7 +82,10 @@ class RouteChecks:
                         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                             InitPassThroughEndpointHelpers,
                         )
-                        if InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=route):
+
+                        if InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                            route=route
+                        ):
                             return True
 
         # check if wildcard pattern is allowed
@@ -195,6 +204,32 @@ class RouteChecks:
             pass
         elif route.startswith("/v1/mcp/") or route.startswith("/mcp-rest/"):
             pass  # authN/authZ handled by api itself
+        elif valid_token.allowed_routes is not None:
+            # check if route is in allowed_routes (exact match or prefix match)
+            route_allowed = False
+            if route in valid_token.allowed_routes:
+                route_allowed = True
+            else:
+                # check if any allowed_route is a prefix of the actual route
+                # e.g., allowed_route="/fake-openai-proxy-6" matches route="/fake-openai-proxy-6/v1/chat/completions"
+                for allowed_route in valid_token.allowed_routes:
+                    if route.startswith(allowed_route + "/") or route == allowed_route:
+                        route_allowed = True
+                        break
+
+            if route_allowed:
+                pass
+            else:
+                user_role = "unknown"
+                user_id = "unknown"
+                if user_obj is not None:
+                    user_role = user_obj.user_role or "unknown"
+                    user_id = user_obj.user_id or "unknown"
+
+                masked_user_id = RouteChecks._mask_user_id(user_id)
+                raise Exception(
+                    f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
+                )
         else:
             user_role = "unknown"
             user_id = "unknown"
