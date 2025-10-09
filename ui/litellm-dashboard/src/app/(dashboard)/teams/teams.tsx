@@ -1,37 +1,19 @@
 import React, { useState, useEffect } from "react";
-import Link from "next/link";
 import { Typography } from "antd";
-import {
-  teamDeleteCall,
-  teamUpdateCall,
-  teamInfoCall,
-  Organization,
-  DEFAULT_ORGANIZATION,
-  fetchMCPAccessGroups,
-} from "./networking";
-import TeamMemberModal from "@/components/team/edit_membership";
-import { fetchTeams } from "./common_components/fetch_teams";
-import {
-  InformationCircleIcon,
-  PencilAltIcon,
-  PencilIcon,
-  RefreshIcon,
-  StatusOnlineIcon,
-  TrashIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-} from "@heroicons/react/outline";
+import { teamDeleteCall, Organization, fetchMCPAccessGroups } from "@/components/networking";
+import { fetchTeams } from "@/components/common_components/fetch_teams";
+import { PencilAltIcon, RefreshIcon, TrashIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { Button as Button2, Modal, Form, Input, Select as Select2, message, Tooltip } from "antd";
-import NumericalInput from "./shared/numerical_input";
+import NumericalInput from "../../../components/shared/numerical_input";
 import {
   fetchAvailableModelsForTeamOrKey,
   getModelDisplayName,
   unfurlWildcardModelsInList,
-} from "./key_team_helpers/fetch_available_models_team_key";
+} from "@/components/key_team_helpers/fetch_available_models_team_key";
 import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { getGuardrailsList } from "./networking";
-import TeamInfoView, { TeamData } from "@/components/team/team_info";
+import { getGuardrailsList } from "@/components/networking";
+import TeamInfoView from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isAdminRole } from "@/utils/roles";
 import {
@@ -58,12 +40,11 @@ import {
   TabPanels,
   Tab,
 } from "@tremor/react";
-import { CogIcon } from "@heroicons/react/outline";
 import AvailableTeamsPanel from "@/components/team/available_teams";
-import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
-import type { KeyResponse, Team } from "./key_team_helpers/key_list";
-import { formatNumberWithCommas } from "../utils/dataUtils";
+import VectorStoreSelector from "../../../components/vector_store_management/VectorStoreSelector";
+import PremiumLoggingSettings from "../../../components/common_components/PremiumLoggingSettings";
+import type { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { AlertTriangleIcon, XIcon } from "lucide-react";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
@@ -96,15 +77,10 @@ interface EditTeamModalProps {
   onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
 }
 
-import {
-  teamCreateCall,
-  teamMemberAddCall,
-  teamMemberUpdateCall,
-  Member,
-  modelAvailableCall,
-  v2TeamListCall,
-} from "./networking";
+import { teamCreateCall, Member, v2TeamListCall } from "@/components/networking";
 import { updateExistingKeys } from "@/utils/dataUtils";
+import TeamsHeaderTabs from "@/app/(dashboard)/teams/components/TeamsHeaderTabs";
+import TeamsFilters from "@/app/(dashboard)/teams/components/TeamsFilters";
 
 interface TeamInfo {
   members_with_roles: Member[];
@@ -167,11 +143,7 @@ const Teams: React.FC<TeamProps> = ({
 
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
-  const { Title, Paragraph } = Typography;
-  const [value, setValue] = useState("");
-  const [editModalVisible, setEditModalVisible] = useState(false);
 
-  const [selectedTeam, setSelectedTeam] = useState<null | any>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [editTeam, setEditTeam] = useState<boolean>(false);
 
@@ -573,450 +545,328 @@ const Teams: React.FC<TeamProps> = ({
               editTeam={editTeam}
             />
           ) : (
-            <TabGroup className="gap-2 h-[75vh] w-full">
-              <TabList className="flex justify-between mt-2 w-full items-center">
-                <div className="flex">
-                  <Tab>Your Teams</Tab>
-                  <Tab>Available Teams</Tab>
-                  {isAdminRole(userRole || "") && <Tab>Default Team Settings</Tab>}
-                </div>
-                <div className="flex items-center space-x-2">
-                  {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-                  <Icon
-                    icon={RefreshIcon} // Modify as necessary for correct icon name
-                    variant="shadow"
-                    size="xs"
-                    className="self-center"
-                    onClick={handleRefreshClick}
-                  />
-                </div>
-              </TabList>
-              <TabPanels>
-                <TabPanel>
-                  <Text>
-                    Click on &ldquo;Team ID&rdquo; to view team details <b>and</b> manage team members.
-                  </Text>
-                  <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
-                    <Col numColSpan={1}>
-                      <Card className="w-full mx-auto flex-auto overflow-hidden overflow-y-auto max-h-[50vh]">
-                        <div className="border-b px-6 py-4">
-                          <div className="flex flex-col space-y-4">
-                            {/* Search and Filter Controls */}
-                            <div className="flex flex-wrap items-center gap-3">
-                              {/* Team Alias Search */}
-                              <div className="relative w-64">
-                                <input
-                                  type="text"
-                                  placeholder="Search by Team Name..."
-                                  className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                  value={filters.team_alias}
-                                  onChange={(e) => handleFilterChange("team_alias", e.target.value)}
-                                />
-                                <svg
-                                  className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                                  />
-                                </svg>
-                              </div>
-
-                              {/* Filter Button */}
-                              <button
-                                className={`px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2 ${showFilters ? "bg-gray-100" : ""}`}
-                                onClick={() => setShowFilters(!showFilters)}
-                              >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
-                                  />
-                                </svg>
-                                Filters
-                                {(filters.team_id || filters.team_alias || filters.organization_id) && (
-                                  <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                                )}
-                              </button>
-
-                              {/* Reset Filters Button */}
-                              <button
-                                className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
-                                onClick={handleFilterReset}
-                              >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                                  />
-                                </svg>
-                                Reset Filters
-                              </button>
-                            </div>
-
-                            {/* Additional Filters */}
-                            {showFilters && (
-                              <div className="flex flex-wrap items-center gap-3 mt-3">
-                                {/* Team ID Search */}
-                                <div className="relative w-64">
-                                  <input
-                                    type="text"
-                                    placeholder="Enter Team ID"
-                                    className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                    value={filters.team_id}
-                                    onChange={(e) => handleFilterChange("team_id", e.target.value)}
-                                  />
-                                  <svg
-                                    className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                  >
-                                    <path
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      strokeWidth={2}
-                                      d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                                    />
-                                  </svg>
-                                </div>
-
-                                {/* Organization Dropdown */}
-                                <div className="w-64">
-                                  <Select
-                                    value={filters.organization_id || ""}
-                                    onValueChange={(value) => handleFilterChange("organization_id", value)}
-                                    placeholder="Select Organization"
-                                  >
-                                    {organizations?.map((org) => (
-                                      <SelectItem key={org.organization_id} value={org.organization_id || ""}>
-                                        {org.organization_alias || org.organization_id}
-                                      </SelectItem>
-                                    ))}
-                                  </Select>
-                                </div>
-                              </div>
-                            )}
-                          </div>
+            <TeamsHeaderTabs lastRefreshed={lastRefreshed} onRefresh={handleRefreshClick} userRole={userRole}>
+              <TabPanel>
+                <Text>
+                  Click on &ldquo;Team ID&rdquo; to view team details <b>and</b> manage team members.
+                </Text>
+                <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
+                  <Col numColSpan={1}>
+                    <Card className="w-full mx-auto flex-auto overflow-hidden overflow-y-auto max-h-[50vh]">
+                      <div className="border-b px-6 py-4">
+                        <div className="flex flex-col space-y-4">
+                          <TeamsFilters
+                            filters={filters}
+                            organizations={organizations}
+                            showFilters={showFilters}
+                            onToggleFilters={setShowFilters}
+                            onChange={handleFilterChange}
+                            onReset={handleFilterReset}
+                          />
                         </div>
-                        <Table>
-                          <TableHead>
-                            <TableRow>
-                              <TableHeaderCell>Team Name</TableHeaderCell>
-                              <TableHeaderCell>Team ID</TableHeaderCell>
-                              <TableHeaderCell>Created</TableHeaderCell>
-                              <TableHeaderCell>Spend (USD)</TableHeaderCell>
-                              <TableHeaderCell>Budget (USD)</TableHeaderCell>
-                              <TableHeaderCell>Models</TableHeaderCell>
-                              <TableHeaderCell>Organization</TableHeaderCell>
-                              <TableHeaderCell>Info</TableHeaderCell>
-                            </TableRow>
-                          </TableHead>
+                      </div>
+                      <Table>
+                        <TableHead>
+                          <TableRow>
+                            <TableHeaderCell>Team Name</TableHeaderCell>
+                            <TableHeaderCell>Team ID</TableHeaderCell>
+                            <TableHeaderCell>Created</TableHeaderCell>
+                            <TableHeaderCell>Spend (USD)</TableHeaderCell>
+                            <TableHeaderCell>Budget (USD)</TableHeaderCell>
+                            <TableHeaderCell>Models</TableHeaderCell>
+                            <TableHeaderCell>Organization</TableHeaderCell>
+                            <TableHeaderCell>Info</TableHeaderCell>
+                          </TableRow>
+                        </TableHead>
 
-                          <TableBody>
-                            {teams && teams.length > 0
-                              ? teams
-                                  .filter((team) => {
-                                    if (!currentOrg) return true;
-                                    return team.organization_id === currentOrg.organization_id;
-                                  })
-                                  .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-                                  .map((team: any) => (
-                                    <TableRow key={team.team_id}>
-                                      <TableCell
-                                        style={{
-                                          maxWidth: "4px",
-                                          whiteSpace: "pre-wrap",
-                                          overflow: "hidden",
-                                        }}
-                                      >
-                                        {team["team_alias"]}
-                                      </TableCell>
-                                      <TableCell>
-                                        <div className="overflow-hidden">
-                                          <Tooltip title={team.team_id}>
-                                            <Button
-                                              size="xs"
-                                              variant="light"
-                                              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                                              onClick={() => {
-                                                // Add click handler
-                                                setSelectedTeamId(team.team_id);
-                                              }}
-                                            >
-                                              {team.team_id.slice(0, 7)}...
-                                            </Button>
-                                          </Tooltip>
-                                        </div>
-                                      </TableCell>
-                                      <TableCell
-                                        style={{
-                                          maxWidth: "4px",
-                                          whiteSpace: "pre-wrap",
-                                          overflow: "hidden",
-                                        }}
-                                      >
-                                        {team.created_at ? new Date(team.created_at).toLocaleDateString() : "N/A"}
-                                      </TableCell>
-                                      <TableCell
-                                        style={{
-                                          maxWidth: "4px",
-                                          whiteSpace: "pre-wrap",
-                                          overflow: "hidden",
-                                        }}
-                                      >
-                                        {formatNumberWithCommas(team["spend"], 4)}
-                                      </TableCell>
-                                      <TableCell
-                                        style={{
-                                          maxWidth: "4px",
-                                          whiteSpace: "pre-wrap",
-                                          overflow: "hidden",
-                                        }}
-                                      >
-                                        {team["max_budget"] !== null && team["max_budget"] !== undefined
-                                          ? team["max_budget"]
-                                          : "No limit"}
-                                      </TableCell>
-                                      <TableCell
-                                        style={{
-                                          maxWidth: "8-x",
-                                          whiteSpace: "pre-wrap",
-                                          overflow: "hidden",
-                                        }}
-                                        className={team.models.length > 3 ? "px-0" : ""}
-                                      >
-                                        <div className="flex flex-col">
-                                          {Array.isArray(team.models) ? (
-                                            <div className="flex flex-col">
-                                              {team.models.length === 0 ? (
-                                                <Badge size={"xs"} className="mb-1" color="red">
-                                                  <Text>All Proxy Models</Text>
-                                                </Badge>
-                                              ) : (
-                                                <>
-                                                  <div className="flex items-start">
-                                                    {team.models.length > 3 && (
-                                                      <div>
-                                                        <Icon
-                                                          icon={
-                                                            expandedAccordions[team.team_id]
-                                                              ? ChevronDownIcon
-                                                              : ChevronRightIcon
-                                                          }
-                                                          className="cursor-pointer"
-                                                          size="xs"
-                                                          onClick={() => {
-                                                            setExpandedAccordions((prev) => ({
-                                                              ...prev,
-                                                              [team.team_id]: !prev[team.team_id],
-                                                            }));
-                                                          }}
-                                                        />
-                                                      </div>
-                                                    )}
-                                                    <div className="flex flex-wrap gap-1">
-                                                      {team.models.slice(0, 3).map((model: string, index: number) =>
-                                                        model === "all-proxy-models" ? (
-                                                          <Badge key={index} size={"xs"} color="red">
-                                                            <Text>All Proxy Models</Text>
-                                                          </Badge>
-                                                        ) : (
-                                                          <Badge key={index} size={"xs"} color="blue">
-                                                            <Text>
-                                                              {model.length > 30
-                                                                ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                                                : getModelDisplayName(model)}
-                                                            </Text>
-                                                          </Badge>
-                                                        ),
-                                                      )}
-                                                      {team.models.length > 3 && !expandedAccordions[team.team_id] && (
-                                                        <Badge size={"xs"} color="gray" className="cursor-pointer">
+                        <TableBody>
+                          {teams && teams.length > 0
+                            ? teams
+                                .filter((team) => {
+                                  if (!currentOrg) return true;
+                                  return team.organization_id === currentOrg.organization_id;
+                                })
+                                .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                                .map((team: any) => (
+                                  <TableRow key={team.team_id}>
+                                    <TableCell
+                                      style={{
+                                        maxWidth: "4px",
+                                        whiteSpace: "pre-wrap",
+                                        overflow: "hidden",
+                                      }}
+                                    >
+                                      {team["team_alias"]}
+                                    </TableCell>
+                                    <TableCell>
+                                      <div className="overflow-hidden">
+                                        <Tooltip title={team.team_id}>
+                                          <Button
+                                            size="xs"
+                                            variant="light"
+                                            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+                                            onClick={() => {
+                                              // Add click handler
+                                              setSelectedTeamId(team.team_id);
+                                            }}
+                                          >
+                                            {team.team_id.slice(0, 7)}...
+                                          </Button>
+                                        </Tooltip>
+                                      </div>
+                                    </TableCell>
+                                    <TableCell
+                                      style={{
+                                        maxWidth: "4px",
+                                        whiteSpace: "pre-wrap",
+                                        overflow: "hidden",
+                                      }}
+                                    >
+                                      {team.created_at ? new Date(team.created_at).toLocaleDateString() : "N/A"}
+                                    </TableCell>
+                                    <TableCell
+                                      style={{
+                                        maxWidth: "4px",
+                                        whiteSpace: "pre-wrap",
+                                        overflow: "hidden",
+                                      }}
+                                    >
+                                      {formatNumberWithCommas(team["spend"], 4)}
+                                    </TableCell>
+                                    <TableCell
+                                      style={{
+                                        maxWidth: "4px",
+                                        whiteSpace: "pre-wrap",
+                                        overflow: "hidden",
+                                      }}
+                                    >
+                                      {team["max_budget"] !== null && team["max_budget"] !== undefined
+                                        ? team["max_budget"]
+                                        : "No limit"}
+                                    </TableCell>
+                                    <TableCell
+                                      style={{
+                                        maxWidth: "8-x",
+                                        whiteSpace: "pre-wrap",
+                                        overflow: "hidden",
+                                      }}
+                                      className={team.models.length > 3 ? "px-0" : ""}
+                                    >
+                                      <div className="flex flex-col">
+                                        {Array.isArray(team.models) ? (
+                                          <div className="flex flex-col">
+                                            {team.models.length === 0 ? (
+                                              <Badge size={"xs"} className="mb-1" color="red">
+                                                <Text>All Proxy Models</Text>
+                                              </Badge>
+                                            ) : (
+                                              <>
+                                                <div className="flex items-start">
+                                                  {team.models.length > 3 && (
+                                                    <div>
+                                                      <Icon
+                                                        icon={
+                                                          expandedAccordions[team.team_id]
+                                                            ? ChevronDownIcon
+                                                            : ChevronRightIcon
+                                                        }
+                                                        className="cursor-pointer"
+                                                        size="xs"
+                                                        onClick={() => {
+                                                          setExpandedAccordions((prev) => ({
+                                                            ...prev,
+                                                            [team.team_id]: !prev[team.team_id],
+                                                          }));
+                                                        }}
+                                                      />
+                                                    </div>
+                                                  )}
+                                                  <div className="flex flex-wrap gap-1">
+                                                    {team.models.slice(0, 3).map((model: string, index: number) =>
+                                                      model === "all-proxy-models" ? (
+                                                        <Badge key={index} size={"xs"} color="red">
+                                                          <Text>All Proxy Models</Text>
+                                                        </Badge>
+                                                      ) : (
+                                                        <Badge key={index} size={"xs"} color="blue">
                                                           <Text>
-                                                            +{team.models.length - 3}{" "}
-                                                            {team.models.length - 3 === 1
-                                                              ? "more model"
-                                                              : "more models"}
+                                                            {model.length > 30
+                                                              ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                                              : getModelDisplayName(model)}
                                                           </Text>
                                                         </Badge>
-                                                      )}
-                                                      {expandedAccordions[team.team_id] && (
-                                                        <div className="flex flex-wrap gap-1">
-                                                          {team.models.slice(3).map((model: string, index: number) =>
-                                                            model === "all-proxy-models" ? (
-                                                              <Badge key={index + 3} size={"xs"} color="red">
-                                                                <Text>All Proxy Models</Text>
-                                                              </Badge>
-                                                            ) : (
-                                                              <Badge key={index + 3} size={"xs"} color="blue">
-                                                                <Text>
-                                                                  {model.length > 30
-                                                                    ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                                                    : getModelDisplayName(model)}
-                                                                </Text>
-                                                              </Badge>
-                                                            ),
-                                                          )}
-                                                        </div>
-                                                      )}
-                                                    </div>
+                                                      ),
+                                                    )}
+                                                    {team.models.length > 3 && !expandedAccordions[team.team_id] && (
+                                                      <Badge size={"xs"} color="gray" className="cursor-pointer">
+                                                        <Text>
+                                                          +{team.models.length - 3}{" "}
+                                                          {team.models.length - 3 === 1 ? "more model" : "more models"}
+                                                        </Text>
+                                                      </Badge>
+                                                    )}
+                                                    {expandedAccordions[team.team_id] && (
+                                                      <div className="flex flex-wrap gap-1">
+                                                        {team.models.slice(3).map((model: string, index: number) =>
+                                                          model === "all-proxy-models" ? (
+                                                            <Badge key={index + 3} size={"xs"} color="red">
+                                                              <Text>All Proxy Models</Text>
+                                                            </Badge>
+                                                          ) : (
+                                                            <Badge key={index + 3} size={"xs"} color="blue">
+                                                              <Text>
+                                                                {model.length > 30
+                                                                  ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                                                  : getModelDisplayName(model)}
+                                                              </Text>
+                                                            </Badge>
+                                                          ),
+                                                        )}
+                                                      </div>
+                                                    )}
                                                   </div>
-                                                </>
-                                              )}
-                                            </div>
-                                          ) : null}
-                                        </div>
-                                      </TableCell>
-
-                                      <TableCell>{team.organization_id}</TableCell>
-                                      <TableCell>
-                                        <Text>
-                                          {perTeamInfo &&
-                                            team.team_id &&
-                                            perTeamInfo[team.team_id] &&
-                                            perTeamInfo[team.team_id].keys &&
-                                            perTeamInfo[team.team_id].keys.length}{" "}
-                                          Keys
-                                        </Text>
-                                        <Text>
-                                          {perTeamInfo &&
-                                            team.team_id &&
-                                            perTeamInfo[team.team_id] &&
-                                            perTeamInfo[team.team_id].team_info &&
-                                            perTeamInfo[team.team_id].team_info.members_with_roles &&
-                                            perTeamInfo[team.team_id].team_info.members_with_roles.length}{" "}
-                                          Members
-                                        </Text>
-                                      </TableCell>
-                                      <TableCell>
-                                        {userRole == "Admin" ? (
-                                          <>
-                                            <Icon
-                                              icon={PencilAltIcon}
-                                              size="sm"
-                                              onClick={() => {
-                                                setSelectedTeamId(team.team_id);
-                                                setEditTeam(true);
-                                              }}
-                                            />
-                                            <Icon
-                                              onClick={() => handleDelete(team.team_id)}
-                                              icon={TrashIcon}
-                                              size="sm"
-                                            />
-                                          </>
+                                                </div>
+                                              </>
+                                            )}
+                                          </div>
                                         ) : null}
-                                      </TableCell>
-                                    </TableRow>
-                                  ))
-                              : null}
-                          </TableBody>
-                        </Table>
-                        {isDeleteModalOpen &&
-                          (() => {
-                            const team = teams?.find((t) => t.team_id === teamToDelete);
-                            const teamName = team?.team_alias || "";
-                            const keyCount = team?.keys?.length || 0;
-                            const isValid = deleteConfirmInput === teamName;
-                            return (
-                              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                                <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl min-h-[380px] py-6 overflow-hidden transform transition-all flex flex-col justify-between">
-                                  <div>
-                                    <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-                                      <h3 className="text-lg font-semibold text-gray-900">Delete Team</h3>
-                                      <button
-                                        onClick={() => {
-                                          cancelDelete();
-                                          setDeleteConfirmInput("");
-                                        }}
-                                        className="text-gray-400 hover:text-gray-500 focus:outline-none"
-                                      >
-                                        <XIcon size={20} />
-                                      </button>
-                                    </div>
-                                    <div className="px-6 py-4">
-                                      {keyCount > 0 && (
-                                        <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-100 rounded-md mb-5">
-                                          <div className="text-red-500 mt-0.5">
-                                            <AlertTriangleIcon size={20} />
-                                          </div>
-                                          <div>
-                                            <p className="text-base font-medium text-red-600">
-                                              Warning: This team has {keyCount} associated key{keyCount > 1 ? "s" : ""}.
-                                            </p>
-                                            <p className="text-base text-red-600 mt-2">
-                                              Deleting the team will also delete all associated keys. This action is
-                                              irreversible.
-                                            </p>
-                                          </div>
-                                        </div>
-                                      )}
-                                      <p className="text-base text-gray-600 mb-5">
-                                        Are you sure you want to force delete this team and all its keys?
-                                      </p>
-                                      <div className="mb-5">
-                                        <label className="block text-base font-medium text-gray-700 mb-2">
-                                          {`Type `}
-                                          <span className="underline">{teamName}</span>
-                                          {` to confirm deletion:`}
-                                        </label>
-                                        <input
-                                          type="text"
-                                          value={deleteConfirmInput}
-                                          onChange={(e) => setDeleteConfirmInput(e.target.value)}
-                                          placeholder="Enter team name exactly"
-                                          className="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-base"
-                                          autoFocus
-                                        />
                                       </div>
-                                    </div>
-                                  </div>
-                                  <div className="px-6 py-4 bg-gray-50 flex justify-end gap-4">
+                                    </TableCell>
+
+                                    <TableCell>{team.organization_id}</TableCell>
+                                    <TableCell>
+                                      <Text>
+                                        {perTeamInfo &&
+                                          team.team_id &&
+                                          perTeamInfo[team.team_id] &&
+                                          perTeamInfo[team.team_id].keys &&
+                                          perTeamInfo[team.team_id].keys.length}{" "}
+                                        Keys
+                                      </Text>
+                                      <Text>
+                                        {perTeamInfo &&
+                                          team.team_id &&
+                                          perTeamInfo[team.team_id] &&
+                                          perTeamInfo[team.team_id].team_info &&
+                                          perTeamInfo[team.team_id].team_info.members_with_roles &&
+                                          perTeamInfo[team.team_id].team_info.members_with_roles.length}{" "}
+                                        Members
+                                      </Text>
+                                    </TableCell>
+                                    <TableCell>
+                                      {userRole == "Admin" ? (
+                                        <>
+                                          <Icon
+                                            icon={PencilAltIcon}
+                                            size="sm"
+                                            onClick={() => {
+                                              setSelectedTeamId(team.team_id);
+                                              setEditTeam(true);
+                                            }}
+                                          />
+                                          <Icon onClick={() => handleDelete(team.team_id)} icon={TrashIcon} size="sm" />
+                                        </>
+                                      ) : null}
+                                    </TableCell>
+                                  </TableRow>
+                                ))
+                            : null}
+                        </TableBody>
+                      </Table>
+                      {isDeleteModalOpen &&
+                        (() => {
+                          const team = teams?.find((t) => t.team_id === teamToDelete);
+                          const teamName = team?.team_alias || "";
+                          const keyCount = team?.keys?.length || 0;
+                          const isValid = deleteConfirmInput === teamName;
+                          return (
+                            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                              <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl min-h-[380px] py-6 overflow-hidden transform transition-all flex flex-col justify-between">
+                                <div>
+                                  <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                                    <h3 className="text-lg font-semibold text-gray-900">Delete Team</h3>
                                     <button
                                       onClick={() => {
                                         cancelDelete();
                                         setDeleteConfirmInput("");
                                       }}
-                                      className="px-5 py-3 bg-white border border-gray-300 rounded-md text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                                      className="text-gray-400 hover:text-gray-500 focus:outline-none"
                                     >
-                                      Cancel
-                                    </button>
-                                    <button
-                                      onClick={confirmDelete}
-                                      disabled={!isValid}
-                                      className={`px-5 py-3 rounded-md text-base font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 ${isValid ? "bg-red-600 hover:bg-red-700" : "bg-red-300 cursor-not-allowed"}`}
-                                    >
-                                      Force Delete
+                                      <XIcon size={20} />
                                     </button>
                                   </div>
+                                  <div className="px-6 py-4">
+                                    {keyCount > 0 && (
+                                      <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-100 rounded-md mb-5">
+                                        <div className="text-red-500 mt-0.5">
+                                          <AlertTriangleIcon size={20} />
+                                        </div>
+                                        <div>
+                                          <p className="text-base font-medium text-red-600">
+                                            Warning: This team has {keyCount} associated key{keyCount > 1 ? "s" : ""}.
+                                          </p>
+                                          <p className="text-base text-red-600 mt-2">
+                                            Deleting the team will also delete all associated keys. This action is
+                                            irreversible.
+                                          </p>
+                                        </div>
+                                      </div>
+                                    )}
+                                    <p className="text-base text-gray-600 mb-5">
+                                      Are you sure you want to force delete this team and all its keys?
+                                    </p>
+                                    <div className="mb-5">
+                                      <label className="block text-base font-medium text-gray-700 mb-2">
+                                        {`Type `}
+                                        <span className="underline">{teamName}</span>
+                                        {` to confirm deletion:`}
+                                      </label>
+                                      <input
+                                        type="text"
+                                        value={deleteConfirmInput}
+                                        onChange={(e) => setDeleteConfirmInput(e.target.value)}
+                                        placeholder="Enter team name exactly"
+                                        className="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-base"
+                                        autoFocus
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="px-6 py-4 bg-gray-50 flex justify-end gap-4">
+                                  <button
+                                    onClick={() => {
+                                      cancelDelete();
+                                      setDeleteConfirmInput("");
+                                    }}
+                                    className="px-5 py-3 bg-white border border-gray-300 rounded-md text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    onClick={confirmDelete}
+                                    disabled={!isValid}
+                                    className={`px-5 py-3 rounded-md text-base font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 ${isValid ? "bg-red-600 hover:bg-red-700" : "bg-red-300 cursor-not-allowed"}`}
+                                  >
+                                    Force Delete
+                                  </button>
                                 </div>
                               </div>
-                            );
-                          })()}
-                      </Card>
-                    </Col>
-                  </Grid>
-                </TabPanel>
+                            </div>
+                          );
+                        })()}
+                    </Card>
+                  </Col>
+                </Grid>
+              </TabPanel>
+              <TabPanel>
+                <AvailableTeamsPanel accessToken={accessToken} userID={userID} />
+              </TabPanel>
+              {isAdminRole(userRole || "") && (
                 <TabPanel>
-                  <AvailableTeamsPanel accessToken={accessToken} userID={userID} />
+                  <TeamSSOSettings accessToken={accessToken} userID={userID || ""} userRole={userRole || ""} />
                 </TabPanel>
-                {isAdminRole(userRole || "") && (
-                  <TabPanel>
-                    <TeamSSOSettings accessToken={accessToken} userID={userID || ""} userRole={userRole || ""} />
-                  </TabPanel>
-                )}
-              </TabPanels>
-            </TabGroup>
+              )}
+            </TeamsHeaderTabs>
           )}
           {(userRole == "Admin" || userRole == "Org Admin") && (
             <Modal
@@ -1285,9 +1135,9 @@ const Teams: React.FC<TeamProps> = ({
                         <Input type="hidden" />
                       </Form.Item>
 
-                      <Form.Item 
+                      <Form.Item
                         noStyle
-                        shouldUpdate={(prevValues, currentValues) => 
+                        shouldUpdate={(prevValues, currentValues) =>
                           prevValues.allowed_mcp_servers_and_groups !== currentValues.allowed_mcp_servers_and_groups ||
                           prevValues.mcp_tool_permissions !== currentValues.mcp_tool_permissions
                         }
