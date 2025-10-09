@@ -657,7 +657,13 @@ class AsyncHTTPHandler:
         )
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
-                connector=TCPConnector(**connector_kwargs),
+                connector=TCPConnector(
+                    limit=0,  # 0 = unlimited connections per host
+                    keepalive_timeout=120,  # Keep connections alive for 2 minutes (default is 15s)
+                    ttl_dns_cache=300,  # Cache DNS for 5 minutes
+                    enable_cleanup_closed=True,
+                    **connector_kwargs
+                ),
                 trust_env=trust_env,
             ),
         )

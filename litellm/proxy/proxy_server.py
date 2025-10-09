@@ -44,6 +44,7 @@ from litellm.types.utils import (
 from litellm.utils import load_credentials_from_list
 
 if TYPE_CHECKING:
+    from aiohttp import ClientSession
     from opentelemetry.trace import Span as _Span
 
     from litellm.integrations.opentelemetry import OpenTelemetry
@@ -559,7 +560,7 @@ async def proxy_shutdown_event():
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval, shared_aiohttp_session
     import json
 
     init_verbose_loggers()
@@ -674,10 +675,39 @@ async def proxy_startup_event(app: FastAPI):
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
+    ## Initialize shared aiohttp session for connection reuse
+    try:
+        from aiohttp import ClientSession, TCPConnector
+        
+        # Create connector with connection pooling settings optimized for long-lived connections
+        connector = TCPConnector(
+            limit=100,  # Max 100 connections per host
+            keepalive_timeout=120,  # Keep connections alive for 2 minutes (prevents "once in a while" cold starts)
+            ttl_dns_cache=300,  # Cache DNS for 5 minutes
+            enable_cleanup_closed=True,
+            force_close=False,  # Don't force close connections after each request
+        )
+        
+        shared_aiohttp_session = ClientSession(connector=connector)
+        verbose_proxy_logger.info(
+            f"🔄 SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(shared_aiohttp_session)})"
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"⚠️ Failed to create shared aiohttp session: {e}. Continuing without session reuse."
+        )
+
     # End of startup event
     yield
 
-    # Shutdown event
+    # Shutdown event - close shared aiohttp session
+    if shared_aiohttp_session is not None:
+        try:
+            await shared_aiohttp_session.close()
+            verbose_proxy_logger.info("🔄 SESSION REUSE: Closed shared aiohttp session")
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error closing shared aiohttp session: {e}")
+    
     await proxy_shutdown_event()
 
 
@@ -955,6 +985,7 @@ worker_config = None
 master_key: Optional[str] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
+shared_aiohttp_session: Optional["ClientSession"] = None  # Global shared session for connection reuse
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
