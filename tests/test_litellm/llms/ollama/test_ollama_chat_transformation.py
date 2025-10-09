@@ -1,6 +1,7 @@
 import inspect
 import os
 import sys
+from typing import cast
 
 import pytest
 from pydantic import BaseModel
@@ -10,6 +11,7 @@ sys.path.insert(
 )
 
 from litellm.llms.ollama.chat.transformation import OllamaChatConfig
+from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_optional_params
 
 
@@ -101,3 +103,228 @@ class TestOllamaChatConfigResponseFormat:
             # Clean up class attributes
             delattr(litellm.OllamaChatConfig, "num_ctx")
             delattr(litellm.OllamaChatConfig, "temperature")
+
+    def test_transform_request_content_list_to_string(self):
+        """Test that content list is properly converted to string in transform_request"""
+        config = OllamaChatConfig()
+
+        # Test message with content as list containing text
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Hello "},
+                        {"type": "text", "text": "world!"},
+                    ],
+                }
+            ],
+        )
+
+        result = config.transform_request(
+            model="llama2",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        # Verify content was converted to string
+        assert len(result["messages"]) == 1
+        assert result["messages"][0]["content"] == "Hello world!"
+        assert result["messages"][0]["role"] == "user"
+
+    def test_transform_request_content_string_passthrough(self):
+        """Test that string content passes through unchanged in transform_request"""
+        config = OllamaChatConfig()
+
+        # Test message with content as string
+        messages = cast(
+            list[AllMessageValues], [{"role": "user", "content": "Hello world!"}]
+        )
+
+        result = config.transform_request(
+            model="llama2",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        # Verify string content passes through
+        assert len(result["messages"]) == 1
+        assert result["messages"][0]["content"] == "Hello world!"
+        assert result["messages"][0]["role"] == "user"
+
+    def test_transform_request_empty_content_list(self):
+        """Test handling of empty content list in transform_request"""
+        config = OllamaChatConfig()
+
+        # Test message with empty content list
+        messages = cast(list[AllMessageValues], [{"role": "user", "content": []}])
+
+        result = config.transform_request(
+            model="llama2",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        # Verify empty content becomes empty string
+        assert len(result["messages"]) == 1
+        assert result["messages"][0]["content"] == ""
+        assert result["messages"][0]["role"] == "user"
+
+    def test_transform_request_image_extraction(self):
+        """Test that images are properly extracted from messages in transform_request"""
+        config = OllamaChatConfig()
+
+        # Test message with images in content list
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What's in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ..."
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+
+        result = config.transform_request(
+            model="llama2",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        # Verify text content was extracted
+        assert len(result["messages"]) == 1
+        assert result["messages"][0]["content"] == "What's in this image?"
+        assert result["messages"][0]["role"] == "user"
+
+        # Verify image was extracted to images list
+        assert "images" in result["messages"][0]
+        assert len(result["messages"][0]["images"]) == 1
+        assert (
+            result["messages"][0]["images"][0]
+            == "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ..."
+        )
+
+    def test_transform_request_multiple_images_extraction(self):
+        """Test extraction of multiple images from a single message"""
+        config = OllamaChatConfig()
+
+        # Test message with multiple images
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Compare these images:"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/jpeg;base64,image1data..."
+                            },
+                        },
+                        {"type": "text", "text": " and "},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,image2data..."},
+                        },
+                    ],
+                }
+            ],
+        )
+
+        result = config.transform_request(
+            model="llama2",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        # Verify text content was combined
+        assert result["messages"][0]["content"] == "Compare these images: and "
+
+        # Verify both images were extracted
+        assert "images" in result["messages"][0]
+        assert len(result["messages"][0]["images"]) == 2
+        assert (
+            result["messages"][0]["images"][0] == "data:image/jpeg;base64,image1data..."
+        )
+        assert (
+            result["messages"][0]["images"][1] == "data:image/png;base64,image2data..."
+        )
+
+    def test_transform_request_image_url_as_string(self):
+        """Test handling of image_url as direct string (edge case)"""
+        config = OllamaChatConfig()
+
+        # Test message with image_url as string (edge case from extract_images_from_message)
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Check this:"},
+                        {
+                            "type": "image_url",
+                            "image_url": "https://example.com/image.jpg",
+                        },
+                    ],
+                }
+            ],
+        )
+
+        result = config.transform_request(
+            model="llama2",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        # Verify image URL was extracted
+        assert "images" in result["messages"][0]
+        assert len(result["messages"][0]["images"]) == 1
+        assert result["messages"][0]["images"][0] == "https://example.com/image.jpg"
+
+    def test_transform_request_no_images_no_images_key(self):
+        """Test that messages without images don't have images key"""
+        config = OllamaChatConfig()
+
+        # Test message with no images
+        messages = cast(
+            list[AllMessageValues],
+            [{"role": "user", "content": [{"type": "text", "text": "Just text here"}]}],
+        )
+
+        result = config.transform_request(
+            model="llama2",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        # Verify no images key when no images present
+        assert result["messages"][0]["content"] == "Just text here"
+        # Since extract_images_from_message returns empty list [] when no images found,
+        # and the code checks "if images is not None", an empty list will still be set
+        assert "images" in result["messages"][0]
+        assert result["messages"][0]["images"] == []

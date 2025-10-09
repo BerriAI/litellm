@@ -7,6 +7,7 @@ This logger sends ``StandardLoggingPayload`` entries to an AWS SQS queue.
 from __future__ import annotations
 
 import asyncio
+import traceback
 from typing import List, Optional
 
 import litellm
@@ -199,6 +200,25 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             )
         except Exception as e:
             verbose_logger.exception(f"sqs Layer Error - {str(e)}")
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            standard_logging_payload = kwargs.get("standard_logging_object")
+            if standard_logging_payload is None:
+                raise ValueError("standard_logging_payload is None")
+
+            self.log_queue.append(standard_logging_payload)
+            verbose_logger.debug(
+                "sqs logging: queue length %s, batch size %s",
+                len(self.log_queue),
+                self.batch_size,
+            )
+
+        except Exception as e:
+            verbose_logger.exception(
+                f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
+            )
+            pass
 
     async def async_send_batch(self) -> None:
         verbose_logger.debug(

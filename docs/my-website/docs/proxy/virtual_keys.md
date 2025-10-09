@@ -66,6 +66,50 @@ curl 'http://0.0.0.0:4000/key/generate' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4"], "metadata": {"user": "ishaan@berri.ai"}}'
 ```
 
+## 🔁 Scheduled Key Rotations (NEW in v1.77.5)
+
+LiteLLM can now rotate **virtual keys automatically** on a schedule you define.
+
+### How it works
+1. When creating a virtual key you set `rotation_schedule` – a [cron expression](https://crontab.guru/).
+2. LiteLLM stores the schedule in the DB and runs a background job that regenerates the key at the specified time.
+3. Existing key string is invalidated; a **notification webhook** (if configured) is sent with the new key value.
+
+### Create a key with rotation
+
+```bash
+curl 'http://0.0.0.0:4000/key/generate' \
+  -H 'Authorization: Bearer <your-master-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "models": ["gpt-4o"],
+        "rotation_schedule": "0 0 * * SUN",   # rotate every Sunday at 00:00 UTC
+        "webhook_url": "https://example.com/key-rotated"
+      }'
+```
+
+### Enable globally via env
+
+Set these env vars when starting the proxy:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LITELLM_KEY_ROTATION_ENABLED` | Enable the rotation worker | `false` |
+| `LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS` | How often to scan for keys to rotate | `86400` |
+
+### Webhook payload
+
+```json
+{
+  "event": "virtual_key.rotated",
+  "old_key_id": "sk-abc...",
+  "new_key": "sk-def...",
+  "rotation_time": "2025-10-05T00:00:00Z"
+}
+```
+
+If no `webhook_url` is provided the new key value is returned in the response of the `/key/rotate` REST call instead.
+
 ## Spend Tracking 
 
 Get spend per:

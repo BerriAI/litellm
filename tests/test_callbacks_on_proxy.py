@@ -108,7 +108,7 @@ async def test_check_num_callbacks():
     -> sleep for 30 seconds
     -> check current callbacks
     """
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         await asyncio.sleep(30)
@@ -158,7 +158,7 @@ async def test_check_num_callbacks_on_lowest_latency():
     -> check current callbacks
     -> update back to original routing-strategy
     """
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         await asyncio.sleep(30)

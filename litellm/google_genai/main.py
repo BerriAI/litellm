@@ -85,7 +85,6 @@ class GenerateContentHelper:
         contents: GenerateContentContentListUnionDict,
         config: Optional[GenerateContentConfigDict] = None,
         custom_llm_provider: Optional[str] = None,
-        stream: bool = False,
         tools: Optional[ToolConfigDict] = None,
         **kwargs,
     ) -> GenerateContentSetupResult:
@@ -97,8 +96,7 @@ class GenerateContentHelper:
             contents: The content to generate from
             config: Optional configuration
             custom_llm_provider: Optional custom LLM provider
-            stream: Whether this is a streaming call
-            local_vars: Local variables from the calling function
+            tools: Optional tools
             **kwargs: Additional keyword arguments
 
         Returns:
@@ -114,7 +112,7 @@ class GenerateContentHelper:
 
         ## MOCK RESPONSE LOGIC (only for non-streaming)
         if (
-            not stream
+            not kwargs.get("stream", False)
             and litellm_params.mock_response
             and isinstance(litellm_params.mock_response, str)
         ):
@@ -289,7 +287,7 @@ def generate_content(
     """
     local_vars = locals()
     try:
-        _is_async = kwargs.pop("agenerate_content", False) is True
+        _is_async = kwargs.pop("agenerate_content", False)
 
         # Handle generationConfig parameter from kwargs for backward compatibility
         if "generationConfig" in kwargs and config is None:
@@ -309,7 +307,6 @@ def generate_content(
             contents=contents,
             config=config,
             custom_llm_provider=custom_llm_provider,
-            stream=False,
             tools=tools,
             **kwargs,
         )
@@ -321,7 +318,7 @@ def generate_content(
                 model=model,
                 contents=contents,  # type: ignore
                 config=setup_result.generate_content_config_dict,
-                stream=False,
+                tools=tools,
                 _is_async=_is_async,
                 litellm_params=setup_result.litellm_params,
                 **kwargs,
@@ -342,7 +339,6 @@ def generate_content(
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
-            stream=False,
             litellm_metadata=kwargs.get("litellm_metadata", {}),
         )
 
@@ -391,15 +387,12 @@ async def agenerate_content_stream(
 
         # Setup the call
         setup_result = GenerateContentHelper.setup_generate_content_call(
-            **{
-                "model": model,
-                "contents": contents,
-                "config": config,
-                "custom_llm_provider": custom_llm_provider,
-                "stream": True,
-                "tools": tools,
-                **kwargs,
-            }
+            model=model,
+            contents=contents,
+            config=config,
+            custom_llm_provider=custom_llm_provider,
+            tools=tools,
+            **kwargs,
         )
 
         # Check if we should use the adapter (when provider config is None)
@@ -411,6 +404,7 @@ async def agenerate_content_stream(
                     contents=contents,  # type: ignore
                     config=setup_result.generate_content_config_dict,
                     litellm_params=setup_result.litellm_params,
+                    tools=tools,
                     stream=True,
                     **kwargs,
                 )
@@ -479,7 +473,6 @@ def generate_content_stream(
             contents=contents,
             config=config,
             custom_llm_provider=custom_llm_provider,
-            stream=True,
             tools=tools,
             **kwargs,
         )
@@ -491,9 +484,9 @@ def generate_content_stream(
                 model=model,
                 contents=contents,  # type: ignore
                 config=setup_result.generate_content_config_dict,
-                stream=True,
                 _is_async=_is_async,
                 litellm_params=setup_result.litellm_params,
+                stream=True,
                 **kwargs,
             )
 

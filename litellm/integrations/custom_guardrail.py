@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Type, Union, get_args
+from typing import Any, Dict, List, Optional, Type, Union, get_args
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -14,6 +14,7 @@ from litellm.types.guardrails import (
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
     CallTypes,
+    GuardrailStatus,
     LLMResponseTypes,
     StandardLoggingGuardrailInformation,
 )
@@ -352,11 +353,12 @@ class CustomGuardrail(CustomLogger):
         self,
         guardrail_json_response: Union[Exception, str, dict, List[dict]],
         request_data: dict,
-        guardrail_status: Literal["success", "failure", "blocked"],
+        guardrail_status: GuardrailStatus,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         duration: Optional[float] = None,
         masked_entity_count: Optional[Dict[str, int]] = None,
+        guardrail_provider: Optional[str] = None,
     ) -> None:
         """
         Builds `StandardLoggingGuardrailInformation` and adds it to the request metadata so it can be used for logging to DataDog, Langfuse, etc.
@@ -367,6 +369,7 @@ class CustomGuardrail(CustomLogger):
 
         slg = StandardLoggingGuardrailInformation(
             guardrail_name=self.guardrail_name,
+            guardrail_provider=guardrail_provider,
             guardrail_mode=(
                 GuardrailMode(**self.event_hook.model_dump())  # type: ignore
                 if isinstance(self.event_hook, Mode)
@@ -458,7 +461,7 @@ class CustomGuardrail(CustomLogger):
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=e,
             request_data=request_data,
-            guardrail_status="failure",
+            guardrail_status="guardrail_failed_to_respond",
             duration=duration,
             start_time=start_time,
             end_time=end_time,
@@ -487,7 +490,8 @@ class CustomGuardrail(CustomLogger):
         """
         Update the guardrails litellm params in memory
         """
-        pass
+        for key, value in vars(litellm_params).items():
+            setattr(self, key, value)
 
 
 def log_guardrail_information(func):

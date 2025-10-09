@@ -171,7 +171,7 @@ class TeamMemberPermissionChecks:
         """
         all_available_permissions = []
         for route in LiteLLMRoutes.key_management_routes.value:
-            all_available_permissions.append(route.value)
+            all_available_permissions.append(route)
         return all_available_permissions
 
     @staticmethod

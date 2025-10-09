@@ -14,6 +14,7 @@ import litellm
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
+    ImageGenerationPartialImageEvent,
     OutputTextDeltaEvent,
     ResponseCompletedEvent,
     ResponsesAPIRequestParams,
@@ -281,6 +282,113 @@ class TestOpenAIResponsesAPIConfig:
         )
         assert isinstance(result, GenericEvent)
         assert result.type == "test"
+
+    def test_get_event_model_class_image_generation_partial_image(self):
+        """Test that get_event_model_class returns ImageGenerationPartialImageEvent for image generation events"""
+        event_type = ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
+        result = self.config.get_event_model_class(event_type)
+        assert result == ImageGenerationPartialImageEvent
+
+    def test_transform_streaming_response_image_generation_partial_image(self):
+        """Test streaming response transformation for image generation partial image events"""
+        # Test with a partial image event - simulating OpenAI's streaming image generation
+        chunk = {
+            "type": "image_generation.partial_image",
+            "partial_image_index": 0,
+            "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",  # 1x1 red pixel PNG
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=chunk, logging_obj=self.logging_obj
+        )
+
+        # Verify the result is the correct event type
+        assert isinstance(result, ImageGenerationPartialImageEvent)
+        assert result.type == ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
+        assert result.partial_image_index == 0
+        assert result.b64_json == chunk["b64_json"]
+        assert len(result.b64_json) > 0  # Verify we have image data
+
+    def test_transform_streaming_response_multiple_partial_images(self):
+        """Test streaming response with multiple partial images (simulating progressive image generation)"""
+        # Test with multiple partial images (as would happen with partial_images=2 or 3)
+        test_cases = [
+            {
+                "type": "image_generation.partial_image",
+                "partial_image_index": 0,
+                "b64_json": "base64data_partial_0",
+            },
+            {
+                "type": "image_generation.partial_image",
+                "partial_image_index": 1,
+                "b64_json": "base64data_partial_1",
+            },
+            {
+                "type": "image_generation.partial_image",
+                "partial_image_index": 2,
+                "b64_json": "base64data_partial_2",
+            },
+        ]
+
+        for idx, chunk in enumerate(test_cases):
+            result = self.config.transform_streaming_response(
+                model=self.model, parsed_chunk=chunk, logging_obj=self.logging_obj
+            )
+
+            assert isinstance(result, ImageGenerationPartialImageEvent)
+            assert result.type == ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
+            assert result.partial_image_index == idx
+            assert result.b64_json == chunk["b64_json"]
+
+    def test_transform_responses_api_request_with_partial_images_param(self):
+        """Test request transformation with partial_images parameter for streaming image generation"""
+        input_text = "Generate a beautiful landscape"
+        optional_params = {
+            "temperature": 0.7,
+            "stream": True,
+            "partial_images": 2,  # Request 2 partial images during generation
+        }
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_text,
+            response_api_optional_request_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        # Validate the result includes partial_images parameter
+        expected_fields = {
+            "model": self.model,
+            "input": input_text,
+            "temperature": 0.7,
+            "stream": True,
+            "partial_images": 2,
+        }
+
+        self.validate_responses_api_request_params(result, expected_fields)
+
+    def test_partial_images_parameter_validation(self):
+        """Test that partial_images parameter accepts valid values (1-3)"""
+        input_text = "Generate an image"
+
+        # Test with different valid partial_images values
+        for partial_images_value in [1, 2, 3]:
+            optional_params = {
+                "stream": True,
+                "partial_images": partial_images_value,
+            }
+
+            result = self.config.transform_responses_api_request(
+                model=self.model,
+                input=input_text,
+                response_api_optional_request_params=optional_params,
+                litellm_params={},
+                headers={},
+            )
+
+            assert result["partial_images"] == partial_images_value
+            assert result["stream"] is True
 
 
 class TestAzureResponsesAPIConfig:

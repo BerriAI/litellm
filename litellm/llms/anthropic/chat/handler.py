@@ -51,6 +51,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
     Usage,
+    _generate_id,
 )
 
 from ...base import BaseLLM
@@ -490,6 +491,8 @@ class ModelResponseIterator:
         self.content_blocks: List[ContentBlockDelta] = []
         self.tool_index = -1
         self.json_mode = json_mode
+        # Generate response ID once per stream to match OpenAI-compatible behavior
+        self.response_id = _generate_id()
 
         # Track if we're currently streaming a response_format tool
         self.is_response_format_tool: bool = False
@@ -765,6 +768,7 @@ class ModelResponseIterator:
                     )
                 ],
                 usage=usage,
+                id=self.response_id,
             )
 
             return returned_chunk
@@ -936,4 +940,4 @@ class ModelResponseIterator:
             data_json = json.loads(str_line[5:])
             return self.chunk_parser(chunk=data_json)
         else:
-            return ModelResponseStream()
+            return ModelResponseStream(id=self.response_id)

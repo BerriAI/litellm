@@ -364,3 +364,53 @@ async def test_should_check_cold_storage_for_full_payload():
     with patch.object(litellm, 'configured_cold_storage_logger', None):
         result5 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
         assert result5 == False, "Should return False when cold storage is not configured, even with truncated content"
+
+
+@pytest.mark.asyncio
+async def test_get_chat_completion_message_history_empty_response_dict():
+    """
+    Test that empty response dict is handled correctly without processing.
+    This tests the fix for response validation to check for empty dict responses.
+    """
+    from unittest.mock import AsyncMock, patch
+    
+    # Mock spend logs with empty response dict
+    mock_spend_logs = [
+        {
+            "request_id": "chatcmpl-test-empty-response",
+            "call_type": "aresponses", 
+            "api_key": "test_key",
+            "spend": 0.001,
+            "total_tokens": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "startTime": "2025-01-15T10:30:00.000+00:00",
+            "endTime": "2025-01-15T10:30:01.000+00:00",
+            "model": "gpt-4",
+            "session_id": "test-session",
+            "proxy_server_request": {
+                "input": "test input",
+                "model": "gpt-4"
+            },
+            "response": {}  # Empty dict - should not be processed
+        }
+    ]
+    
+    with patch.object(ResponsesSessionHandler, "get_all_spend_logs_for_previous_response_id") as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = mock_spend_logs
+        
+        # Call the function
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "chatcmpl-test-empty-response"
+        )
+        
+        # Verify that user message was added but no assistant response
+        # Since response is empty dict, no assistant response should be processed
+        # But user input from proxy_server_request should still be included
+        messages = result["messages"]
+        assert len(messages) == 1  # Only user message, no assistant response
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"] == "test input"
+        
+        # Verify the session was still created correctly
+        assert result["litellm_session_id"] == "test-session"

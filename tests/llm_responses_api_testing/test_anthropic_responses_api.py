@@ -34,14 +34,19 @@ class TestAnthropicResponsesAPITest(BaseResponsesAPITest):
         }
     
     async def test_basic_openai_responses_delete_endpoint(self, sync_mode=False):
-        pass
+        pytest.skip("DELETE responses is not supported for anthropic")
     
     async def test_basic_openai_responses_streaming_delete_endpoint(self, sync_mode=False):
-        pass
+        pytest.skip("DELETE responses is not supported for anthropic")
 
     async def test_basic_openai_responses_get_endpoint(self, sync_mode=False):
-        pass
-    
+        pytest.skip("GET responses is not supported for anthropic")
+
+    async def test_basic_openai_responses_cancel_endpoint(self, sync_mode=False):
+        pytest.skip("CANCEL responses is not supported for anthropic")
+
+    async def test_cancel_responses_invalid_response_id(self, sync_mode=False):
+        pytest.skip("CANCEL responses is not supported for anthropic")
 
 
 

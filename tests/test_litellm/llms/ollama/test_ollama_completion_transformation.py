@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-import uuid
+from litellm._uuid import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest

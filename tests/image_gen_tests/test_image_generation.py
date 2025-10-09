@@ -118,19 +118,6 @@ class TestVertexImageGeneration(BaseImageGenTest):
             "n": 1,
         }
 
-
-class TestBedrockSd3(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        litellm.in_memory_llm_clients_cache = InMemoryCache()
-        return {"model": "bedrock/stability.sd3-large-v1:0"}
-
-
-class TestBedrockSd1(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        litellm.in_memory_llm_clients_cache = InMemoryCache()
-        return {"model": "bedrock/stability.sd3-large-v1:0"}
-
-
 class TestBedrockNovaCanvasTextToImage(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.in_memory_llm_clients_cache = InMemoryCache()

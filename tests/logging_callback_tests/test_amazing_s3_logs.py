@@ -384,7 +384,7 @@ async def make_async_calls():
     for _ in range(5):
         task = asyncio.create_task(
             litellm.acompletion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-nano",
                 messages=[{"role": "user", "content": "This is a test"}],
                 max_tokens=5,
                 temperature=0.7,

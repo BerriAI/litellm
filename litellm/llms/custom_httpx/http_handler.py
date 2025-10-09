@@ -164,26 +164,27 @@ class AsyncHTTPHandler:
         self,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]] = None,
-        concurrent_limit=1000,
+        concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
+        shared_session: Optional["ClientSession"] = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
         self.client = self.create_client(
             timeout=timeout,
-            concurrent_limit=concurrent_limit,
             event_hooks=event_hooks,
             ssl_verify=ssl_verify,
+            shared_session=shared_session,
         )
         self.client_alias = client_alias
 
     def create_client(
         self,
         timeout: Optional[Union[float, httpx.Timeout]],
-        concurrent_limit: int,
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> httpx.AsyncClient:
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration(ssl_verify)
@@ -199,16 +200,13 @@ class AsyncHTTPHandler:
         transport = AsyncHTTPHandler._create_async_transport(
             ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
+            shared_session=shared_session,
         )
 
         return httpx.AsyncClient(
             transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
-            limits=httpx.Limits(
-                max_connections=concurrent_limit,
-                max_keepalive_connections=concurrent_limit,
-            ),
             verify=ssl_config,
             cert=cert,
             headers=headers,
@@ -260,7 +258,6 @@ class AsyncHTTPHandler:
         files: Optional[RequestFiles] = None,
         content: Any = None,
     ):
-
         start_time = time.time()
         try:
             if timeout is None:
@@ -283,7 +280,7 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+                timeout=timeout, event_hooks=self.event_hooks
             )
             try:
                 return await self.single_connection_post_request(
@@ -349,7 +346,7 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+                timeout=timeout, event_hooks=self.event_hooks
             )
             try:
                 return await self.single_connection_post_request(
@@ -409,7 +406,7 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+                timeout=timeout, event_hooks=self.event_hooks
             )
             try:
                 return await self.single_connection_post_request(
@@ -468,7 +465,7 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+                timeout=timeout, event_hooks=self.event_hooks
             )
             try:
                 return await self.single_connection_post_request(
@@ -523,7 +520,9 @@ class AsyncHTTPHandler:
 
     @staticmethod
     def _create_async_transport(
-        ssl_context: Optional[ssl.SSLContext] = None, ssl_verify: Optional[bool] = None
+        ssl_context: Optional[ssl.SSLContext] = None,
+        ssl_verify: Optional[bool] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Optional[Union[LiteLLMAiohttpTransport, AsyncHTTPTransport]]:
         """
         - Creates a transport for httpx.AsyncClient
@@ -544,7 +543,9 @@ class AsyncHTTPHandler:
         #########################################################
         if AsyncHTTPHandler._should_use_aiohttp_transport():
             return AsyncHTTPHandler._create_aiohttp_transport(
-                ssl_context=ssl_context, ssl_verify=ssl_verify
+                ssl_context=ssl_context,
+                ssl_verify=ssl_verify,
+                shared_session=shared_session,
             )
 
         #########################################################
@@ -612,6 +613,7 @@ class AsyncHTTPHandler:
     def _create_aiohttp_transport(
         ssl_verify: Optional[bool] = None,
         ssl_context: Optional[ssl.SSLContext] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> LiteLLMAiohttpTransport:
         """
         Creates an AiohttpTransport with RequestNotRead error handling
@@ -635,9 +637,21 @@ class AsyncHTTPHandler:
             trust_env = True
 
         verbose_logger.debug("Creating AiohttpTransport...")
+
+        # Use shared session if provided and valid
+        if shared_session is not None and not shared_session.closed:
+            verbose_logger.debug(
+                f"SHARED SESSION: Reusing existing ClientSession (ID: {id(shared_session)})"
+            )
+            return LiteLLMAiohttpTransport(client=shared_session)
+
+        # Create new session only if none provided or existing one is invalid
+        verbose_logger.debug(
+            "NEW SESSION: Creating new ClientSession (no shared session provided)"
+        )
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
-                connector=TCPConnector(**connector_kwargs),
+                connector=TCPConnector(limit=0, **connector_kwargs),  # 0 = unlimited connections per host
                 trust_env=trust_env,
             ),
         )
@@ -660,7 +674,7 @@ class HTTPHandler:
     def __init__(
         self,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
-        concurrent_limit=1000,
+        concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
         client: Optional[httpx.Client] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ):
@@ -681,10 +695,6 @@ class HTTPHandler:
             self.client = httpx.Client(
                 transport=transport,
                 timeout=timeout,
-                limits=httpx.Limits(
-                    max_connections=concurrent_limit,
-                    max_keepalive_connections=concurrent_limit,
-                ),
                 verify=ssl_config,
                 cert=cert,
                 headers=headers,
@@ -915,12 +925,13 @@ class HTTPHandler:
         if litellm.force_ipv4:
             return HTTPTransport(local_address="0.0.0.0")
         else:
-            return None
+            return getattr(litellm, 'sync_transport', None)
 
 
 def get_async_httpx_client(
     llm_provider: Union[LlmProviders, httpxSpecialProvider],
     params: Optional[dict] = None,
+    shared_session: Optional["ClientSession"] = None,
 ) -> AsyncHTTPHandler:
     """
     Retrieves the async HTTP client from the cache
@@ -942,10 +953,12 @@ def get_async_httpx_client(
         return _cached_client
 
     if params is not None:
+        params["shared_session"] = shared_session
         _new_client = AsyncHTTPHandler(**params)
     else:
         _new_client = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+            timeout=httpx.Timeout(timeout=600.0, connect=5.0),
+            shared_session=shared_session,
         )
 
     litellm.in_memory_llm_clients_cache.set_cache(

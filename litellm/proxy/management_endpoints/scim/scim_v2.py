@@ -4,8 +4,8 @@
 This is an enterprise feature and requires a premium license.
 """
 
-import uuid
-from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
+from litellm._uuid import uuid
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import (
     APIRouter,
@@ -17,6 +17,8 @@ from fastapi import (
     Request,
     Response,
 )
+from typing_extensions import TypedDict
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -28,6 +30,7 @@ from litellm.proxy._types import (
     Member,
     NewTeamRequest,
     NewUserRequest,
+    NewUserResponse,
     TeamMemberAddRequest,
     TeamMemberDeleteRequest,
     UserAPIKeyAuth,
@@ -98,6 +101,13 @@ class ScimUserData(TypedDict):
     given_name: Optional[str]
     family_name: Optional[str]
     active: Optional[bool]
+
+
+class GroupMemberExtractionResult(BaseModel):
+    """Result of extracting and processing group members."""
+    existing_member_ids: List[str]
+    created_users: List[NewUserResponse]
+    all_member_ids: List[str]  # existing + newly created
 
 
 scim_router = APIRouter(
@@ -189,21 +199,47 @@ def _build_scim_metadata(given_name: Optional[str], family_name: Optional[str], 
     return metadata
 
 
-async def _extract_group_member_ids(group: SCIMGroup) -> List[str]:
-    """Extract valid member IDs from SCIMGroup, verifying users exist."""
+async def _extract_group_member_ids(group: SCIMGroup) -> GroupMemberExtractionResult:
+    """
+    Extract member IDs from SCIMGroup, creating users that don't exist.
+    
+    Returns:
+        GroupMemberExtractionResult with existing members, created users, and all member IDs
+    """
     prisma_client = await _get_prisma_client_or_raise_exception()
-    member_ids = []
+    existing_member_ids = []
+    created_users = []
+    all_member_ids = []
     
     if group.members:
         for member in group.members:
+            user_id = member.value
+            
             # Check if user exists
             user = await prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": member.value}
+                where={"user_id": user_id}
             )
+            
             if user:
-                member_ids.append(member.value)
+                existing_member_ids.append(user_id)
+                all_member_ids.append(user_id)
+            else:
+                # Create the user if they don't exist using our helper
+                created_user = await _create_user_if_not_exists(
+                    user_id=user_id, 
+                    created_via="scim_group_membership"
+                )
+                
+                if created_user:
+                    created_users.append(created_user)
+                    all_member_ids.append(user_id)
+                # If creation failed, user is skipped (logged in helper)
     
-    return member_ids
+    return GroupMemberExtractionResult(
+        existing_member_ids=existing_member_ids,
+        created_users=created_users,
+        all_member_ids=all_member_ids
+    )
 
 
 async def _get_team_members_display(member_ids: List[str]) -> List[SCIMMember]:
@@ -238,6 +274,51 @@ async def _handle_team_membership_changes(user_id: str, existing_teams: List[str
         )
 
 
+async def _create_user_if_not_exists(user_id: str, created_via: str = "scim_group") -> Optional[NewUserResponse]:
+    """
+    Helper function to create a user if they don't exist.
+    
+    Args:
+        user_id: The user ID to create
+        created_via: Context for where the user was created from
+        
+    Returns:
+        LiteLLM_UserTable if user was created, None if creation failed
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+    
+    try:
+        # Get default role for new internal users
+        default_role: Optional[
+            Literal[
+                LitellmUserRoles.PROXY_ADMIN,
+                LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+                LitellmUserRoles.INTERNAL_USER,
+                LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+            ]
+        ] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        if litellm.default_internal_user_params:
+            default_role = litellm.default_internal_user_params.get("user_role")
+
+        new_user_request = NewUserRequest(
+            user_id=user_id,
+            user_email=user_id,  # We don't have email from group membership
+            user_alias=None,
+            teams=[],  # Teams will be added separately
+            metadata={"created_via": created_via},
+            auto_create_key=False,
+            user_role=default_role,
+        )
+
+        created_user = await new_user(data=new_user_request)
+        verbose_proxy_logger.info(f"Created user {user_id} via {created_via}")
+        return created_user
+        
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Failed to create user {user_id}: {e}")
+        return None
+
+
 async def _get_team_member_user_ids_from_team(team: LiteLLM_TeamTable) -> List[str]:
     """
     Get the IDs of the members from a team.
@@ -254,6 +335,8 @@ async def _get_team_member_user_ids_from_team(team: LiteLLM_TeamTable) -> List[s
             if user_id is not None:
                 member_user_ids.append(user_id)
     return member_user_ids
+
+
 
 # Dependency to set the correct SCIM Content-Type
 async def set_scim_content_type(response: Response):
@@ -913,9 +996,9 @@ async def create_group(
                 detail={"error": f"Group already exists with ID: {team_id}"},
             )
 
-        # Extract valid member IDs  
-        member_ids = await _extract_group_member_ids(group)
-        members_with_roles = [Member(user_id=member_id, role="user") for member_id in member_ids]
+        # Extract and process group members (creating users that don't exist)
+        member_result = await _extract_group_member_ids(group)
+        members_with_roles = [Member(user_id=member_id, role="user") for member_id in member_result.all_member_ids]
 
         # Create team in database
         created_team = await new_team(
@@ -958,9 +1041,10 @@ async def update_group(
         prisma_client = await _get_prisma_client_or_raise_exception()
         existing_team = await _check_team_exists(group_id)
 
-        # Extract valid member IDs
-        member_ids = await _extract_group_member_ids(group)
-        verbose_proxy_logger.debug(f"SCIM PUT GROUP member_ids: {member_ids}")
+        # Extract and process group members (creating users that don't exist)
+        member_result = await _extract_group_member_ids(group)
+        verbose_proxy_logger.debug(f"SCIM PUT GROUP all_member_ids: {member_result.all_member_ids}")
+        verbose_proxy_logger.debug(f"SCIM PUT GROUP created_users: {len(member_result.created_users)}")
 
         # Prepare update data
         existing_metadata = existing_team.metadata if existing_team.metadata else {}
@@ -977,10 +1061,10 @@ async def update_group(
             data=update_data,
         )
 
-        # Handle user-team relationship changes using the same approach as patch_group
+        # Handle user-team relationship changes
         current_members = set(await _get_team_member_user_ids_from_team(existing_team))
         verbose_proxy_logger.debug(f"SCIM PUT GROUP current_members: {current_members}")
-        final_members = set(member_ids)
+        final_members = set(member_result.all_member_ids)
         verbose_proxy_logger.debug(f"SCIM PUT GROUP final_members: {final_members}")
         
         await _handle_group_membership_changes(
@@ -1074,7 +1158,7 @@ async def _process_group_patch_operations(
         elif path.startswith("members"):
             # Handle member operations
             member_values = _extract_group_values(value)
-            # Validate that users exist
+            # Create users that don't exist and get all valid member IDs
             valid_members = []
             for member_id in member_values:
                 user = await prisma_client.db.litellm_usertable.find_unique(
@@ -1082,6 +1166,16 @@ async def _process_group_patch_operations(
                 )
                 if user:
                     valid_members.append(member_id)
+                else:
+                    # Create the user if they don't exist using our helper
+                    created_user = await _create_user_if_not_exists(
+                        user_id=member_id,
+                        created_via="scim_group_patch"
+                    )
+                    
+                    if created_user:
+                        valid_members.append(member_id)
+                    # If creation failed, user is skipped (logged in helper)
             
             if op_type == "replace":
                 final_members = set(valid_members)

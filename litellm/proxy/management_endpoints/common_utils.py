@@ -43,7 +43,7 @@ def _set_object_metadata_field(
         value: Value to set for the field
     """
     if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        _premium_user_check()
+        _premium_user_check(field_name)
     object_data.metadata = object_data.metadata or {}
     object_data.metadata[field_name] = value
 
@@ -93,7 +93,7 @@ async def _upsert_budget_and_membership(
         create_data["tpm_limit"] = tpm_limit
     if rpm_limit is not None:
         create_data["rpm_limit"] = rpm_limit
-    
+
     new_budget = await tx.litellm_budgettable.create(
         data=create_data,
         include={"team_membership": True},

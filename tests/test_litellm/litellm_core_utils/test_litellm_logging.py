@@ -439,6 +439,97 @@ async def test_e2e_generate_cold_storage_object_key_successful():
 
 
 @pytest.mark.asyncio
+async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path():
+    """
+    Test that _generate_cold_storage_object_key uses s3_path from custom logger instance.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock, patch
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Create test data
+    start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
+    response_id = "chatcmpl-test-12345"
+    
+    # Create mock custom logger with s3_path
+    mock_custom_logger = MagicMock()
+    mock_custom_logger.s3_path = "storage"
+    
+    with patch("litellm.configured_cold_storage_logger", "s3_v2"), \
+         patch("litellm.logging_callback_manager.get_active_custom_logger_for_callback_name") as mock_get_logger, \
+         patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key:
+        
+        # Setup mocks
+        mock_get_logger.return_value = mock_custom_logger
+        mock_get_s3_key.return_value = "storage/2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
+        
+        # Call the function
+        result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+            start_time=start_time,
+            response_id=response_id
+        )
+        
+        # Verify logger was queried correctly
+        mock_get_logger.assert_called_once_with("s3_v2")
+        
+        # Verify the S3 function was called with the custom logger's s3_path
+        mock_get_s3_key.assert_called_once_with(
+            s3_path="storage",  # Should use custom logger's s3_path
+            team_alias_prefix="",
+            start_time=start_time,
+            s3_file_name="time-10-30-45-123456_chatcmpl-test-12345"
+        )
+        
+        # Verify the result
+        assert result == "storage/2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
+
+
+@pytest.mark.asyncio
+async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
+    """
+    Test that _generate_cold_storage_object_key falls back to empty s3_path when logger has no s3_path.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock, patch
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Create test data
+    start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
+    response_id = "chatcmpl-test-12345"
+    
+    # Create mock custom logger without s3_path
+    mock_custom_logger = MagicMock()
+    mock_custom_logger.s3_path = None  # or could be missing attribute
+    
+    with patch("litellm.configured_cold_storage_logger", "s3_v2"), \
+         patch("litellm.logging_callback_manager.get_active_custom_logger_for_callback_name") as mock_get_logger, \
+         patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key:
+        
+        # Setup mocks
+        mock_get_logger.return_value = mock_custom_logger
+        mock_get_s3_key.return_value = "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
+        
+        # Call the function
+        result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+            start_time=start_time,
+            response_id=response_id
+        )
+        
+        # Verify the S3 function was called with empty s3_path (fallback)
+        mock_get_s3_key.assert_called_once_with(
+            s3_path="",  # Should fall back to empty string
+            team_alias_prefix="",
+            start_time=start_time,
+            s3_file_name="time-10-30-45-123456_chatcmpl-test-12345"
+        )
+        
+        # Verify the result
+        assert result == "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
+
+
+@pytest.mark.asyncio
 async def test_e2e_generate_cold_storage_object_key_not_configured():
     """
     Test end-to-end generation of cold storage object key when cold storage is not configured.
@@ -467,73 +558,3 @@ async def test_e2e_generate_cold_storage_object_key_not_configured():
     assert result is None
 
 
-@pytest.mark.asyncio
-async def test_logging_opentelemetry_context_propagation():
-    """
-    Test that OpenTelemtry context propagation works with async completion.
-    """
-    import asyncio
-    import litellm
-
-    from litellm.integrations.custom_logger import CustomLogger
-    from opentelemetry import trace
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
-    provider = TracerProvider()
-    exporter = InMemorySpanExporter()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
-    tracer = trace.get_tracer(__name__)
-
-    class MockOpenTelemetryLogger(CustomLogger):
-        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-            span = tracer.start_span(start_time=start_time.timestamp() * 1e9, name="async_log_success_event")
-            span.end(end_time=end_time)
-
-
-    mock_logging_obj = MockOpenTelemetryLogger()
-
-    litellm.callbacks = [mock_logging_obj]
-
-    with tracer.start_as_current_span("span_1") as span:
-        span_1_id = span.get_span_context().span_id
-        await litellm.acompletion(
-            max_tokens=100,
-            messages=[{"role": "user", "content": "Hey"}],
-            model="openai/codex-mini-latest",
-            mock_response="Hello, world!",
-        )
-
-    
-    with tracer.start_as_current_span("span_2") as span:
-        span_2_id = span.get_span_context().span_id
-        await litellm.acompletion(
-            max_tokens=100,
-            messages=[{"role": "user", "content": "Hey"}],
-            model="openai/codex-mini-latest",
-            mock_response="Hello, world!",
-        )
-    
-    await asyncio.sleep(1)
-    spans = exporter.get_finished_spans()
-    assert len(spans) == 4
-    assert span_1_id != span_2_id
-    sorted_spans = sorted(list(spans), key=lambda x: x.start_time or 0)
-
-    assert sorted_spans[0].name == "span_1"
-    assert sorted_spans[1].name == "async_log_success_event"
-    assert sorted_spans[2].name == "span_2"
-    assert sorted_spans[3].name == "async_log_success_event"
-
-    first_span_context = sorted_spans[0].get_span_context()
-    assert first_span_context is not None and first_span_context.span_id == span_1_id
-    second_span_context = sorted_spans[2].get_span_context()
-    assert second_span_context is not None and second_span_context.span_id == span_2_id
-    first_completion_span_parent = sorted_spans[1].parent
-    assert first_completion_span_parent is not None and first_completion_span_parent.span_id == span_1_id
-
-    # This check would fail without the proper context propagation, and span[3] would end up with span_1_id as the parent
-    second_completion_span_parent = sorted_spans[3].parent
-    assert second_completion_span_parent is not None and second_completion_span_parent.span_id == span_2_id

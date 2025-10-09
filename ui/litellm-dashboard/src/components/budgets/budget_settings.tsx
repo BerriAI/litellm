@@ -23,24 +23,9 @@ import {
   AccordionHeader,
   AccordionList,
 } from "@tremor/react";
-import {
-  TabPanel,
-  TabPanels,
-  TabGroup,
-  TabList,
-  Tab,
-  Icon,
-} from "@tremor/react";
+import { TabPanel, TabPanels, TabGroup, TabList, Tab, Icon } from "@tremor/react";
 import { getBudgetSettings } from "../networking";
-import {
-  Modal,
-  Form,
-  Input,
-  Select,
-  Button as Button2,
-  message,
-  InputNumber,
-} from "antd";
+import { Modal, Form, Input, Select, Button as Button2, message, InputNumber } from "antd";
 import {
   InformationCircleIcon,
   PencilAltIcon,
@@ -68,9 +53,7 @@ interface budgetSettingsItem {
 }
 
 const BudgetSettings: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
-  const [budgetSettings, setBudgetSettings] = useState<budgetSettingsItem[]>(
-    []
-  );
+  const [budgetSettings, setBudgetSettings] = useState<budgetSettingsItem[]>([]);
   useEffect(() => {
     if (!accessToken) {
       return;
@@ -85,9 +68,7 @@ const BudgetSettings: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   const handleInputChange = (fieldName: string, newValue: any) => {
     // Update the value in the state
     const updatedSettings = budgetSettings.map((setting) =>
-      setting.field_name === fieldName
-        ? { ...setting, field_value: newValue }
-        : setting
+      setting.field_name === fieldName ? { ...setting, field_value: newValue } : setting,
     );
     setBudgetSettings(updatedSettings);
   };
@@ -104,9 +85,7 @@ const BudgetSettings: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
     }
     try {
       const updatedSettings = budgetSettings.map((setting) =>
-        setting.field_name === fieldName
-          ? { ...setting, stored_in_db: true }
-          : setting
+        setting.field_name === fieldName ? { ...setting, stored_in_db: true } : setting,
       );
       setBudgetSettings(updatedSettings);
     } catch (error) {
@@ -121,9 +100,7 @@ const BudgetSettings: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
 
     try {
       const updatedSettings = budgetSettings.map((setting) =>
-        setting.field_name === fieldName
-          ? { ...setting, stored_in_db: null, field_value: null }
-          : setting
+        setting.field_name === fieldName ? { ...setting, stored_in_db: null, field_value: null } : setting,
       );
       setBudgetSettings(updatedSettings);
     } catch (error) {
@@ -162,23 +139,13 @@ const BudgetSettings: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                     <InputNumber
                       step={1}
                       value={value.field_value}
-                      onChange={(newValue) =>
-                        handleInputChange(value.field_name, newValue)
-                      } // Handle value change
+                      onChange={(newValue) => handleInputChange(value.field_name, newValue)} // Handle value change
                     />
                   ) : null}
                 </TableCell>
                 <TableCell>
-                  <Button
-                    onClick={() => handleUpdateField(value.field_name, index)}
-                  >
-                    Update
-                  </Button>
-                  <Icon
-                    icon={TrashIcon}
-                    color="red"
-                    onClick={() => handleResetField(value.field_name, index)}
-                  >
+                  <Button onClick={() => handleUpdateField(value.field_name, index)}>Update</Button>
+                  <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name, index)}>
                     Reset
                   </Icon>
                 </TableCell>

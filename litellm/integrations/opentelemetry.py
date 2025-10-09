@@ -575,9 +575,16 @@ class OpenTelemetry(CustomLogger):
         if litellm.turn_off_message_logging or not self.message_logging:
             return
 
+        litellm_params = kwargs.get("litellm_params", {})
+        metadata = litellm_params.get("metadata") or {}
+        generation_name = metadata.get("generation_name")
+
+        raw_span_name = generation_name if generation_name else RAW_REQUEST_SPAN_NAME
+
+
         otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
         raw_span = otel_tracer.start_span(
-            name=RAW_REQUEST_SPAN_NAME,
+            name=raw_span_name,
             start_time=self._to_ns(start_time),
             context=trace.set_span_in_context(parent_span),
         )
@@ -645,7 +652,7 @@ class OpenTelemetry(CustomLogger):
         if not self.config.enable_events:
             return
 
-        from opentelemetry._logs import get_logger, LogRecord
+        from opentelemetry._logs import LogRecord, get_logger
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
 
         parent_ctx = span.get_span_context()
@@ -1115,56 +1122,68 @@ class OpenTelemetry(CustomLogger):
         span.set_attribute(key, primitive_value)
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
-        kwargs.get("optional_params", {})
-        litellm_params = kwargs.get("litellm_params", {}) or {}
-        custom_llm_provider = litellm_params.get("custom_llm_provider", "Unknown")
+        try:
+            kwargs.get("optional_params", {})
+            litellm_params = kwargs.get("litellm_params", {}) or {}
+            custom_llm_provider = litellm_params.get("custom_llm_provider", "Unknown")
 
-        _raw_response = kwargs.get("original_response")
-        _additional_args = kwargs.get("additional_args", {}) or {}
-        complete_input_dict = _additional_args.get("complete_input_dict")
-        #############################################
-        ########## LLM Request Attributes ###########
-        #############################################
+            _raw_response = kwargs.get("original_response")
+            _additional_args = kwargs.get("additional_args", {}) or {}
+            complete_input_dict = _additional_args.get("complete_input_dict")
+            #############################################
+            ########## LLM Request Attributes ###########
+            #############################################
 
-        # OTEL Attributes for the RAW Request to https://docs.anthropic.com/en/api/messages
-        if complete_input_dict and isinstance(complete_input_dict, dict):
-            for param, val in complete_input_dict.items():
-                self.safe_set_attribute(
-                    span=span, key=f"llm.{custom_llm_provider}.{param}", value=val
-                )
+            # OTEL Attributes for the RAW Request to https://docs.anthropic.com/en/api/messages
+            if complete_input_dict and isinstance(complete_input_dict, dict):
+                for param, val in complete_input_dict.items():
+                    self.safe_set_attribute(
+                        span=span, key=f"llm.{custom_llm_provider}.{param}", value=val
+                    )
 
-        #############################################
-        ########## LLM Response Attributes ##########
-        #############################################
-        if _raw_response and isinstance(_raw_response, str):
-            # cast sr -> dict
-            import json
+            #############################################
+            ########## LLM Response Attributes ##########
+            #############################################
+            if _raw_response and isinstance(_raw_response, str):
+                # cast sr -> dict
+                import json
 
-            try:
-                _raw_response = json.loads(_raw_response)
-                for param, val in _raw_response.items():
+                try:
+                    _raw_response = json.loads(_raw_response)
+                    for param, val in _raw_response.items():
+                        self.safe_set_attribute(
+                            span=span,
+                            key=f"llm.{custom_llm_provider}.{param}",
+                            value=val,
+                        )
+                except json.JSONDecodeError:
+                    verbose_logger.debug(
+                        "litellm.integrations.opentelemetry.py::set_raw_request_attributes() - raw_response not json string - {}".format(
+                            _raw_response
+                        )
+                    )
+
                     self.safe_set_attribute(
                         span=span,
-                        key=f"llm.{custom_llm_provider}.{param}",
-                        value=val,
+                        key=f"llm.{custom_llm_provider}.stringified_raw_response",
+                        value=_raw_response,
                     )
-            except json.JSONDecodeError:
-                verbose_logger.debug(
-                    "litellm.integrations.opentelemetry.py::set_raw_request_attributes() - raw_response not json string - {}".format(
-                        _raw_response
-                    )
-                )
-
-                self.safe_set_attribute(
-                    span=span,
-                    key=f"llm.{custom_llm_provider}.stringified_raw_response",
-                    value=_raw_response,
-                )
+        except Exception as e:
+            verbose_logger.exception(
+                "OpenTelemetry logging error in set_raw_request_attributes %s", str(e)
+            )
 
     def _to_ns(self, dt):
         return int(dt.timestamp() * 1e9)
 
     def _get_span_name(self, kwargs):
+        litellm_params = kwargs.get("litellm_params", {})
+        metadata = litellm_params.get("metadata") or {}
+        generation_name = metadata.get("generation_name")
+
+        if generation_name:
+            return generation_name
+
         return LITELLM_REQUEST_SPAN_NAME
 
     def get_traceparent_from_header(self, headers):

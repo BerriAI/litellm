@@ -40,4 +40,4 @@ jobs:
         cd ..
     - name: Run tests
       run: |
-        poetry run pytest tests/test_litellm -x -vv -n 4 
+        poetry run pytest tests/test_litellm --tb=short -vv --maxfail=10 -n 4 

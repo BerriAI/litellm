@@ -32,6 +32,7 @@ ignored_keys = [
     "metadata.model_map_information",
     "metadata.usage_object",
     "metadata.cold_storage_object_key",
+    "metadata.additional_usage_values.prompt_tokens_details.cache_creation_tokens",
 ]
 
 MODEL_LIST = [

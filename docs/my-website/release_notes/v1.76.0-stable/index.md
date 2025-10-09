@@ -1,5 +1,5 @@
 ---
-title: "[PRE-RELEASE]v1.76.0-stable - RPS Improvements"
+title: "v1.76.0-stable - RPS Improvements"
 slug: "v1-76-0"
 date: 2025-08-23T10:00:00
 authors:

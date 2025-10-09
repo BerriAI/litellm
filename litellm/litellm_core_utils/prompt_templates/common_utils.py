@@ -14,6 +14,7 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Tuple,
     Union,
     cast,
 )
@@ -869,3 +870,63 @@ def convert_prefix_message_to_non_prefix_messages(
         else:
             new_messages.append(message)
     return new_messages
+
+
+def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Extract reasoning content and main content from a message.
+
+    Args:
+        message (dict): The message dictionary that may contain reasoning_content
+
+    Returns:
+        tuple[Optional[str], Optional[str]]: A tuple of (reasoning_content, content)
+    """
+    message_content = message.get("content")
+    if "reasoning_content" in message:
+        return message["reasoning_content"], message["content"]
+    elif "reasoning" in message:
+        return message["reasoning"], message["content"]
+    elif isinstance(message_content, str):
+        return _parse_content_for_reasoning(message_content)
+    return None, message_content
+
+
+def _parse_content_for_reasoning(
+    message_text: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Parse the content for reasoning
+
+    Returns:
+    - reasoning_content: The content of the reasoning
+    - content: The content of the message
+    """
+    if not message_text:
+        return None, message_text
+
+    reasoning_match = re.match(
+        r"<(?:think|thinking)>(.*?)</(?:think|thinking)>(.*)", message_text, re.DOTALL
+    )
+
+    if reasoning_match:
+        return reasoning_match.group(1), reasoning_match.group(2)
+
+    return None, message_text
+
+
+def extract_images_from_message(message: AllMessageValues) -> List[str]:
+    """
+    Extract images from a message
+    """
+    images = []
+    message_content = message.get("content")
+    if isinstance(message_content, list):
+        for m in message_content:
+            image_url = m.get("image_url")
+            if image_url:
+                if isinstance(image_url, str):
+                    images.append(image_url)
+                elif isinstance(image_url, dict) and "url" in image_url:
+                    images.append(image_url["url"])
+    return images

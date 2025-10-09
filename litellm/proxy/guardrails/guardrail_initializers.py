@@ -123,3 +123,18 @@ def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail)
     return _secret_detection_object
 
 
+def initialize_tool_permission(litellm_params: LitellmParams, guardrail: Guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.tool_permission import (
+        ToolPermissionGuardrail,
+    )
+
+    _tool_permission_callback = ToolPermissionGuardrail(
+        guardrail_name=guardrail.get("guardrail_name", ""),
+        event_hook=litellm_params.mode,
+        rules=litellm_params.rules,
+        default_action=getattr(litellm_params, "default_action", "deny"),
+        on_disallowed_action=getattr(litellm_params, "on_disallowed_action", "block"),
+        default_on=litellm_params.default_on,
+    )
+    litellm.logging_callback_manager.add_litellm_callback(_tool_permission_callback)
+    return _tool_permission_callback

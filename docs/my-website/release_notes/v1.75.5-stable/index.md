@@ -50,6 +50,7 @@ pip install litellm==1.75.5.post2
 - **Oracle Cloud Infrastructure** - New LLM provider for calling models on Oracle Cloud Infrastructure.
 - **Digital Ocean's Gradient AI** - New LLM provider for calling models on Digital Ocean's Gradient AI platform.
 
+---
 
 ### Risk of Upgrade
 

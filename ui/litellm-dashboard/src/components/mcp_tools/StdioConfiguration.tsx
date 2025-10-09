@@ -35,7 +35,7 @@ const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible }) =>
         },
       ]}
     >
-      <Input.TextArea 
+      <Input.TextArea
         placeholder={`{
   "mcpServers": {
     "circleci-mcp-server": {
@@ -55,4 +55,4 @@ const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible }) =>
   );
 };
 
-export default StdioConfiguration; 
+export default StdioConfiguration;

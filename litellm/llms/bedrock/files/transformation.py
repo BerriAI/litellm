@@ -1,7 +1,7 @@
 import json
 import os
 import time
-import uuid
+from litellm._uuid import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from httpx import Headers, Response

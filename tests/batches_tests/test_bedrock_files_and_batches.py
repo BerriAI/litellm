@@ -75,6 +75,19 @@ async def test_async_file_and_batch():
     )
     print("CREATED BATCH RESPONSE=", create_batch_response)
 
+    # retrieve batch
+    retrieve_batch_response = await litellm.aretrieve_batch(
+        batch_id=create_batch_response.id,
+        custom_llm_provider="bedrock",
+        model="us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+    )
+    print("RETRIEVED BATCH RESPONSE=", retrieve_batch_response)
+    
+    # Validate the response
+    assert retrieve_batch_response.id == create_batch_response.id
+    assert retrieve_batch_response.object == "batch"
+    assert retrieve_batch_response.status in ["validating", "in_progress", "completed", "failed", "cancelled"]
+
 
 @pytest.mark.asyncio()
 async def test_mock_bedrock_file_url_mapping():
@@ -117,4 +130,66 @@ async def test_mock_bedrock_file_url_mapping():
         bedrock_config = BedrockFilesConfig()
         expected_s3_uri, _ = bedrock_config._convert_https_url_to_s3_uri(captured_put_url)
         assert file_obj.id == expected_s3_uri
+
+
+@pytest.mark.asyncio()
+async def test_bedrock_retrieve_batch():
+    """
+    Test bedrock batch retrieval functionality, validating that input and output file IDs 
+    are correctly extracted from the Bedrock response and included in the final transformed response.
+    """
+    print("Testing bedrock batch retrieval")
+    
+    # Mock bedrock batch response
+    mock_bedrock_response = {
+        "jobArn": "arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/test-job-123",
+        "jobName": "test-job-123",
+        "modelId": "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "roleArn": "arn:aws:iam::123456789012:role/service-role/AmazonBedrockExecutionRoleForAgents_TEST",
+        "status": "InProgress",
+        "message": "Job is in progress",
+        "submitTime": "2024-01-01T12:00:00Z",
+        "lastModifiedTime": "2024-01-01T12:30:00Z",
+        "inputDataConfig": {
+            "s3InputDataConfig": {
+                "s3Uri": "s3://test-bucket/input/test-input.jsonl"
+            }
+        },
+        "outputDataConfig": {
+            "s3OutputDataConfig": {
+                "s3Uri": "s3://test-bucket/output/"
+            }
+        }
+    }
+    
+    # Mock the HTTP response
+    mock_response = MagicMock()
+    mock_response.json.return_value = mock_bedrock_response
+    mock_response.status_code = 200
+    
+    # Print the mock response to debug
+    print("MOCK RESPONSE DATA:", mock_bedrock_response)
+    
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get") as mock_get:
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+        
+        # Test retrieve batch
+        batch_response = await litellm.aretrieve_batch(
+            batch_id="arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/test-job-123",
+            custom_llm_provider="bedrock",
+            model="us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        )
+        
+        print("MOCKED BATCH RESPONSE=", batch_response)
+        
+        # Validate the response
+        assert batch_response.id == "arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/test-job-123"
+        assert batch_response.object == "batch"
+        assert batch_response.status == "in_progress"  # Bedrock "InProgress" maps to "in_progress"
+        assert batch_response.endpoint == "/v1/chat/completions"
+        
+        # Validate input and output file IDs in the final transformed response
+        assert batch_response.input_file_id == "s3://test-bucket/input/test-input.jsonl"
+        assert batch_response.output_file_id == "s3://test-bucket/output/"
 

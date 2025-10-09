@@ -729,7 +729,7 @@ def azure_openai_test_completion():
     try:
         # OVERRIDE WITH DYNAMIC MAX TOKENS
         response_1 = litellm.completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=[
                 {
                     "content": "Hello, how are you? Be as verbose as possible",
@@ -743,7 +743,7 @@ def azure_openai_test_completion():
 
         # USE CONFIG TOKENS
         response_2 = litellm.completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=[
                 {
                     "content": "Hello, how are you? Be as verbose as possible",

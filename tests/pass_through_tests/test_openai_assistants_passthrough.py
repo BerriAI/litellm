@@ -96,3 +96,42 @@ def test_openai_assistants_e2e_operations_stream():
         event_handler=EventHandler(),
     ) as stream:
         stream.until_done()
+
+
+
+def test_azure_openai_assistants_e2e_operations_stream():
+    from openai import AzureOpenAI
+    client = AzureOpenAI(
+        base_url="http://0.0.0.0:4000/azure-config-passthrough/openai", 
+        api_key="sk-1234",
+        api_version="2025-01-01-preview"
+    )
+    assistant = client.beta.assistants.create(
+        name="Math Tutor",
+        instructions="You are a personal math tutor. Write and run code to answer math questions.",
+        tools=[{"type": "code_interpreter"}],
+        model="gpt-4o",
+    )
+    print("assistant created", assistant)
+
+    thread = client.beta.threads.create()
+    print("thread created", thread)
+
+    message = client.beta.threads.messages.create(
+        thread_id=thread.id,
+        role="user",
+        content="I need to solve the equation `3x + 11 = 14`. Can you help me?",
+    )
+    print("message created", message)
+
+    # Then, we use the `stream` SDK helper
+    # with the `EventHandler` class to create the Run
+    # and stream the response.
+
+    with client.beta.threads.runs.stream(
+        thread_id=thread.id,
+        assistant_id=assistant.id,
+        instructions="Please address the user as Jane Doe. The user has a premium account.",
+        event_handler=EventHandler(),
+    ) as stream:
+        stream.until_done()

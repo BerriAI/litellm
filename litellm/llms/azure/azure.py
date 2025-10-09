@@ -182,12 +182,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         model: str,
         messages: list,
         model_response: ModelResponse,
-        api_key: str,
+        api_key: Optional[str],
         api_base: str,
         api_version: str,
         api_type: str,
-        azure_ad_token: str,
-        azure_ad_token_provider: Callable,
+        azure_ad_token: Optional[str],
+        azure_ad_token_provider: Optional[Callable],
         dynamic_params: bool,
         print_verbose: Callable,
         timeout: Union[float, httpx.Timeout],
@@ -372,7 +372,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
     async def acompletion(
         self,
-        api_key: str,
+        api_key: Optional[str],
         api_version: str,
         model: str,
         api_base: str,
@@ -477,7 +477,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         self,
         logging_obj,
         api_base: str,
-        api_key: str,
+        api_key: Optional[str],
         api_version: str,
         dynamic_params: bool,
         data: dict,
@@ -555,7 +555,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         self,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        api_key: str,
+        api_key: Optional[str],
         api_version: str,
         dynamic_params: bool,
         data: dict,
@@ -1116,6 +1116,14 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 raise AzureOpenAIError(
                     status_code=422, message="max retries must be an int"
                 )
+
+            if api_key is None and azure_ad_token_provider is not None:
+                azure_ad_token = azure_ad_token_provider()
+                if azure_ad_token:
+                    headers.pop(
+                        "api-key", None
+                    )
+                    headers["Authorization"] = f"Bearer {azure_ad_token}"
 
             # init AzureOpenAI Client
             azure_client_params: Dict[str, Any] = self.initialize_azure_sdk_client(

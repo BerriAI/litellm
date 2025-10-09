@@ -158,6 +158,7 @@ def _setup_timezone(
                 "US/Eastern": timezone(timedelta(hours=-4)),  # EDT
                 "US/Pacific": timezone(timedelta(hours=-7)),  # PDT
                 "Asia/Kolkata": timezone(timedelta(hours=5, minutes=30)),  # IST
+                "Asia/Bangkok": timezone(timedelta(hours=7)),  # ICT (Indochina Time)
                 "Europe/London": timezone(timedelta(hours=1)),  # BST
                 "UTC": timezone.utc,
             }

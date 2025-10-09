@@ -8,6 +8,7 @@
 | gpt-3.5-turbo-16k    | `completion('gpt-3.5-turbo-16k', messages)` | `os.environ['OPENAI_API_KEY']`       |
 | gpt-3.5-turbo-16k-0613    | `completion('gpt-3.5-turbo-16k-0613', messages)` | `os.environ['OPENAI_API_KEY']`       |
 | gpt-4            | `completion('gpt-4', messages)`         | `os.environ['OPENAI_API_KEY']`       |
+| gpt-5-pro        | `completion('gpt-5-pro', messages)`    | `os.environ['OPENAI_API_KEY']`       |
 
 ## Azure OpenAI Chat Completion Models
 For Azure calls add the `azure/` prefix to `model`. If your azure deployment name is `gpt-v-2` set `model` = `azure/gpt-v-2`

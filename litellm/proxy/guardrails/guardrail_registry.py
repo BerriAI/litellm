@@ -2,7 +2,7 @@
 
 import importlib
 import os
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Type, cast
 
@@ -26,6 +26,7 @@ from .guardrail_initializers import (
     initialize_lakera,
     initialize_lakera_v2,
     initialize_presidio,
+    initialize_tool_permission,
 )
 
 guardrail_initializer_registry = {
@@ -34,6 +35,7 @@ guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.LAKERA_V2.value: initialize_lakera_v2,
     SupportedGuardrailIntegrations.PRESIDIO.value: initialize_presidio,
     SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,
+    SupportedGuardrailIntegrations.TOOL_PERMISSION.value: initialize_tool_permission,
 }
 
 guardrail_class_registry: Dict[str, Type[CustomGuardrail]] = {}

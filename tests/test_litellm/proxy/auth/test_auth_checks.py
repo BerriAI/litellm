@@ -28,6 +28,7 @@ from litellm.proxy.auth.auth_checks import (
     _can_object_call_vector_stores,
     get_user_object,
     vector_store_access_check,
+    _get_team_db_check,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.utils import get_utc_datetime
@@ -190,6 +191,64 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     assert creation_args["models"] == ["gpt-4", "claude-3-opus"]
     assert creation_args["max_budget"] == 200.0
     assert creation_args["user_role"] == "internal_user"
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock)
+async def test_get_team_db_check_calls_new_team_on_upsert(mock_new_team, monkeypatch):
+    """
+    Test that _get_team_db_check correctly calls the `new_team` function
+    when a team does not exist and upsert is enabled.
+    """
+    mock_prisma_client = MagicMock()
+    mock_db = AsyncMock()
+    mock_prisma_client.db = mock_db
+    mock_prisma_client.db.litellm_teamtable.find_unique.return_value = None
+
+    # Define what our mocked `new_team` function should return
+    team_id_to_create = "new-jwt-team"
+    mock_new_team.return_value = {"team_id": team_id_to_create, "max_budget": 123.45}
+
+    await _get_team_db_check(
+        team_id=team_id_to_create,
+        prisma_client=mock_prisma_client,
+        team_id_upsert=True,
+    )
+
+    # Verify that our mocked `new_team` function was called exactly once
+    mock_new_team.assert_called_once()
+
+    call_args = mock_new_team.call_args[1]
+    data_arg = call_args["data"]
+
+    # Verify that `new_team` was called with the correct team_id and that
+    # `max_budget` was None, as our function's job is to delegate, not to set defaults.
+    assert data_arg.team_id == team_id_to_create
+    assert data_arg.max_budget is None
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock)
+async def test_get_team_db_check_does_not_call_new_team_if_exists(mock_new_team, monkeypatch):
+    """
+    Test that _get_team_db_check does NOT call the `new_team` function
+    if the team already exists in the database.
+    """
+    mock_prisma_client = MagicMock()
+    mock_db = AsyncMock()
+    mock_prisma_client.db = mock_db
+    mock_prisma_client.db.litellm_teamtable.find_unique.return_value = MagicMock()
+
+    team_id_to_find = "existing-jwt-team"
+
+    await _get_team_db_check(
+        team_id=team_id_to_find,
+        prisma_client=mock_prisma_client,
+        team_id_upsert=True,
+    )
+
+    # Verify that `new_team` was NEVER called, because the team was found.
+    mock_new_team.assert_not_called()
 
 
 # Vector Store Auth Check Tests

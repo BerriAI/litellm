@@ -41,6 +41,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
+    NewTeamRequest,
     ProxyErrorTypes,
     ProxyException,
     RoleBasedPermissions,
@@ -468,14 +469,10 @@ async def get_end_user_object(
     # check if in cache
     cached_user_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_user_obj is not None:
-        if isinstance(cached_user_obj, dict):
-            return_obj = LiteLLM_EndUserTable(**cached_user_obj)
-            check_in_budget(end_user_obj=return_obj)
-            return return_obj
-        elif isinstance(cached_user_obj, LiteLLM_EndUserTable):
-            return_obj = cached_user_obj
-            check_in_budget(end_user_obj=return_obj)
-            return return_obj
+        return_obj = LiteLLM_EndUserTable(**cached_user_obj)
+        check_in_budget(end_user_obj=return_obj)
+        return return_obj
+
     # else, check db
     try:
         response = await prisma_client.db.litellm_endusertable.find_unique(
@@ -486,9 +483,9 @@ async def get_end_user_object(
         if response is None:
             raise Exception
 
-        # save the end-user object to cache
+        # save the end-user object to cache (always store as dict for consistency)
         await user_api_key_cache.async_set_cache(
-            key="end_user_id:{}".format(end_user_id), value=response
+            key="end_user_id:{}".format(end_user_id), value=response.dict()
         )
 
         _response = LiteLLM_EndUserTable(**response.dict())
@@ -529,10 +526,7 @@ async def get_team_membership(
     # check if in cache
     cached_membership_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_membership_obj is not None:
-        if isinstance(cached_membership_obj, dict):
-            return LiteLLM_TeamMembership(**cached_membership_obj)
-        elif isinstance(cached_membership_obj, LiteLLM_TeamMembership):
-            return cached_membership_obj
+        return LiteLLM_TeamMembership(**cached_membership_obj)
 
     # else, check db
     try:
@@ -544,8 +538,8 @@ async def get_team_membership(
         if response is None:
             return None
 
-        # save the team membership object to cache
-        await user_api_key_cache.async_set_cache(key=_key, value=response)
+        # save the team membership object to cache (store as dict)
+        await user_api_key_cache.async_set_cache(key=_key, value=response.dict())
 
         _response = LiteLLM_TeamMembership(**response.dict())
 
@@ -821,8 +815,11 @@ async def _cache_management_object(
     user_api_key_cache: DualCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
+
     await user_api_key_cache.async_set_cache(
-        key=key, value=value, ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+        key=key,
+        value=value,
+        ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     )
 
 
@@ -889,10 +886,19 @@ async def _get_team_db_check(
     )
 
     if response is None and team_id_upsert:
-        response = await prisma_client.db.litellm_teamtable.create(
-            data={"team_id": team_id}
-        )
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
 
+        new_team_data = NewTeamRequest(team_id=team_id)
+
+        mock_request = Request(scope={"type": "http"})
+        system_admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        created_team_dict = await new_team(
+            data=new_team_data,
+            http_request=mock_request,
+            user_api_key_dict=system_admin_user,
+        )
+        response = LiteLLM_TeamTable(**created_team_dict)
     return response
 
 
@@ -1165,6 +1171,54 @@ async def get_key_object(
 
 
 @log_db_metrics
+async def get_object_permission(
+    object_permission_id: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> Optional[LiteLLM_ObjectPermissionTable]:
+    """
+    - Check if object permission id in proxy ObjectPermissionTable
+    - if valid, return LiteLLM_ObjectPermissionTable object
+    - if not, then raise an error
+    """
+    if prisma_client is None:
+        raise Exception(
+            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
+        )
+
+    # check if in cache
+    key = "object_permission_id:{}".format(object_permission_id)
+    cached_obj_permission = await user_api_key_cache.async_get_cache(key=key)
+    if cached_obj_permission is not None:
+        if isinstance(cached_obj_permission, dict):
+            return LiteLLM_ObjectPermissionTable(**cached_obj_permission)
+        elif isinstance(cached_obj_permission, LiteLLM_ObjectPermissionTable):
+            return cached_obj_permission
+
+    # else, check db
+    try:
+        response = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+            where={"object_permission_id": object_permission_id}
+        )
+
+        if response is None:
+            return None
+
+        # save the object permission to cache
+        await user_api_key_cache.async_set_cache(
+            key=key,
+            value=response.model_dump(),
+            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        )
+
+        return LiteLLM_ObjectPermissionTable(**response.dict())
+    except Exception:
+        return None
+
+
+@log_db_metrics
 async def get_org_object(
     org_id: str,
     prisma_client: Optional[PrismaClient],
@@ -1211,7 +1265,6 @@ def _check_model_access_helper(
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
     team_id: Optional[str] = None,
-    object_type: Literal["user", "team", "key", "org"] = "user",
 ) -> bool:
     ## check if model in allowed model names
     from collections import defaultdict
@@ -1316,7 +1369,6 @@ def _can_object_call_model(
             models=models,
             team_model_aliases=team_model_aliases,
             team_id=team_id,
-            object_type=object_type,
         ):
             return True
 

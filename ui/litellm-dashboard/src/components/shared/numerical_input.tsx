@@ -33,7 +33,7 @@ const NumericalInput: React.FC<NumericalInputProps> = ({
 }) => {
   return (
     <NumberInput
-      onWheel={ event => event.currentTarget.blur()}
+      onWheel={(event) => event.currentTarget.blur()}
       step={step}
       style={style}
       placeholder={placeholder}

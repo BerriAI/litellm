@@ -282,8 +282,8 @@ async def test_azure_ai_request_format():
 
     # Set up the test parameters
     api_key = os.getenv("AZURE_API_KEY")
-    api_base = f"{os.getenv('AZURE_API_BASE')}/openai/deployments/gpt-4o-new-test/chat/completions?api-version=2024-08-01-preview"
-    model = "azure_ai/gpt-4o"
+    api_base = os.getenv("AZURE_API_BASE")
+    model = "azure_ai/gpt-4.1-nano"
     messages = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "Hello! How can I assist you today?"},
@@ -313,3 +313,30 @@ async def test_azure_gpt5_reasoning(model):
     )
     print("response: ", response)
     assert response.choices[0].message.content is not None
+
+
+
+def test_completion_azure():
+    try:
+        from litellm import completion_cost
+        litellm.set_verbose = False
+        ## Test azure call
+        response = completion(
+            model="azure/gpt-4.1-nano",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hello, how are you?",
+                }
+            ],
+            api_key="os.environ/AZURE_API_KEY",
+        )
+        print(f"response: {response}")
+        print(f"response hidden params: {response._hidden_params}")
+        print(response)
+
+        cost = completion_cost(completion_response=response)
+        assert cost > 0.0
+        print("Cost for azure completion request", cost)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")

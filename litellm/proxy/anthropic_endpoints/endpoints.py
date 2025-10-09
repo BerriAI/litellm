@@ -120,7 +120,7 @@ async def anthropic_response(  # noqa: PLR0915
         ):  # model in router deployments, calling a specific deployment on the router
             llm_coro = llm_router.aanthropic_messages(**data, specific_deployment=True)
         elif (
-            llm_router is not None and data["model"] in llm_router.get_model_ids()
+            llm_router is not None and llm_router.has_model_id(data["model"])
         ):  # model in router model list
             llm_coro = llm_router.aanthropic_messages(**data)
         elif (

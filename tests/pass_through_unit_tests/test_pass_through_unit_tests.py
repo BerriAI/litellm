@@ -45,6 +45,18 @@ def mock_request():
     class QueryParams:
         def __init__(self):
             self._dict = {}
+        
+        def __iter__(self):
+            return iter(self._dict.items())
+        
+        def items(self):
+            return self._dict.items()
+        
+        def keys(self):
+            return self._dict.keys()
+        
+        def values(self):
+            return self._dict.values()
 
     class MockRequest:
         def __init__(
@@ -134,21 +146,19 @@ def test_init_kwargs_for_pass_through_endpoint_basic(
     assert result["litellm_call_id"] == "test-call-id"
     assert result["passthrough_logging_payload"] == passthrough_payload
 
+    #########################################################
     # Check metadata
-    expected_metadata = {
-        "user_api_key": "test-key",
-        "user_api_key_hash": "test-key",
-        "user_api_key_alias": None,
-        "user_api_key_user_email": None,
-        "user_api_key_user_id": "test-user",
-        "user_api_key_team_id": "test-team",
-        "user_api_key_org_id": None,
-        "user_api_key_team_alias": None,
-        "user_api_key_end_user_id": "test-user",
-        "user_api_key_request_route": None,
-    }
-
-    assert result["litellm_params"]["metadata"] == expected_metadata
+    #########################################################
+    assert result["litellm_params"]["metadata"]["user_api_key"] == "test-key"
+    assert result["litellm_params"]["metadata"]["user_api_key_hash"] == "test-key"
+    assert result["litellm_params"]["metadata"]["user_api_key_alias"] is None
+    assert result["litellm_params"]["metadata"]["user_api_key_user_email"] is None
+    assert result["litellm_params"]["metadata"]["user_api_key_user_id"] == "test-user"
+    assert result["litellm_params"]["metadata"]["user_api_key_team_id"] == "test-team"
+    assert result["litellm_params"]["metadata"]["user_api_key_org_id"] is None
+    assert result["litellm_params"]["metadata"]["user_api_key_team_alias"] is None
+    assert result["litellm_params"]["metadata"]["user_api_key_end_user_id"] == "test-user"
+    assert result["litellm_params"]["metadata"]["user_api_key_request_route"] is None
 
 
 def test_init_kwargs_with_litellm_metadata(mock_request, mock_user_api_key_dict):

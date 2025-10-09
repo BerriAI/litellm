@@ -1,13 +1,13 @@
 const { GoogleGenerativeAI, ModelParams, RequestOptions } = require("@google/generative-ai");
 
 const modelParams = {
-    model: 'gemini-1.5-pro',
+    model: 'gemini-2.5-flash-lite',
 };
   
 const requestOptions = {
     baseUrl: 'http://127.0.0.1:4000/gemini',
     customHeaders: {
-        "tags": "gemini-js-sdk,gemini-1.5-pro"
+        "tags": "gemini-js-sdk,gemini-2.5-flash-lite"
     }
 };
   

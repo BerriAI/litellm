@@ -240,6 +240,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
         UserAPIKeyLabelNames.ROUTE.value,
@@ -302,6 +303,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
     ]
 
     litellm_input_tokens_metric = [
@@ -312,6 +314,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
     ]
 
@@ -323,6 +326,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
     ]
 
@@ -334,6 +338,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
     ]
 
@@ -421,13 +426,13 @@ class PrometheusMetricLabels:
 
     # Buffer monitoring metrics - these typically don't need additional labels
     litellm_pod_lock_manager_size: List[str] = []
-    
+
     litellm_in_memory_daily_spend_update_queue_size: List[str] = []
-    
+
     litellm_redis_daily_spend_update_queue_size: List[str] = []
-    
+
     litellm_in_memory_spend_update_queue_size: List[str] = []
-    
+
     litellm_redis_spend_update_queue_size: List[str] = []
 
     @staticmethod

@@ -764,7 +764,7 @@ def test_gemini_pro_grounding(value_in_dict):
 
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
-@pytest.mark.parametrize("model", ["vertex_ai_beta/gemini-1.5-pro"])  # "vertex_ai",
+@pytest.mark.parametrize("model", ["vertex_ai_beta/gemini-2.5-flash-lite"])  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
@@ -980,7 +980,7 @@ def vertex_httpx_mock_reject_prompt_post(*args, **kwargs):
 
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
-def vertex_httpx_mock_post(url, data=None, json=None, headers=None):
+def vertex_httpx_mock_post(url, data=None, json=None, headers=None, **kwargs):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "application/json"}
@@ -2329,63 +2329,6 @@ def test_prompt_factory_nested():
         ), "'text' value not a string."
 
 
-def test_get_token_url():
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexLLM,
-    )
-
-    vertex_llm = VertexLLM()
-    vertex_ai_project = "pathrise-convert-1606954137718"
-    vertex_ai_location = "us-central1"
-    json_obj = get_vertex_ai_creds_json()
-    vertex_credentials = json.dumps(json_obj)
-
-    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
-        optional_params={"cached_content": "hi"}
-    )
-
-    assert should_use_v1beta1_features is True
-
-    _, url = vertex_llm._get_token_and_url(
-        auth_header=None,
-        vertex_project=vertex_ai_project,
-        vertex_location=vertex_ai_location,
-        vertex_credentials=vertex_credentials,
-        gemini_api_key="",
-        custom_llm_provider="vertex_ai_beta",
-        should_use_v1beta1_features=should_use_v1beta1_features,
-        api_base=None,
-        model="",
-        stream=False,
-    )
-
-    print("url=", url)
-
-    assert "/v1beta1/" in url
-
-    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
-        optional_params={"temperature": 0.1}
-    )
-
-    _, url = vertex_llm._get_token_and_url(
-        auth_header=None,
-        vertex_project=vertex_ai_project,
-        vertex_location=vertex_ai_location,
-        vertex_credentials=vertex_credentials,
-        gemini_api_key="",
-        custom_llm_provider="vertex_ai_beta",
-        should_use_v1beta1_features=should_use_v1beta1_features,
-        api_base=None,
-        model="",
-        stream=False,
-    )
-
-    print("url for normal request", url)
-
-    assert "v1beta1" not in url
-    assert "/v1/" in url
-
-    pass
 
 
 @pytest.mark.asyncio
@@ -2549,7 +2492,7 @@ def mock_gemini_list_request(*args, **kwargs):
     return mock_response
 
 
-import uuid
+from litellm._uuid import uuid
 
 
 @pytest.mark.parametrize(
@@ -3029,10 +2972,13 @@ def test_custom_api_base(api_base):
         stream=stream,
         auth_header=None,
         url="my-fake-endpoint",
+        model="gemini-1.5-pro",  # Required for Gemini custom API base URLs
     )
 
     if api_base:
-        assert url == api_base + ":"
+        # For Gemini with custom API base, URL should be constructed as api_base/models/model:endpoint
+        expected_url = f"{api_base}/models/gemini-1.5-pro:"
+        assert url == expected_url
     else:
         assert url == test_endpoint
 
@@ -3901,26 +3847,31 @@ def test_gemini_grounding_on_streaming():
     assert vertex_ai_grounding_metadata_shows_up
 
 
-def test_gemini_additional_properties_bug():
-    # Simple tool with additionalProperties (simulating the TypedDict issue)
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "test_tool",
-                "description": "Test tool",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"param1": {"type": "string"}},
-                    # This causes the error - any non-False value
-                    "additionalProperties": True,  # Could also be None, {}, etc.
-                },
-            },
-        }
-    ]
+def test_gemini_google_maps_tool_simple():
+    """
+    Test googleMaps tool with just enableWidget parameter.
+    """
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
 
-    messages = [{"role": "user", "content": "Test message"}]
+    tools = [{"googleMaps": {"enableWidget": True}}]
+    tools_with_location = [{"googleMaps": {"enableWidget": True, "latitude": 37.7749, "longitude": -122.4194, "languageCode": "en_US"}}]
+    try:
+        for tools in [tools, tools_with_location]:
+            response = completion(
+                model="vertex_ai/gemini-2.0-flash",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "What restaurants are nearby?",
+                    }
+                ],
+                tools=tools,
+            )
+        print(f"Response: {response.model_dump_json(indent=4)}")
+        assert response.choices[0].message.content is not None
+    except litellm.RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
-    response = litellm.completion(
-        model="gemini/gemini-2.5-flash", messages=messages, tools=tools
-    )

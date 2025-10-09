@@ -80,6 +80,8 @@ class XAIChatConfig(OpenAIGPTConfig):
             return False
         elif "grok-4" in model:
             return False
+        elif "grok-code-fast" in model:
+            return False
         return True
     
     def _supports_frequency_penalty(self, model: str) -> bool:

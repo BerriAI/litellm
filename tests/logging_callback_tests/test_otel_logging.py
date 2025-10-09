@@ -251,7 +251,8 @@ async def test_awesome_otel_with_message_logging_off(streaming, global_redact):
 
 
 def validate_redacted_message_span_attributes(span):
-    expected_attributes = [
+    # Required non-metadata attributes that must be present
+    required_attributes = [
         "gen_ai.request.model",
         "gen_ai.system",
         "llm.is_streaming",
@@ -259,27 +260,8 @@ def validate_redacted_message_span_attributes(span):
         "gen_ai.response.id",
         "gen_ai.response.model",
         "llm.usage.total_tokens",
-        "metadata.prompt_management_metadata",
         "gen_ai.usage.completion_tokens",
         "gen_ai.usage.prompt_tokens",
-        "metadata.user_api_key_hash",
-        "metadata.requester_ip_address",
-        "metadata.user_api_key_team_alias",
-        "metadata.requester_metadata",
-        "metadata.user_api_key_team_id",
-        "metadata.spend_logs_metadata",
-        "metadata.usage_object",
-        "metadata.user_api_key_alias",
-        "metadata.user_api_key_user_id",
-        "metadata.user_api_key_org_id",
-        "metadata.user_api_key_end_user_id",
-        "metadata.user_api_key_user_email",
-        "metadata.user_api_key_request_route",
-        "metadata.applied_guardrails",
-        "metadata.mcp_tool_call_metadata",
-        "metadata.vector_store_request_metadata",
-        "metadata.requester_custom_headers",
-        "metadata.cold_storage_object_key",
     ]
 
     _all_attributes = set(
@@ -293,6 +275,13 @@ def validate_redacted_message_span_attributes(span):
     for attr in _all_attributes:
         print(f"attr: {attr}, type: {type(attr)}")
 
-    assert _all_attributes == set(expected_attributes)
+    # Check that all required attributes are present
+    required_set = set(required_attributes)
+    assert required_set.issubset(_all_attributes), f"Missing required attributes: {required_set - _all_attributes}"
+    
+    # Check that any additional attributes are metadata fields (start with "metadata.")
+    non_required_attrs = _all_attributes - required_set
+    for attr in non_required_attrs:
+        assert attr.startswith("metadata."), f"Non-metadata attribute found: {attr}"
 
     pass

@@ -1,7 +1,7 @@
 import json
 import os
 import time
-import uuid
+from litellm._uuid import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from httpx import Headers, Response
@@ -261,10 +261,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             raise ValueError("file is required")
         extracted_file_data = extract_file_data(file_data)
         extracted_file_data_content = extracted_file_data.get("content")
-        
+
         if extracted_file_data_content is None:
             raise ValueError("file content is required")
-            
+
         if FilesAPIUtils.is_batch_jsonl_file(
             create_file_data=create_file_data,
             extracted_file_data=extracted_file_data,
@@ -283,7 +283,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                     openai_jsonl_content
                 )
             )
-            return json.dumps(vertex_jsonl_content)
+            return "\n".join(json.dumps(item) for item in vertex_jsonl_content)
         elif isinstance(extracted_file_data_content, bytes):
             return extracted_file_data_content
         else:

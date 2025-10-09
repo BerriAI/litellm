@@ -36,7 +36,7 @@ async def test_get_available_deployments():
         },
     ]
     lowest_cost_logger = LowestCostLoggingHandler(
-        router_cache=test_cache, model_list=model_list
+        router_cache=test_cache,
     )
     model_group = "gpt-3.5-turbo"
 
@@ -60,7 +60,7 @@ async def test_get_available_deployments_custom_price():
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {
-                "model": "azure/chatgpt-v-3",
+                "model": "azure/gpt-4.1-nano",
                 "input_cost_per_token": 0.00003,
                 "output_cost_per_token": 0.00003,
             },
@@ -86,7 +86,7 @@ async def test_get_available_deployments_custom_price():
         },
     ]
     lowest_cost_logger = LowestCostLoggingHandler(
-        router_cache=test_cache, model_list=model_list
+        router_cache=test_cache,
     )
     model_group = "gpt-3.5-turbo"
 
@@ -187,7 +187,7 @@ async def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
         },
     ]
     lowest_cost_logger = LowestCostLoggingHandler(
-        router_cache=test_cache, model_list=model_list
+        router_cache=test_cache
     )
     model_group = "gpt-3.5-turbo"
     d1 = [(lowest_cost_logger, "1234", 50, 0.01)] * non_ans_rpm
