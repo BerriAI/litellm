@@ -1029,7 +1029,6 @@ def test_update_config_fields():
     assert team_config["langfuse_secret"] == "my-fake-secret"
 
 
-
 def test_update_config_fields_default_internal_user_params(monkeypatch):
     from litellm.proxy.proxy_server import ProxyConfig
 
