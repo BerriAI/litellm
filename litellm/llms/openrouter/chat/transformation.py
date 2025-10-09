@@ -6,6 +6,7 @@ Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 Docs: https://openrouter.ai/docs/parameters
 """
 
+from enum import Enum
 from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
 
 import httpx
@@ -18,6 +19,12 @@ from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import OpenRouterException
+
+
+class CacheControlSupportedModels(str, Enum):
+    """Models that support cache_control in content blocks."""
+    CLAUDE = "claude"
+    GEMINI = "gemini"
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
@@ -48,18 +55,72 @@ class OpenrouterConfig(OpenAIGPTConfig):
         )
         return mapped_openai_params
 
+    def _supports_cache_control_in_content(self, model: str) -> bool:
+        """
+        Check if the model supports cache_control in content blocks.
+        
+        Returns:
+            bool: True if model supports cache_control (Claude or Gemini models)
+        """
+        model_lower = model.lower()
+        return any(
+            supported_model.value in model_lower
+            for supported_model in CacheControlSupportedModels
+        )
+
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,
         messages: List[AllMessageValues],
         tools: Optional[List["ChatCompletionToolParam"]] = None,
     ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
-        if "claude" in model.lower():  # don't remove 'cache_control' flag
+        if self._supports_cache_control_in_content(model):
             return messages, tools
         else:
             return super().remove_cache_control_flag_from_messages_and_tools(
                 model, messages, tools
             )
+
+    def _move_cache_control_to_content(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        """
+        Move cache_control from message level to content blocks.
+        OpenRouter requires cache_control to be inside content blocks, not at message level.
+        
+        When cache_control is at message level, it's added to ALL content blocks
+        to cache the entire message content.
+        """
+        transformed_messages = []
+        for message in messages:
+            message_copy = dict(message)
+            cache_control = message_copy.pop("cache_control", None)
+            
+            if cache_control is not None:
+                content = message_copy.get("content")
+                
+                if isinstance(content, list):
+                    # Content is already a list, add cache_control to all blocks
+                    if len(content) > 0:
+                        content_copy = []
+                        for block in content:
+                            block_copy = dict(block)
+                            block_copy["cache_control"] = cache_control
+                            content_copy.append(block_copy)
+                        message_copy["content"] = content_copy
+                else:
+                    # Content is a string, convert to structured format
+                    message_copy["content"] = [
+                        {
+                            "type": "text",
+                            "text": content,
+                            "cache_control": cache_control,
+                        }
+                    ]
+            
+            transformed_messages.append(message_copy)
+        
+        return transformed_messages
 
     def transform_request(
         self,
@@ -75,6 +136,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
+        if self._supports_cache_control_in_content(model):
+            messages = self._move_cache_control_to_content(messages)
+        
         extra_body = optional_params.pop("extra_body", {})
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers

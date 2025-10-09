@@ -1882,7 +1882,9 @@ class ProxyConfig:
                 elif key == "priority_reservation_settings":
                     from litellm.types.utils import PriorityReservationSettings
 
-                    litellm.priority_reservation_settings = PriorityReservationSettings(**value)
+                    litellm.priority_reservation_settings = PriorityReservationSettings(
+                        **value
+                    )
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
                         value=value,
@@ -2965,32 +2967,32 @@ class ProxyConfig:
     ) -> bool:
         """
         Check if an object type should be loaded from the database based on general_settings.supported_db_objects.
-        
+
         Args:
             object_type: Type of object to check (e.g., SupportedDBObjectType.MODELS, "models", etc.)
-        
+
         Returns:
             True if the object should be loaded, False otherwise
         """
         global general_settings
-        
+
         # Get the supported_db_objects configuration
         supported_db_objects = general_settings.get("supported_db_objects", None)
-        
+
         # If supported_db_objects is not set, load all objects (default behavior)
         if supported_db_objects is None:
             return True
-        
+
         # If supported_db_objects is set, only load specified objects
         if not isinstance(supported_db_objects, list):
             verbose_proxy_logger.warning(
                 f"supported_db_objects is not a list, got {type(supported_db_objects)}. Loading all objects."
             )
             return True
-        
+
         # Convert object_type to string for comparison (handles both str and enum)
         object_type_str = str(object_type)
-        
+
         # Check if the object type is in the list (supports both str and enum values)
         return any(str(obj) == object_type_str for obj in supported_db_objects)
 
@@ -3062,19 +3064,19 @@ class ProxyConfig:
         """
         if self._should_load_db_object(object_type="guardrails"):
             await self._init_guardrails_in_db(prisma_client=prisma_client)
-        
+
         if self._should_load_db_object(object_type="vector_stores"):
             await self._init_vector_stores_in_db(prisma_client=prisma_client)
-        
+
         if self._should_load_db_object(object_type="mcp"):
             await self._init_mcp_servers_in_db()
-        
+
         if self._should_load_db_object(object_type="pass_through_endpoints"):
             await self._init_pass_through_endpoints_in_db()
-        
+
         if self._should_load_db_object(object_type="prompts"):
             await self._init_prompts_in_db(prisma_client=prisma_client)
-        
+
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
 
@@ -9707,6 +9709,8 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
             media_type=headers_dict.get("content-type", "application/json"),
         )
 
+    except HTTPException as e:
+        raise e
     except Exception as e:
         verbose_proxy_logger.error(
             f"Error handling dynamic MCP route for {mcp_server_name}: {str(e)}"
