@@ -3108,7 +3108,6 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "enforced_params",
     "temp_budget_increase",
     "temp_budget_expiry",
-    "allowed_passthrough_routes",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
@@ -3117,6 +3116,7 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "team_member_key_duration",
     "prompts",
     "logging",
+    "allowed_passthrough_routes",
 ]
 
 
