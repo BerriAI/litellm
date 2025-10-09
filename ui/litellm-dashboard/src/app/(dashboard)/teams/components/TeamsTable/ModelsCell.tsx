@@ -9,7 +9,7 @@ interface ModelsCellProps {
 }
 
 const ModelsCell = ({ team }: ModelsCellProps) => {
-  const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
+  const [expandedAccordion, setExpandedAccordion] = useState<boolean>(false);
 
   return (
     <TableCell
@@ -33,14 +33,11 @@ const ModelsCell = ({ team }: ModelsCellProps) => {
                   {team.models.length > 3 && (
                     <div>
                       <Icon
-                        icon={expandedAccordions[team.team_id] ? ChevronDownIcon : ChevronRightIcon}
+                        icon={expandedAccordion ? ChevronDownIcon : ChevronRightIcon}
                         className="cursor-pointer"
                         size="xs"
                         onClick={() => {
-                          setExpandedAccordions((prev) => ({
-                            ...prev,
-                            [team.team_id]: !prev[team.team_id],
-                          }));
+                          setExpandedAccordion((prev) => !prev);
                         }}
                       />
                     </div>
@@ -61,14 +58,14 @@ const ModelsCell = ({ team }: ModelsCellProps) => {
                         </Badge>
                       ),
                     )}
-                    {team.models.length > 3 && !expandedAccordions[team.team_id] && (
+                    {team.models.length > 3 && !expandedAccordion && (
                       <Badge size={"xs"} color="gray" className="cursor-pointer">
                         <Text>
                           +{team.models.length - 3} {team.models.length - 3 === 1 ? "more model" : "more models"}
                         </Text>
                       </Badge>
                     )}
-                    {expandedAccordions[team.team_id] && (
+                    {expandedAccordion && (
                       <div className="flex flex-wrap gap-1">
                         {team.models.slice(3).map((model: string, index: number) =>
                           model === "all-proxy-models" ? (
