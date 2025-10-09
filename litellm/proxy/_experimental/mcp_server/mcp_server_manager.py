@@ -1098,13 +1098,14 @@ class MCPServerManager:
                 extra_headers=extra_headers,
             )
 
-            async with client:
-                # Use the original tool name (without prefix) for the actual call
-                call_tool_params = MCPCallToolRequestParams(
-                    name=original_tool_name,
-                    arguments=arguments,
-                )
-                tasks.append(asyncio.create_task(client.call_tool(call_tool_params)))
+            call_tool_params = MCPCallToolRequestParams(
+                name=original_tool_name,
+                arguments=arguments,
+            )
+            async def _call_tool_via_client(client, params):
+                async with client:
+                    return await client.call_tool(params)
+            tasks.append(asyncio.create_task(_call_tool_via_client(client, call_tool_params)))
 
         try:
             mcp_responses = await asyncio.gather(*tasks)
