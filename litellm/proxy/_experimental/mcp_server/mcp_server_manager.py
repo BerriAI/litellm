@@ -927,7 +927,7 @@ class MCPServerManager:
         self,
         name: str,
         arguments: Dict[str, Any],
-        server_name_from_prefix: str,
+        server_name: str,
         user_api_key_auth: Optional[UserAPIKeyAuth],
         proxy_logging_obj: ProxyLogging,
         server: MCPServer,
@@ -958,7 +958,7 @@ class MCPServerManager:
         pre_hook_kwargs = {
             "name": name,
             "arguments": arguments,
-            "server_name": server_name_from_prefix,
+            "server_name": server_name,
             "user_api_key_auth": user_api_key_auth,
             "user_api_key_user_id": (
                 getattr(user_api_key_auth, "user_id", None)
@@ -1060,6 +1060,7 @@ class MCPServerManager:
 
     async def call_tool(
         self,
+        server_name: str,
         name: str,
         arguments: Dict[str, Any],
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
@@ -1070,10 +1071,11 @@ class MCPServerManager:
         raw_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
-        Call a tool with the given name and arguments (handles prefixed tool names)
+        Call a tool with the given name and arguments
 
         Args:
-            name: Tool name (can be prefixed with server name)
+            server_name: Server name
+            name: Tool name
             arguments: Tool arguments
             user_api_key_auth: User authentication
             mcp_auth_header: MCP auth header (deprecated)
@@ -1086,25 +1088,11 @@ class MCPServerManager:
         """
         start_time = datetime.datetime.now()
 
-        # Remove prefix if present to get the original tool name
-        original_tool_name, server_name_from_prefix = get_server_name_prefix_tool_mcp(
-            name
-        )
-
         # Get the MCP server
-        mcp_server = self._get_mcp_server_from_tool_name(name)
+        prefixed_tool_name = add_server_prefix_to_tool_name(name, server_name)
+        mcp_server = self._get_mcp_server_from_tool_name(prefixed_tool_name)
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
-
-        # Validate that the server from prefix matches the actual server (if prefix was used)
-        if server_name_from_prefix:
-            expected_prefix = get_server_prefix(mcp_server)
-            if normalize_server_name(server_name_from_prefix) != normalize_server_name(
-                expected_prefix
-            ):
-                raise ValueError(
-                    f"Tool {name} server prefix mismatch: expected {expected_prefix}, got {server_name_from_prefix}"
-                )
 
         #########################################################
         # Pre MCP Tool Call Hook
@@ -1113,9 +1101,9 @@ class MCPServerManager:
         #########################################################
         if proxy_logging_obj:
             await self.pre_call_tool_check(
-                name=original_tool_name,
+                name=name,
                 arguments=arguments,
-                server_name_from_prefix=server_name_from_prefix,
+                server_name=server_name,
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=mcp_server,
@@ -1127,7 +1115,7 @@ class MCPServerManager:
             during_hook_task = self._create_during_hook_task(
                 name=name,
                 arguments=arguments,
-                server_name_from_prefix=server_name_from_prefix,
+                server_name_from_prefix=server_name,
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 start_time=start_time,
@@ -1176,7 +1164,7 @@ class MCPServerManager:
             )
 
             call_tool_params = MCPCallToolRequestParams(
-                name=original_tool_name,
+                name=name,
                 arguments=arguments,
             )
 
@@ -1304,13 +1292,13 @@ class MCPServerManager:
                 return server
         return None
 
-    def get_mcp_server_names_from_ids(self, server_ids: List[str]) -> List[str]:
-        server_names = []
+    def get_mcp_server_names_from_ids(self, server_ids: List[str]) -> List[MCPServer]:
+        servers = []
         registry = self.get_registry()
         for server in registry.values():
             if server.server_id in server_ids:
-                server_names.append(server.name)
-        return server_names
+                servers.append(server)
+        return servers
 
     def get_mcp_server_by_name(self, server_name: str) -> Optional[MCPServer]:
         """
