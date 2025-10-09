@@ -118,6 +118,32 @@ class RouteChecks:
         return masker._mask_value(user_id)
 
     @staticmethod
+    def _raise_admin_only_route_exception(
+        user_obj: Optional[LiteLLM_UserTable],
+        route: str,
+    ) -> None:
+        """
+        Raise exception for routes that require proxy admin access
+
+        Args:
+            user_obj (Optional[LiteLLM_UserTable]): The user object
+            route (str): The route being accessed
+
+        Raises:
+            Exception: With user role and masked user_id information
+        """
+        user_role = "unknown"
+        user_id = "unknown"
+        if user_obj is not None:
+            user_role = user_obj.user_role or "unknown"
+            user_id = user_obj.user_id or "unknown"
+
+        masked_user_id = RouteChecks._mask_user_id(user_id)
+        raise Exception(
+            f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
+        )
+
+    @staticmethod
     def non_proxy_admin_allowed_routes_check(
         user_obj: Optional[LiteLLM_UserTable],
         _user_role: Optional[LitellmUserRoles],
@@ -215,29 +241,13 @@ class RouteChecks:
                     route_allowed = True
                     break
 
-            if route_allowed:
-                pass
-            else:
-                user_role = "unknown"
-                user_id = "unknown"
-                if user_obj is not None:
-                    user_role = user_obj.user_role or "unknown"
-                    user_id = user_obj.user_id or "unknown"
-
-                masked_user_id = RouteChecks._mask_user_id(user_id)
-                raise Exception(
-                    f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
+            if not route_allowed:
+                RouteChecks._raise_admin_only_route_exception(
+                    user_obj=user_obj, route=route
                 )
         else:
-            user_role = "unknown"
-            user_id = "unknown"
-            if user_obj is not None:
-                user_role = user_obj.user_role or "unknown"
-                user_id = user_obj.user_id or "unknown"
-
-            masked_user_id = RouteChecks._mask_user_id(user_id)
-            raise Exception(
-                f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
+            RouteChecks._raise_admin_only_route_exception(
+                user_obj=user_obj, route=route
             )
 
     @staticmethod
