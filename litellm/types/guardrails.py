@@ -435,6 +435,7 @@ class PointGuardAIGuardrailConfigModel(BaseModel):
     )
     model_name: Optional[str] = Field(
         default=None, description="Model name"
+    )
       
 
 class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
