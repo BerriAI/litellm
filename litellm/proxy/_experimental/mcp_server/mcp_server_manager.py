@@ -354,12 +354,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
-                        server_prefix
-                    )
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
-                        server_prefix
-                    )
+                    self.tool_name_to_mcp_server_name_mapping[
+                        base_tool_name
+                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[
+                        prefixed_tool_name
+                    ] = server_prefix
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -879,7 +879,6 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging,
         server: MCPServer,
     ):
-
         ## check if the tool is allowed or banned for the given server
         if not self.check_allowed_or_banned_tools(name, server):
             raise HTTPException(
@@ -959,7 +958,7 @@ class MCPServerManager:
             verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
             raise e
 
-    async def call_tool(
+    async def call_tool(  # noqa: PLR0915
         self,
         name: str,
         arguments: Dict[str, Any],
@@ -1102,10 +1101,14 @@ class MCPServerManager:
                 name=original_tool_name,
                 arguments=arguments,
             )
+
             async def _call_tool_via_client(client, params):
                 async with client:
                     return await client.call_tool(params)
-            tasks.append(asyncio.create_task(_call_tool_via_client(client, call_tool_params)))
+
+            tasks.append(
+                asyncio.create_task(_call_tool_via_client(client, call_tool_params))
+            )
 
         try:
             mcp_responses = await asyncio.gather(*tasks)
