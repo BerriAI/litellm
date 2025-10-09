@@ -4,7 +4,7 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 const useTeams = () => {
-  const [teams, setTeams] = useState<Team[]>([]);
+  const [teams, setTeams] = useState<Team[] | null>([]);
   const { accessToken, userId: userID, userRole } = useAuthorized();
 
   useEffect(() => {
@@ -14,7 +14,7 @@ const useTeams = () => {
     })();
   }, [accessToken, userID, userRole]);
 
-  return teams;
+  return { teams, setTeams };
 };
 
 export default useTeams;

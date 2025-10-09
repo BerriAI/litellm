@@ -70,7 +70,7 @@ const CreateUserModal: React.FC<CreateUserModalProps> = ({ possibleUIRoles, onUs
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
-  const teams = useTeams();
+  const { teams } = useTeams();
 
   // get all models
   useEffect(() => {

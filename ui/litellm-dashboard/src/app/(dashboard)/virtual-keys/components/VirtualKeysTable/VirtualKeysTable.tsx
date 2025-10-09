@@ -61,7 +61,7 @@ const VirtualKeysTable = ({
   setAccessToken,
 }: AllKeysTableProps) => {
   const { userId: userID, userRole, accessToken, premiumUser } = useAuthorized();
-  const teams = useTeams();
+  const { teams } = useTeams();
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [userList, setUserList] = useState<UserResponse[]>([]);
   const [sorting, setSorting] = React.useState<SortingState>(() => {
