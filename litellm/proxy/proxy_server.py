@@ -681,7 +681,7 @@ async def proxy_startup_event(app: FastAPI):
         
         # Create connector with connection pooling settings optimized for long-lived connections
         connector = TCPConnector(
-            limit=100,  # Max 100 connections per host
+            limit=0,
             keepalive_timeout=120,  # Keep connections alive for 2 minutes (prevents "once in a while" cold starts)
             ttl_dns_cache=300,  # Cache DNS for 5 minutes
             enable_cleanup_closed=True,
