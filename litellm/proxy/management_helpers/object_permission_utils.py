@@ -143,3 +143,38 @@ async def handle_update_object_permission_common(
     )
 
     return created_object_permission_row.object_permission_id
+
+
+async def _set_object_permission(
+    data_json: dict,
+    prisma_client: Optional[PrismaClient],
+):
+    """
+    Creates the LiteLLM_ObjectPermissionTable record for the key/team.
+    Handles permissions for vector stores and mcp servers.
+    """
+    if prisma_client is None or "object_permission" not in data_json:
+        return data_json
+
+    permission_data = data_json["object_permission"]
+    if not isinstance(permission_data, dict):
+        data_json.pop("object_permission")
+        return data_json
+    
+    # Clean data: exclude None values and object_permission_id
+    clean_data = {
+        k: v for k, v in permission_data.items()
+        if v is not None and k != "object_permission_id"
+    }
+    
+    # Serialize mcp_tool_permissions to JSON string for GraphQL compatibility
+    if "mcp_tool_permissions" in clean_data:
+        clean_data["mcp_tool_permissions"] = safe_dumps(clean_data["mcp_tool_permissions"])
+    
+    created_permission = await prisma_client.db.litellm_objectpermissiontable.create(
+        data=clean_data
+    )
+    
+    data_json["object_permission_id"] = created_permission.object_permission_id
+    data_json.pop("object_permission")
+    return data_json

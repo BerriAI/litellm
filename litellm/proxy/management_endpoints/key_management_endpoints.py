@@ -21,7 +21,6 @@ import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 import litellm
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps        
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching import DualCache
@@ -50,6 +49,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_helpers.object_permission_utils import (
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
+    _set_object_permission,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -1114,36 +1114,6 @@ def prepare_metadata_fields(
     return non_default_values
 
 
-async def _set_object_permission(
-    data_json: dict,
-    prisma_client: Optional[PrismaClient],
-):
-    """
-    Creates the LiteLLM_ObjectPermissionTable record for the key.
-    - Handles permissions for vector stores and mcp servers.
-    """
-    if prisma_client is None:
-        return data_json
-
-    if "object_permission" in data_json:
-        # Serialize mcp_tool_permissions JSON field to avoid GraphQL parsing issues
-        # (e.g., server IDs starting with "3e64" being interpreted as floats)
-        if "mcp_tool_permissions" in data_json["object_permission"]:
-            data_json["object_permission"]["mcp_tool_permissions"] = safe_dumps(
-                data_json["object_permission"]["mcp_tool_permissions"]
-            )
-        
-        created_object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.create(
-                data=data_json["object_permission"],
-            )
-        )
-        data_json["object_permission_id"] = (
-            created_object_permission.object_permission_id
-        )
-        # delete the object_permission from the data_json
-        data_json.pop("object_permission")
-    return data_json
 
 
 async def prepare_key_update_data(

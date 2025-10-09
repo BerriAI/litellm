@@ -124,7 +124,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 # Ensure required fields are present for ResponseReasoningItem
                 item_data = dict(item)
                 if "id" not in item_data:
-                    item_data["id"] = f"reasoning_{hash(str(item_data))}"
+                    item_data["id"] = f"rs_{hash(str(item_data))}"
                 if "summary" not in item_data:
                     item_data["summary"] = (
                         item_data.get("reasoning_content", "")[:100] + "..."
@@ -271,6 +271,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE: MCPCallArgumentsDoneEvent,
             ResponsesAPIStreamEvents.MCP_CALL_COMPLETED: MCPCallCompletedEvent,
             ResponsesAPIStreamEvents.MCP_CALL_FAILED: MCPCallFailedEvent,
+            ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE: ImageGenerationPartialImageEvent,
             ResponsesAPIStreamEvents.ERROR: ErrorEvent,
         }
 

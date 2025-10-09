@@ -268,6 +268,7 @@ def create_file(
         raise e
 
 
+@client
 async def afile_retrieve(
     file_id: str,
     custom_llm_provider: Literal["openai", "azure"] = "openai",
@@ -308,6 +309,7 @@ async def afile_retrieve(
         raise e
 
 
+@client
 def file_retrieve(
     file_id: str,
     custom_llm_provider: Literal["openai", "azure"] = "openai",
@@ -422,6 +424,7 @@ def file_retrieve(
 
 
 # Delete file
+@client
 async def afile_delete(
     file_id: str,
     custom_llm_provider: Literal["openai", "azure"] = "openai",
@@ -462,6 +465,7 @@ async def afile_delete(
         raise e
 
 
+@client
 def file_delete(
     file_id: str,
     custom_llm_provider: Literal["openai", "azure"] = "openai",
@@ -577,6 +581,7 @@ def file_delete(
 
 
 # List files
+@client
 async def afile_list(
     custom_llm_provider: Literal["openai", "azure"] = "openai",
     purpose: Optional[str] = None,
@@ -617,6 +622,7 @@ async def afile_list(
         raise e
 
 
+@client
 def file_list(
     custom_llm_provider: Literal["openai", "azure"] = "openai",
     purpose: Optional[str] = None,
@@ -729,6 +735,7 @@ def file_list(
         raise e
 
 
+@client
 async def afile_content(
     file_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
@@ -771,6 +778,7 @@ async def afile_content(
         raise e
 
 
+@client
 def file_content(
     file_id: str,
     model: Optional[str] = None,

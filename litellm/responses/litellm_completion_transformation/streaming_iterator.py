@@ -134,7 +134,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
             return ReasoningSummaryTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
-                item_id=f"{chunk.id}_reasoning",
+                item_id=f"rs_{hash(str(reasoning_content))}",
                 output_index=0,
                 delta=reasoning_content,
             )

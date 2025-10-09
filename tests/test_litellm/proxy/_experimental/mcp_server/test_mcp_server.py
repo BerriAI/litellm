@@ -995,3 +995,176 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
     assert len(tools) == 3
     tool_names = sorted([t.name for t in tools])
     assert tool_names == ["tool1", "tool2", "tool3"]
+
+
+@pytest.mark.asyncio
+async def test_list_tools_strips_prefix_when_matching_permissions():
+    """
+    Test that tool permission filtering correctly strips prefixes from tool names.
+
+    Tools from MCP servers are prefixed (e.g., "GITMCP-fetch_litellm_documentation"),
+    but allowed tools in DB are stored without prefix (e.g., "fetch_litellm_documentation").
+    The filtering should strip the prefix before comparing.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # Create object permission with tool-level restrictions (WITHOUT prefix)
+    object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm_123",
+        mcp_tool_permissions={
+            "gitmcp_server": [
+                "fetch_litellm_documentation",  # No prefix in DB
+                "search_litellm_code",  # No prefix in DB
+            ],
+        },
+    )
+
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test_key",
+        user_id="test_user",
+        object_permission=object_permission,
+    )
+    set_auth_context(user_api_key_auth)
+
+    # Mock server
+    server = MagicMock()
+    server.server_id = "gitmcp_server"
+    server.name = "GITMCP"
+    server.alias = "gitmcp"
+    server.allowed_tools = None
+    server.disallowed_tools = None
+
+    # Mock manager
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["gitmcp_server"])
+    mock_manager.get_mcp_server_by_id = lambda server_id: server
+
+    async def mock_get_tools_from_server(
+        server, mcp_auth_header=None, extra_headers=None, add_prefix=True
+    ):
+        # Return tools WITH prefix (as they come from MCP server)
+        tool1 = MagicMock()
+        tool1.name = "GITMCP-fetch_litellm_documentation"  # Prefixed
+        tool1.description = "Fetch docs"
+        tool1.inputSchema = {}
+
+        tool2 = MagicMock()
+        tool2.name = (
+            "GITMCP-search_litellm_documentation"  # Prefixed, not in allowed list
+        )
+        tool2.description = "Search docs"
+        tool2.inputSchema = {}
+
+        tool3 = MagicMock()
+        tool3.name = "GITMCP-search_litellm_code"  # Prefixed
+        tool3.description = "Search code"
+        tool3.inputSchema = {}
+
+        tool4 = MagicMock()
+        tool4.name = "GITMCP-fetch_generic_url_content"  # Prefixed, not in allowed list
+        tool4.description = "Fetch URL"
+        tool4.inputSchema = {}
+
+        return [tool1, tool2, tool3, tool4]
+
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        mock_manager,
+    ):
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+        )
+
+    # Should only return the 2 tools that match (after stripping prefix)
+    assert len(tools) == 2
+    tool_names = sorted([t.name for t in tools])
+    # Tools still have prefixes in the output, but were filtered correctly
+    assert tool_names == [
+        "GITMCP-fetch_litellm_documentation",
+        "GITMCP-search_litellm_code",
+    ]
+
+
+def test_filter_tools_by_allowed_tools():
+    """Test that filter_tools_by_allowed_tools filters tools correctly"""
+    from mcp.types import Tool
+
+    from litellm.proxy._experimental.mcp_server.server import (
+        filter_tools_by_allowed_tools,
+    )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mcp_server = MCPServer(
+        server_id="my_api_mcp",
+        name="my_api_mcp",
+        alias="my_api_mcp",
+        transport=MCPTransport.http,
+        allowed_tools=["getpetbyid", "my_api_mcp-findpetsbystatus"],
+        disallowed_tools=None,
+    )
+    tools_to_return = [
+        Tool(
+            name="my_api_mcp-getpetbyid",
+            title=None,
+            description="Find pet by ID",
+            inputSchema={
+                "type": "object",
+                "properties": {"petId": {"type": "integer", "description": ""}},
+                "required": ["petId"],
+            },
+            outputSchema=None,
+            annotations=None,
+        ),
+        Tool(
+            name="my_api_mcp-findpetsbystatus",
+            title=None,
+            description="Finds Pets by status",
+            inputSchema={
+                "type": "object",
+                "properties": {"status": {"type": "string", "description": ""}},
+                "required": ["status"],
+            },
+            outputSchema=None,
+            annotations=None,
+        ),
+        Tool(
+            name="my_api_mcp-addpet",
+            title=None,
+            description="Add a new pet to the store",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "body": {
+                        "type": "object",
+                        "description": "Request body",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "status": {"type": "string"},
+                        },
+                    }
+                },
+                "required": ["body"],
+            },
+            outputSchema=None,
+            annotations=None,
+        ),
+    ]
+
+    filtered_tools = filter_tools_by_allowed_tools(tools_to_return, mcp_server)
+
+    assert len(filtered_tools) == 2
+    assert filtered_tools[0].name == "my_api_mcp-getpetbyid"
+    assert filtered_tools[1].name == "my_api_mcp-findpetsbystatus"
