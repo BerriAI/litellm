@@ -1028,6 +1028,12 @@ PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
 )  # 5 minutes
+DEFAULT_SHARED_HEALTH_CHECK_TTL = int(
+    os.getenv("DEFAULT_SHARED_HEALTH_CHECK_TTL", 300)
+)  # 5 minutes - TTL for cached health check results
+DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL = int(
+    os.getenv("DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL", 60)
+)  # 1 minute - TTL for health check lock
 PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS = int(
     os.getenv("PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS", 9)
 )
