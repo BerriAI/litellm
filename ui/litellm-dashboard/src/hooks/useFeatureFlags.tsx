@@ -1,5 +1,13 @@
 "use client";
+
+const getBasePath = () => {
+  const raw = process.env.NEXT_PUBLIC_BASE_URL ?? "";
+  const trimmed = raw.replace(/^\/+|\/+$/g, ""); // strip leading/trailing slashes
+  return trimmed ? `/${trimmed}/` : "/"; // ensure trailing slash
+};
+
 import React, { createContext, useContext, useEffect, useState } from "react";
+import { useRouter } from "next/navigation"; // ⟵ add this
 
 type Flags = {
   refactoredUIFlag: boolean;
@@ -48,6 +56,8 @@ function writeFlagSafely(v: boolean) {
 }
 
 export const FeatureFlagsProvider = ({ children }: { children: React.ReactNode }) => {
+  const router = useRouter(); // ⟵ add this
+
   // Lazy init reads from localStorage only on the client
   const [refactoredUIFlag, setRefactoredUIFlagState] = useState<boolean>(() => readFlagSafely());
 
@@ -72,6 +82,21 @@ export const FeatureFlagsProvider = ({ children }: { children: React.ReactNode }
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
+
+  // Redirect to base path the moment the flag is OFF.
+  useEffect(() => {
+    if (refactoredUIFlag) return; // only act when turned off
+
+    const base = getBasePath();
+    const normalize = (p: string) => (p.endsWith("/") ? p : p + "/");
+    const current = normalize(window.location.pathname);
+
+    // Avoid a redirect loop if we're already at the base path.
+    if (current !== base) {
+      // Replace so the "off" redirect doesn't pollute history.
+      router.replace(base);
+    }
+  }, [refactoredUIFlag, router]);
 
   return (
     <FeatureFlagsCtx.Provider value={{ refactoredUIFlag, setRefactoredUIFlag }}>{children}</FeatureFlagsCtx.Provider>
