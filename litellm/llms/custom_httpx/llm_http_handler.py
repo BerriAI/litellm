@@ -13,6 +13,7 @@ from typing import (
     cast,
 )
 
+from litellm._logging import verbose_logger
 import httpx  # type: ignore
 
 import litellm
@@ -241,10 +242,9 @@ class BaseLLMHTTPHandler:
         shared_session: Optional["ClientSession"] = None,
     ):
         # PANIC: Ensure shared_session is being passed for connection reuse
-        from litellm._logging import verbose_logger
         if shared_session is None and client is None:
             error_msg = (
-                "❌ PANIC: shared_session is None in async_completion! "
+                "PANIC: shared_session is None in async_completion! "
                 "This means connection reuse is broken. Session should be passed from completion() -> async_completion(). "
                 f"Provider: {custom_llm_provider}, Model: {model}"
             )

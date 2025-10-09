@@ -28,6 +28,9 @@ from typing import (
 
 from litellm._uuid import uuid
 from litellm.constants import (
+    AIOHTTP_CONNECTOR_LIMIT,
+    AIOHTTP_KEEPALIVE_TIMEOUT,
+    AIOHTTP_TTL_DNS_CACHE,
     BASE_MCP_ROUTE,
     DEFAULT_MAX_RECURSE_DEPTH,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
@@ -681,20 +684,19 @@ async def proxy_startup_event(app: FastAPI):
         
         # Create connector with connection pooling settings optimized for long-lived connections
         connector = TCPConnector(
-            limit=0,
-            keepalive_timeout=120,  # Keep connections alive for 2 minutes (prevents "once in a while" cold starts)
-            ttl_dns_cache=300,  # Cache DNS for 5 minutes
+            limit=AIOHTTP_CONNECTOR_LIMIT,
+            keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
+            ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
             enable_cleanup_closed=True,
-            force_close=False,  # Don't force close connections after each request
         )
         
         shared_aiohttp_session = ClientSession(connector=connector)
         verbose_proxy_logger.info(
-            f"🔄 SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(shared_aiohttp_session)})"
+            f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(shared_aiohttp_session)})"
         )
     except Exception as e:
         verbose_proxy_logger.warning(
-            f"⚠️ Failed to create shared aiohttp session: {e}. Continuing without session reuse."
+            f"Failed to create shared aiohttp session: {e}. Continuing without session reuse."
         )
 
     # End of startup event
@@ -704,7 +706,7 @@ async def proxy_startup_event(app: FastAPI):
     if shared_aiohttp_session is not None:
         try:
             await shared_aiohttp_session.close()
-            verbose_proxy_logger.info("🔄 SESSION REUSE: Closed shared aiohttp session")
+            verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
         except Exception as e:
             verbose_proxy_logger.error(f"Error closing shared aiohttp session: {e}")
     
