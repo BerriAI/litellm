@@ -2,7 +2,7 @@
 
 import NewUsagePage from "@/components/new_usage";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import useTeams from "@/app/(dashboard)/virtual-keys/hooks/useTeams";
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
 
 const UsagePage = () => {
   const { accessToken, userRole, userId, premiumUser } = useAuthorized();

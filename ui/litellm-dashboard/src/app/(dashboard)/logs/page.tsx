@@ -2,7 +2,7 @@
 
 import SpendLogsTable from "@/components/view_logs";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import useTeams from "@/app/(dashboard)/virtual-keys/hooks/useTeams";
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const LogsPage = () => {
