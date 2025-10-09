@@ -2,7 +2,7 @@
 
 import ViewUserDashboard from "@/components/view_users";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import useTeams from "@/app/(dashboard)/virtual-keys/hooks/useTeams";
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 

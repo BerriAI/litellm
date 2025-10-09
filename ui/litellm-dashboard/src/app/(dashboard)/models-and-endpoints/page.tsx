@@ -2,7 +2,7 @@
 
 import ModelDashboard from "@/components/templates/model_dashboard";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import useTeams from "@/app/(dashboard)/virtual-keys/hooks/useTeams";
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useState } from "react";
 
 const ModelsAndEndpointsPage = () => {
