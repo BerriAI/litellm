@@ -221,7 +221,7 @@ class JavelinGuardrail(CustomGuardrail):
         javelin_response = await self.call_javelin_guard(request=javelin_guard_request)
 
         assessments = javelin_response.get("assessments", [])
-        reject_prompt = ""
+        reject_prompt = "Violated guardrail policy"
         should_reject = False
 
         # Debug: Log the full Javelin response
@@ -276,11 +276,10 @@ class JavelinGuardrail(CustomGuardrail):
 
             # Raise HTTPException to prevent the request from going to the LLM
             raise HTTPException(
-                status_code=500,
+                status_code=400,
                 detail={
-                    "error": "Violated guardrail policy",
-                    "javelin_guardrail_response": javelin_response,
-                    "reject_prompt": reject_prompt,
+                    "error": reject_prompt,
+                    "javelin_guardrail_response": javelin_response
                 },
             )
 
