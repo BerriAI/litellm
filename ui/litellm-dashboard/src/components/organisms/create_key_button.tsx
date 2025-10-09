@@ -17,6 +17,7 @@ import {
   keyCreateServiceAccountCall,
   fetchMCPAccessGroups,
   getPromptsList,
+  getPassThroughEndpointsCall,
 } from "../networking";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { Team } from "../key_team_helpers/key_list";
@@ -158,6 +159,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
+  const [passThroughRoutesList, setPassThroughRoutesList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
@@ -239,8 +241,19 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       }
     };
 
+    const fetchPassThroughEndpoints = async () => {
+      try {
+        const response = await getPassThroughEndpointsCall(accessToken);
+        const passThroughPaths = response.endpoints.map((endpoint: { path: string }) => endpoint.path);
+        setPassThroughRoutesList(passThroughPaths);
+      } catch (error) {
+        console.error("Failed to fetch pass through endpoints:", error);
+      }
+    };
+
     fetchGuardrails();
     fetchPrompts();
+    fetchPassThroughEndpoints();
   }, [accessToken]);
 
   // Fetch possible user roles when component mounts
@@ -910,6 +923,40 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         !premiumUser ? "Premium feature - Upgrade to set prompts by key" : "Select or enter prompts"
                       }
                       options={promptsList.map((name) => ({ value: name, label: name }))}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        Allowed Pass Through Routes{" "}
+                        <Tooltip title="Allow this key to use specific prompt templates">
+                          <a
+                            href="https://docs.litellm.ai/docs/proxy/prompt_management"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="allowed_passthrough_routes"
+                    className="mt-4"
+                    help={
+                      premiumUser
+                        ? "Select existing pass through routes or enter new ones"
+                        : "Premium feature - Upgrade to set pass through routes by key"
+                    }
+                  >
+                    <Select
+                      mode="tags"
+                      style={{ width: "100%" }}
+                      disabled={!premiumUser}
+                      placeholder={
+                        !premiumUser ? "Premium feature - Upgrade to set pass through routes by key" : "Select or enter pass through routes"
+                      }
+                      options={passThroughRoutesList.map((name) => ({ value: name, label: name }))}
                     />
                   </Form.Item>
                   <Form.Item
