@@ -9,6 +9,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.bedrock.common_utils import ModelResponseIterator
 from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import *
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
@@ -240,14 +241,40 @@ def completion(  # noqa: PLR0915
             )
             request_str += f"llm_model = aiplatform.PrivateEndpoint(endpoint_name={model}, project={vertex_project}, location={vertex_location})\n"
         else:  # assume vertex model garden on public endpoint
-            mode = "custom"
-
-            instances = [optional_params.copy()]
-            instances[0]["prompt"] = prompt
-            instances = [
-                json_format.ParseDict(instance_dict, Value())
-                for instance_dict in instances
-            ]
+            # Check if this is a dedicated endpoint (has dedicated_endpoint_dns)
+            dedicated_endpoint_dns = optional_params.pop("dedicated_endpoint_dns", None)
+            if dedicated_endpoint_dns:
+                mode = "dedicated_endpoint"
+                # Create instances in chat completions format for dedicated endpoints
+                instances = [{
+                    "@requestFormat": "chatCompletions",
+                    "messages": messages,
+                    "max_tokens": optional_params.get("max_tokens", 100),
+                    "temperature": optional_params.get("temperature", 0.7),
+                    "top_p": optional_params.get("top_p", 1.0),
+                }]
+            # Check if this is a chat completions endpoint by looking for specific patterns
+            # or by checking if the model is a numeric endpoint ID that supports chat completions
+            elif model.isdigit() or "@requestFormat" in str(optional_params):
+                mode = "custom_chat_completions"
+                # Create instances in chat completions format
+                instances = [{
+                    "@requestFormat": "chatCompletions",
+                    "messages": messages,
+                    "max_tokens": optional_params.get("max_tokens", 100),
+                    "temperature": optional_params.get("temperature", 0.7),
+                    "top_p": optional_params.get("top_p", 1.0),
+                }]
+                # Remove chat completions specific params from optional_params
+                optional_params.pop("@requestFormat", None)
+            else:
+                mode = "custom"
+                instances = [optional_params.copy()]
+                instances[0]["prompt"] = prompt
+                instances = [
+                    json_format.ParseDict(instance_dict, Value())
+                    for instance_dict in instances
+                ]
             # Will determine the API used based on async parameter
             llm_model = None
 
@@ -390,6 +417,84 @@ def completion(  # noqa: PLR0915
                 and "\nOutput:\n" in completion_response
             ):
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
+            if stream is True:
+                response = TextStreamer(completion_response)
+                return response
+        elif mode == "dedicated_endpoint":
+            """
+            Vertex AI Dedicated Endpoint with Chat Completions Format using httpx
+            """
+            if vertex_project is None or vertex_location is None:
+                raise ValueError(
+                    "Vertex project and location are required for dedicated endpoint"
+                )
+
+            # Get access token first
+            vertex_httpx_logic = VertexBase()
+            access_token, project_id = vertex_httpx_logic._ensure_access_token(
+                credentials=vertex_credentials,
+                project_id=vertex_project,
+                custom_llm_provider="vertex_ai",
+            )
+
+            # Get the dedicated endpoint DNS from optional_params or fetch it
+            dedicated_endpoint_dns = optional_params.get("dedicated_endpoint_dns")
+            if not dedicated_endpoint_dns:
+                # Try to fetch the dedicated DNS from the endpoint metadata
+                dedicated_endpoint_dns = vertex_httpx_logic.get_dedicated_endpoint_dns(
+                    endpoint_id=model,
+                    project_id=project_id,
+                    location=vertex_location,
+                    access_token=access_token,
+                )
+                if not dedicated_endpoint_dns:
+                    raise ValueError(
+                        "dedicated_endpoint_dns is required for dedicated endpoint mode. "
+                        "Either provide it explicitly or ensure the endpoint has dedicated DNS enabled."
+                    )
+
+            # Construct the dedicated endpoint prediction URL
+            # Format: https://{dedicated_endpoint_dns}/v1/projects/{project}/locations/{location}/endpoints/{endpoint_id}:predict
+            url = f"https://{dedicated_endpoint_dns}/v1/projects/{project_id}/locations/{vertex_location}/endpoints/{model}:predict"
+            
+            # Prepare headers
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            }
+
+            # Prepare request body in chat completions format
+            request_body = {
+                "instances": instances
+            }
+
+            ## LOGGING
+            logging_obj.pre_call(
+                input=prompt,
+                api_key=None,
+                additional_args={
+                    "complete_input_dict": optional_params,
+                    "request_str": f"POST {url}",
+                    "request_body": request_body,
+                },
+            )
+
+            # Use httpx client
+            from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+            httpx_client = _get_httpx_client()
+            
+            response = httpx_client.post(
+                url=url,
+                headers=headers,
+                json=request_body,
+                timeout=600.0,
+            )
+
+            if response.status_code != 200:
+                raise Exception(f"Vertex AI Dedicated Endpoint API error: {response.status_code} - {response.text}")
+
+            completion_response = response.json()
+            
             if stream is True:
                 response = TextStreamer(completion_response)
                 return response
@@ -661,7 +766,9 @@ async def async_streaming(  # noqa: PLR0915
     instances=None,
     vertex_project=None,
     vertex_location=None,
+    vertex_credentials=None,
     safety_settings=None,
+    timeout=None,
     **optional_params,
 ):
     """
@@ -748,6 +855,85 @@ async def async_streaming(  # noqa: PLR0915
         if stream:
             response = TextStreamer(completion_response)
 
+    elif mode == "dedicated_endpoint":
+        """
+        Vertex AI Dedicated Endpoint with Chat Completions Format using async httpx
+        """
+        if vertex_project is None or vertex_location is None:
+            raise ValueError(
+                "Vertex project and location are required for dedicated endpoint"
+            )
+
+        # Get access token first
+        vertex_httpx_logic = VertexBase()
+        access_token, project_id = await vertex_httpx_logic._ensure_access_token_async(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai",
+        )
+
+        # Get the dedicated endpoint DNS from optional_params or fetch it
+        dedicated_endpoint_dns = optional_params.get("dedicated_endpoint_dns")
+        if not dedicated_endpoint_dns:
+            # Try to fetch the dedicated DNS from the endpoint metadata
+            dedicated_endpoint_dns = await vertex_httpx_logic.get_dedicated_endpoint_dns_async(
+                endpoint_id=model,
+                project_id=project_id,
+                location=vertex_location,
+                access_token=access_token,
+            )
+            if not dedicated_endpoint_dns:
+                raise ValueError(
+                    "dedicated_endpoint_dns is required for dedicated endpoint mode. "
+                    "Either provide it explicitly or ensure the endpoint has dedicated DNS enabled."
+                )
+
+        # Construct the dedicated endpoint prediction URL
+        # Format: https://{dedicated_endpoint_dns}/v1/projects/{project}/locations/{location}/endpoints/{endpoint_id}:predict
+        url = f"https://{dedicated_endpoint_dns}/v1/projects/{project_id}/locations/{vertex_location}/endpoints/{model}:predict"
+        
+        # Prepare headers
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+
+        # Prepare request body in chat completions format
+        request_body = {
+            "instances": instances
+        }
+
+        stream = optional_params.pop("stream", None)
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=prompt,
+            api_key=None,
+            additional_args={
+                "complete_input_dict": optional_params,
+                "request_str": f"POST {url}",
+                "request_body": request_body,
+            },
+        )
+
+        # Use async httpx client
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        httpx_client = get_async_httpx_client(llm_provider="vertex_ai")
+        
+        response = await httpx_client.post(
+            url=url,
+            headers=headers,
+            json=request_body,
+            timeout=timeout or 600.0,
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Vertex AI Dedicated Endpoint API error: {response.status_code} - {response.text}")
+
+        completion_response = response.json()
+                
+        if stream:
+            response = TextStreamer(completion_response)
     elif mode == "private":
         if instances is None:
             raise ValueError("Instances are required for private endpoint")

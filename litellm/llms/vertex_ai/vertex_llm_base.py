@@ -624,3 +624,92 @@ class VertexBase:
             or get_secret_str("VERTEXAI_LOCATION")
             or get_secret_str("VERTEX_LOCATION")
         )
+
+    @staticmethod
+    def get_dedicated_endpoint_dns(
+        endpoint_id: str,
+        project_id: str,
+        location: str,
+        access_token: str,
+    ) -> Optional[str]:
+        """
+        Get the dedicated endpoint DNS from Vertex AI endpoint metadata.
+        
+        Args:
+            endpoint_id: The numeric endpoint ID
+            project_id: The GCP project ID
+            location: The Vertex AI location (e.g., 'us-central1')
+            access_token: OAuth2 access token
+            
+        Returns:
+            The dedicated endpoint DNS if available, None otherwise
+        """
+        try:
+            import httpx
+            
+            # Construct the endpoint URL
+            endpoint_url = f"https://{location}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}"
+            
+            # Make the request
+            response = httpx.get(
+                url=endpoint_url,
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=30.0
+            )
+            
+            if response.status_code == 200:
+                endpoint_data = response.json()
+                dedicated_dns = endpoint_data.get("dedicatedEndpointDns")
+                return dedicated_dns
+            else:
+                print(f"Failed to get endpoint details: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            print(f"Error getting dedicated endpoint DNS: {e}")
+            return None
+
+    @staticmethod
+    async def get_dedicated_endpoint_dns_async(
+        endpoint_id: str,
+        project_id: str,
+        location: str,
+        access_token: str,
+    ) -> Optional[str]:
+        """
+        Async version of get_dedicated_endpoint_dns.
+        
+        Args:
+            endpoint_id: The numeric endpoint ID
+            project_id: The GCP project ID
+            location: The Vertex AI location (e.g., 'us-central1')
+            access_token: OAuth2 access token
+            
+        Returns:
+            The dedicated endpoint DNS if available, None otherwise
+        """
+        try:
+            import httpx
+            
+            # Construct the endpoint URL
+            endpoint_url = f"https://{location}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}"
+            
+            # Make the async request
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    url=endpoint_url,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    timeout=30.0
+                )
+            
+            if response.status_code == 200:
+                endpoint_data = response.json()
+                dedicated_dns = endpoint_data.get("dedicatedEndpointDns")
+                return dedicated_dns
+            else:
+                print(f"Failed to get endpoint details: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            print(f"Error getting dedicated endpoint DNS: {e}")
+            return None
