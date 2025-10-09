@@ -70,6 +70,8 @@ def test_snowflake_jwt_account_id(mock_post):
     assert "00000" in post_kwargs["headers"]["Authorization"]
     # account id was used
     assert "AAAA-BBBB" in post_kwargs["url"]
+    # is embedding
+    post_kwargs["url"].endswith("cortex/inference:embed")
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
@@ -85,7 +87,7 @@ def test_snowflake_pat_key_account_id(mock_post):
     assert len(response.data) == 1
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
 
-    # JWT key was used
+    # PAT key was used
     post_kwargs = mock_post.call_args_list[-1][1]
     assert "xxxxx" in post_kwargs["headers"]["Authorization"]
     assert (
