@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
-    EnkryptAIGuardrailConfigModel,
+    EnkryptAIGuardrailConfigs,
 )
 
 """
@@ -506,7 +506,7 @@ class LitellmParams(
     ToolPermissionGuardrailConfigModel,
     JavelinGuardrailConfigModel,
     BaseLitellmParams,
-    EnkryptAIGuardrailConfigModel,
+    EnkryptAIGuardrailConfigs,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(

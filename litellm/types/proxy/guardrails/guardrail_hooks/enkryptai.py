@@ -102,9 +102,8 @@ class EnkryptAIProcessedResult(TypedDict):
 
 
 # Pydantic Config Model
-
-
-class EnkryptAIGuardrailConfigModel(GuardrailConfigModel):
+class EnkryptAIGuardrailConfigs(BaseModel):
+    """Configuration parameters for the EnkryptAI guardrail"""
     api_key: Optional[str] = Field(
         default=None,
         description="The EnkryptAI API key. Reads from ENKRYPTAI_API_KEY env var if None.",
@@ -130,6 +129,7 @@ class EnkryptAIGuardrailConfigModel(GuardrailConfigModel):
         description="Whether to block requests when violations are detected. Defaults to True.",
     )
 
+class EnkryptAIGuardrailConfigModel(GuardrailConfigModel, EnkryptAIGuardrailConfigs):
     @staticmethod
     def ui_friendly_name() -> str:
         return "EnkryptAI"
