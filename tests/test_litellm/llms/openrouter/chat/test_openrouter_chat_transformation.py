@@ -261,4 +261,59 @@ def test_openrouter_transform_request_with_cache_control_list_content():
     assert system_message["content"][0]["cache_control"] == {"type": "ephemeral"}
     assert system_message["content"][1]["cache_control"] == {"type": "ephemeral"}
     assert "cache_control" not in system_message
+
+
+def test_openrouter_transform_request_with_cache_control_gemini():
+    """
+    Test transform_request moves cache_control to content blocks for Gemini models.
+    
+    Input:
+    {
+        "role": "user",
+        "content": "Analyze this data",
+        "cache_control": {"type": "ephemeral"}
+    }
+    
+    Expected Output:
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Analyze this data",
+                "cache_control": {"type": "ephemeral"}
+            }
+        ]
+    }
+    """
+    import json
+    config = OpenrouterConfig()
+    
+    messages = [
+        {
+            "role": "user",
+            "content": "Analyze this data",
+            "cache_control": {"type": "ephemeral"}
+        }
+    ]
+    
+    transformed_request = config.transform_request(
+        model="openrouter/google/gemini-2.0-flash-exp:free",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    
+    print("\n=== Transformed Request (Gemini) ===")
+    print(json.dumps(transformed_request, indent=4, default=str))
+    
+    assert "messages" in transformed_request
+    assert len(transformed_request["messages"]) == 1
+    
+    user_message = transformed_request["messages"][0]
+    assert user_message["role"] == "user"
+    assert isinstance(user_message["content"], list)
+    assert user_message["content"][0]["type"] == "text"
+    assert user_message["content"][0]["cache_control"] == {"type": "ephemeral"}
     
