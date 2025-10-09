@@ -5,7 +5,7 @@ import json
 import traceback
 from base64 import b64encode
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -1003,31 +1003,44 @@ def create_pass_through_route(
             if passthrough_params is not None:
                 target_params.update(passthrough_params.get("passthrough_params", {}))
 
+            # Extract and cast parameters with proper types
+            param_target = target_params.get("target") or target
+            param_custom_headers = target_params.get("custom_headers", custom_headers)
+            param_forward_headers = target_params.get(
+                "forward_headers", _forward_headers
+            )
+            param_merge_query_params = target_params.get(
+                "merge_query_params", _merge_query_params
+            )
+            param_cost_per_request = target_params.get(
+                "cost_per_request", cost_per_request
+            )
+
             # Construct the full target URL with subpath if needed
             full_target = (
                 HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
-                    base_target=target_params.get("target", target),
+                    base_target=cast(str, param_target),
                     subpath=subpath,
                     include_subpath=include_subpath,
                 )
             )
 
+            # Ensure custom_headers is a dict
+            headers_dict = (
+                param_custom_headers if isinstance(param_custom_headers, dict) else {}
+            )
+
             return await pass_through_request(  # type: ignore
                 request=request,
                 target=full_target,
-                custom_headers=target_params.get("custom_headers", custom_headers)
-                or {},
+                custom_headers=headers_dict,
                 user_api_key_dict=user_api_key_dict,
-                forward_headers=target_params.get("forward_headers", _forward_headers),
-                merge_query_params=target_params.get(
-                    "merge_query_params", _merge_query_params
-                ),
+                forward_headers=cast(Optional[bool], param_forward_headers),
+                merge_query_params=cast(Optional[bool], param_merge_query_params),
                 query_params=query_params,
                 stream=stream,
                 custom_body=custom_body,
-                cost_per_request=target_params.get(
-                    "cost_per_request", cost_per_request
-                ),
+                cost_per_request=cast(Optional[float], param_cost_per_request),
                 custom_llm_provider=custom_llm_provider,
             )
 
