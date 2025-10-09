@@ -64,4 +64,6 @@ class SnowflakeEmbeddingConfig(SnowflakeBaseConfig, BaseEmbeddingConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        return SnowflakeException(message=error_message, status_code=status_code, headers=headers)
+        return SnowflakeException(
+            message=error_message, status_code=status_code, headers=headers
+        )

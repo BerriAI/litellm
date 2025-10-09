@@ -303,7 +303,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         return snowflake_tools
 
-    def _transform_tool_choice(self, tool_choice: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
+    def _transform_tool_choice(
+        self, tool_choice: Union[str, Dict[str, Any]]
+    ) -> Union[str, Dict[str, Any]]:
         """
         Transform OpenAI tool_choice format to Snowflake format.
 
