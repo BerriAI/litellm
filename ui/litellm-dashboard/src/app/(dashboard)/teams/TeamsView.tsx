@@ -8,11 +8,6 @@ import { isAdminRole } from "@/utils/roles";
 import { Card, Button, Col, Text, Grid, TabPanel } from "@tremor/react";
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import type { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
-import { AlertTriangleIcon, XIcon } from "lucide-react";
-import MCPServerSelector from "../../../components/mcp_server_management/MCPServerSelector";
-import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
-import ModelAliasManager from "../../../components/common_components/ModelAliasManager";
-import NotificationsManager from "../../../components/molecules/notifications_manager";
 
 import { Member, v2TeamListCall } from "@/components/networking";
 import { updateExistingKeys } from "@/utils/dataUtils";
