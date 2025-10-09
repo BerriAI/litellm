@@ -63,7 +63,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-2">
-            <Sidebar2 defaultSelectedKey={page} setPage={updatePage} accessToken={accessToken} userRole={userRole} />
+            <Sidebar2 defaultSelectedKey={page} accessToken={accessToken} userRole={userRole} />
           </div>
           <main className="flex-1">{children}</main>
         </div>
