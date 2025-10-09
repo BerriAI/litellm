@@ -51,7 +51,11 @@ class _ProxyDBLogger(CustomLogger):
                 user_api_key_alias=user_api_key_dict.key_alias,
                 user_api_key_spend=user_api_key_dict.spend,
                 user_api_key_max_budget=user_api_key_dict.max_budget,
-                user_api_key_budget_reset_at=user_api_key_dict.budget_reset_at.isoformat() if user_api_key_dict.budget_reset_at else None,
+                user_api_key_budget_reset_at=(
+                    user_api_key_dict.budget_reset_at.isoformat()
+                    if user_api_key_dict.budget_reset_at
+                    else None
+                ),
                 user_api_key_user_email=user_api_key_dict.user_email,
                 user_api_key_user_id=user_api_key_dict.user_id,
                 user_api_key_team_id=user_api_key_dict.team_id,
@@ -59,15 +63,16 @@ class _ProxyDBLogger(CustomLogger):
                 user_api_key_team_alias=user_api_key_dict.team_alias,
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,
                 user_api_key_request_route=user_api_key_dict.request_route,
+                user_api_key_auth_metadata=user_api_key_dict.metadata,
             )
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["status"] = "failure"
-        _metadata[
-            "error_information"
-        ] = StandardLoggingPayloadSetup.get_error_information(
-            original_exception=original_exception,
-            traceback_str=traceback_str,
+        _metadata["error_information"] = (
+            StandardLoggingPayloadSetup.get_error_information(
+                original_exception=original_exception,
+                traceback_str=traceback_str,
+            )
         )
 
         existing_metadata: dict = request_data.get("metadata", None) or {}

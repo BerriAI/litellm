@@ -52,6 +52,24 @@ else:
     Span = Any
 
 
+class SupportedDBObjectType(str, enum.Enum):
+    """
+    Supported database object types for fine-grained DB storage control.
+    Use in general_settings.supported_db_objects to specify which objects to load from DB.
+    """
+
+    MODELS = "models"
+    MCP = "mcp"
+    GUARDRAILS = "guardrails"
+    VECTOR_STORES = "vector_stores"
+    PASS_THROUGH_ENDPOINTS = "pass_through_endpoints"
+    PROMPTS = "prompts"
+    MODEL_COST_MAP = "model_cost_map"
+
+    def __str__(self):
+        return str(self.value)
+
+
 class LiteLLMTeamRoles(enum.Enum):
     # team admin
     TEAM_ADMIN = "admin"
@@ -712,6 +730,7 @@ class ModelParams(LiteLLMPydanticObjectBase):
 class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_servers: Optional[List[str]] = None
     mcp_access_groups: Optional[List[str]] = None
+    mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
     vector_stores: Optional[List[str]] = None
 
 
@@ -731,6 +750,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = {}
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+
     budget_duration: Optional[str] = None
     allowed_cache_controls: Optional[list] = []
     config: Optional[dict] = {}
@@ -755,6 +775,12 @@ class KeyRequestBase(GenerateRequestBase):
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
+    rpm_limit_type: Optional[
+        Literal["guaranteed_throughput", "best_effort_throughput"]
+    ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
+    tpm_limit_type: Optional[
+        Literal["guaranteed_throughput", "best_effort_throughput"]
+    ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
 
 
 class LiteLLMKeyType(str, enum.Enum):
@@ -918,6 +944,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: Optional[List[str]] = None
+    extra_headers: Optional[List[str]] = None
     # Stdio-specific fields
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
@@ -987,9 +1014,10 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: List[str] = Field(default_factory=list)
+    extra_headers: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
     # Health check status
-    status: Optional[str] = Field(
+    status: Optional[Literal["healthy", "unhealthy", "unknown"]] = Field(
         default="unknown",
         description="Health status: 'healthy', 'unhealthy', 'unknown'",
     )
@@ -1405,6 +1433,16 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     object_permission_id: str
     mcp_servers: Optional[List[str]] = []
     mcp_access_groups: Optional[List[str]] = []
+    mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
+    """
+    Mapping - server_id -> list of tools
+
+    Enforces allowed tools for a specific key/team/organization
+    {
+        "1234567890": ["tool_name_1", "tool_name_2"]
+    }
+    """
+    
     vector_stores: Optional[List[str]] = []
 
 
@@ -1740,6 +1778,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="[DEPRECATED] Use 'user_header_mappings' instead. When set, the header value is treated as the end user id unless overridden by user_header_mappings.",
     )
     user_header_mappings: Optional[List[UserHeaderMapping]] = None
+    supported_db_objects: Optional[List[SupportedDBObjectType]] = Field(
+        None,
+        description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map'. If not set, all objects are loaded (default behavior).",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
@@ -3056,6 +3098,8 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "rpm_limit_type",
+    "tpm_limit_type",
     "guardrails",
     "tags",
     "enforced_params",
@@ -3068,6 +3112,7 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "tags",
     "team_member_key_duration",
     "prompts",
+    "logging",
 ]
 
 

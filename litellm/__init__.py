@@ -290,7 +290,7 @@ banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
 include_cost_in_streaming_usage: bool = False
-### PROMPTS ###
+### PROMPTS ####
 from litellm.types.prompts.init_prompts import PromptSpec
 
 prompt_name_config_map: Dict[str, PromptSpec] = {}
@@ -1189,6 +1189,9 @@ from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from .llms.azure.responses.o_series_transformation import (
     AzureOpenAIOSeriesResponsesAPIConfig,
+)
+from .llms.litellm_proxy.responses.transformation import (
+    LiteLLMProxyResponsesAPIConfig,
 )
 from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility

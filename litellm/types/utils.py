@@ -1867,6 +1867,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_team_alias: Optional[str]
     user_api_key_end_user_id: Optional[str]
     user_api_key_request_route: Optional[str]
+    user_api_key_auth_metadata: Optional[Dict[str, str]]
 
 
 class StandardLoggingMCPToolCall(TypedDict, total=False):
@@ -2077,10 +2078,12 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
+
 class CachingDetails(TypedDict):
     """
     Track all caching related metrics, fields for a given request
     """
+
     cache_hit: Optional[bool]
     """
     Whether the request hit the cache
@@ -2090,12 +2093,16 @@ class CachingDetails(TypedDict):
     Duration for reading from cache
     """
 
+
 class CostBreakdown(TypedDict):
     """
     Detailed cost breakdown for a request
     """
+
     input_cost: float  # Cost of input/prompt tokens
-    output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
+    output_cost: (
+        float  # Cost of output/completion tokens (includes reasoning if applicable)
+    )
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
 
@@ -2219,6 +2226,60 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
 
+class CustomPricingLiteLLMParams(BaseModel):
+    ## CUSTOM PRICING ##
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    input_cost_per_second: Optional[float] = None
+    output_cost_per_second: Optional[float] = None
+    input_cost_per_pixel: Optional[float] = None
+    output_cost_per_pixel: Optional[float] = None
+    
+    # Include all ModelInfoBase fields as optional
+    # This allows any model_info parameter to be set in litellm_params
+    input_cost_per_token_flex: Optional[float] = None
+    input_cost_per_token_priority: Optional[float] = None
+    cache_creation_input_token_cost: Optional[float] = None
+    cache_creation_input_token_cost_above_1hr: Optional[float] = None
+    cache_creation_input_token_cost_above_200k_tokens: Optional[float] = None
+    cache_creation_input_audio_token_cost: Optional[float] = None
+    cache_read_input_token_cost: Optional[float] = None
+    cache_read_input_token_cost_flex: Optional[float] = None
+    cache_read_input_token_cost_priority: Optional[float] = None
+    cache_read_input_token_cost_above_200k_tokens: Optional[float] = None
+    cache_read_input_audio_token_cost: Optional[float] = None
+    input_cost_per_character: Optional[float] = None
+    input_cost_per_character_above_128k_tokens: Optional[float] = None
+    input_cost_per_audio_token: Optional[float] = None
+    input_cost_per_token_cache_hit: Optional[float] = None
+    input_cost_per_token_above_128k_tokens: Optional[float] = None
+    input_cost_per_token_above_200k_tokens: Optional[float] = None
+    input_cost_per_character_above_128k_tokens: Optional[float] = None
+    input_cost_per_query: Optional[float] = None
+    input_cost_per_image: Optional[float] = None
+    input_cost_per_image_above_128k_tokens: Optional[float] = None
+    input_cost_per_audio_per_second: Optional[float] = None
+    input_cost_per_audio_per_second_above_128k_tokens: Optional[float] = None
+    input_cost_per_video_per_second: Optional[float] = None
+    input_cost_per_video_per_second_above_128k_tokens: Optional[float] = None
+    input_cost_per_video_per_second_above_15s_interval: Optional[float] = None
+    input_cost_per_video_per_second_above_8s_interval: Optional[float] = None
+    input_cost_per_token_batches: Optional[float] = None
+    output_cost_per_token_batches: Optional[float] = None
+    output_cost_per_token_flex: Optional[float] = None
+    output_cost_per_token_priority: Optional[float] = None
+    output_cost_per_character: Optional[float] = None
+    output_cost_per_audio_token: Optional[float] = None
+    output_cost_per_token_above_128k_tokens: Optional[float] = None
+    output_cost_per_token_above_200k_tokens: Optional[float] = None
+    output_cost_per_character_above_128k_tokens: Optional[float] = None
+    output_cost_per_image: Optional[float] = None
+    output_cost_per_reasoning_token: Optional[float] = None
+    output_cost_per_video_per_second: Optional[float] = None
+    output_cost_per_audio_per_second: Optional[float] = None
+    search_context_cost_per_query: Optional[Dict[str, Any]] = None
+    citation_cost_per_token: Optional[float] = None
+    tiered_pricing: Optional[List[Dict[str, Any]]] = None
 
 all_litellm_params = [
     "metadata",
@@ -2318,7 +2379,7 @@ all_litellm_params = [
     "litellm_session_id",
     "use_litellm_proxy",
     "prompt_label",
-] + list(StandardCallbackDynamicParams.__annotations__.keys())
+] + list(StandardCallbackDynamicParams.__annotations__.keys()) + list(CustomPricingLiteLLMParams.model_fields.keys())
 
 
 class KeyGenerationConfig(TypedDict, total=False):
@@ -2709,11 +2770,6 @@ class PriorityReservationSettings(BaseModel):
     saturation_threshold: float = Field(
         default=0.50,
         description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits."
-    )
-    
-    tracking_multiplier: int = Field(
-        default=10,
-        description="Multiplier for model-wide tracking limits in strict mode. Set to 10x because v3_limiter.should_rate_limit() both increments counters AND enforces limits - we need the counter increment (for saturation checks) but not the enforcement (priority limits handle that). High multiplier ensures tracking never blocks."
     )
 
     model_config = ConfigDict(protected_namespaces=())
