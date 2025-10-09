@@ -1053,7 +1053,7 @@ async def test_get_team_object_permission_with_already_loaded_permission():
     from the team object without making an additional DB call.
     """
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
-    
+
     # Create mock object permission
     mock_object_permission = LiteLLM_ObjectPermissionTable(
         object_permission_id="perm-123",
@@ -1077,28 +1077,34 @@ async def test_get_team_object_permission_with_already_loaded_permission():
     )
     
     # Mock get_team_object to return our team with loaded permission
+    # Also need to mock prisma_client from proxy_server
+    mock_prisma = MagicMock()
     with patch(
-        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.get_team_object"
-    ) as mock_get_team:
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma,
+    ):
         with patch(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.get_object_permission"
-        ) as mock_get_perm:
-            mock_get_team.return_value = mock_team_obj
-            
-            # Call the method
-            result = await MCPRequestHandler._get_team_object_permission(
-                mock_user_auth
-            )
-            
-            # Assert we got the object permission
-            assert result == mock_object_permission
-            assert result.mcp_servers == ["server1", "server2"]
-            
-            # Verify get_team_object was called
-            mock_get_team.assert_called_once()
-            
-            # Verify get_object_permission was NOT called (since it was already loaded)
-            mock_get_perm.assert_not_called()
+            "litellm.proxy.auth.auth_checks.get_team_object"
+        ) as mock_get_team:
+            with patch(
+                "litellm.proxy.auth.auth_checks.get_object_permission"
+            ) as mock_get_perm:
+                mock_get_team.return_value = mock_team_obj
+                
+                # Call the method
+                result = await MCPRequestHandler._get_team_object_permission(
+                    mock_user_auth
+                )
+                
+                # Assert we got the object permission
+                assert result == mock_object_permission
+                assert result.mcp_servers == ["server1", "server2"]
+                
+                # Verify get_team_object was called
+                mock_get_team.assert_called_once()
+                
+                # Verify get_object_permission was NOT called (since it was already loaded)
+                mock_get_perm.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1108,7 +1114,7 @@ async def test_get_team_object_permission_fetches_from_db_when_not_loaded():
     is not loaded but object_permission_id exists.
     """
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
-    
+
     # Create mock object permission (to be returned from DB)
     mock_object_permission = LiteLLM_ObjectPermissionTable(
         object_permission_id="perm-456",
@@ -1132,35 +1138,41 @@ async def test_get_team_object_permission_fetches_from_db_when_not_loaded():
     )
     
     # Mock the methods
+    # Also need to mock prisma_client from proxy_server
+    mock_prisma = MagicMock()
     with patch(
-        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.get_team_object"
-    ) as mock_get_team:
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma,
+    ):
         with patch(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.get_object_permission"
-        ) as mock_get_perm:
-            mock_get_team.return_value = mock_team_obj
-            mock_get_perm.return_value = mock_object_permission
-            
-            # Call the method
-            result = await MCPRequestHandler._get_team_object_permission(
-                mock_user_auth
-            )
-            
-            # Assert we got the object permission
-            assert result == mock_object_permission
-            assert result.mcp_servers == ["server3", "server4"]
-            
-            # Verify get_team_object was called
-            mock_get_team.assert_called_once()
-            
-            # Verify get_object_permission WAS called (since it wasn't loaded)
-            mock_get_perm.assert_called_once_with(
-                object_permission_id="perm-456",
-                prisma_client=mock.ANY,
-                user_api_key_cache=mock.ANY,
-                parent_otel_span=mock_user_auth.parent_otel_span,
-                proxy_logging_obj=mock.ANY,
-            )
+            "litellm.proxy.auth.auth_checks.get_team_object"
+        ) as mock_get_team:
+            with patch(
+                "litellm.proxy.auth.auth_checks.get_object_permission"
+            ) as mock_get_perm:
+                mock_get_team.return_value = mock_team_obj
+                mock_get_perm.return_value = mock_object_permission
+                
+                # Call the method
+                result = await MCPRequestHandler._get_team_object_permission(
+                    mock_user_auth
+                )
+                
+                # Assert we got the object permission
+                assert result == mock_object_permission
+                assert result.mcp_servers == ["server3", "server4"]
+                
+                # Verify get_team_object was called
+                mock_get_team.assert_called_once()
+                
+                # Verify get_object_permission WAS called (since it wasn't loaded)
+                mock_get_perm.assert_called_once_with(
+                    object_permission_id="perm-456",
+                    prisma_client=mock.ANY,
+                    user_api_key_cache=mock.ANY,
+                    parent_otel_span=mock_user_auth.parent_otel_span,
+                    proxy_logging_obj=mock.ANY,
+                )
 
 
 @pytest.mark.asyncio
@@ -1170,7 +1182,7 @@ async def test_get_allowed_mcp_servers_for_team_uses_helper():
     helper which handles both loaded and unloaded object_permission cases.
     """
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
-    
+
     # Create mock object permission with servers and access groups
     mock_object_permission = LiteLLM_ObjectPermissionTable(
         object_permission_id="perm-789",
