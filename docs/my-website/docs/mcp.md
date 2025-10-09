@@ -246,7 +246,7 @@ litellm_settings:
 </TabItem>
 </Tabs>
 
-## MCP Tool Filtering
+## Allow/Disallow MCP Tools
 
 Control which tools are available from your MCP servers. You can either allow only specific tools or block dangerous ones.
 
@@ -305,6 +305,119 @@ mcp_servers:
 
 - If you specify both `allowed_tools` and `disallowed_tools`, the allowed list takes priority
 - Tool names are case-sensitive
+
+---
+
+## Allow/Disallow MCP Tool Parameters
+
+Control which parameters are allowed for specific MCP tools using the `allowed_params` configuration. This provides fine-grained control over tool usage by restricting the parameters that can be passed to each tool.
+
+### Configuration
+
+`allowed_params` is a dictionary that maps tool names to lists of allowed parameter names. When configured, only the specified parameters will be accepted for that tool - any other parameters will be rejected with a 403 error.
+
+```yaml title="config.yaml with allowed_params" showLineNumbers
+mcp_servers:
+  deepwiki_mcp:
+    url: https://mcp.deepwiki.com/mcp
+    transport: "http"
+    auth_type: "none"
+    allowed_params:
+      # Tool name: list of allowed parameters
+      read_wiki_contents: ["status"]
+  
+  my_api_mcp:
+    url: "https://my-api-server.com"
+    auth_type: "api_key"
+    auth_value: "my-key"
+    allowed_params:
+      # Using unprefixed tool name
+      getpetbyid: ["status"]
+      # Using prefixed tool name (both formats work)
+      my_api_mcp-findpetsbystatus: ["status", "limit"]
+      # Another tool with multiple allowed params
+      create_issue: ["title", "body", "labels"]
+```
+
+### How It Works
+
+1. **Tool-specific filtering**: Each tool can have its own list of allowed parameters
+2. **Flexible naming**: Tool names can be specified with or without the server prefix (e.g., both `"getpetbyid"` and `"my_api_mcp-getpetbyid"` work)
+3. **Whitelist approach**: Only parameters in the allowed list are permitted
+4. **Unlisted tools**: If `allowed_params` is not set, all parameters are allowed
+5. **Error handling**: Requests with disallowed parameters receive a 403 error with details about which parameters are allowed
+
+### Example Request Behavior
+
+With the configuration above, here's how requests would be handled:
+
+**✅ Allowed Request:**
+```json
+{
+  "tool": "read_wiki_contents",
+  "arguments": {
+    "status": "active"
+  }
+}
+```
+
+**❌ Rejected Request:**
+```json
+{
+  "tool": "read_wiki_contents",
+  "arguments": {
+    "status": "active",
+    "limit": 10  // This parameter is not allowed
+  }
+}
+```
+
+**Error Response:**
+```json
+{
+  "error": "Parameters ['limit'] are not allowed for tool read_wiki_contents. Allowed parameters: ['status']. Contact proxy admin to allow these parameters."
+}
+```
+
+### Use Cases
+
+- **Security**: Prevent users from accessing sensitive parameters or dangerous operations
+- **Cost control**: Restrict expensive parameters (e.g., limiting result counts)
+- **Compliance**: Enforce parameter usage policies for regulatory requirements
+- **Staged rollouts**: Gradually enable parameters as tools are tested
+- **Multi-tenant isolation**: Different parameter access for different user groups
+
+### Combining with Tool Filtering
+
+`allowed_params` works alongside `allowed_tools` and `disallowed_tools` for complete control:
+
+```yaml title="Combined filtering example" showLineNumbers
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: oauth2
+    authorization_url: https://github.com/login/oauth/authorize
+    token_url: https://github.com/login/oauth/access_token
+    client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
+    client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
+    scopes: ["public_repo", "user:email"]
+    # Only allow specific tools
+    allowed_tools: ["create_issue", "list_issues", "search_issues"]
+    # Block dangerous operations
+    disallowed_tools: ["delete_repo"]
+    # Restrict parameters per tool
+    allowed_params:
+      create_issue: ["title", "body", "labels"]
+      list_issues: ["state", "sort", "perPage"]
+      search_issues: ["query", "sort", "order", "perPage"]
+```
+
+This configuration ensures that:
+1. Only the three listed tools are available
+2. The `delete_repo` tool is explicitly blocked
+3. Each tool can only use its specified parameters
+
+---
 
 ## MCP Server Access Control
 
