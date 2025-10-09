@@ -18,12 +18,14 @@ import React, { useState } from "react";
 import { type KeyResponse, Team } from "@/components/key_team_helpers/key_list";
 import { Member, Organization } from "@/components/networking";
 import ModelsCell from "@/app/(dashboard)/teams/components/TeamsTable/ModelsCell";
+import YourRoleCell from "@/app/(dashboard)/teams/components/TeamsTable/YourRoleCell/YourRoleCell";
 
 type TeamsTableProps = {
   teams: Team[] | null;
   currentOrg: Organization | null;
   perTeamInfo: Record<string, PerTeamInfo>;
   userRole: string | null;
+  userId: string | null;
   setSelectedTeamId: (teamId: string) => void;
   setEditTeam: (editTeam: boolean) => void;
   onDeleteTeam: (teamId: string) => void;
@@ -44,6 +46,7 @@ const TeamsTable = ({
   setSelectedTeamId,
   perTeamInfo,
   userRole,
+  userId,
   setEditTeam,
   onDeleteTeam,
 }: TeamsTableProps) => {
@@ -58,6 +61,7 @@ const TeamsTable = ({
           <TableHeaderCell>Budget (USD)</TableHeaderCell>
           <TableHeaderCell>Models</TableHeaderCell>
           <TableHeaderCell>Organization</TableHeaderCell>
+          <TableHeaderCell>Your Role</TableHeaderCell>
           <TableHeaderCell>Info</TableHeaderCell>
         </TableRow>
       </TableHead>
@@ -127,6 +131,7 @@ const TeamsTable = ({
                   </TableCell>
                   <ModelsCell team={team} />
                   <TableCell>{team.organization_id}</TableCell>
+                  <YourRoleCell team={team} userId={userId} />
                   <TableCell>
                     <Text>
                       {perTeamInfo &&
