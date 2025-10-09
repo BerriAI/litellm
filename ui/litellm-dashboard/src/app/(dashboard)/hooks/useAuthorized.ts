@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { getCookie, clearTokenCookies } from "@/utils/cookieUtils";
 import { useRouter } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
+import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 
 const useAuthorized = () => {
   const router = useRouter();
@@ -31,10 +31,13 @@ const useAuthorized = () => {
   }, [token, router]);
 
   return {
+    token: token,
     accessToken: decoded?.key ?? null,
     userId: decoded?.user_id ?? null,
     userRole: decoded?.user_role ?? null,
     premiumUser: decoded?.premium_user ?? null,
+    disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,
+    showSSOBanner: decoded?.login_method === "username_password" ?? false,
   };
 };
 
