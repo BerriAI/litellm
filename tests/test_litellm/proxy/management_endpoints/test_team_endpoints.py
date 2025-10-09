@@ -2,13 +2,14 @@ import asyncio
 import json
 import os
 import sys
-from litellm._uuid import uuid
 from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+
+from litellm._uuid import uuid
 
 sys.path.insert(
     0, os.path.abspath("../../../")
@@ -412,8 +413,10 @@ async def test_new_team_with_mcp_tool_permissions(mock_db_client, mock_admin_aut
     )
 
     # Verify mcp_tool_permissions was stored
+    import json
     assert "mcp_tool_permissions" in created_permission_data
-    assert created_permission_data["mcp_tool_permissions"] == {
+    # mcp_tool_permissions is stored as a JSON string
+    assert json.loads(created_permission_data["mcp_tool_permissions"]) == {
         "server_a": ["read_wiki_structure", "read_wiki_contents"],
         "server_b": ["ask_question"],
     }
