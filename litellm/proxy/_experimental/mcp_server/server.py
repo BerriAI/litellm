@@ -364,25 +364,25 @@ if MCP_AVAILABLE:
     def _tool_name_matches(tool_name: str, filter_list: List[str]) -> bool:
         """
         Check if a tool name matches any name in the filter list.
-        
+
         Checks both the full tool name and unprefixed version (without server prefix).
         This allows users to configure simple tool names regardless of prefixing.
-        
+
         Args:
             tool_name: The tool name to check (may be prefixed like "server-tool_name")
             filter_list: List of tool names to match against
-            
+
         Returns:
             True if the tool name (prefixed or unprefixed) is in the filter list
         """
         from litellm.proxy._experimental.mcp_server.utils import (
             get_server_name_prefix_tool_mcp,
         )
-        
+
         # Check if the full name is in the list
         if tool_name in filter_list:
             return True
-            
+
         # Check if the unprefixed name is in the list
         unprefixed_name, _ = get_server_name_prefix_tool_mcp(tool_name)
         return unprefixed_name in filter_list
@@ -393,34 +393,36 @@ if MCP_AVAILABLE:
     ) -> List[MCPTool]:
         """
         Filter tools by allowed/disallowed tools configuration.
-        
+
         If allowed_tools is set, only tools in that list are returned.
         If disallowed_tools is set, tools in that list are excluded.
         Tool names are matched with and without server prefixes for flexibility.
-        
+
         Args:
             tools: List of tools to filter
             mcp_server: Server configuration with allowed_tools/disallowed_tools
-            
+
         Returns:
             Filtered list of tools
         """
         tools_to_return = tools
-        
+
         # Filter by allowed_tools (whitelist)
         if mcp_server.allowed_tools:
             tools_to_return = [
-                tool for tool in tools 
+                tool
+                for tool in tools
                 if _tool_name_matches(tool.name, mcp_server.allowed_tools)
             ]
-                    
+
         # Filter by disallowed_tools (blacklist)
         if mcp_server.disallowed_tools:
             tools_to_return = [
-                tool for tool in tools_to_return
+                tool
+                for tool in tools_to_return
                 if not _tool_name_matches(tool.name, mcp_server.disallowed_tools)
             ]
-            
+
         return tools_to_return
 
     async def _get_tools_from_mcp_servers(
@@ -497,17 +499,17 @@ if MCP_AVAILABLE:
                     extra_headers=extra_headers,
                     add_prefix=add_prefix,
                 )
-                
+
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
-                
+
                 filtered_tools = await filter_tools_by_key_team_permissions(
                     tools=filtered_tools,
                     server_id=server_id,
                     user_api_key_auth=user_api_key_auth,
                 )
-                
+
                 all_tools.extend(filtered_tools)
-                
+
                 verbose_logger.debug(
                     f"Successfully fetched {len(tools)} tools from server {server.name}, {len(filtered_tools)} after filtering"
                 )
@@ -520,6 +522,7 @@ if MCP_AVAILABLE:
         verbose_logger.info(
             f"Successfully fetched {len(all_tools)} tools total from all MCP servers"
         )
+
         return all_tools
 
     async def filter_tools_by_key_team_permissions(
@@ -529,7 +532,7 @@ if MCP_AVAILABLE:
     ) -> List[MCPTool]:
         """
         Filter tools based on key/team mcp_tool_permissions.
-        
+
         Note: Tool names in the DB are stored without server prefixes,
         but tool names from MCP servers are prefixed. We need to strip
         the prefix before comparing.
@@ -551,7 +554,7 @@ if MCP_AVAILABLE:
         else:
             # No restrictions, return all tools
             filtered_tools = tools
-        
+
         return filtered_tools
 
     async def _list_mcp_tools(
@@ -596,30 +599,7 @@ if MCP_AVAILABLE:
             )
             # Continue with empty managed tools list instead of failing completely
 
-        # Get tools from local registry
-        local_tools = []
-        try:
-            local_tools_raw = global_mcp_tool_registry.list_tools()
-
-            # Convert local tools to MCPTool format
-            for tool in local_tools_raw:
-                # Convert from litellm.types.mcp_server.tool_registry.MCPTool to mcp.types.Tool
-                mcp_tool = MCPTool(
-                    name=tool.name,
-                    description=tool.description,
-                    inputSchema=tool.input_schema,
-                )
-                local_tools.append(mcp_tool)
-        except Exception as e:
-            verbose_logger.exception(
-                f"Error getting tools from local registry: {str(e)}"
-            )
-            # Continue with empty local tools list instead of failing completely
-
-        # Combine all tools
-        all_tools = managed_tools + local_tools
-
-        return all_tools
+        return managed_tools
 
     @client
     async def call_mcp_tool(
@@ -680,33 +660,42 @@ if MCP_AVAILABLE:
                 standard_logging_mcp_tool_call
             )
             litellm_logging_obj.model = f"MCP: {name}"
-        # Try managed server tool first (pass the full prefixed name)
-        # Primary and recommended way to use MCP servers
+        # Check if tool exists in local registry first (for OpenAPI-based tools)
+        # These tools are registered with their prefixed names
         #########################################################
-        mcp_server: Optional[MCPServer] = (
-            global_mcp_server_manager._get_mcp_server_from_tool_name(name)
-        )
-        if mcp_server:
-            standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
-                mcp_server.mcp_info or {}
-            ).get("mcp_server_cost_info")
-            response = await _handle_managed_mcp_tool(
-                name=name,  # Pass the full name (potentially prefixed)
-                arguments=arguments,
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=mcp_auth_header,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                litellm_logging_obj=litellm_logging_obj,
-            )
+        local_tool = global_mcp_tool_registry.get_tool(name)
+        if local_tool:
+            verbose_logger.debug(f"Executing local registry tool: {name}")
+            response = await _handle_local_mcp_tool(name, arguments)
 
-        # Fall back to local tool registry (use original name)
-        #########################################################
-        # Deprecated: Local MCP Server Tool
+        # Try managed MCP server tool (pass the full prefixed name)
+        # Primary and recommended way to use external MCP servers
         #########################################################
         else:
-            response = await _handle_local_mcp_tool(original_tool_name, arguments)
+            mcp_server: Optional[MCPServer] = (
+                global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+            )
+            if mcp_server:
+                standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
+                    mcp_server.mcp_info or {}
+                ).get("mcp_server_cost_info")
+                response = await _handle_managed_mcp_tool(
+                    name=name,  # Pass the full name (potentially prefixed)
+                    arguments=arguments,
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    litellm_logging_obj=litellm_logging_obj,
+                )
+
+            # Fall back to local tool registry with original name (legacy support)
+            #########################################################
+            # Deprecated: Local MCP Server Tool
+            #########################################################
+            else:
+                response = await _handle_local_mcp_tool(original_tool_name, arguments)
 
         #########################################################
         # Post MCP Tool Call Hook
@@ -778,14 +767,21 @@ if MCP_AVAILABLE:
         Handle tool execution for local registry tools
         Note: Local tools don't use prefixes, so we use the original name
         """
+        import inspect
+
         tool = global_mcp_tool_registry.get_tool(name)
         if not tool:
             raise HTTPException(status_code=404, detail=f"Tool '{name}' not found")
 
         try:
-            result = tool.handler(**arguments)
+            # Check if handler is async or sync
+            if inspect.iscoroutinefunction(tool.handler):
+                result = await tool.handler(**arguments)
+            else:
+                result = tool.handler(**arguments)
             return [TextContent(text=str(result), type="text")]
         except Exception as e:
+            verbose_logger.exception(f"Error executing local tool {name}: {str(e)}")
             return [TextContent(text=f"Error: {str(e)}", type="text")]
 
     def _get_mcp_servers_in_path(path: str) -> Optional[List[str]]:
