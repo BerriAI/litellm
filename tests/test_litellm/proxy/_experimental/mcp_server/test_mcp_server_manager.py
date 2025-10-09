@@ -1150,6 +1150,78 @@ class TestMCPServerManager:
             user_api_key_auth=user_auth,
         )
 
+    @pytest.mark.asyncio
+    async def test_allowed_tools_with_mixed_prefixed_and_unprefixed_names(self):
+        """
+        Test that allowed_tools works with both unprefixed and prefixed tool names.
+        This tests the scenario where allowed_tools = ["getpetbyid", "my_api_mcp-findpetsbystatus"]
+        Both getpetbyid (unprefixed) and findpetsbystatus (called unprefixed but allowed via prefix) should work.
+        """
+        manager = MCPServerManager()
+
+        # Create server with mixed prefixed/unprefixed allowed_tools
+        server = MCPServer(
+            server_id="my_api_mcp",
+            name="my_api_mcp",
+            transport=MCPTransport.stdio,
+            allowed_tools=["getpetbyid", "my_api_mcp-findpetsbystatus"],
+            disallowed_tools=None,
+        )
+
+        # Mock dependencies - set object_permission and object_permission_id to None
+        # so permission checks return None (no restrictions)
+        user_api_key_auth = MagicMock()
+        user_api_key_auth.object_permission = None
+        user_api_key_auth.object_permission_id = None
+        proxy_logging_obj = MagicMock()
+
+        # Mock the async methods that pre_call_tool_check calls
+        proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value={}
+        )
+        proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+
+        # Test 1: Call getpetbyid (unprefixed in allowed_tools) - should succeed
+        await manager.pre_call_tool_check(
+            name="getpetbyid",
+            arguments={"petId": "1"},
+            server_name_from_prefix="my_api_mcp",
+            user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
+            server=server,
+        )
+
+        # Test 2: Call findpetsbystatus (prefixed in allowed_tools as "my_api_mcp-findpetsbystatus") - should succeed
+        await manager.pre_call_tool_check(
+            name="findpetsbystatus",
+            arguments={"status": "available"},
+            server_name_from_prefix="my_api_mcp",
+            user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
+            server=server,
+        )
+
+        # Test 3: Call a tool that's not in allowed_tools - should fail
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.pre_call_tool_check(
+                name="deletepet",
+                arguments={"petId": "1"},
+                server_name_from_prefix="my_api_mcp",
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging_obj,
+                server=server,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert (
+            "Tool deletepet is not allowed for server my_api_mcp"
+            in exc_info.value.detail["error"]
+        )
+        assert (
+            "Contact proxy admin to allow this tool" in exc_info.value.detail["error"]
+        )
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
