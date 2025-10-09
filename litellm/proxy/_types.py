@@ -1282,6 +1282,7 @@ class NewTeamRequest(TeamBase):
     guardrails: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    allowed_passthrough_routes: Optional[list] = None
     team_member_budget: Optional[float] = (
         None  # allow user to set a budget for all team members
     )
@@ -1337,6 +1338,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_member_rpm_limit: Optional[int] = None
     team_member_tpm_limit: Optional[int] = None
     team_member_key_duration: Optional[str] = None
+    allowed_passthrough_routes: Optional[list] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
