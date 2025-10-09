@@ -114,16 +114,16 @@ class MCPRequestHandler:
         request.body = mock_body  # type: ignore
         if ".well-known" in str(request.url):  # public routes
             validated_user_api_key_auth = UserAPIKeyAuth()
-        elif litellm_api_key == "":
-            from fastapi import HTTPException
+        # elif litellm_api_key == "":
+        #     from fastapi import HTTPException
 
-            raise HTTPException(
-                status_code=401,
-                detail="LiteLLM API key is missing. Please add it or use OAuth authentication.",
-                headers={
-                    "WWW-Authenticate": f'Bearer resource_metadata=f"{request.base_url}/.well-known/oauth-protected-resource"',
-                },
-            )
+        #     raise HTTPException(
+        #         status_code=401,
+        #         detail="LiteLLM API key is missing. Please add it or use OAuth authentication.",
+        #         headers={
+        #             "WWW-Authenticate": f'Bearer resource_metadata=f"{request.base_url}/.well-known/oauth-protected-resource"',
+        #         },
+        #     )
         else:
             validated_user_api_key_auth = await user_api_key_auth(
                 api_key=litellm_api_key, request=request
