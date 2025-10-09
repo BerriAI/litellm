@@ -1,59 +1,49 @@
 import React, { useState, useEffect } from "react";
-import { Typography } from "antd";
 import { teamDeleteCall, Organization, fetchMCPAccessGroups } from "@/components/networking";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
-import { PencilAltIcon, RefreshIcon, TrashIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
-import { Button as Button2, Modal, Form, Input, Select as Select2, message, Tooltip } from "antd";
+import { Button as Button2, Modal, Form, Input, Select as Select2, Tooltip } from "antd";
 import NumericalInput from "../../../components/shared/numerical_input";
 import {
   fetchAvailableModelsForTeamOrKey,
   getModelDisplayName,
   unfurlWildcardModelsInList,
 } from "@/components/key_team_helpers/fetch_available_models_team_key";
-import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { getGuardrailsList } from "@/components/networking";
 import TeamInfoView from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isAdminRole } from "@/utils/roles";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
   TextInput,
   Card,
-  Icon,
   Button,
-  Badge,
   Col,
   Text,
   Grid,
   Accordion,
   AccordionHeader,
   AccordionBody,
-  TabGroup,
-  TabList,
   TabPanel,
-  TabPanels,
-  Tab,
 } from "@tremor/react";
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import VectorStoreSelector from "../../../components/vector_store_management/VectorStoreSelector";
 import PremiumLoggingSettings from "../../../components/common_components/PremiumLoggingSettings";
 import type { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { AlertTriangleIcon, XIcon } from "lucide-react";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
 import ModelAliasManager from "./common_components/ModelAliasManager";
 import NotificationsManager from "./molecules/notifications_manager";
 
+import { teamCreateCall, Member, v2TeamListCall } from "@/components/networking";
+import { updateExistingKeys } from "@/utils/dataUtils";
+import TeamsHeaderTabs from "@/app/(dashboard)/teams/components/TeamsHeaderTabs";
+import TeamsFilters from "@/app/(dashboard)/teams/components/TeamsFilters";
+import useFetchTeams from "@/app/(dashboard)/teams/hooks/useFetchTeams";
+import TeamsTable from "@/app/(dashboard)/teams/components/TeamsTable/TeamsTable";
+
 interface TeamProps {
   teams: Team[] | null;
-  searchParams: any;
   accessToken: string | null;
   setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   userID: string | null;
@@ -69,18 +59,6 @@ interface FilterState {
   sort_by: string;
   sort_order: "asc" | "desc";
 }
-
-interface EditTeamModalProps {
-  visible: boolean;
-  onCancel: () => void;
-  team: any; // Assuming TeamType is a type representing your team object
-  onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
-}
-
-import { teamCreateCall, Member, v2TeamListCall } from "@/components/networking";
-import { updateExistingKeys } from "@/utils/dataUtils";
-import TeamsHeaderTabs from "@/app/(dashboard)/teams/components/TeamsHeaderTabs";
-import TeamsFilters from "@/app/(dashboard)/teams/components/TeamsFilters";
 
 interface TeamInfo {
   members_with_roles: Member[];
@@ -112,7 +90,6 @@ const getOrganizationModels = (organization: Organization | null, userModels: st
 
 const Teams: React.FC<TeamProps> = ({
   teams,
-  searchParams,
   accessToken,
   setTeams,
   userID,
@@ -120,7 +97,6 @@ const Teams: React.FC<TeamProps> = ({
   organizations,
   premiumUser = false,
 }) => {
-  const [lastRefreshed, setLastRefreshed] = useState("");
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
   const [showFilters, setShowFilters] = useState(false);
@@ -131,15 +107,6 @@ const Teams: React.FC<TeamProps> = ({
     sort_by: "created_at",
     sort_order: "desc",
   });
-
-  useEffect(() => {
-    console.log(`inside useeffect - ${lastRefreshed}`);
-    if (accessToken) {
-      // Call your function here
-      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
-    }
-    handleRefreshClick();
-  }, [lastRefreshed]);
 
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
@@ -158,12 +125,12 @@ const Teams: React.FC<TeamProps> = ({
 
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
-  const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
+  const { lastRefreshed, onRefreshClick: handleRefreshClick } = useFetchTeams({ currentOrg, setTeams });
 
   useEffect(() => {
     console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
@@ -426,12 +393,6 @@ const Teams: React.FC<TeamProps> = ({
     return false;
   };
 
-  const handleRefreshClick = () => {
-    // Update the 'lastRefreshed' state to the current date and time
-    const currentDate = new Date();
-    setLastRefreshed(currentDate.toLocaleString());
-  };
-
   const handleFilterChange = (key: keyof FilterState, value: string) => {
     const newFilters = { ...filters, [key]: value };
     setFilters(newFilters);
@@ -565,214 +526,15 @@ const Teams: React.FC<TeamProps> = ({
                           />
                         </div>
                       </div>
-                      <Table>
-                        <TableHead>
-                          <TableRow>
-                            <TableHeaderCell>Team Name</TableHeaderCell>
-                            <TableHeaderCell>Team ID</TableHeaderCell>
-                            <TableHeaderCell>Created</TableHeaderCell>
-                            <TableHeaderCell>Spend (USD)</TableHeaderCell>
-                            <TableHeaderCell>Budget (USD)</TableHeaderCell>
-                            <TableHeaderCell>Models</TableHeaderCell>
-                            <TableHeaderCell>Organization</TableHeaderCell>
-                            <TableHeaderCell>Info</TableHeaderCell>
-                          </TableRow>
-                        </TableHead>
-
-                        <TableBody>
-                          {teams && teams.length > 0
-                            ? teams
-                                .filter((team) => {
-                                  if (!currentOrg) return true;
-                                  return team.organization_id === currentOrg.organization_id;
-                                })
-                                .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-                                .map((team: any) => (
-                                  <TableRow key={team.team_id}>
-                                    <TableCell
-                                      style={{
-                                        maxWidth: "4px",
-                                        whiteSpace: "pre-wrap",
-                                        overflow: "hidden",
-                                      }}
-                                    >
-                                      {team["team_alias"]}
-                                    </TableCell>
-                                    <TableCell>
-                                      <div className="overflow-hidden">
-                                        <Tooltip title={team.team_id}>
-                                          <Button
-                                            size="xs"
-                                            variant="light"
-                                            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                                            onClick={() => {
-                                              // Add click handler
-                                              setSelectedTeamId(team.team_id);
-                                            }}
-                                          >
-                                            {team.team_id.slice(0, 7)}...
-                                          </Button>
-                                        </Tooltip>
-                                      </div>
-                                    </TableCell>
-                                    <TableCell
-                                      style={{
-                                        maxWidth: "4px",
-                                        whiteSpace: "pre-wrap",
-                                        overflow: "hidden",
-                                      }}
-                                    >
-                                      {team.created_at ? new Date(team.created_at).toLocaleDateString() : "N/A"}
-                                    </TableCell>
-                                    <TableCell
-                                      style={{
-                                        maxWidth: "4px",
-                                        whiteSpace: "pre-wrap",
-                                        overflow: "hidden",
-                                      }}
-                                    >
-                                      {formatNumberWithCommas(team["spend"], 4)}
-                                    </TableCell>
-                                    <TableCell
-                                      style={{
-                                        maxWidth: "4px",
-                                        whiteSpace: "pre-wrap",
-                                        overflow: "hidden",
-                                      }}
-                                    >
-                                      {team["max_budget"] !== null && team["max_budget"] !== undefined
-                                        ? team["max_budget"]
-                                        : "No limit"}
-                                    </TableCell>
-                                    <TableCell
-                                      style={{
-                                        maxWidth: "8-x",
-                                        whiteSpace: "pre-wrap",
-                                        overflow: "hidden",
-                                      }}
-                                      className={team.models.length > 3 ? "px-0" : ""}
-                                    >
-                                      <div className="flex flex-col">
-                                        {Array.isArray(team.models) ? (
-                                          <div className="flex flex-col">
-                                            {team.models.length === 0 ? (
-                                              <Badge size={"xs"} className="mb-1" color="red">
-                                                <Text>All Proxy Models</Text>
-                                              </Badge>
-                                            ) : (
-                                              <>
-                                                <div className="flex items-start">
-                                                  {team.models.length > 3 && (
-                                                    <div>
-                                                      <Icon
-                                                        icon={
-                                                          expandedAccordions[team.team_id]
-                                                            ? ChevronDownIcon
-                                                            : ChevronRightIcon
-                                                        }
-                                                        className="cursor-pointer"
-                                                        size="xs"
-                                                        onClick={() => {
-                                                          setExpandedAccordions((prev) => ({
-                                                            ...prev,
-                                                            [team.team_id]: !prev[team.team_id],
-                                                          }));
-                                                        }}
-                                                      />
-                                                    </div>
-                                                  )}
-                                                  <div className="flex flex-wrap gap-1">
-                                                    {team.models.slice(0, 3).map((model: string, index: number) =>
-                                                      model === "all-proxy-models" ? (
-                                                        <Badge key={index} size={"xs"} color="red">
-                                                          <Text>All Proxy Models</Text>
-                                                        </Badge>
-                                                      ) : (
-                                                        <Badge key={index} size={"xs"} color="blue">
-                                                          <Text>
-                                                            {model.length > 30
-                                                              ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                                              : getModelDisplayName(model)}
-                                                          </Text>
-                                                        </Badge>
-                                                      ),
-                                                    )}
-                                                    {team.models.length > 3 && !expandedAccordions[team.team_id] && (
-                                                      <Badge size={"xs"} color="gray" className="cursor-pointer">
-                                                        <Text>
-                                                          +{team.models.length - 3}{" "}
-                                                          {team.models.length - 3 === 1 ? "more model" : "more models"}
-                                                        </Text>
-                                                      </Badge>
-                                                    )}
-                                                    {expandedAccordions[team.team_id] && (
-                                                      <div className="flex flex-wrap gap-1">
-                                                        {team.models.slice(3).map((model: string, index: number) =>
-                                                          model === "all-proxy-models" ? (
-                                                            <Badge key={index + 3} size={"xs"} color="red">
-                                                              <Text>All Proxy Models</Text>
-                                                            </Badge>
-                                                          ) : (
-                                                            <Badge key={index + 3} size={"xs"} color="blue">
-                                                              <Text>
-                                                                {model.length > 30
-                                                                  ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                                                  : getModelDisplayName(model)}
-                                                              </Text>
-                                                            </Badge>
-                                                          ),
-                                                        )}
-                                                      </div>
-                                                    )}
-                                                  </div>
-                                                </div>
-                                              </>
-                                            )}
-                                          </div>
-                                        ) : null}
-                                      </div>
-                                    </TableCell>
-
-                                    <TableCell>{team.organization_id}</TableCell>
-                                    <TableCell>
-                                      <Text>
-                                        {perTeamInfo &&
-                                          team.team_id &&
-                                          perTeamInfo[team.team_id] &&
-                                          perTeamInfo[team.team_id].keys &&
-                                          perTeamInfo[team.team_id].keys.length}{" "}
-                                        Keys
-                                      </Text>
-                                      <Text>
-                                        {perTeamInfo &&
-                                          team.team_id &&
-                                          perTeamInfo[team.team_id] &&
-                                          perTeamInfo[team.team_id].team_info &&
-                                          perTeamInfo[team.team_id].team_info.members_with_roles &&
-                                          perTeamInfo[team.team_id].team_info.members_with_roles.length}{" "}
-                                        Members
-                                      </Text>
-                                    </TableCell>
-                                    <TableCell>
-                                      {userRole == "Admin" ? (
-                                        <>
-                                          <Icon
-                                            icon={PencilAltIcon}
-                                            size="sm"
-                                            onClick={() => {
-                                              setSelectedTeamId(team.team_id);
-                                              setEditTeam(true);
-                                            }}
-                                          />
-                                          <Icon onClick={() => handleDelete(team.team_id)} icon={TrashIcon} size="sm" />
-                                        </>
-                                      ) : null}
-                                    </TableCell>
-                                  </TableRow>
-                                ))
-                            : null}
-                        </TableBody>
-                      </Table>
+                      <TeamsTable
+                        teams={teams}
+                        currentOrg={currentOrg}
+                        perTeamInfo={perTeamInfo}
+                        userRole={userRole}
+                        setSelectedTeamId={setSelectedTeamId}
+                        setEditTeam={setEditTeam}
+                        onDeleteTeam={handleDelete}
+                      />
                       {isDeleteModalOpen &&
                         (() => {
                           const team = teams?.find((t) => t.team_id === teamToDelete);
