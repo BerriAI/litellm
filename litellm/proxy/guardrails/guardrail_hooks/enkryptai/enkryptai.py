@@ -79,7 +79,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
                 GuardrailEventHooks.during_call,
             ]
 
-        super().__init__(**kwargs)
+        super().__init__(guardrail_name=guardrail_name, **kwargs)
 
         verbose_proxy_logger.debug(
             "EnkryptAI Guardrail initialized with guardrail_name: %s, policy_name: %s",
