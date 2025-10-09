@@ -53,6 +53,9 @@ class SnowflakeEmbeddingConfig(SnowflakeBaseConfig, BaseEmbeddingConfig):
         litellm_params: dict,
     ) -> EmbeddingResponse:
         response_json = raw_response.json()
+        # convert embeddings to 1d array
+        for item in response_json["data"]:
+            item["embedding"] = item["embedding"][0]
         returned_response = EmbeddingResponse(**response_json)
 
         returned_response.model = "snowflake/" + (returned_response.model or "")
