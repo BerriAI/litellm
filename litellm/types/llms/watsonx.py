@@ -32,3 +32,12 @@ class WatsonXAIEndpoint(str, Enum):
     EMBEDDINGS = "/ml/v1/text/embeddings"
     PROMPTS = "/ml/v1/prompts"
     AVAILABLE_MODELS = "/ml/v1/foundation_model_specs"
+
+
+class WatsonXModelPattern(str, Enum):
+    """Model identifier patterns for WatsonX models"""
+    GRANITE_CHAT = "granite-chat"
+    IBM_MISTRAL = "ibm-mistral"
+    IBM_MISTRALAI = "ibm-mistralai"
+    GPT_OSS = "openai/gpt-oss"
+    LLAMA3_INSTRUCT = "meta-llama/llama-3-instruct"

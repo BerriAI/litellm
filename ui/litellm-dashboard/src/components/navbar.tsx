@@ -1,7 +1,7 @@
 import Link from "next/link";
 import React, { useState, useEffect } from "react";
 import type { MenuProps } from "antd";
-import { Dropdown, Tooltip } from "antd";
+import { Dropdown, Tooltip, Switch } from "antd";
 import { getProxyBaseUrl, Organization } from "@/components/networking";
 import { defaultOrg } from "@/components/common_components/default_org";
 import {
@@ -19,6 +19,7 @@ import { clearTokenCookies } from "@/utils/cookieUtils";
 import { fetchProxySettings } from "@/utils/proxyUtils";
 import { useTheme } from "@/contexts/ThemeContext";
 import { clearMCPAuthTokens } from "./mcp_tools/mcp_auth_storage";
+import useFeatureFlags from "@/hooks/useFeatureFlags";
 
 interface NavbarProps {
   userID: string | null;
@@ -43,11 +44,12 @@ const Navbar: React.FC<NavbarProps> = ({
   accessToken,
   isPublicPage = false,
   sidebarCollapsed = false,
-  onToggleSidebar,
+  onToggleSidebar
 }) => {
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
   const { logoUrl } = useTheme();
+  const { refactoredUIFlag, setRefactoredUIFlag } = useFeatureFlags();
 
   // Simple logo URL: use custom logo if available, otherwise default
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
@@ -79,6 +81,8 @@ const Navbar: React.FC<NavbarProps> = ({
   const userItems: MenuProps["items"] = [
     {
       key: "user-info",
+      // Prevent dropdown from closing when interacting with the toggle
+      onClick: (info) => info.domEvent?.stopPropagation(),
       label: (
         <div className="px-3 py-3 border-b border-gray-100">
           <div className="flex items-center justify-between mb-3">
@@ -114,6 +118,18 @@ const Navbar: React.FC<NavbarProps> = ({
               <span className="ml-auto text-gray-700 font-medium truncate max-w-[150px]" title={userEmail || "Unknown"}>
                 {userEmail || "Unknown"}
               </span>
+            </div>
+
+            {/* NEW: Feature flag label + toggle below the email field */}
+            <div className="flex items-center text-sm pt-2 mt-2 border-t border-gray-100">
+              <span className="text-gray-500 text-xs">Refactored UI</span>
+              <Switch
+                className="ml-auto"
+                size="small"
+                checked={refactoredUIFlag}
+                onChange={(checked) => setRefactoredUIFlag(checked)}
+                aria-label="Toggle refactored UI feature flag"
+              />
             </div>
           </div>
         </div>
