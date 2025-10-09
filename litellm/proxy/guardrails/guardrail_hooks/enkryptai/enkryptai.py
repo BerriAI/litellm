@@ -192,8 +192,8 @@ class EnkryptAIGuardrails(CustomGuardrail):
         summary = response.get("summary", {})
         details = response.get("details", {})
         
-        detected_attacks = []
-        attack_details = {}
+        detected_attacks: List[str] = []
+        attack_details: Dict[str, Any] = {}
         
         for key, value in summary.items():
             # Check if attack is detected
