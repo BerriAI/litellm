@@ -10,7 +10,7 @@ import { ThemeProvider } from "@/contexts/ThemeContext";
 import UserDashboard from "@/components/user_dashboard";
 import ModelDashboard from "@/components/templates/model_dashboard";
 import ViewUserDashboard from "@/components/view_users";
-import Teams from "@/components/teams";
+import Teams from "@/app/(dashboard)/teams/teams";
 import Organizations from "@/components/organizations";
 import { fetchOrganizations } from "@/components/organizations";
 import AdminPanel from "@/components/admins";
