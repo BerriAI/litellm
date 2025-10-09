@@ -86,6 +86,15 @@ async def route_request(
     """
     Common helper to route the request
     """
+    # Add shared aiohttp session for connection reuse (prevents cold starts)
+    try:
+        from litellm.proxy.proxy_server import shared_aiohttp_session
+        if shared_aiohttp_session is not None and not shared_aiohttp_session.closed:
+            data["shared_session"] = shared_aiohttp_session
+    except Exception:
+        # Silently continue without session reuse if import fails or session unavailable
+        pass
+    
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
 
