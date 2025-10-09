@@ -1,4 +1,8 @@
 import { Layout, Menu } from "antd";
+import Link from "next/link";
+import { List } from "postcss/lib/list";
+import { Text, Button } from "@tremor/react";
+import { useState } from "react";
 import {
   KeyOutlined,
   PlayCircleOutlined,
@@ -55,17 +59,6 @@ interface MenuItem {
   children?: MenuItem[]; // Add children property for submenus
   icon?: React.ReactNode;
 }
-
-/** ---------- Base URL helpers ---------- */
-/**
- * Normalizes NEXT_PUBLIC_BASE_URL to either "/" or "/ui/" (always with a trailing slash).
- * Supported env values: "" or "ui/".
- */
-const getBasePath = () => {
-  const raw = process.env.NEXT_PUBLIC_BASE_URL ?? "";
-  const trimmed = raw.replace(/^\/+|\/+$/g, ""); // strip leading/trailing slashes
-  return trimmed ? `/${trimmed}/` : "/"; // ensure trailing slash
-};
 
 const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defaultSelectedKey, collapsed = false }) => {
   // Note: If a menu item does not have a role, it is visible to all roles.
@@ -225,7 +218,6 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
       ],
     },
   ];
-
   // Find the menu item that matches the default page, including in submenus
   const findMenuItemKey = (page: string): string => {
     // Check top-level items
@@ -259,15 +251,6 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
 
     return true;
   });
-
-  // Centralized navigation that prefixes the base path ("/" or "/ui/")
-  const goTo = (page: string) => {
-    const base = getBasePath(); // "/" or "/ui/"
-    const newSearchParams = new URLSearchParams(window.location.search);
-    newSearchParams.set("page", page);
-    window.history.pushState(null, "", `${base}?${newSearchParams.toString()}`); // e.g. "/ui/?page=..."
-    setPage(page);
-  };
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
@@ -312,9 +295,21 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
                 key: child.key,
                 icon: child.icon,
                 label: child.label,
-                onClick: () => goTo(child.page),
+                onClick: () => {
+                  const newSearchParams = new URLSearchParams(window.location.search);
+                  newSearchParams.set("page", child.page);
+                  window.history.pushState(null, "", `?${newSearchParams.toString()}`);
+                  setPage(child.page);
+                },
               })),
-              onClick: !item.children ? () => goTo(item.page) : undefined,
+              onClick: !item.children
+                ? () => {
+                    const newSearchParams = new URLSearchParams(window.location.search);
+                    newSearchParams.set("page", item.page);
+                    window.history.pushState(null, "", `?${newSearchParams.toString()}`);
+                    setPage(item.page);
+                  }
+                : undefined,
             }))}
           />
         </ConfigProvider>
