@@ -307,6 +307,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
         aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
+        aws_external_id = optional_params.pop("aws_external_id", None)
         optional_params.pop("aws_region_name", None)
 
         litellm_params[
@@ -323,6 +324,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             aws_role_name=aws_role_name,
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
+            aws_external_id=aws_external_id,
         )
 
         ### SET RUNTIME ENDPOINT ###

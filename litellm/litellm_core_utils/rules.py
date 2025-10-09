@@ -23,6 +23,11 @@ class Rules:
     def __init__(self) -> None:
         pass
 
+    @staticmethod
+    def has_pre_call_rules() -> bool:
+        """Check if any pre-call rules are configured"""
+        return len(litellm.pre_call_rules) > 0
+
     def pre_call_rules(self, input: str, model: str):
         for rule in litellm.pre_call_rules:
             if callable(rule):

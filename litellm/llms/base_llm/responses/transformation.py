@@ -217,3 +217,28 @@ class BaseResponsesAPIConfig(ABC):
     ) -> bool:
         """Returns True if litellm should fake a stream for the given model and stream value"""
         return False
+
+    #########################################################
+    ########## CANCEL RESPONSE API TRANSFORMATION ##########
+    #########################################################
+    @abstractmethod
+    def transform_cancel_response_api_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        pass
+
+    @abstractmethod
+    def transform_cancel_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        pass
+
+    #########################################################
+    ########## END CANCEL RESPONSE API TRANSFORMATION #######
+    #########################################################

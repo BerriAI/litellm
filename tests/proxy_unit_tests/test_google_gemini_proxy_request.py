@@ -345,6 +345,130 @@ async def test_generationconfig_to_config_mapping(sample_request_payload):
     print("✅ generationConfig to config mapping test passed")
 
 
+@pytest.mark.asyncio
+async def test_gemini_custom_api_base_proxy_integration():
+    """
+    Test that Gemini models work correctly with custom API base URLs in proxy context.
+    
+    This test verifies that when a custom api_base is provided for Gemini models,
+    the URL is correctly constructed using the _check_custom_proxy method.
+    """
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+    
+    # Test the _check_custom_proxy method directly
+    vertex_base = VertexBase()
+    
+    # Test case 1: Custom API base for Gemini
+    custom_api_base = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta"
+    model = "gemini-2.5-flash-lite"
+    endpoint = "generateContent"
+    
+    auth_header, result_url = vertex_base._check_custom_proxy(
+        api_base=custom_api_base,
+        custom_llm_provider="gemini",
+        gemini_api_key="test-api-key",
+        endpoint=endpoint,
+        stream=False,
+        auth_header=None,
+        url=f"https://generativelanguage.googleapis.com/v1beta/models/{model}:{endpoint}",
+        model=model,
+    )
+    
+    # Verify the URL is correctly constructed
+    expected_url = f"{custom_api_base}/models/{model}:{endpoint}"
+    assert result_url == expected_url, f"Expected {expected_url}, got {result_url}"
+    
+    # Verify the auth header is set to the API key
+    assert auth_header == "test-api-key", f"Expected 'test-api-key', got {auth_header}"
+    
+    print(f"✅ Custom API base URL construction test passed: {result_url}")
+    
+    # Test case 2: Custom API base with streaming
+    auth_header_streaming, result_url_streaming = vertex_base._check_custom_proxy(
+        api_base=custom_api_base,
+        custom_llm_provider="gemini",
+        gemini_api_key="test-api-key",
+        endpoint=endpoint,
+        stream=True,
+        auth_header=None,
+        url=f"https://generativelanguage.googleapis.com/v1beta/models/{model}:{endpoint}",
+        model=model,
+    )
+    
+    # Verify streaming URL has ?alt=sse parameter
+    expected_streaming_url = f"{custom_api_base}/models/{model}:{endpoint}?alt=sse"
+    assert result_url_streaming == expected_streaming_url, f"Expected {expected_streaming_url}, got {result_url_streaming}"
+    
+    print(f"✅ Custom API base streaming URL test passed: {result_url_streaming}")
+    
+    # Test case 3: Error handling - missing API key
+    with pytest.raises(ValueError, match="Missing gemini_api_key"):
+        vertex_base._check_custom_proxy(
+            api_base=custom_api_base,
+            custom_llm_provider="gemini",
+            gemini_api_key=None,  # Missing API key
+            endpoint=endpoint,
+            stream=False,
+            auth_header=None,
+            url=f"https://generativelanguage.googleapis.com/v1beta/models/{model}:{endpoint}",
+            model=model,
+        )
+    
+    print("✅ Missing API key error handling test passed")
+
+
+@pytest.mark.asyncio
+async def test_gemini_proxy_config_with_custom_api_base():
+    """
+    Test that proxy configuration correctly handles custom API base for Gemini models.
+    
+    This test simulates the proxy configuration scenario where a model is configured
+    with a custom api_base in the config.yaml file.
+    """
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+    
+    # Simulate proxy configuration
+    model_config = {
+        "model_name": "byok-gemini/*",
+        "litellm_params": {
+            "model": "gemini/*",
+            "api_key": "dummy-key-for-testing",
+            "api_base": "https://proxy.example.com/generativelanguage.googleapis.com/v1beta"
+        }
+    }
+    
+    vertex_base = VertexBase()
+    
+    # Test with different Gemini models
+    test_models = [
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro", 
+        "gemini-1.5-flash",
+        "gemini-1.5-pro"
+    ]
+    
+    for model in test_models:
+        # Test generateContent endpoint
+        auth_header, result_url = vertex_base._check_custom_proxy(
+            api_base=model_config["litellm_params"]["api_base"],
+            custom_llm_provider="gemini",
+            gemini_api_key=model_config["litellm_params"]["api_key"],
+            endpoint="generateContent",
+            stream=False,
+            auth_header=None,
+            url=f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            model=model,
+        )
+        
+        expected_url = f"{model_config['litellm_params']['api_base']}/models/{model}:generateContent"
+        assert result_url == expected_url, f"Expected {expected_url}, got {result_url} for model {model}"
+        assert auth_header == model_config["litellm_params"]["api_key"], f"Expected API key, got {auth_header} for model {model}"
+        
+        print(f"✅ Model {model} configuration test passed: {result_url}")
+    
+    print("✅ Proxy configuration with custom API base test passed")
+
+
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])

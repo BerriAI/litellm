@@ -1,6 +1,6 @@
 import os
 import sys
-import uuid
+from litellm._uuid import uuid
 from functools import partial
 from typing import Optional
 
@@ -117,7 +117,7 @@ async def test_pass_through_endpoint_rerank(client):
         {
             "path": "/v1/rerank",
             "target": "https://api.cohere.com/v1/rerank",
-            "headers": {"Authorization": f"bearer {_cohere_api_key}"},
+            "headers": {"Authorization": f"Bearer {_cohere_api_key}"},
         }
     ]
 
@@ -193,7 +193,7 @@ async def test_pass_through_endpoint_rpm_limit(
             "path": "/v1/rerank",
             "target": "https://api.cohere.com/v1/rerank",
             "auth": auth,
-            "headers": {"Authorization": f"bearer {_cohere_api_key}"},
+            "headers": {"Authorization": f"Bearer {_cohere_api_key}"},
         }
     ]
 
@@ -293,7 +293,7 @@ async def test_pass_through_endpoint_sequential_rpm_limit(
             "path": "/v1/rerank",
             "target": "https://api.cohere.com/v1/rerank",
             "auth": auth,
-            "headers": {"Authorization": f"bearer {_cohere_api_key}"},
+            "headers": {"Authorization": f"Bearer {_cohere_api_key}"},
         }
     ]
 

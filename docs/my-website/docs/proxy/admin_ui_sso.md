@@ -5,6 +5,10 @@ import TabItem from '@theme/TabItem';
 # ✨ SSO for Admin UI
 
 :::info
+From v1.76.0, SSO is now Free for up to 5 users.
+:::
+
+:::info
 
 ✨ SSO is on LiteLLM Enterprise
 

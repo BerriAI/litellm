@@ -7,7 +7,7 @@ import random
 import sys
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 
 from dotenv import load_dotenv
 
@@ -240,7 +240,7 @@ def prisma_client():
 @pytest.fixture
 def team_token_tuple():
     import json
-    import uuid
+    from litellm._uuid import uuid
 
     import jwt
     from cryptography.hazmat.backends import default_backend
@@ -305,7 +305,7 @@ def team_token_tuple():
 @pytest.mark.asyncio
 async def test_team_token_output(prisma_client, audience, monkeypatch):
     import json
-    import uuid
+    from litellm._uuid import uuid
 
     import jwt
     from cryptography.hazmat.backends import default_backend
@@ -478,7 +478,7 @@ async def test_team_token_output(prisma_client, audience, monkeypatch):
 async def aaaatest_user_token_output(
     prisma_client, audience, team_id_set, default_team_id, user_id_upsert, monkeypatch
 ):
-    import uuid
+    from litellm._uuid import uuid
 
     args = locals()
     print(f"received args - {args}")
@@ -491,7 +491,7 @@ async def aaaatest_user_token_output(
     - retry -> it should pass now
     """
     import json
-    import uuid
+    from litellm._uuid import uuid
 
     import jwt
     from cryptography.hazmat.backends import default_backend
@@ -726,7 +726,7 @@ async def test_allowed_routes_admin(
     - check if admin passes user_api_key_auth for them
     """
     import json
-    import uuid
+    from litellm._uuid import uuid
 
     import jwt
     from cryptography.hazmat.backends import default_backend
@@ -1155,15 +1155,26 @@ async def test_end_user_jwt_auth(monkeypatch):
 
     ## 1. INITIAL TEAM CALL - should fail
     # use generated key to auth in
+    from litellm import Router
+    from litellm.types.router import RouterGeneralSettings
+    
+    # Create a router with pass_through_all_models enabled
+    router = Router(
+        model_list=[],
+        router_general_settings=RouterGeneralSettings(
+            pass_through_all_models=True
+        ),
+    )
+    
     setattr(
         litellm.proxy.proxy_server,
         "general_settings",
-        {"enable_jwt_auth": True, "pass_through_all_models": True},
+        {"enable_jwt_auth": True},
     )
     setattr(
         litellm.proxy.proxy_server,
         "llm_router",
-        MagicMock(),
+        router,
     )
     setattr(litellm.proxy.proxy_server, "prisma_client", {})
     setattr(litellm.proxy.proxy_server, "jwt_handler", jwt_handler)
@@ -1171,18 +1182,39 @@ async def test_end_user_jwt_auth(monkeypatch):
 
     cost_tracking()
     result = await user_api_key_auth(request=request, api_key=bearer_token)
-    assert (
-        result.end_user_id == "81b3e52a-67a6-4efb-9645-70527e101479"
-    )  # jwt token decoded sub value
+    
+    # Assert that end_user_id is correctly extracted from JWT token's 'sub' field
+    assert result.end_user_id == "81b3e52a-67a6-4efb-9645-70527e101479"
 
     temp_response = Response()
     from litellm.proxy.hooks.proxy_track_cost_callback import (
         _should_track_cost_callback,
     )
 
-    with patch.object(
-        litellm.proxy.hooks.proxy_track_cost_callback, "_should_track_cost_callback"
-    ) as mock_client:
+    # Mock the actual LLM completion call
+    mock_response = litellm.ModelResponse(
+        id="chatcmpl-mock",
+        choices=[
+            litellm.Choices(
+                finish_reason="stop",
+                index=0,
+                message=litellm.Message(
+                    content="Hello! I'm doing well, thank you for asking.",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=1234567890,
+        model="gpt-4o",
+        object="chat.completion",
+        usage=litellm.Usage(
+            prompt_tokens=10,
+            completion_tokens=15,
+            total_tokens=25,
+        ),
+    )
+
+    with patch("litellm.acompletion", new=AsyncMock(return_value=mock_response)) as mock_completion:
         resp = await chat_completion(
             request=request,
             fastapi_response=temp_response,
@@ -1194,11 +1226,13 @@ async def test_end_user_jwt_auth(monkeypatch):
 
         await asyncio.sleep(1)
 
-        mock_client.assert_called_once()
-
-        mock_client.call_args.kwargs[
-            "end_user_id"
-        ] == "81b3e52a-67a6-4efb-9645-70527e101479"
+        # Verify the completion was called with correct end_user_id
+        mock_completion.assert_called_once()
+        call_kwargs = mock_completion.call_args.kwargs
+        
+        # end_user_id is passed in metadata as 'user_api_key_end_user_id'
+        metadata = call_kwargs.get("metadata", {})
+        assert metadata.get("user_api_key_end_user_id") == "81b3e52a-67a6-4efb-9645-70527e101479"
 
 
 def test_can_rbac_role_call_route():

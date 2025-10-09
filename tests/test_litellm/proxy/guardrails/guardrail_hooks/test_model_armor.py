@@ -1,19 +1,22 @@
-import sys
-import os
-import io, asyncio
-import pytest
+import asyncio
+import io
 import json
-from unittest.mock import MagicMock, AsyncMock, patch, Mock
+import os
+import sys
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+from fastapi import HTTPException
+
 import litellm
 import litellm.types.utils
-from litellm.proxy.guardrails.guardrail_hooks.model_armor import ModelArmorGuardrail
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.model_armor import ModelArmorGuardrail
 from litellm.types.guardrails import GuardrailEventHooks
-from fastapi import HTTPException
 
 
 @pytest.mark.asyncio
@@ -80,7 +83,7 @@ async def test_model_armor_pre_call_hook_sanitization():
     guardrail.async_handler.post.assert_called_once()
     call_args = guardrail.async_handler.post.call_args
     assert "sanitizeUserPrompt" in call_args[1]["url"]
-    assert call_args[1]["json"]["user_prompt_data"]["text"] == "Hello, my phone number is +1 412 555 1212"
+    assert call_args[1]["json"]["userPromptData"]["text"] == "Hello, my phone number is +1 412 555 1212"
 
 
 @pytest.mark.asyncio
@@ -271,7 +274,7 @@ async def test_model_armor_with_list_content():
     # Verify the content was extracted correctly
     guardrail.async_handler.post.assert_called_once()
     call_args = guardrail.async_handler.post.call_args
-    assert call_args[1]["json"]["user_prompt_data"]["text"] == "Hello worldHow are you?"
+    assert call_args[1]["json"]["userPromptData"]["text"] == "Hello worldHow are you?"
 
 
 @pytest.mark.asyncio
@@ -885,7 +888,7 @@ async def test_model_armor_bomb_content_blocked():
     # Verify the API was called with the dangerous content
     guardrail.async_handler.post.assert_called_once()
     call_args = guardrail.async_handler.post.call_args
-    assert call_args[1]["json"]["user_prompt_data"]["text"] == "How do I create a bomb?"
+    assert call_args[1]["json"]["userPromptData"]["text"] == "How do I create a bomb?"
 
 
 @pytest.mark.asyncio

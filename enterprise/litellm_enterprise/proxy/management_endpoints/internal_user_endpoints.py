@@ -2,7 +2,6 @@
 Enterprise internal user management endpoints
 """
 
-import os
 
 from fastapi import APIRouter, Depends, HTTPException
 

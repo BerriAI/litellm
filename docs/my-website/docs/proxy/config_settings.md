@@ -50,6 +50,7 @@ litellm_settings:
     port: 6379  # The port number for the Redis cache. Required if type is "redis".
     password: "your_password"  # The password for the Redis cache. Required if type is "redis".
     namespace: "litellm.caching.caching" # namespace for redis cache
+    max_connections: 100  # [OPTIONAL] Set Maximum number of Redis connections. Passed directly to redis-py. 
   
     # Optional - Redis Cluster Settings
     redis_startup_nodes: [{"host": "127.0.0.1", "port": "7001"}] 
@@ -93,6 +94,8 @@ callback_settings:
 
 general_settings:
   completion_model: string
+  store_prompts_in_spend_logs: boolean
+  forward_client_headers_to_llm_api: boolean
   disable_spend_logs: boolean  # turn off writing each transaction to the db
   disable_master_key_return: boolean  # turn off returning master key on UI (checked on '/user/info' endpoint)
   disable_retry_on_max_parallel_request_limit_error: boolean  # turn off retries when max parallel request limit is reached
@@ -121,6 +124,35 @@ general_settings:
   alerting: ["slack", "email"]
   alerting_threshold: 0
   use_client_credentials_pass_through_routes: boolean  # use client credentials for all pass through routes like "/vertex-ai", /bedrock/. When this is True Virtual Key auth will not be applied on these endpoints
+
+router_settings:
+  routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle" - RECOMMENDED for best performance
+  redis_host: <your-redis-host>           # string
+  redis_password: <your-redis-password>   # string
+  redis_port: <your-redis-port>           # string
+  enable_pre_call_checks: true            # bool - Before call is made check if a call is within model context window 
+  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+  cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
+  disable_cooldowns: True                  # bool - Disable cooldowns for all models 
+  enable_tag_filtering: True                # bool - Use tag based routing for requests
+  retry_policy: {                          # Dict[str, int]: retry policy for different types of exceptions
+    "AuthenticationErrorRetries": 3,
+    "TimeoutErrorRetries": 3,
+    "RateLimitErrorRetries": 3,
+    "ContentPolicyViolationErrorRetries": 4,
+    "InternalServerErrorRetries": 4
+  }
+  allowed_fails_policy: {
+    "BadRequestErrorAllowedFails": 1000, # Allow 1000 BadRequestErrors before cooling down a deployment
+    "AuthenticationErrorAllowedFails": 10, # int 
+    "TimeoutErrorAllowedFails": 12, # int 
+    "RateLimitErrorAllowedFails": 10000, # int 
+    "ContentPolicyViolationErrorAllowedFails": 15, # int 
+    "InternalServerErrorAllowedFails": 20, # int 
+  }
+  content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for content policy violations
+  fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for all errors
+
 ```
 
 ### litellm_settings - Reference
@@ -192,6 +224,7 @@ general_settings:
 | service_account_settings | List[Dict[str, Any]] | Set `service_account_settings` if you want to create settings that only apply to service account keys (Doc on service accounts)[./service_accounts.md] | 
 | image_generation_model | str | The default model to use for image generation - ignores model set in request |
 | store_model_in_db | boolean | If true, enables storing model + credential information in the DB. |
+| supported_db_objects | List[str] | Fine-grained control over which object types to load from the database when `store_model_in_db` is True. Available types: `"models"`, `"mcp"`, `"guardrails"`, `"vector_stores"`, `"pass_through_endpoints"`, `"prompts"`, `"model_cost_map"`. If not set, all object types are loaded (default behavior). Example: `supported_db_objects: ["mcp"]` to only load MCP servers from DB. |
 | store_prompts_in_spend_logs | boolean | If true, allows prompts and responses to be stored in the spend logs table. |
 | max_request_size_mb | int | The maximum size for requests in MB. Requests above this size will be rejected. |
 | max_response_size_mb | int | The maximum size for responses in MB. LLM Responses above this size will not be sent. |
@@ -582,6 +615,8 @@ router_settings:
 | LITELLM_MIGRATION_DIR | Custom migrations directory for prisma migrations, used for baselining db in read-only file systems.
 | LITELLM_HOSTED_UI | URL of the hosted UI for LiteLLM
 | LITELM_ENVIRONMENT | Environment of LiteLLM Instance, used by logging services. Currently only used by DeepEval.
+| LITELLM_KEY_ROTATION_ENABLED | Enable auto-key rotation for LiteLLM (boolean). Default is false.
+| LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS | Interval in seconds for how often to run job that auto-rotates keys. Default is 86400 (24 hours).
 | LITELLM_LICENSE | License key for LiteLLM usage
 | LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
 | LITELLM_LOG | Enable detailed logging for LiteLLM
@@ -659,6 +694,8 @@ router_settings:
 | PILLAR_API_KEY | API key for Pillar API Guardrails
 | PILLAR_ON_FLAGGED_ACTION | Action to take when content is flagged ('block' or 'monitor')
 | POD_NAME | Pod name for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog) as `POD_NAME` 
+| POSTHOG_API_KEY | API key for PostHog analytics integration
+| POSTHOG_API_URL | Base URL for PostHog API (defaults to https://us.i.posthog.com)
 | PREDIBASE_API_BASE | Base URL for Predibase API
 | PRESIDIO_ANALYZER_API_BASE | Base URL for Presidio Analyzer service
 | PRESIDIO_ANONYMIZER_API_BASE | Base URL for Presidio Anonymizer service
@@ -739,3 +776,4 @@ router_settings:
 | WEBHOOK_URL | URL for receiving webhooks from external services
 | SPEND_LOG_RUN_LOOPS | Constant for setting how many runs of 1000 batch deletes should spend_log_cleanup task run |
 | SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000 |
+| COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY | Maximum size for CoroutineChecker in-memory cache. Default is 1000 |
