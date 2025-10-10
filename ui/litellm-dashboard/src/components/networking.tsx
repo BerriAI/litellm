@@ -4453,9 +4453,13 @@ export const getGeneralSettingsCall = async (accessToken: String) => {
   }
 };
 
-export const getPassThroughEndpointsCall = async (accessToken: String) => {
+export const getPassThroughEndpointsCall = async (accessToken: String, teamId?: string | null) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/config/pass_through_endpoint` : `/config/pass_through_endpoint`;
+
+    if (teamId) {
+      url += `/team/${teamId}`;
+    }
 
     //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
