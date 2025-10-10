@@ -533,6 +533,7 @@ const sidebars = {
         "providers/oci",
         "providers/datarobot",
         "providers/ovhcloud",  
+        "providers/wandb_inference",
       ],
     },
     {

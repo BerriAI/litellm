@@ -355,12 +355,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
-                        server_prefix
-                    )
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
-                        server_prefix
-                    )
+                    self.tool_name_to_mcp_server_name_mapping[
+                        base_tool_name
+                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[
+                        prefixed_tool_name
+                    ] = server_prefix
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -932,7 +932,6 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging,
         server: MCPServer,
     ):
-
         ## check if the tool is allowed or banned for the given server
         if not self.check_allowed_or_banned_tools(name, server):
             raise HTTPException(
@@ -1176,13 +1175,18 @@ class MCPServerManager:
                 extra_headers=extra_headers,
             )
 
-            async with client:
-                # Use the original tool name (without prefix) for the actual call
-                call_tool_params = MCPCallToolRequestParams(
-                    name=original_tool_name,
-                    arguments=arguments,
-                )
-                tasks.append(asyncio.create_task(client.call_tool(call_tool_params)))
+            call_tool_params = MCPCallToolRequestParams(
+                name=original_tool_name,
+                arguments=arguments,
+            )
+
+            async def _call_tool_via_client(client, params):
+                async with client:
+                    return await client.call_tool(params)
+
+            tasks.append(
+                asyncio.create_task(_call_tool_via_client(client, call_tool_params))
+            )
 
         try:
             mcp_responses = await asyncio.gather(*tasks)
