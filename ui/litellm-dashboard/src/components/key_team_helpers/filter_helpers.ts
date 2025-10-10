@@ -11,7 +11,7 @@ export const fetchAllKeyAliases = async (accessToken: string | null): Promise<st
   if (!accessToken) return [];
 
   try {
-    const { aliases } = await keyAliasesCall(accessToken as unknown as String);
+    const { aliases } = await keyAliasesCall(accessToken as unknown as string);
     // Defensive dedupe & null-guard
     return Array.from(new Set((aliases || []).filter(Boolean)));
   } catch (error) {

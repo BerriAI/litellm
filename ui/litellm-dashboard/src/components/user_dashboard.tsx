@@ -3,29 +3,21 @@ import React, { useState, useEffect } from "react";
 import {
   userInfoCall,
   modelAvailableCall,
-  getTotalSpendCall,
   getProxyUISettings,
   Organization,
-  organizationListCall,
-  DEFAULT_ORGANIZATION,
   keyInfoCall,
   getProxyBaseUrl,
 } from "./networking";
 import { fetchTeams } from "./common_components/fetch_teams";
-import { Grid, Col, Card, Text, Title } from "@tremor/react";
+import { Grid, Col } from "@tremor/react";
 import CreateKey from "./organisms/create_key_button";
 import ViewKeyTable from "./templates/view_key_table";
-import ViewUserSpend from "./view_user_spend";
-import ViewUserTeam from "./view_user_team";
-import DashboardTeam from "./dashboard_default_team";
 import Onboarding from "../app/onboarding/page";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { KeyResponse, Team } from "./key_team_helpers/key_list";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-import { clearMCPAuthTokens } from "./mcp_tools/mcp_auth_storage";
-import { Setter } from "@/types";
 
 export interface ProxySettings {
   PROXY_BASE_URL: string | null;
@@ -67,7 +59,7 @@ interface UserDashboardProps {
 type TeamInterface = {
   models: any[];
   team_id: null;
-  team_alias: String;
+  team_alias: string;
 };
 
 const UserDashboard: React.FC<UserDashboardProps> = ({

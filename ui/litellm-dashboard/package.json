@@ -61,6 +61,8 @@
     "autoprefixer": "^10.4.17",
     "eslint": "^8",
     "eslint-config-next": "14.2.32",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-unused-imports": "^4.2.0",
     "jsdom": "^27.0.0",
     "postcss": "^8.4.33",
     "prettier": "3.2.5",
