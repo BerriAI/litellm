@@ -63,6 +63,7 @@ import AvailableTeamsPanel from "@/components/team/available_teams";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
 import type { KeyResponse, Team } from "./key_team_helpers/key_list";
+import PassThroughRoutesSelector from "./common_components/PassThroughRoutesSelector";
 import { formatNumberWithCommas } from "../utils/dataUtils";
 import { AlertTriangleIcon, XIcon } from "lucide-react";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
@@ -1249,6 +1250,26 @@ const Teams: React.FC<TeamProps> = ({
                           value={form.getFieldValue("allowed_vector_store_ids")}
                           accessToken={accessToken || ""}
                           placeholder="Select vector stores (optional)"
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={
+                          <span>
+                            Allowed Pass Through Routes{" "}
+                            <Tooltip title="Select which pass through routes this team can access by default. Leave empty for access to all pass through routes">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="allowed_passthrough_routes"
+                        className="mt-8"
+                        help="Select pass through routes this team can access. Leave empty for access to all pass through routes"
+                      >
+                        <PassThroughRoutesSelector
+                          onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+                          value={form.getFieldValue("allowed_passthrough_routes")}
+                          accessToken={accessToken || ""}
+                          placeholder="Select pass through routes (optional)"
                         />
                       </Form.Item>
                     </AccordionBody>
