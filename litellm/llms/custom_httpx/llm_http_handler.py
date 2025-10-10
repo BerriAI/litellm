@@ -239,17 +239,7 @@ class BaseLLMHTTPHandler:
         json_mode: bool = False,
         signed_json_body: Optional[bytes] = None,
         shared_session: Optional["ClientSession"] = None,
-    ):
-        # PANIC: Ensure shared_session is being passed for connection reuse
-        if shared_session is None and client is None:
-            error_msg = (
-                "PANIC: shared_session is None in async_completion! "
-                "This means connection reuse is broken. Session should be passed from completion() -> async_completion(). "
-                f"Provider: {custom_llm_provider}, Model: {model}"
-            )
-            verbose_logger.error(error_msg)
-            raise ValueError(error_msg)
-        
+    ):  
         if client is None:
             verbose_logger.debug(
                 f"Creating HTTP client with shared_session: {id(shared_session) if shared_session else None}"
