@@ -37,8 +37,6 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
             description: tagData.description,
             models: tagData.models,
             max_budget: tagData.litellm_budget_table?.max_budget,
-            tpm_limit: tagData.litellm_budget_table?.tpm_limit,
-            rpm_limit: tagData.litellm_budget_table?.rpm_limit,
             budget_duration: tagData.litellm_budget_table?.budget_duration,
           });
         }
@@ -163,33 +161,20 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
                   <BudgetDurationDropdown onChange={(value) => form.setFieldValue("budget_duration", value)} />
                 </Form.Item>
 
-                <Form.Item
-                  label={
-                    <span>
-                      TPM Limit{" "}
-                      <Tooltip title="Maximum tokens per minute">
-                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="tpm_limit"
-                >
-                  <NumericalInput step={1} width={400} />
-                </Form.Item>
-
-                <Form.Item
-                  label={
-                    <span>
-                      RPM Limit{" "}
-                      <Tooltip title="Maximum requests per minute">
-                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="rpm_limit"
-                >
-                  <NumericalInput step={1} width={400} />
-                </Form.Item>
+                <div className="mt-4 p-3 bg-gray-50 rounded-md border border-gray-200">
+                  <p className="text-sm text-gray-600">
+                    TPM/RPM limits for tags are not currently supported. If you need this feature, please{" "}
+                    <a
+                      href="https://github.com/BerriAI/litellm/issues/new"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:text-blue-800 underline"
+                    >
+                      create a GitHub issue
+                    </a>
+                    .
+                  </p>
+                </div>
               </AccordionBody>
             </Accordion>
 

@@ -124,35 +124,20 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({
               <BudgetDurationDropdown onChange={(value) => form.setFieldValue("budget_duration", value)} />
             </Form.Item>
 
-            <Form.Item
-              className="mt-4"
-              label={
-                <span>
-                  Tokens per minute Limit (TPM){" "}
-                  <Tooltip title="Maximum number of tokens this tag can process per minute. Helps control usage and costs">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              }
-              name="tpm_limit"
-            >
-              <NumericalInput step={1} width={400} />
-            </Form.Item>
-
-            <Form.Item
-              className="mt-4"
-              label={
-                <span>
-                  Requests per minute Limit (RPM){" "}
-                  <Tooltip title="Maximum number of API requests this tag can make per minute. Helps prevent abuse and manage load">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              }
-              name="rpm_limit"
-            >
-              <NumericalInput step={1} width={400} />
-            </Form.Item>
+            <div className="mt-4 p-3 bg-gray-50 rounded-md border border-gray-200">
+              <p className="text-sm text-gray-600">
+                TPM/RPM limits for tags are not currently supported. If you need this feature, please{" "}
+                <a
+                  href="https://github.com/BerriAI/litellm/issues/new"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:text-blue-800 underline"
+                >
+                  create a GitHub issue
+                </a>
+                .
+              </p>
+            </div>
           </AccordionBody>
         </Accordion>
 
