@@ -138,22 +138,3 @@ def initialize_tool_permission(litellm_params: LitellmParams, guardrail: Guardra
     )
     litellm.logging_callback_manager.add_litellm_callback(_tool_permission_callback)
     return _tool_permission_callback
-
-
-def initialize_pointguardai(litellm_params: LitellmParams, guardrail: Guardrail):
-    from litellm.proxy.guardrails.guardrail_hooks.pointguardai import PointGuardAIGuardrail
-    
-    _pointguardai_callback = PointGuardAIGuardrail(
-        api_base=litellm_params.api_base,
-        api_key=litellm_params.api_key,
-        api_email=litellm_params.api_email,
-        org_code=litellm_params.org_code,
-        policy_config_name=litellm_params.policy_config_name,
-        model_provider_name=litellm_params.model_provider_name,
-        model_name=litellm_params.model_name,
-        guardrail_name=guardrail.get("guardrail_name", ""),
-        event_hook=litellm_params.mode,
-        default_on=litellm_params.default_on,
-    )
-    litellm.logging_callback_manager.add_litellm_callback(_pointguardai_callback)
-    return _pointguardai_callback  

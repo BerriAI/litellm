@@ -27,7 +27,6 @@ from .guardrail_initializers import (
     initialize_lakera_v2,
     initialize_presidio,
     initialize_tool_permission,
-    initialize_pointguardai,
 )
 
 guardrail_initializer_registry = {
@@ -37,7 +36,6 @@ guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.PRESIDIO.value: initialize_presidio,
     SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,
     SupportedGuardrailIntegrations.TOOL_PERMISSION.value: initialize_tool_permission,
-    SupportedGuardrailIntegrations.POINTGUARDAI.value: initialize_pointguardai,
 }
 
 guardrail_class_registry: Dict[str, Type[CustomGuardrail]] = {}
