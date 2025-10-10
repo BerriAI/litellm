@@ -246,8 +246,203 @@ litellm_settings:
 </TabItem>
 </Tabs>
 
-## MCP Tool Filtering
+## Converting OpenAPI Specs to MCP Servers
 
+LiteLLM can automatically convert OpenAPI specifications into MCP servers, allowing you to expose any REST API as MCP tools. This is useful when you have existing APIs with OpenAPI/Swagger documentation and want to make them available as MCP tools.
+
+### Benefits
+
+- **Rapid Integration**: Convert existing APIs to MCP tools without writing custom MCP server code
+- **Automatic Tool Generation**: LiteLLM automatically generates MCP tools from your OpenAPI spec
+- **Unified Interface**: Use the same MCP interface for both native MCP servers and OpenAPI-based APIs
+- **Easy Testing**: Test and iterate on API integrations quickly
+
+### Configuration
+
+Add your OpenAPI-based MCP server to your `config.yaml`:
+
+```yaml title="config.yaml - OpenAPI to MCP" showLineNumbers
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: sk-xxxxxxx
+
+mcp_servers:
+  # OpenAPI Spec Example - Petstore API
+  petstore_mcp:
+    url: "https://petstore.swagger.io/v2"
+    spec_path: "/path/to/openapi.json"
+    auth_type: "none"
+  
+  # OpenAPI Spec with API Key Authentication
+  my_api_mcp:
+    url: "http://0.0.0.0:8090"
+    spec_path: "/path/to/openapi.json"
+    auth_type: "api_key"
+    auth_value: "your-api-key-here"
+  
+  # OpenAPI Spec with Bearer Token
+  secured_api_mcp:
+    url: "https://api.example.com"
+    spec_path: "/path/to/openapi.json" 
+    auth_type: "bearer_token"
+    auth_value: "your-bearer-token"
+```
+
+### Configuration Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `url` | Yes | The base URL of your API endpoint |
+| `spec_path` | Yes | Path or URL to your OpenAPI specification file (JSON or YAML) |
+| `auth_type` | No | Authentication type: `none`, `api_key`, `bearer_token`, `basic`, `authorization` |
+| `auth_value` | No | Authentication value (required if `auth_type` is set) |
+| `description` | No | Optional description for the MCP server |
+| `allowed_tools` | No | List of specific tools to allow (see [MCP Tool Filtering](#mcp-tool-filtering)) |
+| `disallowed_tools` | No | List of specific tools to block (see [MCP Tool Filtering](#mcp-tool-filtering)) |
+
+### Usage Example
+
+Once configured, you can use the OpenAPI-based MCP server just like any other MCP server:
+
+<Tabs>
+<TabItem value="fastmcp" label="Python FastMCP">
+
+```python title="Using OpenAPI-based MCP Server" showLineNumbers
+from fastmcp import Client
+import asyncio
+
+# Standard MCP configuration
+config = {
+    "mcpServers": {
+        "petstore": {
+            "url": "http://localhost:4000/petstore_mcp/mcp",
+            "headers": {
+                "x-litellm-api-key": "Bearer sk-1234"
+            }
+        }
+    }
+}
+
+# Create a client that connects to the server
+client = Client(config)
+
+async def main():
+    async with client:
+        # List available tools generated from OpenAPI spec
+        tools = await client.list_tools()
+        print(f"Available tools: {[tool.name for tool in tools]}")
+
+        # Example: Get a pet by ID (from Petstore API)
+        response = await client.call_tool(
+            name="getpetbyid", 
+            arguments={"petId": "1"}
+        )
+        print(f"Response:\n{response}\n")
+
+        # Example: Find pets by status
+        response = await client.call_tool(
+            name="findpetsbystatus", 
+            arguments={"status": "available"}
+        )
+        print(f"Response:\n{response}\n")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+</TabItem>
+
+<TabItem value="cursor" label="Cursor IDE">
+
+```json title="Cursor MCP Configuration for OpenAPI Server" showLineNumbers
+{
+  "mcpServers": {
+    "Petstore": {
+      "url": "http://localhost:4000/petstore_mcp/mcp",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
+      }
+    }
+  }
+}
+```
+
+</TabItem>
+
+<TabItem value="openai" label="OpenAI Responses API">
+
+```bash title="Using OpenAPI MCP Server with OpenAI" showLineNumbers
+curl --location 'https://api.openai.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $OPENAI_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "petstore",
+            "server_url": "http://localhost:4000/petstore_mcp/mcp",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+            }
+        }
+    ],
+    "input": "Find all available pets in the petstore",
+    "tool_choice": "required"
+}'
+```
+
+</TabItem>
+</Tabs>
+
+### How It Works
+
+1. **Spec Loading**: LiteLLM loads your OpenAPI specification from the provided `spec_path`
+2. **Tool Generation**: Each API endpoint in the spec becomes an MCP tool
+3. **Parameter Mapping**: OpenAPI parameters are automatically mapped to MCP tool parameters
+4. **Request Handling**: When a tool is called, LiteLLM converts the MCP request to the appropriate HTTP request
+5. **Response Translation**: API responses are converted back to MCP format
+
+### OpenAPI Spec Requirements
+
+Your OpenAPI specification should follow standard OpenAPI/Swagger conventions:
+- **Supported versions**: OpenAPI 3.0.x, OpenAPI 3.1.x, Swagger 2.0
+- **Required fields**: `paths`, `info` sections should be properly defined
+- **Operation IDs**: Each operation should have a unique `operationId` (this becomes the tool name)
+- **Parameters**: Request parameters should be properly documented with types and descriptions
+
+### Example OpenAPI Spec Structure
+
+```yaml title="sample-openapi.yaml" showLineNumbers
+openapi: 3.0.0
+info:
+  title: My API
+  version: 1.0.0
+paths:
+  /pets/{petId}:
+    get:
+      operationId: getPetById
+      summary: Get a pet by ID
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+```
+
+## Allow/Disallow MCP Tools
+  
 Control which tools are available from your MCP servers. You can either allow only specific tools or block dangerous ones.
 
 <Tabs>
@@ -305,6 +500,119 @@ mcp_servers:
 
 - If you specify both `allowed_tools` and `disallowed_tools`, the allowed list takes priority
 - Tool names are case-sensitive
+
+---
+
+## Allow/Disallow MCP Tool Parameters
+
+Control which parameters are allowed for specific MCP tools using the `allowed_params` configuration. This provides fine-grained control over tool usage by restricting the parameters that can be passed to each tool.
+
+### Configuration
+
+`allowed_params` is a dictionary that maps tool names to lists of allowed parameter names. When configured, only the specified parameters will be accepted for that tool - any other parameters will be rejected with a 403 error.
+
+```yaml title="config.yaml with allowed_params" showLineNumbers
+mcp_servers:
+  deepwiki_mcp:
+    url: https://mcp.deepwiki.com/mcp
+    transport: "http"
+    auth_type: "none"
+    allowed_params:
+      # Tool name: list of allowed parameters
+      read_wiki_contents: ["status"]
+  
+  my_api_mcp:
+    url: "https://my-api-server.com"
+    auth_type: "api_key"
+    auth_value: "my-key"
+    allowed_params:
+      # Using unprefixed tool name
+      getpetbyid: ["status"]
+      # Using prefixed tool name (both formats work)
+      my_api_mcp-findpetsbystatus: ["status", "limit"]
+      # Another tool with multiple allowed params
+      create_issue: ["title", "body", "labels"]
+```
+
+### How It Works
+
+1. **Tool-specific filtering**: Each tool can have its own list of allowed parameters
+2. **Flexible naming**: Tool names can be specified with or without the server prefix (e.g., both `"getpetbyid"` and `"my_api_mcp-getpetbyid"` work)
+3. **Whitelist approach**: Only parameters in the allowed list are permitted
+4. **Unlisted tools**: If `allowed_params` is not set, all parameters are allowed
+5. **Error handling**: Requests with disallowed parameters receive a 403 error with details about which parameters are allowed
+
+### Example Request Behavior
+
+With the configuration above, here's how requests would be handled:
+
+**✅ Allowed Request:**
+```json
+{
+  "tool": "read_wiki_contents",
+  "arguments": {
+    "status": "active"
+  }
+}
+```
+
+**❌ Rejected Request:**
+```json
+{
+  "tool": "read_wiki_contents",
+  "arguments": {
+    "status": "active",
+    "limit": 10  // This parameter is not allowed
+  }
+}
+```
+
+**Error Response:**
+```json
+{
+  "error": "Parameters ['limit'] are not allowed for tool read_wiki_contents. Allowed parameters: ['status']. Contact proxy admin to allow these parameters."
+}
+```
+
+### Use Cases
+
+- **Security**: Prevent users from accessing sensitive parameters or dangerous operations
+- **Cost control**: Restrict expensive parameters (e.g., limiting result counts)
+- **Compliance**: Enforce parameter usage policies for regulatory requirements
+- **Staged rollouts**: Gradually enable parameters as tools are tested
+- **Multi-tenant isolation**: Different parameter access for different user groups
+
+### Combining with Tool Filtering
+
+`allowed_params` works alongside `allowed_tools` and `disallowed_tools` for complete control:
+
+```yaml title="Combined filtering example" showLineNumbers
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: oauth2
+    authorization_url: https://github.com/login/oauth/authorize
+    token_url: https://github.com/login/oauth/access_token
+    client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
+    client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
+    scopes: ["public_repo", "user:email"]
+    # Only allow specific tools
+    allowed_tools: ["create_issue", "list_issues", "search_issues"]
+    # Block dangerous operations
+    disallowed_tools: ["delete_repo"]
+    # Restrict parameters per tool
+    allowed_params:
+      create_issue: ["title", "body", "labels"]
+      list_issues: ["state", "sort", "perPage"]
+      search_issues: ["query", "sort", "order", "perPage"]
+```
+
+This configuration ensures that:
+1. Only the three listed tools are available
+2. The `delete_repo` tool is explicitly blocked
+3. Each tool can only use its specified parameters
+
+---
 
 ## MCP Server Access Control
 
