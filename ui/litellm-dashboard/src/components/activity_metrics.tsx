@@ -113,7 +113,8 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
             index="date"
             categories={["metrics.spend"]}
             colors={["green"]}
-            valueFormatter={(value: number) => `$${formatNumberWithCommas(value, 2)}`}
+            valueFormatter={(value: number) => `$${formatNumberWithCommas(value, 2, true)}`}
+            yAxisWidth={72}
           />
         </Card>
 
