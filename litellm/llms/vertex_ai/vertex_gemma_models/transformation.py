@@ -88,6 +88,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         # Remove params not needed/supported by Vertex Gemma
         openai_request.pop("model", None)
         openai_request.pop("stream", None)  # Streaming not supported, will be faked client-side
+        openai_request.pop("stream_options", None)  # Stream options not supported
         
         # Wrap in Vertex Gemma format
         return {
