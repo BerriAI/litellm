@@ -231,7 +231,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
               <div>
                 <Text className="font-medium">Allowed LLMs</Text>
                 <div className="flex flex-wrap gap-2 mt-2">
-                  {tagDetails.models.length === 0 ? (
+                  {!tagDetails.models || tagDetails.models.length === 0 ? (
                     <Badge color="red">All Models</Badge>
                   ) : (
                     tagDetails.models.map((modelId) => (
