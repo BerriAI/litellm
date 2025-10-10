@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect } from "react";
 import { Form, Select, Tooltip, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { MCPServer } from "./types";

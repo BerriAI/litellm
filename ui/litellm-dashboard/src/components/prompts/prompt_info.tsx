@@ -12,15 +12,9 @@ import {
   TabPanel,
   TabPanels,
 } from "@tremor/react";
-import { Button, message, Tooltip, Modal } from "antd";
+import { Button, Modal } from "antd";
 import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline";
-import {
-  getPromptInfo,
-  PromptInfoResponse,
-  PromptSpec,
-  PromptTemplateBase,
-  deletePromptCall,
-} from "@/components/networking";
+import { getPromptInfo, PromptSpec, PromptTemplateBase, deletePromptCall } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import NotificationsManager from "../molecules/notifications_manager";

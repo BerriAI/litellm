@@ -8,17 +8,9 @@ export const formatDate = (date: Date) => {
 /**
  * Helper file for calls being made to proxy
  */
-import { all_admin_roles } from "@/utils/roles";
 import { message } from "antd";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-import {
-  TagNewRequest,
-  TagUpdateRequest,
-  TagDeleteRequest,
-  TagInfoRequest,
-  TagListResponse,
-  TagInfoResponse,
-} from "./tag_management/types";
+import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
@@ -3125,9 +3117,7 @@ export const keyListCall = async (
   }
 };
 
-export const keyAliasesCall = async (
-  accessToken: String
-): Promise<{ aliases: string[] }> => {
+export const keyAliasesCall = async (accessToken: String): Promise<{ aliases: string[] }> => {
   /**
    * Get all key aliases from proxy
    */
@@ -3158,7 +3148,6 @@ export const keyAliasesCall = async (
     throw error;
   }
 };
-
 
 export const spendUsersCall = async (accessToken: String, userID: String) => {
   try {
