@@ -7,8 +7,6 @@ from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
-from .enkryptai import EnkryptAIGuardrails
-
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 

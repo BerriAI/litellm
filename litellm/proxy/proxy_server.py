@@ -257,7 +257,9 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -304,7 +306,9 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -561,6 +565,31 @@ async def proxy_shutdown_event():
     cleanup_router_config_variables()
 
 
+async def _initialize_shared_aiohttp_session():
+    """Initialize shared aiohttp session for connection reuse."""
+    try:
+        from aiohttp import ClientSession, TCPConnector
+
+        # Create connector with connection pooling settings optimized for long-lived connections
+        connector = TCPConnector(
+            limit=AIOHTTP_CONNECTOR_LIMIT,
+            keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
+            ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
+            enable_cleanup_closed=True,
+        )
+        
+        session = ClientSession(connector=connector)
+        verbose_proxy_logger.info(
+            f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(session)})"
+        )
+        return session
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"Failed to create shared aiohttp session: {e}. Continuing without session reuse."
+        )
+        return None
+
+
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):
     global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval, shared_aiohttp_session
@@ -679,25 +708,7 @@ async def proxy_startup_event(app: FastAPI):
     ProxyStartupEvent._init_dd_tracer()
 
     ## Initialize shared aiohttp session for connection reuse
-    try:
-        from aiohttp import ClientSession, TCPConnector
-        
-        # Create connector with connection pooling settings optimized for long-lived connections
-        connector = TCPConnector(
-            limit=AIOHTTP_CONNECTOR_LIMIT,
-            keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
-            ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
-            enable_cleanup_closed=True,
-        )
-        
-        shared_aiohttp_session = ClientSession(connector=connector)
-        verbose_proxy_logger.info(
-            f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(shared_aiohttp_session)})"
-        )
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            f"Failed to create shared aiohttp session: {e}. Continuing without session reuse."
-        )
+    shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
     # End of startup event
     yield
