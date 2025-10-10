@@ -1,0 +1,8 @@
+{
+  "search": { "items": [
+    {"id": "node-1", "type": "fact", "content": "cxplus emits a pre-stream context.summary v2 line with retrieval metrics.", "score": 0.98, "tags": {"source": "fixture"}}
+  ]},
+  "neighbors": { "items": [
+    {"id": "node-2", "type": "procedure", "content": "Use CONTEXT_MCP_FIXTURE to enable deterministic Knowledge-First tests.", "score": 0.77, "tags": {"source": "fixture"}}
+  ]}
+}

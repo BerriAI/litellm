@@ -1,0 +1,45 @@
+name: knowledge-first-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      binary_url:
+        description: "URL to codex/cxplus binary (Linux x86_64)"
+        required: true
+        type: string
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download binary
+        run: |
+          mkdir -p dist/bin
+          curl -fsSL "${{ inputs.binary_url }}" -o dist/bin/codex
+          chmod +x dist/bin/codex
+          ./dist/bin/codex --help >/dev/null
+
+      - name: Verify fixture presence
+        run: |
+          test -f scenarios/fixtures/knowledge_fixture.json || {
+            echo "Missing fixture at scenarios/fixtures/knowledge_fixture.json"; exit 1;
+          }
+
+      - name: Run Knowledge-First (fixture)
+        env:
+          CONTEXT_MCP_FIXTURE: scenarios/fixtures/knowledge_fixture.json
+        run: |
+          ./dist/bin/codex -c context.provider=arango exec "hello fixture" --seed 42 || true
+          echo "First NDJSON line:" && head -n1 ./.codex/runs/*-events.ndjson | tee /dev/stderr
+
+      - name: Optional strict checks
+        if: ${{ always() }}
+        run: |
+          sudo apt-get update >/dev/null 2>&1 || true
+          sudo apt-get install -y jq >/dev/null 2>&1 || true
+          first=$(head -n1 ./.codex/runs/*-events.ndjson)
+          kind=$(echo "$first" | jq -r '.kind // empty')
+          echo "kind=$kind"
+          test "$kind" = "context.summary" || { echo "expected kind=context.summary"; exit 1; }
