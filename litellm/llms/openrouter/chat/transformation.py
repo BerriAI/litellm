@@ -7,7 +7,7 @@ Docs: https://openrouter.ai/docs/parameters
 """
 
 from enum import Enum
-from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union, cast
 
 import httpx
 
@@ -91,28 +91,28 @@ class OpenrouterConfig(OpenAIGPTConfig):
         To avoid exceeding Anthropic's limit of 4 cache breakpoints, cache_control is only
         added to the LAST content block in each message.
         """
-        transformed_messages = []
+        transformed_messages: List[AllMessageValues] = []
         for message in messages:
-            message_copy = dict(message)
-            cache_control = message_copy.pop("cache_control", None)
+            message_dict = dict(message)
+            cache_control = message_dict.pop("cache_control", None)
             
             if cache_control is not None:
-                content = message_copy.get("content")
+                content = message_dict.get("content")
                 
                 if isinstance(content, list):
                     # Content is already a list, add cache_control only to the last block
                     if len(content) > 0:
                         content_copy = []
                         for i, block in enumerate(content):
-                            block_copy = dict(block)
+                            block_dict = dict(block)
                             # Only add cache_control to the last content block
                             if i == len(content) - 1:
-                                block_copy["cache_control"] = cache_control
-                            content_copy.append(block_copy)
-                        message_copy["content"] = content_copy
+                                block_dict["cache_control"] = cache_control
+                            content_copy.append(block_dict)
+                        message_dict["content"] = content_copy
                 else:
                     # Content is a string, convert to structured format
-                    message_copy["content"] = [
+                    message_dict["content"] = [
                         {
                             "type": "text",
                             "text": content,
@@ -120,7 +120,8 @@ class OpenrouterConfig(OpenAIGPTConfig):
                         }
                     ]
             
-            transformed_messages.append(message_copy)
+            # Cast back to AllMessageValues after modification
+            transformed_messages.append(cast(AllMessageValues, message_dict))
         
         return transformed_messages
 
