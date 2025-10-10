@@ -135,7 +135,7 @@ Deploy Gemma models on custom Vertex AI prediction endpoints with OpenAI-compati
 model_list:
   - model_name: gemma-model
     litellm_params:
-      model: vertex_ai/gemma/gemma-3-12b-it-1759525599171
+      model: vertex_ai/gemma/gemma-3-12b-it-1222199011122
       api_base: https://ENDPOINT.us-central1-PROJECT.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict
       vertex_project: "my-project-id"
       vertex_location: "us-central1"
@@ -168,7 +168,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 from litellm import completion
 
 response = completion(
-    model="vertex_ai/gemma/gemma-3-12b-it-1759525599171",
+    model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
     messages=[{"role": "user", "content": "What is machine learning?"}],
     api_base="https://ENDPOINT.us-central1-PROJECT.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
     vertex_project="my-project-id",

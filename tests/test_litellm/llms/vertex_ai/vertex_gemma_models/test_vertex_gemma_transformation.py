@@ -42,8 +42,8 @@ class TestVertexGemmaCompletion:
         Expected Vertex Response:
         {
             "deployedModelId": "1207280419999999999",
-            "model": "projects/993702345710/locations/us-central1/models/gemma-3-12b-it-1759525599171",
-            "modelDisplayName": "gemma-3-12b-it-1759525599171",
+            "model": "projects/993702345710/locations/us-central1/models/gemma-3-12b-it-1222199011122",
+            "modelDisplayName": "gemma-3-12b-it-1222199011122",
             "modelVersionId": "1",
             "predictions": {
                 "choices": [
@@ -79,8 +79,8 @@ class TestVertexGemmaCompletion:
         # Real Vertex response from user's spec
         mock_vertex_response = {
             "deployedModelId": "1207280419999999999",
-            "model": "projects/993702345710/locations/us-central1/models/gemma-3-12b-it-1759525599171",
-            "modelDisplayName": "gemma-3-12b-it-1759525599171",
+            "model": "projects/993702345710/locations/us-central1/models/gemma-3-12b-it-1222199011122",
+            "modelDisplayName": "gemma-3-12b-it-1222199011122",
             "modelVersionId": "1",
             "predictions": {
                 "choices": [
@@ -122,7 +122,7 @@ class TestVertexGemmaCompletion:
             
             # Call litellm.acompletion()
             response = await litellm.acompletion(
-                model="vertex_ai/gemma/gemma-3-12b-it-1759525599171",
+                model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
                 messages=[{"role": "user", "content": "What is machine learning?"}],
                 max_tokens=100,
                 api_base="https://32277599999999999.us-central1-10582012152.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
@@ -162,7 +162,7 @@ class TestVertexGemmaCompletion:
             assert response.object == "chat.completion"
             assert response.created == 1759863903
             # Model name has the gemma/ prefix stripped during processing
-            assert response.model == "gemma-3-12b-it-1759525599171"
+            assert response.model == "gemma-3-12b-it-1222199011122"
             
             # Validate choices
             assert len(response.choices) == 1

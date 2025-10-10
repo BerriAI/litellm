@@ -7,7 +7,7 @@ with @requestFormat: "chatCompletions" and returns responses wrapped in 'predict
 Usage:
 
 response = litellm.completion(
-    model="vertex_ai/gemma/gemma-3-12b-it-1759525599171",
+    model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
     messages=[{"role": "user", "content": "What is machine learning?"}],
     vertex_project="your-project-id",
     vertex_location="us-central1",
