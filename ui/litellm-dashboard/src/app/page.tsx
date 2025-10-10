@@ -23,7 +23,6 @@ import ModelHubTable from "@/components/model_hub_table";
 import NewUsagePage from "@/components/new_usage";
 import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui/ChatUI";
-import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
 import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
@@ -39,6 +38,8 @@ import VectorStoreManagement from "@/components/vector_store_management";
 import UIThemeSettings from "@/components/ui_theme_settings";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
+import useFeatureFlags from "@/hooks/useFeatureFlags";
+import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 
 function getCookie(name: string) {
   // Safer cookie read + decoding; handles '=' inside values
@@ -140,6 +141,7 @@ export default function CreateKeyPage() {
   const [createClicked, setCreateClicked] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [userID, setUserID] = useState<string | null>(null);
+  const { refactoredUIFlag } = useFeatureFlags();
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -324,13 +326,7 @@ export default function CreateKeyPage() {
               />
               <div className="flex flex-1 overflow-auto">
                 <div className="mt-2">
-                  <Sidebar
-                    accessToken={accessToken}
-                    setPage={updatePage}
-                    userRole={userRole}
-                    defaultSelectedKey={page}
-                    collapsed={sidebarCollapsed}
-                  />
+                  <SidebarProvider setPage={updatePage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
                 </div>
 
                 {page == "api-keys" ? (

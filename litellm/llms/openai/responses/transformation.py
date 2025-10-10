@@ -169,7 +169,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             raise OpenAIError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
-        return ResponsesAPIResponse(**raw_response_json)
+        return ResponsesAPIResponse.model_construct(**raw_response_json)
 
     def validate_environment(
         self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]

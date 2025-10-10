@@ -902,6 +902,7 @@ if MCP_AVAILABLE:
 
             await session_manager.handle_request(scope, receive, send)
         except Exception as e:
+            raise e
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Instead of re-raising, try to send a graceful error response
             try:

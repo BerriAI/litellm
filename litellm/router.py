@@ -59,6 +59,7 @@ from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
@@ -125,7 +126,6 @@ from litellm.types.router import (
     AllowedFailsPolicy,
     AssistantsTypedDict,
     CredentialLiteLLMParams,
-    CustomPricingLiteLLMParams,
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
@@ -142,10 +142,18 @@ from litellm.types.router import (
     RoutingStrategy,
 )
 from litellm.types.services import ServiceTypes
-from litellm.types.utils import GenericBudgetConfigType, LiteLLMBatch
+from litellm.types.utils import (
+    CustomPricingLiteLLMParams,
+    GenericBudgetConfigType,
+    LiteLLMBatch,
+)
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import ModelResponseStream, StandardLoggingPayload, Usage
+from litellm.types.utils import (
+    ModelResponseStream,
+    StandardLoggingPayload,
+    Usage,
+)
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -909,8 +917,13 @@ class Router:
         try:
             _deployment_copy = copy.deepcopy(deployment)
             litellm_params: dict = _deployment_copy["litellm_params"]
-            if "api_key" in litellm_params:
+
+            if litellm.redact_user_api_key_info:
+                masker = SensitiveDataMasker(visible_prefix=2, visible_suffix=0)
+                _deployment_copy["litellm_params"] = masker.mask_dict(litellm_params)
+            elif "api_key" in litellm_params:
                 litellm_params["api_key"] = litellm_params["api_key"][:2] + "*" * 10
+
             return _deployment_copy
         except Exception as e:
             verbose_router_logger.debug(
