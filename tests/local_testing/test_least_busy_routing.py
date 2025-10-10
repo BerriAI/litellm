@@ -28,12 +28,12 @@ from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 
 def test_model_added():
     test_cache = DualCache()
-    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache, model_list=[])
+    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
     kwargs = {
         "litellm_params": {
             "metadata": {
                 "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-3",
+                "deployment": "azure/gpt-4.1-nano",
             },
             "model_info": {"id": "1234"},
         }
@@ -45,9 +45,9 @@ def test_model_added():
 
 def test_get_available_deployments():
     test_cache = DualCache()
-    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache, model_list=[])
+    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
-    deployment = "azure/chatgpt-v-3"
+    deployment = "azure/gpt-4.1-nano"
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -113,7 +113,7 @@ async def test_router_get_available_deployments(async_test):
     router.leastbusy_logger.test_flag = True
 
     model_group = "azure-model"
-    deployment = "azure/chatgpt-v-3"
+    deployment = "azure/gpt-4.1-nano"
     request_count_dict = {1: 10, 2: 54, 3: 100}
     cache_key = f"{model_group}_request_count"
     if async_test is True:

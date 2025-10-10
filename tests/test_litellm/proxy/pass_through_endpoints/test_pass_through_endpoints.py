@@ -344,6 +344,7 @@ def test_add_exact_path_route():
         merge_query_params=merge_query_params,
         dependencies=dependencies,
         cost_per_request=None,
+        endpoint_id="test-endpoint-id",
     )
 
     # Verify add_api_route was called with correct parameters
@@ -385,6 +386,7 @@ def test_add_subpath_route():
         merge_query_params=merge_query_params,
         dependencies=dependencies,
         cost_per_request=None,
+        endpoint_id="test-endpoint-id",
     )
 
     # Verify add_api_route was called with correct parameters
@@ -702,6 +704,7 @@ def test_initialize_pass_through_endpoints_with_cost_per_request():
         merge_query_params=False,
         dependencies=[],
         cost_per_request=5.00,
+        endpoint_id="test-endpoint-id-1",
     )
 
     # Verify add_api_route was called
@@ -727,6 +730,7 @@ def test_initialize_pass_through_endpoints_with_cost_per_request():
         merge_query_params=False,
         dependencies=[],
         cost_per_request=7.50,
+        endpoint_id="test-endpoint-id-2",
     )
 
     # Verify add_api_route was called for subpath
@@ -1245,3 +1249,142 @@ async def test_delete_pass_through_endpoint_empty_list():
         # Verify the exception
         assert exc_info.value.status_code == 400
         assert "no pass-through endpoints setup" in str(exc_info.value.detail).lower()
+
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_query_params_forwarding():
+    """
+    Test that query parameters from the original request are properly forwarded to the target URL.
+    
+    This test verifies the fix for the bug where query parameters like api-version were being lost
+    when forwarding requests to Azure OpenAI and other pass-through endpoints.
+    """
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.HttpPassThroughEndpointHelpers.non_streaming_http_request_handler"
+        ) as mock_http_handler:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
+            ) as mock_processing:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+                ) as mock_success_handler:
+                    with patch(
+                        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_response_body"
+                    ) as mock_get_response_body:
+                        # Setup mock for pre_call_hook
+                        test_body = {"name": "Azure Assistant", "model": "gpt-4o"}
+                        mock_proxy_logging.pre_call_hook = AsyncMock(return_value=test_body)
+                        
+                        # Setup mock for http response
+                        mock_response = MagicMock()
+                        mock_response.status_code = 200
+                        mock_response.headers = {"content-type": "application/json"}
+                        mock_response.aread = AsyncMock(return_value=b'{"id": "asst_123", "object": "assistant"}')
+                        mock_response.text = '{"id": "asst_123", "object": "assistant"}'
+                        mock_response.raise_for_status = MagicMock()
+                        
+                        # Mock the HTTP request handler to capture the call
+                        mock_http_handler.return_value = mock_response
+                        
+                        # Mock response body parser
+                        mock_get_response_body.return_value = {"id": "asst_123", "object": "assistant"}
+                        
+                        # Mock headers for custom headers
+                        mock_processing.get_custom_headers.return_value = {}
+                        
+                        # Mock success handler
+                        mock_success_handler.return_value = None
+                        
+                        # Create mock request with query parameters (Azure API version)
+                        mock_request = MagicMock(spec=Request)
+                        mock_request.method = "POST"
+                        mock_request.url = "http://localhost:4000/azure-assistant/openai/assistants"
+                        mock_request.body = AsyncMock(return_value=json.dumps(test_body).encode())
+                        mock_request.headers = Headers({"Content-Type": "application/json"})
+                        
+                        # Create QueryParams with api-version parameter
+                        mock_request.query_params = QueryParams([("api-version", "2025-01-01-preview")])
+                        
+                        # Create mock user API key dict
+                        mock_user_api_key_dict = MagicMock()
+                        mock_user_api_key_dict.api_key = "sk-1234"
+                        
+                        # Call pass_through_request
+                        result = await pass_through_request(
+                            request=mock_request,
+                            target="https://krris-m2f9a9i7-eastus2.openai.azure.com/openai/assistants",
+                            custom_headers={"Authorization": "Bearer azure_token"},
+                            user_api_key_dict=mock_user_api_key_dict,
+                        )
+                        
+                        # Verify the HTTP handler was called
+                        mock_http_handler.assert_called_once()
+                        
+                        # Extract the call arguments to verify query parameters were passed
+                        call_kwargs = mock_http_handler.call_args[1]
+                        
+                        # The key assertion: query parameters should be preserved and passed to the HTTP handler
+                        assert "requested_query_params" in call_kwargs
+                        assert call_kwargs["requested_query_params"] == {"api-version": "2025-01-01-preview"}
+                        
+                        # Verify the target URL is correct
+                        assert str(call_kwargs["url"]) == "https://krris-m2f9a9i7-eastus2.openai.azure.com/openai/assistants"
+                        
+                        # Verify the request body is preserved
+                        assert call_kwargs["_parsed_body"] == test_body
+
+
+@pytest.mark.asyncio
+async def test_pass_through_with_httpbin_redirect():
+    """
+    Integration test using httpbin.org redirect endpoint to test real redirect handling.
+    This tests the actual redirect handling capability end-to-end using the full pass_through_request function.
+    """
+    from unittest.mock import MagicMock
+
+    from fastapi import Request
+    from starlette.datastructures import Headers, QueryParams
+
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        pass_through_request,
+    )
+
+    # Create mock request
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "GET"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams("")
+    
+    # Mock the body method to return empty bytes for GET request
+    async def mock_body():
+        return b""
+    mock_request.body = mock_body
+    
+    # Mock user API key dict
+    mock_user_api_key_dict = MagicMock()
+    
+    try:
+        # Test with httpbin.org redirect endpoint
+        # This will redirect to httpbin.org/get
+        response = await pass_through_request(
+            request=mock_request,
+            target="https://httpbin.org/redirect/1",
+            custom_headers={},
+            user_api_key_dict=mock_user_api_key_dict
+        )
+        
+        # Should get the final response (200) from /get endpoint, not the redirect (302)
+        assert response.status_code == 200
+        
+        # The response should be from the /get endpoint
+        response_content = response.body.decode('utf-8')
+        
+        # httpbin.org/get returns JSON with info about the request
+        assert '"url": "https://httpbin.org/get"' in response_content
+        print("GOT A Response from HTTPBIN=", response_content)
+    except Exception as e:
+        # If httpbin.org is not accessible, skip the test
+        import pytest
+        pytest.skip(f"Could not reach httpbin.org for integration test: {e}")

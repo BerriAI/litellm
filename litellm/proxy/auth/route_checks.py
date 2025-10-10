@@ -62,12 +62,22 @@ class RouteChecks:
             for allowed_route in valid_token.allowed_routes
         ):
             for allowed_route in valid_token.allowed_routes:
-                if allowed_route in LiteLLMRoutes._member_names_:
+                if allowed_route in LiteLLMRoutes._member_names_:                    
                     if RouteChecks.check_route_access(
                         route=route,
                         allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
                     ):
                         return True
+                    
+                    ################################################
+                    #  For llm_api_routes, also check registered pass-through endpoints
+                    ################################################
+                    if allowed_route == "llm_api_routes":
+                        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+                            InitPassThroughEndpointHelpers,
+                        )
+                        if InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=route):
+                            return True
 
         # check if wildcard pattern is allowed
         for allowed_route in valid_token.allowed_routes:
@@ -302,6 +312,13 @@ class RouteChecks:
         return False
 
     @staticmethod
+    def _is_wildcard_pattern(pattern: str) -> bool:
+        """
+        Check if pattern is a wildcard pattern
+        """
+        return pattern.endswith("*")
+
+    @staticmethod
     def _route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
         """
         Check if route matches the wildcard pattern
@@ -342,10 +359,40 @@ class RouteChecks:
         Returns:
             bool: True if route is allowed, False otherwise
         """
-        return route in allowed_routes or any(  # Check exact match
+        #########################################################
+        # exact match route is in allowed_routes
+        #########################################################
+        if route in allowed_routes:
+            return True
+
+        #########################################################
+        # wildcard match route is in allowed_routes
+        # e.g calling /anthropic/v1/messages is allowed if allowed_routes has /anthropic/*
+        #########################################################
+        wildcard_allowed_routes = [
+            route
+            for route in allowed_routes
+            if RouteChecks._is_wildcard_pattern(pattern=route)
+        ]
+        for allowed_route in wildcard_allowed_routes:
+            if RouteChecks._route_matches_wildcard_pattern(
+                route=route, pattern=allowed_route
+            ):
+                return True
+
+        #########################################################
+        # pattern match route is in allowed_routes
+        # pattern: "/threads/{thread_id}"
+        # route: "/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"
+        # returns: True
+        #########################################################
+        if any(  # Check pattern match
             RouteChecks._route_matches_pattern(route=route, pattern=allowed_route)
             for allowed_route in allowed_routes
-        )  # Check pattern match
+        ):
+            return True
+
+        return False
 
     @staticmethod
     def _is_assistants_api_request(request: Request) -> bool:
@@ -389,7 +436,7 @@ class RouteChecks:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"user not allowed to access this OpenAI routes, role= {_user_role}",
             )
-        
+
         # Check if this is a write operation on management routes
         if RouteChecks.check_route_access(
             route=route, allowed_routes=LiteLLMRoutes.management_routes.value
@@ -405,7 +452,28 @@ class RouteChecks:
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email and password can be updated",
                             )
-            elif route in ["/user/new", "/user/delete", "/team/new", "/team/update", "/team/delete", "/model/new", "/model/update", "/model/delete", "/key/generate", "/key/delete", "/key/update", "/key/regenerate", "/key/service-account/generate", "/key/block", "/key/unblock"] or route.startswith("/key/") and route.endswith("/regenerate"):
+            elif (
+                route
+                in [
+                    "/user/new",
+                    "/user/delete",
+                    "/team/new",
+                    "/team/update",
+                    "/team/delete",
+                    "/model/new",
+                    "/model/update",
+                    "/model/delete",
+                    "/key/generate",
+                    "/key/delete",
+                    "/key/update",
+                    "/key/regenerate",
+                    "/key/service-account/generate",
+                    "/key/block",
+                    "/key/unblock",
+                ]
+                or route.startswith("/key/")
+                and route.endswith("/regenerate")
+            ):
                 # Block write operations for PROXY_ADMIN_VIEW_ONLY
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,

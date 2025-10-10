@@ -364,6 +364,57 @@ def test_x_initiator_header_system_only_messages():
     assert headers["X-Initiator"] == "user"
 
 
+def test_get_supported_openai_params_claude_model():
+    """Test that Claude models with extended thinking support have thinking and reasoning parameters."""
+    config = GithubCopilotConfig()
+    
+    # Test Claude 4 model supports thinking and reasoning_effort parameters
+    supported_params = config.get_supported_openai_params("claude-sonnet-4-20250514")
+    assert "thinking" in supported_params
+    assert "reasoning_effort" in supported_params
+    
+    # Test Claude 3-7 model supports thinking and reasoning_effort parameters
+    supported_params_claude37 = config.get_supported_openai_params("claude-3-7-sonnet-20250219")
+    assert "thinking" in supported_params_claude37
+    assert "reasoning_effort" in supported_params_claude37
+    
+    # Test Claude 3.5 model does NOT support thinking parameters (no extended thinking)
+    supported_params_claude35 = config.get_supported_openai_params("claude-3.5-sonnet")
+    assert "thinking" not in supported_params_claude35
+    assert "reasoning_effort" not in supported_params_claude35
+    
+    # Test non-Claude model doesn't include thinking parameters but may include reasoning_effort
+    supported_params_gpt = config.get_supported_openai_params("gpt-4o")
+    assert "thinking" not in supported_params_gpt
+    # gpt-4o should NOT have reasoning_effort (not a reasoning model)
+    assert "reasoning_effort" not in supported_params_gpt
+    
+    # Test O-series reasoning models include reasoning_effort but not thinking
+    supported_params_o3 = config.get_supported_openai_params("o3-mini")
+    assert "thinking" not in supported_params_o3
+    # o3-mini should have reasoning_effort (it's an O-series reasoning model)
+    assert "reasoning_effort" in supported_params_o3
+
+
+def test_get_supported_openai_params_case_insensitive():
+    """Test that Claude model detection is case-insensitive for models with extended thinking."""
+    config = GithubCopilotConfig()
+    
+    # Test uppercase Claude 4 model with full model name
+    supported_params_upper = config.get_supported_openai_params("CLAUDE-SONNET-4-20250514")
+    assert "thinking" in supported_params_upper
+    assert "reasoning_effort" in supported_params_upper
+    
+    # Test mixed case Claude 3-7 model (has extended thinking) with full model name
+    supported_params_mixed = config.get_supported_openai_params("Claude-3-7-Sonnet-20250219")
+    assert "thinking" in supported_params_mixed
+    assert "reasoning_effort" in supported_params_mixed
+    
+    # Test that Claude 3.5 models don't have thinking support (case insensitive)
+    supported_params_35 = config.get_supported_openai_params("CLAUDE-3.5-SONNET")
+    assert "thinking" not in supported_params_35
+    assert "reasoning_effort" not in supported_params_35
+
 def test_copilot_vision_request_header_with_image():
     """Test that Copilot-Vision-Request header is added when messages contain images"""
     config = GithubCopilotConfig()

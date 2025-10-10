@@ -1,4 +1,5 @@
 import re
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, get_type_hints
 
 import httpx
@@ -22,6 +23,68 @@ class VertexAIError(BaseLLMException):
         headers: Optional[Union[Dict, httpx.Headers]] = None,
     ):
         super().__init__(message=message, status_code=status_code, headers=headers)
+
+
+class VertexAIModelRoute(str, Enum):
+    """Enum for Vertex AI model routing"""
+    PARTNER_MODELS = "partner_models"
+    GEMINI = "gemini"
+    GEMMA = "gemma"
+    MODEL_GARDEN = "model_garden"
+    NON_GEMINI = "non_gemini"
+
+
+def get_vertex_ai_model_route(model: str, litellm_params: Optional[dict] = None) -> VertexAIModelRoute:
+    """
+    Determine which handler to use for a Vertex AI model based on the model name.
+    
+    Args:
+        model: The model name (e.g., "llama3-405b", "gemini-pro", "gemma/gemma-3-12b-it", "openai/gpt-oss-120b")
+        litellm_params: Optional litellm parameters dict that may contain base_model for routing
+        
+    Returns:
+        VertexAIModelRoute: The route enum indicating which handler should be used
+        
+    Examples:
+        >>> get_vertex_ai_model_route("llama3-405b")
+        VertexAIModelRoute.PARTNER_MODELS
+        
+        >>> get_vertex_ai_model_route("gemini-pro")
+        VertexAIModelRoute.GEMINI
+        
+        >>> get_vertex_ai_model_route("gemma/gemma-3-12b-it")
+        VertexAIModelRoute.GEMMA
+        
+        >>> get_vertex_ai_model_route("openai/gpt-oss-120b")
+        VertexAIModelRoute.MODEL_GARDEN
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    # Check base_model in litellm_params for gemini override
+    if litellm_params and litellm_params.get("base_model") is not None:
+        if "gemini" in litellm_params["base_model"]:
+            return VertexAIModelRoute.GEMINI
+    
+    # Check for partner models (llama, mistral, claude, etc.)
+    if VertexAIPartnerModels.is_vertex_partner_model(model=model):
+        return VertexAIModelRoute.PARTNER_MODELS
+    
+    # Check for gemma models
+    if "gemma/" in model:
+        return VertexAIModelRoute.GEMMA
+    
+    # Check for model garden openai models
+    if "openai" in model:
+        return VertexAIModelRoute.MODEL_GARDEN
+    
+    # Check for gemini models
+    if "gemini" in model:
+        return VertexAIModelRoute.GEMINI
+    
+    # Default to non-gemini (legacy vertex models like chat-bison, text-bison, etc.)
+    return VertexAIModelRoute.NON_GEMINI
 
 
 def get_supports_system_message(
@@ -187,6 +250,25 @@ def _check_text_in_content(parts: List[PartType]) -> bool:
     return has_text_param
 
 
+def _fix_enum_empty_strings(schema, depth=0):
+    """Fix empty strings in enum values by replacing them with None. Gemini doesn't accept empty strings in enums."""
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
+    
+    if "enum" in schema and isinstance(schema["enum"], list):
+        schema["enum"] = [None if value == "" else value for value in schema["enum"]]
+
+    # Reuse existing recursion pattern from convert_anyof_null_to_nullable
+    properties = schema.get("properties", None)
+    if properties is not None:
+        for _, value in properties.items():
+            _fix_enum_empty_strings(value, depth=depth + 1)
+
+    items = schema.get("items", None)
+    if items is not None:
+        _fix_enum_empty_strings(items, depth=depth + 1)
+
+
 def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
@@ -214,6 +296,11 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
     convert_anyof_null_to_nullable(parameters)
+
+    _convert_schema_types(parameters)
+
+    # Handle empty strings in enum values - Gemini doesn't accept empty strings in enums
+    _fix_enum_empty_strings(parameters)
 
     # Handle empty items objects
     process_items(parameters)
@@ -254,9 +341,7 @@ def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
                     item["title"] = title
                 if description:
                     item["description"] = description
-            return {"anyOf": any_of}
-        else:
-            return schema_dict
+        return {"anyOf": any_of}
     return schema_dict
 
 
@@ -440,6 +525,47 @@ def _convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
     # Convert to Unix timestamp (seconds since epoch)
     return int(dt.timestamp())
 
+
+def _convert_schema_types(schema, depth=0):
+    """
+    Convert type arrays and lowercase types for Vertex AI compatibility.
+    
+    Transforms OpenAI-style schemas to Vertex AI format by converting type arrays 
+    like ["string", "number"] to anyOf format and converting all types to uppercase.
+    """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+    
+    if not isinstance(schema, dict):
+        return
+
+    
+    # Handle type field
+    if "type" in schema:
+        type_val = schema["type"]
+        if isinstance(type_val, list) and len(type_val) > 1:
+            # Convert ["string", "number"] -> {"anyOf": [{"type": "STRING"}, {"type": "NUMBER"}]}
+            schema["anyOf"] = [{"type": t} for t in type_val if isinstance(t, str)]
+            schema.pop("type")
+        elif isinstance(type_val, list) and len(type_val) == 1:
+            schema["type"] = type_val[0]
+        elif isinstance(type_val, str):
+            schema["type"] = type_val
+    
+    # Recursively process nested properties, items, and anyOf
+    for key in ["properties", "items", "anyOf"]:
+        if key in schema:
+            value = schema[key]
+            if key == "properties" and isinstance(value, dict):
+                for prop_schema in value.values():
+                    _convert_schema_types(prop_schema, depth + 1)
+            elif key == "items":
+                _convert_schema_types(value, depth + 1)
+            elif key == "anyOf" and isinstance(value, list):
+                for anyof_schema in value:
+                    _convert_schema_types(anyof_schema, depth + 1)
 
 def get_vertex_project_id_from_url(url: str) -> Optional[str]:
     """

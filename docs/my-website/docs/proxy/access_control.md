@@ -4,7 +4,7 @@ Role-based access control (RBAC) is based on Organizations, Teams and Internal U
 
 - `Organizations` are the top-level entities that contain Teams.
 - `Team` - A Team is a collection of multiple `Internal Users`
-- `Internal Users` - users that can create keys, make LLM API calls, view usage on LiteLLM 
+- `Internal Users` - users that can create keys, make LLM API calls, view usage on LiteLLM. Users can be on multiple teams.
 - `Roles` define the permissions of an `Internal User`
 - `Virtual Keys` - Keys are used for authentication to the LiteLLM API. Keys are tied to a `Internal User` and `Team` 
 

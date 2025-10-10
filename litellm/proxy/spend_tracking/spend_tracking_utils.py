@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
@@ -21,6 +21,7 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayload,
     StandardLoggingVectorStoreRequest,
+    VectorStoreSearchResponse,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -53,7 +54,7 @@ def _get_spend_logs_metadata(
     guardrail_information: Optional[StandardLoggingGuardrailInformation] = None,
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
-    cold_storage_object_key: Optional[str] = None
+    cold_storage_object_key: Optional[str] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -101,7 +102,7 @@ def _get_spend_logs_metadata(
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
-    
+
     return clean_metadata
 
 
@@ -297,7 +298,9 @@ def get_logging_payload(  # noqa: PLR0915
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
 
     mcp_namespaced_tool_name = None
-    mcp_tool_call_metadata = clean_metadata.get("mcp_tool_call_metadata", {})
+    mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = clean_metadata.get(
+        "mcp_tool_call_metadata"
+    )
     if mcp_tool_call_metadata is not None:
         mcp_namespaced_tool_name = mcp_tool_call_metadata.get(
             "namespaced_tool_name", None
@@ -370,7 +373,7 @@ def _get_session_id_for_spend_log(
     This ensures each spend log is associated with a unique session id.
 
     """
-    import uuid
+    from litellm._uuid import uuid
 
     if (
         standard_logging_payload is not None
@@ -481,10 +484,9 @@ def _sanitize_request_body_for_spend_logs_payload(
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
-    Truncates strings longer than 1000 characters and handles nested dictionaries.
+    Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
     """
     from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
-    MAX_STRING_LENGTH = 1000
 
     if visited is None:
         visited = set()
@@ -501,8 +503,35 @@ def _sanitize_request_body_for_spend_logs_payload(
         elif isinstance(value, list):
             return [_sanitize_value(item) for item in value]
         elif isinstance(value, str):
-            if len(value) > MAX_STRING_LENGTH:
-                return f"{value[:MAX_STRING_LENGTH]}... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} {len(value) - MAX_STRING_LENGTH} chars)"
+            if len(value) > MAX_STRING_LENGTH_PROMPT_IN_DB:
+                # Keep 35% from beginning and 65% from end (end is usually more important)
+                # This split ensures we keep more context from the end of conversations
+                start_ratio = 0.35
+                end_ratio = 0.65
+
+                # Calculate character distribution
+                start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * start_ratio)
+                end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * end_ratio)
+
+                # Ensure we don't exceed the total limit
+                total_keep = start_chars + end_chars
+                if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
+                    end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
+
+                # If the string length is less than what we want to keep, just truncate normally
+                if len(value) <= MAX_STRING_LENGTH_PROMPT_IN_DB:
+                    return value
+
+                # Calculate how many characters are being skipped
+                skipped_chars = len(value) - total_keep
+
+                # Build the truncated string: beginning + truncation marker + end
+                truncated_value = (
+                    f"{value[:start_chars]}"
+                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+                    f"{value[-end_chars:]}"
+                )
+                return truncated_value
             return value
         return value
 
@@ -541,8 +570,9 @@ def _get_vector_store_request_for_spend_logs_payload(
     if vector_store_request_metadata is None:
         return None
     for vector_store_request in vector_store_request_metadata:
-        vector_store_search_response = (
-            vector_store_request.get("vector_store_search_response", {}) or {}
+        vector_store_search_response: VectorStoreSearchResponse = (
+            vector_store_request.get("vector_store_search_response")
+            or VectorStoreSearchResponse()
         )
         response_data = vector_store_search_response.get("data", []) or []
         for response_item in response_data:

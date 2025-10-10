@@ -12,10 +12,8 @@ To start using Litellm, run the following commands in a shell:
 
 ```bash
 # Get the code
-git clone https://github.com/BerriAI/litellm
-
-# Go to folder
-cd litellm
+curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/prometheus.yml
 
 # Add the master key - you can change this after setup
 echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
@@ -29,7 +27,7 @@ echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
 source .env
 
 # Start
-docker-compose up
+docker compose up
 ```
 
 
@@ -713,6 +711,25 @@ In this example, we set the keepalive timeout to 75 seconds.
 
 ```shell showLineNumbers title="Environment Variable"
 export KEEPALIVE_TIMEOUT=75
+docker run ghcr.io/berriai/litellm:main-stable
+```
+
+
+### Restart Workers After N Requests
+
+Use this to mitigate memory growth by recycling workers after a fixed number of requests. When set, each worker restarts after completing the specified number of requests. Defaults to disabled when unset.
+
+Usage Examples:
+
+```shell showLineNumbers title="docker run (CLI flag)"
+docker run ghcr.io/berriai/litellm:main-stable \
+    --max_requests_before_restart 10000
+```
+
+Or set via environment variable:
+
+```shell showLineNumbers title="Environment Variable"
+export MAX_REQUESTS_BEFORE_RESTART=10000
 docker run ghcr.io/berriai/litellm:main-stable
 ```
 

@@ -1,5 +1,17 @@
 import base64
-from typing import Any, Dict, List, Optional, Union, cast, get_type_hints, overload
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Type,
+    Union,
+    cast,
+    get_type_hints,
+    overload,
+)
+
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
@@ -8,9 +20,10 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
+    ResponseText,
 )
 from litellm.types.responses.main import DecodedResponseId
-from litellm.types.utils import SpecialEnums, Usage
+from litellm.types.utils import PromptTokensDetails, SpecialEnums, Usage
 
 
 class ResponsesAPIRequestUtils:
@@ -24,7 +37,6 @@ class ResponsesAPIRequestUtils:
         custom_llm_provider: Optional[str],
         model: str,
     ):
-
         if supported_params is None:
             return
         unsupported_params = {}
@@ -302,6 +314,40 @@ class ResponsesAPIRequestUtils:
         )
         return decoded_response_id.get("response_id", previous_response_id)
 
+    @staticmethod
+    def convert_text_format_to_text_param(
+        text_format: Optional[Union[Type["BaseModel"], dict]],
+        text: Optional["ResponseText"] = None,
+    ) -> Optional["ResponseText"]:
+        """
+        Convert text_format parameter to text parameter for the responses API.
+
+        Args:
+            text_format: Pydantic model class or dict to convert to response format
+            text: Existing text parameter (if provided, text_format is ignored)
+
+        Returns:
+            ResponseText object with the converted format, or None if conversion fails
+        """
+        if text_format is not None and text is None:
+            from litellm.llms.base_llm.base_utils import type_to_response_format_param
+
+            # Convert Pydantic model to response format
+            response_format = type_to_response_format_param(text_format)
+            if response_format is not None:
+                # Create ResponseText object with the format
+                # The responses API expects the format to have name at the top level
+                text = {
+                    "format": {
+                        "type": response_format["type"],
+                        "name": response_format["json_schema"]["name"],
+                        "schema": response_format["json_schema"]["schema"],
+                        "strict": response_format["json_schema"]["strict"],
+                    }
+                }
+                return text
+        return text
+
 
 class ResponseAPILoggingUtils:
     @staticmethod
@@ -329,8 +375,15 @@ class ResponseAPILoggingUtils:
         )
         prompt_tokens: int = response_api_usage.input_tokens or 0
         completion_tokens: int = response_api_usage.output_tokens or 0
+        prompt_tokens_details: Optional[PromptTokensDetails] = None
+        if response_api_usage.input_tokens_details:
+            prompt_tokens_details = PromptTokensDetails(
+                cached_tokens=response_api_usage.input_tokens_details.cached_tokens,
+                audio_tokens=response_api_usage.input_tokens_details.audio_tokens,
+            )
         return Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens_details=prompt_tokens_details,
         )

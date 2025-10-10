@@ -1,11 +1,13 @@
 """
 LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 """
+
 import asyncio
 import base64
 from datetime import timedelta
-from typing import List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
+import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
@@ -16,11 +18,11 @@ from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
 
 from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
     MCPAuth,
     MCPAuthType,
-    MCPSpecVersion,
-    MCPSpecVersionType,
     MCPStdioConfig,
     MCPTransport,
     MCPTransportType,
@@ -45,16 +47,17 @@ class MCPClient:
         server_url: str = "",
         transport_type: MCPTransportType = MCPTransport.http,
         auth_type: MCPAuthType = None,
-        auth_value: Optional[str] = None,
+        auth_value: Optional[Union[str, Dict[str, str]]] = None,
         timeout: float = 60.0,
         stdio_config: Optional[MCPStdioConfig] = None,
-        protocol_version: MCPSpecVersionType = MCPSpecVersion.jun_2025,
+        extra_headers: Optional[Dict[str, str]] = None,
+        ssl_verify: Optional[VerifyTypes] = None,
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
         self.auth_type: MCPAuthType = auth_type
         self.timeout: float = timeout
-        self._mcp_auth_value: Optional[str] = None
+        self._mcp_auth_value: Optional[Union[str, Dict[str, str]]] = None
         self._session: Optional[ClientSession] = None
         self._context = None
         self._transport_ctx = None
@@ -62,8 +65,8 @@ class MCPClient:
         self._session_ctx = None
         self._task: Optional[asyncio.Task] = None
         self.stdio_config: Optional[MCPStdioConfig] = stdio_config
-        self.protocol_version: MCPSpecVersionType = protocol_version
-
+        self.extra_headers: Optional[Dict[str, str]] = extra_headers
+        self.ssl_verify: Optional[VerifyTypes] = ssl_verify
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
@@ -84,44 +87,57 @@ class MCPClient:
         """Initialize the transport and session."""
         if self._session:
             return  # Already connected
-            
+
         try:
             if self.transport_type == MCPTransport.stdio:
                 # For stdio transport, use stdio_client with command-line parameters
                 if not self.stdio_config:
                     raise ValueError("stdio_config is required for stdio transport")
-                    
+
                 server_params = StdioServerParameters(
                     command=self.stdio_config.get("command", ""),
                     args=self.stdio_config.get("args", []),
-                    env=self.stdio_config.get("env", {})
+                    env=self.stdio_config.get("env", {}),
                 )
-                
+
                 self._transport_ctx = stdio_client(server_params)
                 self._transport = await self._transport_ctx.__aenter__()
-                self._session_ctx = ClientSession(self._transport[0], self._transport[1])
+                self._session_ctx = ClientSession(
+                    self._transport[0], self._transport[1]
+                )
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
             elif self.transport_type == MCPTransport.sse:
                 headers = self._get_auth_headers()
+                httpx_client_factory = self._create_httpx_client_factory()
                 self._transport_ctx = sse_client(
                     url=self.server_url,
                     timeout=self.timeout,
                     headers=headers,
+                    httpx_client_factory=httpx_client_factory,
                 )
                 self._transport = await self._transport_ctx.__aenter__()
-                self._session_ctx = ClientSession(self._transport[0], self._transport[1])
+                self._session_ctx = ClientSession(
+                    self._transport[0], self._transport[1]
+                )
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
             else:  # http
                 headers = self._get_auth_headers()
+                httpx_client_factory = self._create_httpx_client_factory()
+                verbose_logger.debug(
+                    "litellm headers for streamablehttp_client: %s", headers
+                )
                 self._transport_ctx = streamablehttp_client(
                     url=self.server_url,
                     timeout=timedelta(seconds=self.timeout),
                     headers=headers,
+                    httpx_client_factory=httpx_client_factory,
                 )
                 self._transport = await self._transport_ctx.__aenter__()
-                self._session_ctx = ClientSession(self._transport[0], self._transport[1])
+                self._session_ctx = ClientSession(
+                    self._transport[0], self._transport[1]
+                )
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
         except ValueError as e:
@@ -173,38 +189,75 @@ class MCPClient:
                 pass
             self._context = None
 
-    def update_auth_value(self, mcp_auth_value: str):
+    def update_auth_value(self, mcp_auth_value: Union[str, Dict[str, str]]):
         """
         Set the authentication header for the MCP client.
         """
-        if self.auth_type == MCPAuth.basic:
-            # Assuming mcp_auth_value is in format "username:password", convert it when updating
-            mcp_auth_value = to_basic_auth(mcp_auth_value)
-        self._mcp_auth_value = mcp_auth_value
+        if isinstance(mcp_auth_value, dict):
+            self._mcp_auth_value = mcp_auth_value
+        else:
+            if self.auth_type == MCPAuth.basic:
+                # Assuming mcp_auth_value is in format "username:password", convert it when updating
+                mcp_auth_value = to_basic_auth(mcp_auth_value)
+            self._mcp_auth_value = mcp_auth_value
 
     def _get_auth_headers(self) -> dict:
         """Generate authentication headers based on auth type."""
         headers = {}
-        
-        if self._mcp_auth_value:
-            if self.auth_type == MCPAuth.bearer_token:
-                headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
-            elif self.auth_type == MCPAuth.basic:
-                headers["Authorization"] = f"Basic {self._mcp_auth_value}"
-            elif self.auth_type == MCPAuth.api_key:
-                headers["X-API-Key"] = self._mcp_auth_value
 
-        # Handle protocol version - it might be a string or enum
-        if hasattr(self.protocol_version, 'value'):
-            # It's an enum
-            protocol_version_str = self.protocol_version.value
-        else:
-            # It's a string
-            protocol_version_str = str(self.protocol_version)
-        
-        headers["MCP-Protocol-Version"] = protocol_version_str
+        if self._mcp_auth_value:
+            if isinstance(self._mcp_auth_value, str):
+                if self.auth_type == MCPAuth.bearer_token:
+                    headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
+                elif self.auth_type == MCPAuth.basic:
+                    headers["Authorization"] = f"Basic {self._mcp_auth_value}"
+                elif self.auth_type == MCPAuth.api_key:
+                    headers["X-API-Key"] = self._mcp_auth_value
+                elif self.auth_type == MCPAuth.authorization:
+                    headers["Authorization"] = self._mcp_auth_value
+            elif isinstance(self._mcp_auth_value, dict):
+                headers.update(self._mcp_auth_value)
+
+        # update the headers with the extra headers
+        if self.extra_headers:
+            headers.update(self.extra_headers)
+
         return headers
 
+    def _create_httpx_client_factory(self) -> Callable[..., httpx.AsyncClient]:
+        """
+        Create a custom httpx client factory that uses LiteLLM's SSL configuration.
+
+        This factory follows the same CA bundle path logic as http_handler.py:
+        1. Check ssl_verify parameter (can be SSLContext, bool, or path to CA bundle)
+        2. Check SSL_VERIFY environment variable
+        3. Check SSL_CERT_FILE environment variable
+        4. Fall back to certifi CA bundle
+        """
+
+        def factory(
+            *,
+            headers: Optional[Dict[str, str]] = None,
+            timeout: Optional[httpx.Timeout] = None,
+            auth: Optional[httpx.Auth] = None,
+        ) -> httpx.AsyncClient:
+            """Create an httpx.AsyncClient with LiteLLM's SSL configuration."""
+            # Get unified SSL configuration using the same logic as http_handler.py
+            ssl_config = get_ssl_configuration(self.ssl_verify)
+
+            verbose_logger.debug(
+                f"MCP client using SSL configuration: {type(ssl_config).__name__}"
+            )
+
+            return httpx.AsyncClient(
+                headers=headers,
+                timeout=timeout,
+                auth=auth,
+                verify=ssl_config,
+                follow_redirects=True,
+            )
+
+        return factory
 
     async def list_tools(self) -> List[MCPTool]:
         """List available tools from the server."""
@@ -214,7 +267,7 @@ class MCPClient:
             except Exception as e:
                 verbose_logger.warning(f"MCP client connection failed: {str(e)}")
                 return []
-        
+
         if self._session is None:
             verbose_logger.warning("MCP client session is not initialized")
             return []
@@ -243,17 +296,20 @@ class MCPClient:
             except Exception as e:
                 verbose_logger.warning(f"MCP client connection failed: {str(e)}")
                 return MCPCallToolResult(
-                    content=[TextContent(type="text", text=f"{str(e)}")],
-                    isError=True
+                    content=[TextContent(type="text", text=f"{str(e)}")], isError=True
                 )
 
         if self._session is None:
             verbose_logger.warning("MCP client session is not initialized")
             return MCPCallToolResult(
-                content=[TextContent(type="text", text="MCP client session is not initialized")],
+                content=[
+                    TextContent(
+                        type="text", text="MCP client session is not initialized"
+                    )
+                ],
                 isError=True,
             )
-        
+
         try:
             tool_result = await self._session.call_tool(
                 name=call_tool_request_params.name,
@@ -268,8 +324,8 @@ class MCPClient:
             await self.disconnect()
             # Return a default error result instead of raising
             return MCPCallToolResult(
-                content=[TextContent(type="text", text=f"{str(e)}")],  # Empty content for error case
+                content=[
+                    TextContent(type="text", text=f"{str(e)}")
+                ],  # Empty content for error case
                 isError=True,
             )
-        
-

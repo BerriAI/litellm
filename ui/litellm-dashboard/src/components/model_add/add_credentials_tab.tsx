@@ -1,15 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { 
-  Card, 
-  Form, 
-  Button, 
-  Tooltip, 
-  Typography, 
-  Select as AntdSelect, 
-  Input, 
-  Switch, 
-  Modal 
-} from "antd";
+import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Input, Switch, Modal } from "antd";
 import type { UploadProps } from "antd/es/upload";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
 import type { FormInstance } from "antd";
@@ -35,7 +25,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
   onUpdateCredential,
   uploadProps,
   addOrEdit,
-  existingCredential
+  existingCredential,
 }) => {
   const [form] = Form.useForm();
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
@@ -43,7 +33,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
 
   const handleSubmit = (values: any) => {
     const filteredValues = Object.entries(values).reduce((acc, [key, value]) => {
-      if (value !== '' && value !== undefined && value !== null) {
+      if (value !== "" && value !== undefined && value !== null) {
         acc[key] = value;
       }
       return acc;
@@ -81,11 +71,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
       footer={null}
       width={600}
     >
-      <Form
-        form={form}
-        onFinish={handleSubmit}
-        layout="vertical"
-      >
+      <Form form={form} onFinish={handleSubmit} layout="vertical">
         {/* Credential Name */}
         <Form.Item
           label="Credential Name:"
@@ -93,7 +79,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
           rules={[{ required: true, message: "Credential name is required" }]}
           initialValue={existingCredential?.credential_name}
         >
-          <TextInput 
+          <TextInput
             placeholder="Enter a friendly name for these credentials"
             disabled={existingCredential?.credential_name ? true : false}
           />
@@ -114,10 +100,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
             }}
           >
             {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
-              <AntdSelect.Option
-                key={providerEnum}
-                value={providerEnum}
-              >
+              <AntdSelect.Option key={providerEnum} value={providerEnum}>
                 <div className="flex items-center space-x-2">
                   <img
                     src={providerLogoMap[providerDisplayName]}
@@ -142,36 +125,25 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
           </AntdSelect>
         </Form.Item>
 
-        
-
-        <ProviderSpecificFields
-          selectedProvider={selectedProvider}
-          uploadProps={uploadProps}
-        />
+        <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
 
         {/* Modal Footer */}
         <div className="flex justify-between items-center">
           <Tooltip title="Get help on our github">
-            <Link href="https://github.com/BerriAI/litellm/issues">
-              Need Help?
-            </Link>
+            <Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Link>
           </Tooltip>
-          
+
           <div>
-            <Button 
+            <Button
               onClick={() => {
                 onCancel();
                 form.resetFields();
-              }} 
+              }}
               style={{ marginRight: 10 }}
             >
               Cancel
             </Button>
-            <Button 
-              htmlType="submit"
-            >
-              {addOrEdit === "add" ? "Add Credential" : "Update Credential"}
-            </Button>
+            <Button htmlType="submit">{addOrEdit === "add" ? "Add Credential" : "Update Credential"}</Button>
           </div>
         </div>
       </Form>

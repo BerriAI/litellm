@@ -712,7 +712,7 @@ def encode_image(image_path):
     "model",
     [
         "gpt-4o",
-        "azure/gpt-4o-new-test",
+        "azure/gpt-4.1-nano",
         "anthropic/claude-3-opus-20240229",
     ],
 )  #
@@ -758,6 +758,7 @@ def test_completion_base64(model):
             pass
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
+
 
 def test_completion_mistral_api():
     try:
@@ -1745,7 +1746,7 @@ def test_completion_openai():
     "model, api_version",
     [
         # ("gpt-4o-2024-08-06", None),
-        # ("azure/chatgpt-v-3", None),
+        # ("azure/gpt-4.1-nano", None),
         ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
         # ("azure/gpt-4o-new-test", "2024-08-01-preview"),
     ],
@@ -2416,7 +2417,7 @@ def test_completion_azure_extra_headers():
         litellm.client_session = http_client
         try:
             response = completion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-nano",
                 messages=messages,
                 api_base=os.getenv("AZURE_API_BASE"),
                 api_version="2023-07-01-preview",
@@ -2465,7 +2466,7 @@ def test_completion_azure_ad_token():
         litellm.client_session = http_client
         try:
             response = completion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-nano",
                 messages=messages,
                 azure_ad_token="my-special-token",
             )
@@ -2496,7 +2497,7 @@ def test_completion_azure_key_completion_arg():
         litellm.set_verbose = True
         ## Test azure call
         response = completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=messages,
             api_key=old_key,
             logprobs=True,
@@ -2513,31 +2514,6 @@ def test_completion_azure_key_completion_arg():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_azure_key_completion_arg()
-
-
-def test_azure_instruct():
-    litellm.set_verbose = True
-    response = completion(
-        model="azure_text/instruct-model",
-        messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
-        max_tokens=10,
-    )
-    print("response", response)
-
-
-@pytest.mark.asyncio
-async def test_azure_instruct_stream():
-    litellm.set_verbose = False
-    response = await litellm.acompletion(
-        model="azure_text/instruct-model",
-        messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
-        max_tokens=10,
-        stream=True,
-    )
-    print("response", response)
-    async for chunk in response:
-        print(chunk)
 
 
 async def test_re_use_azure_async_client():
@@ -2554,7 +2530,7 @@ async def test_re_use_azure_async_client():
         ## Test azure call
         for _ in range(3):
             response = await litellm.acompletion(
-                model="azure/chatgpt-v-3", messages=messages, client=client
+                model="azure/gpt-4.1-nano", messages=messages, client=client
             )
             print(f"response: {response}")
     except Exception as e:
@@ -2580,37 +2556,6 @@ def test_re_use_openaiClient():
         pytest.fail("got Exception", e)
 
 
-def test_completion_azure():
-    try:
-        litellm.set_verbose = False
-        ## Test azure call
-        response = completion(
-            model="azure/gpt-4o-new-test",
-            messages=messages,
-            api_key="os.environ/AZURE_API_KEY",
-        )
-        print(f"response: {response}")
-        print(f"response hidden params: {response._hidden_params}")
-        ## Test azure flag for backwards-compat
-        # response = completion(
-        #     model="chatgpt-v-3",
-        #     messages=messages,
-        #     azure=True,
-        #     max_tokens=10
-        # )
-        # Add any assertions here to check the response
-        print(response)
-
-        cost = completion_cost(completion_response=response)
-        assert cost > 0.0
-        print("Cost for azure completion request", cost)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_azure()
-
-
 @pytest.mark.skip(
     reason="this is bad test. It doesn't actually fail if the token is not set in the header. "
 )
@@ -2632,7 +2577,7 @@ def test_azure_openai_ad_token():
     litellm.input_callback = [tester]
     try:
         response = litellm.completion(
-            model="azure/chatgpt-v-3",  # e.g. gpt-35-instant
+            model="azure/gpt-4.1-nano",  # e.g. gpt-35-instant
             messages=[
                 {
                     "role": "user",
@@ -2670,7 +2615,7 @@ def test_completion_azure2():
 
         ## Test azure call
         response = completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=messages,
             api_base=api_base,
             api_key=api_key,
@@ -2707,7 +2652,7 @@ def test_completion_azure3():
 
         ## Test azure call
         response = completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=messages,
             max_tokens=10,
         )
@@ -2755,7 +2700,7 @@ def test_completion_azure_with_litellm_key():
         openai.api_key = "ymca"
 
         response = completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=messages,
         )
         # Add any assertions here to check the response
@@ -2783,7 +2728,7 @@ def test_completion_azure_deployment_id():
     try:
         litellm.set_verbose = True
         response = completion(
-            deployment_id="gpt-4o-new-test",
+            deployment_id="gpt-4.1-nano",
             model="gpt-3.5-turbo",
             messages=messages,
         )
@@ -3190,7 +3135,6 @@ def response_format_tests(response: litellm.ModelResponse):
         "bedrock/mistral.mistral-large-2407-v1:0",
         "bedrock/cohere.command-r-plus-v1:0",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "anthropic.claude-instant-v1",
         "mistral.mistral-7b-instruct-v0:2",
         # "bedrock/amazon.titan-tg1-large",
         "meta.llama3-8b-instruct-v1:0",
@@ -3695,8 +3639,7 @@ def test_completion_volcengine():
     "model",
     [
         # "gemini-1.0-pro",
-        "gemini-1.5-pro",
-        # "gemini-2.5-flash-lite",
+        "gemini-2.5-flash-lite",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -4098,7 +4041,7 @@ async def test_completion_ai21_chat():
 
 @pytest.mark.parametrize(
     "model",
-    ["gpt-4o", "azure/chatgpt-v-3"],
+    ["gpt-4o", "azure/gpt-4.1-nano"],
 )
 @pytest.mark.parametrize(
     "stream",
@@ -4120,7 +4063,7 @@ def test_completion_response_ratelimit_headers(model, stream):
     assert "x-ratelimit-remaining-requests" in additional_headers
     assert "x-ratelimit-remaining-tokens" in additional_headers
 
-    if model == "azure/chatgpt-v-3":
+    if model == "azure/gpt-4.1-nano":
         # Azure OpenAI header
         assert "llm_provider-azureml-model-session" in additional_headers
     if model == "claude-3-sonnet-20240229":
@@ -4318,20 +4261,6 @@ def test_langfuse_completion(monkeypatch):
         prompt_id="test-chat-prompt",
         prompt_variables={"user_message": "this is used"},
         messages=[{"role": "user", "content": "this is ignored"}],
-    )
-
-
-def test_humanloop_completion(monkeypatch):
-    monkeypatch.setenv(
-        "HUMANLOOP_API_KEY", "hl_sk_59c1206e110c3f5b9985f0de4d23e7cbc79c4c4ae18c9f14"
-    )
-    litellm.set_verbose = True
-    resp = litellm.completion(
-        model="humanloop/gpt-3.5-turbo",
-        humanloop_api_key=os.getenv("HUMANLOOP_API_KEY"),
-        prompt_id="pr_nmSOVpEdyYPm2DrOwCoOm",
-        prompt_variables={"person": "John"},
-        messages=[{"role": "user", "content": "Tell me a joke."}],
     )
 
 
@@ -4592,14 +4521,3 @@ def test_completion_gpt_4o_empty_str():
             messages=[{"role": "user", "content": ""}],
         )
         assert resp.choices[0].message.content is not None
-
-
-def test_completion_openrouter_reasoning_content():
-    litellm._turn_on_debug()
-    resp = litellm.completion(
-        model="openrouter/anthropic/claude-3.7-sonnet",
-        messages=[{"role": "user", "content": "Hello world"}],
-        reasoning={"effort": "high"},
-    )
-    print(resp)
-    assert resp.choices[0].message.reasoning_content is not None

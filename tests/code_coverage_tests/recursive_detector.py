@@ -25,7 +25,10 @@ IGNORE_FUNCTIONS = [
     "filter_value_from_dict",  # max depth set.
     "normalize_json_schema_types",  # max depth set.
     "_extract_fields_recursive",  # max depth set.
-    "_remove_json_schema_refs",  # max depth set.
+    "_remove_json_schema_refs",  # max depth set.,
+    "_convert_schema_types",  # max depth set.,
+    "_fix_enum_empty_strings",  # max depth set.,
+    "get_access_token",  # max depth set.,
 ]
 
 

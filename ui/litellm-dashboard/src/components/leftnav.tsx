@@ -3,7 +3,7 @@ import Link from "next/link";
 import { List } from "postcss/lib/list";
 import { Text, Button } from "@tremor/react";
 import { useState } from "react";
-import { 
+import {
   KeyOutlined,
   PlayCircleOutlined,
   BlockOutlined,
@@ -27,9 +27,18 @@ import {
   BgColorsOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-} from '@ant-design/icons';
-import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles, isAdminRole } from '../utils/roles';
-import UsageIndicator from './usage_indicator';
+} from "@ant-design/icons";
+import {
+  old_admin_roles,
+  v2_admin_role_names,
+  all_admin_roles,
+  rolesAllowedToSeeUsage,
+  rolesWithWriteAccess,
+  internalUserRoles,
+  isAdminRole,
+} from "../utils/roles";
+import UsageIndicator from "./usage_indicator";
+import { ConfigProvider } from "antd";
 const { Sider } = Layout;
 
 // Define the props type
@@ -38,6 +47,7 @@ interface SidebarProps {
   setPage: (page: string) => void;
   userRole: string;
   defaultSelectedKey: string;
+  collapsed?: boolean;
 }
 
 // Create a more comprehensive menu item configuration
@@ -46,89 +56,178 @@ interface MenuItem {
   page: string;
   label: string;
   roles?: string[];
-  children?: MenuItem[];  // Add children property for submenus
+  children?: MenuItem[]; // Add children property for submenus
   icon?: React.ReactNode;
 }
 
-
-
-const Sidebar: React.FC<SidebarProps> = ({
-  accessToken,
-  setPage,
-  userRole,
-  defaultSelectedKey,
-}) => {
-  const [collapsed, setCollapsed] = useState(false);
-
-  const toggleCollapse = () => {
-    setCollapsed(!collapsed);
-  };
+const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defaultSelectedKey, collapsed = false }) => {
   // Note: If a menu item does not have a role, it is visible to all roles.
   const menuItems: MenuItem[] = [
-    { key: "1", page: "api-keys", label: "Virtual Keys", icon: <KeyOutlined /> },
-    { key: "3", page: "llm-playground", label: "Test Key", icon: <PlayCircleOutlined />, roles: rolesWithWriteAccess },
-    { key: "2", page: "models", label: "Models + Endpoints", icon: <BlockOutlined />, roles: rolesWithWriteAccess },
-    { key: "12", page: "new_usage", label: "Usage", icon: <BarChartOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
-    { key: "6", page: "teams", label: "Teams", icon: <TeamOutlined /> },
-    { key: "17", page: "organizations", label: "Organizations", icon: <BankOutlined />, roles: all_admin_roles },
-    { key: "5", page: "users", label: "Internal Users", icon: <UserOutlined />, roles: all_admin_roles },
-    { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined /> },
-    { 
-      key: "16", 
-      page: "model-hub-table", 
-      label: "Model Hub", 
-      icon: <AppstoreOutlined />
+    {
+      key: "1",
+      page: "api-keys",
+      label: "Virtual Keys",
+      icon: <KeyOutlined style={{ fontSize: "18px" }} />,
     },
-    { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />},
-    { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
+    {
+      key: "3",
+      page: "llm-playground",
+      label: "Test Key",
+      icon: <PlayCircleOutlined style={{ fontSize: "18px" }} />,
+      roles: rolesWithWriteAccess,
+    },
+    {
+      key: "2",
+      page: "models",
+      label: "Models + Endpoints",
+      icon: <BlockOutlined style={{ fontSize: "18px" }} />,
+      roles: rolesWithWriteAccess,
+    },
+    {
+      key: "12",
+      page: "new_usage",
+      label: "Usage",
+      icon: <BarChartOutlined style={{ fontSize: "18px" }} />,
+      roles: [...all_admin_roles, ...internalUserRoles],
+    },
+    { key: "6", page: "teams", label: "Teams", icon: <TeamOutlined style={{ fontSize: "18px" }} /> },
+    {
+      key: "17",
+      page: "organizations",
+      label: "Organizations",
+      icon: <BankOutlined style={{ fontSize: "18px" }} />,
+      roles: all_admin_roles,
+    },
+    {
+      key: "5",
+      page: "users",
+      label: "Internal Users",
+      icon: <UserOutlined style={{ fontSize: "18px" }} />,
+      roles: all_admin_roles,
+    },
+    { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined style={{ fontSize: "18px" }} /> },
+    {
+      key: "16",
+      page: "model-hub-table",
+      label: "Model Hub",
+      icon: <AppstoreOutlined style={{ fontSize: "18px" }} />,
+    },
+    { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined style={{ fontSize: "18px" }} /> },
+    {
+      key: "11",
+      page: "guardrails",
+      label: "Guardrails",
+      icon: <SafetyOutlined style={{ fontSize: "18px" }} />,
+      roles: all_admin_roles,
+    },
     {
       key: "26",
       page: "tools",
       label: "Tools",
-      icon: <ToolOutlined />,
+      icon: <ToolOutlined style={{ fontSize: "18px" }} />,
       children: [
-        { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined /> },
-        { key: "21", page: "vector-stores", label: "Vector Stores", icon: <DatabaseOutlined />, roles: all_admin_roles },
-      ]
+        { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined style={{ fontSize: "18px" }} /> },
+        {
+          key: "21",
+          page: "vector-stores",
+          label: "Vector Stores",
+          icon: <DatabaseOutlined style={{ fontSize: "18px" }} />,
+          roles: all_admin_roles,
+        },
+      ],
     },
-    { 
-      key: "experimental", 
+    {
+      key: "experimental",
       page: "experimental",
-      label: "Experimental", 
-      icon: <ExperimentOutlined />,
+      label: "Experimental",
+      icon: <ExperimentOutlined style={{ fontSize: "18px" }} />,
       children: [
-        { key: "9", page: "caching", label: "Caching", icon: <DatabaseOutlined />, roles: all_admin_roles },
-        { key: "25", page: "prompts", label: "Prompts", icon: <FileTextOutlined />, roles: all_admin_roles },
-        { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
-        { key: "20", page: "transform-request", label: "API Playground", icon: <ApiOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
-        { key: "19", page: "tag-management", label: "Tag Management", icon: <TagsOutlined />, roles: all_admin_roles },
-        { key: "4", page: "usage", label: "Old Usage", icon: <BarChartOutlined /> },
-      ]
+        {
+          key: "9",
+          page: "caching",
+          label: "Caching",
+          icon: <DatabaseOutlined style={{ fontSize: "18px" }} />,
+          roles: all_admin_roles,
+        },
+        {
+          key: "25",
+          page: "prompts",
+          label: "Prompts",
+          icon: <FileTextOutlined style={{ fontSize: "18px" }} />,
+          roles: all_admin_roles,
+        },
+        {
+          key: "10",
+          page: "budgets",
+          label: "Budgets",
+          icon: <BankOutlined style={{ fontSize: "18px" }} />,
+          roles: all_admin_roles,
+        },
+        {
+          key: "20",
+          page: "transform-request",
+          label: "API Playground",
+          icon: <ApiOutlined style={{ fontSize: "18px" }} />,
+          roles: [...all_admin_roles, ...internalUserRoles],
+        },
+        {
+          key: "19",
+          page: "tag-management",
+          label: "Tag Management",
+          icon: <TagsOutlined style={{ fontSize: "18px" }} />,
+          roles: all_admin_roles,
+        },
+        { key: "4", page: "usage", label: "Old Usage", icon: <BarChartOutlined style={{ fontSize: "18px" }} /> },
+      ],
     },
     {
       key: "settings",
       page: "settings",
       label: "Settings",
-      icon: <SettingOutlined />,
+      icon: <SettingOutlined style={{ fontSize: "18px" }} />,
       roles: all_admin_roles,
       children: [
-        { key: "11", page: "general-settings", label: "Router Settings", icon: <SettingOutlined />, roles: all_admin_roles },
-        { key: "8", page: "settings", label: "Logging & Alerts", icon: <SettingOutlined />, roles: all_admin_roles },
-        { key: "13", page: "admin-panel", label: "Admin Settings", icon: <SettingOutlined />, roles: all_admin_roles },
-        { key: "14", page: "ui-theme", label: "UI Theme", icon: <BgColorsOutlined />, roles: all_admin_roles },
-      ]
-    }
+        {
+          key: "11",
+          page: "general-settings",
+          label: "Router Settings",
+          icon: <SettingOutlined style={{ fontSize: "18px" }} />,
+          roles: all_admin_roles,
+        },
+        {
+          key: "8",
+          page: "settings",
+          label: "Logging & Alerts",
+          icon: <SettingOutlined style={{ fontSize: "18px" }} />,
+          roles: all_admin_roles,
+        },
+        {
+          key: "13",
+          page: "admin-panel",
+          label: "Admin Settings",
+          icon: <SettingOutlined style={{ fontSize: "18px" }} />,
+          roles: all_admin_roles,
+        },
+        {
+          key: "14",
+          page: "ui-theme",
+          label: "UI Theme",
+          icon: <BgColorsOutlined style={{ fontSize: "18px" }} />,
+          roles: all_admin_roles,
+        },
+      ],
+    },
   ];
   // Find the menu item that matches the default page, including in submenus
   const findMenuItemKey = (page: string): string => {
     // Check top-level items
-    const topLevelItem = menuItems.find(item => item.page === page);
+    const topLevelItem = menuItems.find((item) => item.page === page);
     if (topLevelItem) return topLevelItem.key;
 
     // Check submenu items
     for (const item of menuItems) {
       if (item.children) {
-        const childItem = item.children.find(child => child.page === page);
+        const childItem = item.children.find((child) => child.page === page);
         if (childItem) return childItem.key;
       }
     }
@@ -137,140 +236,84 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const selectedMenuKey = findMenuItemKey(defaultSelectedKey);
 
-  const filteredMenuItems = menuItems.filter(item => {
+  const filteredMenuItems = menuItems.filter((item) => {
     // Check if parent item has roles and user has access
     const hasParentAccess = !item.roles || item.roles.includes(userRole);
-    
+
     console.log(`Menu item ${item.label}: roles=${item.roles}, userRole=${userRole}, hasAccess=${hasParentAccess}`);
-    
+
     if (!hasParentAccess) return false;
 
     // Filter children if they exist
     if (item.children) {
-      item.children = item.children.filter(child => 
-        !child.roles || child.roles.includes(userRole)
-      );
+      item.children = item.children.filter((child) => !child.roles || child.roles.includes(userRole));
     }
 
     return true;
   });
 
-
   return (
     <Layout style={{ minHeight: "100vh" }}>
-      <Sider 
-        theme="light" 
+      <Sider
+        theme="light"
         width={220}
         collapsed={collapsed}
         collapsedWidth={80}
         collapsible
         trigger={null}
         style={{
-          transition: 'all 0.2s',
-          position: 'relative',
+          transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)", // Material Design easing
+          position: "relative",
         }}
       >
-        <Menu
-          mode="inline"
-          selectedKeys={[selectedMenuKey]}
-          defaultOpenKeys={collapsed ? [] : ["llm-tools"]}
-          inlineCollapsed={collapsed}
-          style={{ 
-            borderRight: 0,
-            backgroundColor: 'transparent',
-            fontSize: '14px',
-          }}
-          items={[
-            // Expand button row when collapsed, or first menu item when expanded
-            collapsed ? {
-              key: 'expand-toggle',
-              icon: <MenuUnfoldOutlined />,
-              label: '',
-              onClick: toggleCollapse,
-              style: {
-                cursor: 'pointer',
+        <ConfigProvider
+          theme={{
+            components: {
+              Menu: {
+                iconSize: 18,
+                fontSize: 14,
               },
-              title: "Expand navigation sidebar"
-            } : {
-              key: filteredMenuItems[0]?.key,
-              icon: filteredMenuItems[0]?.icon,
-              label: (
-                <div style={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  justifyContent: 'space-between',
-                  width: '100%'
-                }}>
-                  <span>{filteredMenuItems[0]?.label}</span>
-                  <div
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleCollapse();
-                    }}
-                    style={{
-                      cursor: 'pointer',
-                      padding: '8px 12px',
-                      borderRadius: '4px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '12px',
-                      color: '#888',
-                      transition: 'all 0.2s',
-                      marginLeft: '8px',
-                      marginRight: '-8px',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'rgba(0, 0, 0, 0.04)';
-                      e.currentTarget.style.color = '#666';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'transparent';
-                      e.currentTarget.style.color = '#888';
-                    }}
-                    title="Collapse navigation sidebar"
-                  >
-                    <MenuFoldOutlined />
-                  </div>
-                </div>
-              ),
-              onClick: !filteredMenuItems[0]?.children ? () => {
-                const newSearchParams = new URLSearchParams(window.location.search);
-                newSearchParams.set('page', filteredMenuItems[0]?.page || '');
-                window.history.pushState(null, '', `?${newSearchParams.toString()}`);
-                setPage(filteredMenuItems[0]?.page || '');
-              } : undefined
             },
-            // Rest of the menu items (or all items when collapsed)
-            ...(collapsed ? filteredMenuItems : filteredMenuItems.slice(1)).map(item => ({
+          }}
+        >
+          <Menu
+            mode="inline"
+            selectedKeys={[selectedMenuKey]}
+            defaultOpenKeys={collapsed ? [] : ["llm-tools"]}
+            inlineCollapsed={collapsed}
+            className="custom-sidebar-menu"
+            style={{
+              borderRight: 0,
+              backgroundColor: "transparent",
+              fontSize: "14px",
+            }}
+            items={filteredMenuItems.map((item) => ({
               key: item.key,
               icon: item.icon,
               label: item.label,
-              children: item.children?.map(child => ({
+              children: item.children?.map((child) => ({
                 key: child.key,
                 icon: child.icon,
                 label: child.label,
                 onClick: () => {
                   const newSearchParams = new URLSearchParams(window.location.search);
-                  newSearchParams.set('page', child.page);
-                  window.history.pushState(null, '', `?${newSearchParams.toString()}`);
+                  newSearchParams.set("page", child.page);
+                  window.history.pushState(null, "", `?${newSearchParams.toString()}`);
                   setPage(child.page);
-                }
+                },
               })),
-              onClick: !item.children ? () => {
-                const newSearchParams = new URLSearchParams(window.location.search);
-                newSearchParams.set('page', item.page);
-                window.history.pushState(null, '', `?${newSearchParams.toString()}`);
-                setPage(item.page);
-              } : undefined
-            }))
-          ]}
-        />
-        {
-          isAdminRole(userRole) && !collapsed && (
-            <UsageIndicator accessToken={accessToken} width={220}/>
-          )
-        }
+              onClick: !item.children
+                ? () => {
+                    const newSearchParams = new URLSearchParams(window.location.search);
+                    newSearchParams.set("page", item.page);
+                    window.history.pushState(null, "", `?${newSearchParams.toString()}`);
+                    setPage(item.page);
+                  }
+                : undefined,
+            }))}
+          />
+        </ConfigProvider>
+        {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={220} />}
       </Sider>
     </Layout>
   );

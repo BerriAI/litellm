@@ -22,7 +22,7 @@
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
@@ -61,6 +61,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     list_keys,
     regenerate_key_fn,
     update_key_fn,
+    key_aliases,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
     new_team,
@@ -151,7 +152,6 @@ def prisma_client():
 @pytest.mark.flaky(retries=6, delay=1)
 async def test_new_user_response(prisma_client):
     try:
-
         print("prisma client=", prisma_client)
 
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
@@ -424,7 +424,6 @@ async def test_call_with_valid_model_using_all_models(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
-
         await litellm.proxy.proxy_server.prisma_client.connect()
 
         team_request = NewTeamRequest(
@@ -1236,7 +1235,7 @@ def test_generate_and_update_key(prisma_client):
     # 11. Generate a Key, cal key/info, call key/update, call key/info
     # Check if data gets updated
     # Check if untouched data does not get updated
-    import uuid
+    from litellm._uuid import uuid
 
     print("prisma client=", prisma_client)
 
@@ -1511,7 +1510,10 @@ def test_key_generate_with_custom_auth(prisma_client):
         asyncio.run(test())
     except Exception as e:
         print("Got Exception", e)
-        print(e.message)
+        if hasattr(e, "message"):
+            print(e.message)
+        else:
+            print(e)
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
@@ -1554,7 +1556,7 @@ def test_call_with_key_over_budget(prisma_client):
 
             litellm.cache = Cache()
             import time
-            import uuid
+            from litellm._uuid import uuid
 
             request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
 
@@ -1676,7 +1678,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
 
             litellm.cache = Cache()
             import time
-            import uuid
+            from litellm._uuid import uuid
 
             request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
 
@@ -1786,7 +1788,6 @@ async def test_call_with_key_over_model_budget(
     litellm.callbacks.append(model_budget_limiter)
 
     try:
-
         # set budget for chatgpt-v-3 to 0.000001, expect the next request to fail
         model_max_budget = {
             "gpt-4o-mini": {
@@ -1900,7 +1901,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
 
         # update spend using track_cost callback, make 2nd request, it should fail
         import time
-        import uuid
+        from litellm._uuid import uuid
 
         from litellm import Choices, Message, ModelResponse, Usage
         from litellm.proxy.proxy_server import _ProxyDBLogger
@@ -1991,7 +1992,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
 
         # update spend using track_cost callback, make 2nd request, it should fail
         import time
-        import uuid
+        from litellm._uuid import uuid
 
         from litellm import Choices, Message, ModelResponse, Usage
         from litellm.proxy.proxy_server import _ProxyDBLogger
@@ -2440,7 +2441,7 @@ async def test_key_with_no_permissions(prisma_client):
 
 
 async def track_cost_callback_helper_fn(generated_key: str, user_id: str):
-    import uuid
+    from litellm._uuid import uuid
 
     from litellm import Choices, Message, ModelResponse, Usage
     from litellm.proxy.proxy_server import _ProxyDBLogger
@@ -2549,7 +2550,7 @@ async def test_proxy_load_test_db(prisma_client):
 @pytest.mark.asyncio()
 async def test_master_key_hashing(prisma_client):
     try:
-        import uuid
+        from litellm._uuid import uuid
 
         print("prisma client=", prisma_client)
 
@@ -2844,7 +2845,12 @@ async def test_update_user_role(prisma_client):
     await user_update(
         data=UpdateUserRequest(
             user_id=key.user_id, user_role=LitellmUserRoles.PROXY_ADMIN
-        )
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
     )
 
     # await asyncio.sleep(3)
@@ -2882,7 +2888,12 @@ async def test_update_user_unit_test(prisma_client):
             tpm_limit=100,
             rpm_limit=100,
             metadata={"very-new-metadata": "something"},
-        )
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
     )
 
     print("user_info", user_info)
@@ -3418,6 +3429,16 @@ async def test_list_keys(prisma_client):
         ),
         page=1,
         size=10,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_hash=None,
+        key_alias=None,
+        return_full_object=False,
+        include_team_keys=False,
+        include_created_by_keys=False,
+        sort_by=None,
+        sort_order="desc",
     )
     print("response=", response)
     assert "keys" in response
@@ -3432,6 +3453,16 @@ async def test_list_keys(prisma_client):
         UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value),
         page=1,
         size=2,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_hash=None,
+        key_alias=None,
+        return_full_object=False,
+        include_team_keys=False,
+        include_created_by_keys=False,
+        sort_by=None,
+        sort_order="desc",
     )
     print("pagination response=", response)
     assert len(response["keys"]) == 2
@@ -3460,9 +3491,18 @@ async def test_list_keys(prisma_client):
     response = await list_keys(
         request,
         UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value),
-        user_id=user_id,
         page=1,
         size=10,
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_hash=None,
+        key_alias=None,
+        return_full_object=False,
+        include_team_keys=False,
+        include_created_by_keys=False,
+        sort_by=None,
+        sort_order="desc",
     )
     print("filtered user_id response=", response)
     assert len(response["keys"]) == 1
@@ -3472,12 +3512,73 @@ async def test_list_keys(prisma_client):
     response = await list_keys(
         request,
         UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value),
-        key_alias=key_alias,
         page=1,
         size=10,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_hash=None,
+        key_alias=key_alias,
+        return_full_object=False,
+        include_team_keys=False,
+        include_created_by_keys=False,
+        sort_by=None,
+        sort_order="desc",
     )
     assert len(response["keys"]) == 1
     assert _key in response["keys"]
+
+
+@pytest.mark.asyncio
+async def test_key_aliases(prisma_client):
+    """
+    Test the key_aliases function:
+    - Returns a list
+    - Includes alias from a newly created key
+    - Aliases are unique and sorted
+    """
+    import asyncio
+    import uuid
+    import litellm
+    from litellm.proxy._types import LitellmUserRoles
+
+    # Wire up test prisma client
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Basic call
+    response = await key_aliases()
+    assert "aliases" in response
+    assert isinstance(response["aliases"], list)
+
+    # Create a new user (and key) with a unique alias
+    unique_id = str(uuid.uuid4())
+    test_alias = f"key-aliases-test-{unique_id}"
+    test_user_id = f"key-aliases-user-{unique_id}"
+
+    await new_user(
+        data=NewUserRequest(
+            user_id=test_user_id,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            key_alias=test_alias,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    # Allow async DB writes to settle
+    await asyncio.sleep(2)
+
+    # Call again and validate
+    response_after = await key_aliases()
+    aliases = response_after["aliases"]
+
+    # Contains the new alias
+    assert test_alias in aliases
+
+    # Unique & sorted (endpoint dedupes and orders ascending)
+    assert len(aliases) == len(set(aliases))
+    assert aliases == sorted(aliases)
 
 
 @pytest.mark.asyncio

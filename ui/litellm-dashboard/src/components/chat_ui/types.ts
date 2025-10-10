@@ -7,6 +7,10 @@ export interface Delta {
   audio?: any;
   refusal?: any;
   provider_specific_fields?: any;
+  image?: {
+    url: string;
+    detail: string;
+  };
 }
 
 export interface CompletionTokensDetails {
@@ -67,10 +71,14 @@ export interface MessageType {
   };
   toolName?: string;
   imagePreviewUrl?: string; // For storing image preview URL in chat history
+  image?: {
+    url: string;
+    detail: string;
+  };
 }
 
 export interface MultimodalContent {
   type: "input_text" | "input_image";
   text?: string;
   image_url?: string;
-} 
+}

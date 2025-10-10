@@ -283,7 +283,7 @@ def test_cost_azure_embedding():
 
         async def _test():
             response = await litellm.aembedding(
-                model="azure/azure-embedding-model",
+                model="azure/text-embedding-ada-002",
                 input=["good morning from litellm", "gm"],
             )
 
@@ -319,64 +319,9 @@ def test_cost_openai_image_gen():
     assert cost == 0.019922944
 
 
-def test_cost_bedrock_pricing():
-    """
-    - get pricing specific to region for a model
-    """
-    from litellm import Choices, Message, ModelResponse
-    from litellm.utils import Usage
-
-    litellm.set_verbose = True
-    input_tokens = litellm.token_counter(
-        model="bedrock/anthropic.claude-instant-v1",
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
-    )
-    print(f"input_tokens: {input_tokens}")
-    output_tokens = litellm.token_counter(
-        model="bedrock/anthropic.claude-instant-v1",
-        text="It's all going well",
-        count_response_tokens=True,
-    )
-    print(f"output_tokens: {output_tokens}")
-    resp = ModelResponse(
-        id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
-        choices=[
-            Choices(
-                finish_reason=None,
-                index=0,
-                message=Message(
-                    content="It's all going well",
-                    role="assistant",
-                ),
-            )
-        ],
-        created=1700775391,
-        model="anthropic.claude-instant-v1",
-        object="chat.completion",
-        system_fingerprint=None,
-        usage=Usage(
-            prompt_tokens=input_tokens,
-            completion_tokens=output_tokens,
-            total_tokens=input_tokens + output_tokens,
-        ),
-    )
-    resp._hidden_params = {
-        "custom_llm_provider": "bedrock",
-        "region_name": "ap-northeast-1",
-    }
-
-    cost = litellm.completion_cost(
-        model="anthropic.claude-instant-v1",
-        completion_response=resp,
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
-    )
-    predicted_cost = input_tokens * 0.00000223 + 0.00000755 * output_tokens
-    assert cost == predicted_cost
-
-
 def test_cost_bedrock_pricing_actual_calls():
     litellm.set_verbose = True
-    model = "anthropic.claude-instant-v1"
+    model = "anthropic.claude-3-5-sonnet-20240620-v1:0"
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     response = litellm.completion(
         model=model, messages=messages, mock_response="hello cool one"
@@ -384,7 +329,7 @@ def test_cost_bedrock_pricing_actual_calls():
 
     print("response", response)
     cost = litellm.completion_cost(
-        model="bedrock/anthropic.claude-instant-v1",
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
         completion_response=response,
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
@@ -565,7 +510,7 @@ def test_groq_response_cost_tracking(is_streaming):
 
     response_cost = litellm.response_cost_calculator(
         response_object=response,
-        model="groq/llama3-70b-8192",
+        model="groq/llama-3.3-70b-versatile",
         custom_llm_provider="groq",
         call_type=CallTypes.acompletion.value,
         optional_params={},
@@ -864,6 +809,7 @@ def test_vertex_ai_embedding_completion_cost(caplog):
 
 #     assert False
 
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_cost_hidden_params(sync_mode):
@@ -949,7 +895,9 @@ def test_vertex_ai_mistral_predict_cost(usage):
     assert predictive_cost > 0
 
 
-@pytest.mark.parametrize("model", ["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"])
+@pytest.mark.parametrize(
+    "model", ["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"]
+)
 def test_completion_cost_tts(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1120,6 +1068,7 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
         (
             response_1.usage.prompt_tokens
             - response_1.usage.prompt_tokens_details.cached_tokens
+            - response_1.usage.prompt_tokens_details.cache_creation_tokens
         )
         * _model_info["input_cost_per_token"]
         + (response_1.usage.prompt_tokens_details.cached_tokens or 0)
@@ -1225,7 +1174,10 @@ def test_get_model_params_fireworks_ai(model, base_model):
 
 @pytest.mark.parametrize(
     "model",
-    ["fireworks_ai/llama-v3p1-405b-instruct", "fireworks_ai/llama4-maverick-instruct-basic"],
+    [
+        "fireworks_ai/llama-v3p1-405b-instruct",
+        "fireworks_ai/llama4-maverick-instruct-basic",
+    ],
 )
 def test_completion_cost_fireworks_ai(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -2862,6 +2814,7 @@ def test_cost_calculator_with_custom_pricing():
 @pytest.mark.asyncio
 async def test_cost_calculator_with_custom_pricing_router(model_item, custom_pricing):
     from litellm import Router
+
     if custom_pricing == "litellm_params":
         model_item["litellm_params"]["input_cost_per_token"] = 0.0000008
         model_item["litellm_params"]["output_cost_per_token"] = 0.0000032

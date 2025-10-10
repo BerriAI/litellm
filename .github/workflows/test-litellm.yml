@@ -31,6 +31,7 @@ jobs:
         poetry run pip install "pytest-retry==1.6.3"
         poetry run pip install pytest-xdist
         poetry run pip install "google-genai==1.22.0"
+        poetry run pip install "google-cloud-aiplatform>=1.38"
         poetry run pip install "fastapi-offline==1.7.3"
     - name: Setup litellm-enterprise as local package
       run: |
@@ -39,4 +40,4 @@ jobs:
         cd ..
     - name: Run tests
       run: |
-        poetry run pytest tests/test_litellm -x -vv -n 4 
+        poetry run pytest tests/test_litellm --tb=short -vv --maxfail=10 -n 4 

@@ -10,4 +10,3 @@ tests
 *.tgz
 log.txt
 docker/Dockerfile.*
-*.whl

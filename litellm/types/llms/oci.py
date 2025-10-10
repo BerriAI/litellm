@@ -100,8 +100,8 @@ class OCIServingMode(BaseModel):
     """Defines the serving mode and the model to be used."""
 
     servingType: str
-    modelId: str
-
+    endpointId: Optional[str] = None
+    modelId: Optional[str] = None
 
 class OCICompletionPayload(BaseModel):
     """Pydantic model for the complete OCI chat request body."""
@@ -121,7 +121,7 @@ class OCICompletionTokenDetails(BaseModel):
     reasoningTokens: int
 
 
-class OCIPropmtTokensDetails(BaseModel):
+class OCIPromptTokensDetails(BaseModel):
     """Prompt token details in the OCI response."""
 
     cachedTokens: int
@@ -133,8 +133,8 @@ class OCIResponseUsage(BaseModel):
     promptTokens: int
     completionTokens: int
     totalTokens: int
-    completionTokensDetails: OCICompletionTokenDetails
-    promptTokensDetails: OCIPropmtTokensDetails
+    completionTokensDetails: Optional[OCICompletionTokenDetails] = None
+    promptTokensDetails: Optional[OCIPromptTokensDetails] = None
 
 
 class OCIResponseChoice(BaseModel):

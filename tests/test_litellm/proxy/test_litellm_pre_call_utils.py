@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import Request
 
+import litellm
 from litellm.proxy._types import TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
@@ -935,3 +936,186 @@ def test_add_headers_to_llm_call_by_model_group_existing_headers_in_data():
     finally:
         # Restore original model_group_settings
         litellm.model_group_settings = original_model_group_settings
+
+import json
+import time
+from typing import Optional
+from unittest.mock import AsyncMock
+
+from fastapi.responses import Response
+
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.utils import StandardLoggingPayload
+
+
+class TestCustomLogger(CustomLogger):
+    def __init__(self):
+        self.standard_logging_object: Optional[StandardLoggingPayload] = None
+        super().__init__()
+        
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"SUCCESS CALLBACK CALLED! kwargs keys: {list(kwargs.keys())}")
+        self.standard_logging_object = kwargs.get("standard_logging_object")
+        print(f"Captured standard_logging_object: {self.standard_logging_object}")
+        
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"FAILURE CALLBACK CALLED! kwargs keys: {list(kwargs.keys())}")
+
+@pytest.mark.asyncio
+async def test_add_litellm_metadata_from_request_headers():
+    """
+    Test that add_litellm_metadata_from_request_headers properly adds litellm metadata from request headers,
+    makes an LLM request using base_process_llm_request, sleeps for 3 seconds, and checks standard_logging_payload has spend_logs_metadata from headers
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/14008
+    """
+    # Set up test logger
+    litellm._turn_on_debug()
+    test_logger = TestCustomLogger()
+    litellm.callbacks = [test_logger]
+
+    # Prepare test data (ensure no streaming, add mock_response and api_key to route to litellm.acompletion)
+    headers = {"x-litellm-spend-logs-metadata": '{"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion", "timestamp": "2025-09-02T10:30:00Z"}'}
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}], "stream": False, "mock_response": "Hi", "api_key": "fake-key"}
+    
+    # Create mock request with headers
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = headers
+    mock_request.url.path = "/chat/completions"
+    
+    # Create mock response
+    mock_fastapi_response = MagicMock(spec=Response)
+    
+    # Create mock user API key dict
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        org_id="test-org"
+    )
+    
+    # Create mock proxy logging object
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    
+    # Create async functions for the hooks
+    async def mock_during_call_hook(*args, **kwargs):
+        return None
+        
+    async def mock_pre_call_hook(*args, **kwargs):
+        return data
+        
+    async def mock_post_call_success_hook(*args, **kwargs):
+        # Return the response unchanged
+        return kwargs.get('response', args[2] if len(args) > 2 else None)
+        
+    mock_proxy_logging_obj.during_call_hook = mock_during_call_hook
+    mock_proxy_logging_obj.pre_call_hook = mock_pre_call_hook
+    mock_proxy_logging_obj.post_call_success_hook = mock_post_call_success_hook
+    
+    # Create mock proxy config
+    mock_proxy_config = MagicMock()
+    
+    # Create mock general settings
+    general_settings = {}
+    
+    # Create mock select_data_generator with correct signature
+    def mock_select_data_generator(response=None, user_api_key_dict=None, request_data=None):
+        async def mock_generator():
+            yield "data: " + json.dumps({"choices": [{"delta": {"content": "Hello"}}]}) + "\n\n"
+            yield "data: [DONE]\n\n"
+        return mock_generator()
+    
+    # Create the processor
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    
+    # Call base_process_llm_request (it will use the mock_response="Hi" parameter)
+    result = await processor.base_process_llm_request(
+        request=mock_request,
+        fastapi_response=mock_fastapi_response,
+        user_api_key_dict=mock_user_api_key_dict,
+        route_type="acompletion",
+        proxy_logging_obj=mock_proxy_logging_obj,
+        general_settings=general_settings,
+        proxy_config=mock_proxy_config,
+        select_data_generator=mock_select_data_generator,
+        llm_router=None,
+        model="gpt-4",
+        is_streaming_request=False
+    )
+    
+    # Sleep for 3 seconds to allow logging to complete
+    await asyncio.sleep(3)
+    
+    # Check if standard_logging_object was set
+    assert test_logger.standard_logging_object is not None, "standard_logging_object should be populated after LLM request"
+    
+    # Verify the logging object contains expected metadata
+    standard_logging_obj = test_logger.standard_logging_object
+
+    print(f"Standard logging object captured: {json.dumps(standard_logging_obj, indent=4, default=str)}")
+
+    SPEND_LOGS_METADATA = standard_logging_obj["metadata"]["spend_logs_metadata"]
+    assert SPEND_LOGS_METADATA == dict(json.loads(headers["x-litellm-spend-logs-metadata"])), "spend_logs_metadata should be the same as the headers"
+
+        
+
+def test_get_internal_user_header_from_mapping_returns_expected_header():
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
+    ]
+
+    header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
+    assert header_name == "X-OpenWebUI-User-Id"
+
+
+def test_get_internal_user_header_from_mapping_none_when_absent():
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"}
+    ]
+    header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
+    assert header_name is None
+
+    single = {"header_name": "X-Only-Customer", "litellm_user_role": "customer"}
+    header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(single)
+    assert header_name is None
+
+
+def test_add_internal_user_from_user_mapping_sets_user_id_when_header_present():
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+    headers = {"X-OpenWebUI-User-Id": "internal-user-123"}
+    general_settings = {
+        "user_header_mappings": [
+            {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+            {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
+        ]
+    }
+
+    result = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        general_settings, user_api_key_dict, headers
+    )
+
+    assert result is user_api_key_dict
+    assert user_api_key_dict.user_id == "internal-user-123"
+
+
+def test_add_internal_user_from_user_mapping_no_header_or_mapping_returns_unchanged():
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    result = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        None, user_api_key_dict, {"X-OpenWebUI-User-Id": "abc"}
+    )
+    assert result is user_api_key_dict
+    assert user_api_key_dict.user_id is None
+
+    general_settings = {
+        "user_header_mappings": [
+            {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}
+        ]
+    }
+    result = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        general_settings, user_api_key_dict, {"Other": "value"}
+    )
+    assert result is user_api_key_dict
+    assert user_api_key_dict.user_id is None

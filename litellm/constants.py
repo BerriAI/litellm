@@ -14,6 +14,9 @@ DEFAULT_S3_BATCH_SIZE = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS = int(
     os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
 )
+DEFAULT_NUM_WORKERS_LITELLM_PROXY = int(
+    os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
+)
 DEFAULT_SQS_BATCH_SIZE = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
 SQS_SEND_MESSAGE_ACTION = "SendMessage"
 SQS_API_VERSION = "2012-11-05"
@@ -48,6 +51,25 @@ SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = int(
 DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0)
 )
+
+# Gemini model-specific minimal thinking budget constants
+DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH = int(
+    os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH", 1)
+)
+DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO = int(
+    os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO", 128)
+)
+DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE = int(
+    os.getenv(
+        "DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE", 512
+    )
+)
+
+# Generic fallback for unknown models
+DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
+    os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET", 128)
+)
+
 DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET", 1024)
 )
@@ -64,6 +86,35 @@ MAX_TOKEN_TRIMMING_ATTEMPTS = int(
 
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
+
+# Aiohttp connection pooling constants
+AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 0))
+AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
+AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
+
+# SSL/TLS cipher configuration for faster handshakes
+# Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
+# This balances performance with broad compatibility
+DEFAULT_SSL_CIPHERS = os.getenv(
+    "LITELLM_SSL_CIPHERS",
+    # Priority 1: TLS 1.3 ciphers (fastest, ~50ms handshake)
+    "TLS_AES_256_GCM_SHA384:"           # Fastest observed in testing
+    "TLS_AES_128_GCM_SHA256:"           # Slightly faster than 256-bit
+    "TLS_CHACHA20_POLY1305_SHA256:"     # Fast on ARM/mobile
+    # Priority 2: TLS 1.2 ECDHE+GCM (fast, ~100ms handshake, widely supported)
+    "ECDHE-RSA-AES256-GCM-SHA384:"
+    "ECDHE-RSA-AES128-GCM-SHA256:"
+    "ECDHE-ECDSA-AES256-GCM-SHA384:"
+    "ECDHE-ECDSA-AES128-GCM-SHA256:"
+    # Priority 3: Additional modern ciphers (good balance)
+    "ECDHE-RSA-CHACHA20-POLY1305:"
+    "ECDHE-ECDSA-CHACHA20-POLY1305:"
+    # Priority 4: Widely compatible fallbacks (slower but universally supported)
+    "ECDHE-RSA-AES256-SHA384:"          # Common fallback
+    "ECDHE-RSA-AES128-SHA256:"          # Very widely supported
+    "AES256-GCM-SHA384:"                # Non-PFS fallback (compatibility)
+    "AES128-GCM-SHA256",                # Last resort (maximum compatibility)
+)
 
 ########### v2 Architecture constants for managing writing updates to the database ###########
 REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
@@ -157,6 +208,7 @@ NON_LLM_CONNECTION_TIMEOUT = int(
     os.getenv("NON_LLM_CONNECTION_TIMEOUT", 15)
 )  # timeout for adjacent services (e.g. jwt auth)
 MAX_EXCEPTION_MESSAGE_LENGTH = int(os.getenv("MAX_EXCEPTION_MESSAGE_LENGTH", 2000))
+MAX_STRING_LENGTH_PROMPT_IN_DB = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048))
 BEDROCK_MAX_POLICY_SIZE = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
 REPLICATE_POLLING_DELAY_SECONDS = float(
     os.getenv("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
@@ -285,9 +337,14 @@ LITELLM_CHAT_PROVIDERS = [
     "dashscope",
     "moonshot",
     "v0",
+    "heroku",
     "oci",
     "morph",
     "lambda_ai",
+    "vercel_ai_gateway",
+    "wandb",
+    "ovhcloud",
+    "lemonade"
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -392,6 +449,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "reasoning_effort": None,
     "thinking": None,
     "web_search_options": None,
+    "safety_identifier": None,
 }
 
 openai_compatible_endpoints: List = [
@@ -420,6 +478,8 @@ openai_compatible_endpoints: List = [
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
     "https://api.hyperbolic.xyz/v1",
+    "https://ai-gateway.vercel.sh/v1",
+    "https://api.inference.wandb.ai/v1",
 ]
 
 
@@ -462,7 +522,9 @@ openai_compatible_providers: List = [
     "morph",
     "lambda_ai",
     "hyperbolic",
+    "vercel_ai_gateway",
     "aiml",
+    "wandb",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -478,6 +540,7 @@ openai_text_completion_compatible_providers: List = (
         "v0",
         "lambda_ai",
         "hyperbolic",
+        "wandb",
     ]
 )
 _openai_like_providers: List = [
@@ -486,227 +549,279 @@ _openai_like_providers: List = [
     "watsonx",
 ]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
-replicate_models: set = set([
-    # llama replicate supported LLMs
-    "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf",
-    "a16z-infra/llama-2-13b-chat:2a7f981751ec7fdf87b5b91ad4db53683a98082e9ff7bfd12c8cd5ea85980a52",
-    "meta/codellama-13b:1c914d844307b0588599b8393480a3ba917b660c7e9dfae681542b5325f228db",
-    # Vicuna
-    "replicate/vicuna-13b:6282abe6a492de4145d7bb601023762212f9ddbbe78278bd6771c8b3b2f2a13b",
-    "joehoover/instructblip-vicuna13b:c4c54e3c8c97cd50c2d2fec9be3b6065563ccf7d43787fb99f84151b867178fe",
-    # Flan T-5
-    "daanelson/flan-t5-large:ce962b3f6792a57074a601d3979db5839697add2e4e02696b3ced4c022d4767f",
-    # Others
-    "replicate/dolly-v2-12b:ef0e1aefc61f8e096ebe4db6b2bacc297daf2ef6899f0f7e001ec445893500e5",
-    "replit/replit-code-v1-3b:b84f4c074b807211cd75e3e8b1589b6399052125b4c27106e43d47189e8415ad",
-])
+replicate_models: set = set(
+    [
+        # llama replicate supported LLMs
+        "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf",
+        "a16z-infra/llama-2-13b-chat:2a7f981751ec7fdf87b5b91ad4db53683a98082e9ff7bfd12c8cd5ea85980a52",
+        "meta/codellama-13b:1c914d844307b0588599b8393480a3ba917b660c7e9dfae681542b5325f228db",
+        # Vicuna
+        "replicate/vicuna-13b:6282abe6a492de4145d7bb601023762212f9ddbbe78278bd6771c8b3b2f2a13b",
+        "joehoover/instructblip-vicuna13b:c4c54e3c8c97cd50c2d2fec9be3b6065563ccf7d43787fb99f84151b867178fe",
+        # Flan T-5
+        "daanelson/flan-t5-large:ce962b3f6792a57074a601d3979db5839697add2e4e02696b3ced4c022d4767f",
+        # Others
+        "replicate/dolly-v2-12b:ef0e1aefc61f8e096ebe4db6b2bacc297daf2ef6899f0f7e001ec445893500e5",
+        "replit/replit-code-v1-3b:b84f4c074b807211cd75e3e8b1589b6399052125b4c27106e43d47189e8415ad",
+    ]
+)
 
-clarifai_models: set = set([
-    "clarifai/meta.Llama-3.Llama-3-8B-Instruct",
-    "clarifai/gcp.generate.gemma-1_1-7b-it",
-    "clarifai/mistralai.completion.mixtral-8x22B",
-    "clarifai/cohere.generate.command-r-plus",
-    "clarifai/databricks.drbx.dbrx-instruct",
-    "clarifai/mistralai.completion.mistral-large",
-    "clarifai/mistralai.completion.mistral-medium",
-    "clarifai/mistralai.completion.mistral-small",
-    "clarifai/mistralai.completion.mixtral-8x7B-Instruct-v0_1",
-    "clarifai/gcp.generate.gemma-2b-it",
-    "clarifai/gcp.generate.gemma-7b-it",
-    "clarifai/deci.decilm.deciLM-7B-instruct",
-    "clarifai/mistralai.completion.mistral-7B-Instruct",
-    "clarifai/gcp.generate.gemini-pro",
-    "clarifai/anthropic.completion.claude-v1",
-    "clarifai/anthropic.completion.claude-instant-1_2",
-    "clarifai/anthropic.completion.claude-instant",
-    "clarifai/anthropic.completion.claude-v2",
-    "clarifai/anthropic.completion.claude-2_1",
-    "clarifai/meta.Llama-2.codeLlama-70b-Python",
-    "clarifai/meta.Llama-2.codeLlama-70b-Instruct",
-    "clarifai/openai.completion.gpt-3_5-turbo-instruct",
-    "clarifai/meta.Llama-2.llama2-7b-chat",
-    "clarifai/meta.Llama-2.llama2-13b-chat",
-    "clarifai/meta.Llama-2.llama2-70b-chat",
-    "clarifai/openai.chat-completion.gpt-4-turbo",
-    "clarifai/microsoft.text-generation.phi-2",
-    "clarifai/meta.Llama-2.llama2-7b-chat-vllm",
-    "clarifai/upstage.solar.solar-10_7b-instruct",
-    "clarifai/openchat.openchat.openchat-3_5-1210",
-    "clarifai/togethercomputer.stripedHyena.stripedHyena-Nous-7B",
-    "clarifai/gcp.generate.text-bison",
-    "clarifai/meta.Llama-2.llamaGuard-7b",
-    "clarifai/fblgit.una-cybertron.una-cybertron-7b-v2",
-    "clarifai/openai.chat-completion.GPT-4",
-    "clarifai/openai.chat-completion.GPT-3_5-turbo",
-    "clarifai/ai21.complete.Jurassic2-Grande",
-    "clarifai/ai21.complete.Jurassic2-Grande-Instruct",
-    "clarifai/ai21.complete.Jurassic2-Jumbo-Instruct",
-    "clarifai/ai21.complete.Jurassic2-Jumbo",
-    "clarifai/ai21.complete.Jurassic2-Large",
-    "clarifai/cohere.generate.cohere-generate-command",
-    "clarifai/wizardlm.generate.wizardCoder-Python-34B",
-    "clarifai/wizardlm.generate.wizardLM-70B",
-    "clarifai/tiiuae.falcon.falcon-40b-instruct",
-    "clarifai/togethercomputer.RedPajama.RedPajama-INCITE-7B-Chat",
-    "clarifai/gcp.generate.code-gecko",
-    "clarifai/gcp.generate.code-bison",
-    "clarifai/mistralai.completion.mistral-7B-OpenOrca",
-    "clarifai/mistralai.completion.openHermes-2-mistral-7B",
-    "clarifai/wizardlm.generate.wizardLM-13B",
-    "clarifai/huggingface-research.zephyr.zephyr-7B-alpha",
-    "clarifai/wizardlm.generate.wizardCoder-15B",
-    "clarifai/microsoft.text-generation.phi-1_5",
-    "clarifai/databricks.Dolly-v2.dolly-v2-12b",
-    "clarifai/bigcode.code.StarCoder",
-    "clarifai/salesforce.xgen.xgen-7b-8k-instruct",
-    "clarifai/mosaicml.mpt.mpt-7b-instruct",
-    "clarifai/anthropic.completion.claude-3-opus",
-    "clarifai/anthropic.completion.claude-3-sonnet",
-    "clarifai/gcp.generate.gemini-1_5-pro",
-    "clarifai/gcp.generate.imagen-2",
-    "clarifai/salesforce.blip.general-english-image-caption-blip-2",
-])
-
-
-huggingface_models: set = set([
-    "meta-llama/Llama-2-7b-hf",
-    "meta-llama/Llama-2-7b-chat-hf",
-    "meta-llama/Llama-2-13b-hf",
-    "meta-llama/Llama-2-13b-chat-hf",
-    "meta-llama/Llama-2-70b-hf",
-    "meta-llama/Llama-2-70b-chat-hf",
-    "meta-llama/Llama-2-7b",
-    "meta-llama/Llama-2-7b-chat",
-    "meta-llama/Llama-2-13b",
-    "meta-llama/Llama-2-13b-chat",
-    "meta-llama/Llama-2-70b",
-    "meta-llama/Llama-2-70b-chat",
-])  # these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/providers
-empower_models = set([
-    "empower/empower-functions",
-    "empower/empower-functions-small",
-])
-
-together_ai_models: set = set([
-    # llama llms - chat
-    "togethercomputer/llama-2-70b-chat",
-    # llama llms - language / instruct
-    "togethercomputer/llama-2-70b",
-    "togethercomputer/LLaMA-2-7B-32K",
-    "togethercomputer/Llama-2-7B-32K-Instruct",
-    "togethercomputer/llama-2-7b",
-    # falcon llms
-    "togethercomputer/falcon-40b-instruct",
-    "togethercomputer/falcon-7b-instruct",
-    # alpaca
-    "togethercomputer/alpaca-7b",
-    # chat llms
-    "HuggingFaceH4/starchat-alpha",
-    # code llms
-    "togethercomputer/CodeLlama-34b",
-    "togethercomputer/CodeLlama-34b-Instruct",
-    "togethercomputer/CodeLlama-34b-Python",
-    "defog/sqlcoder",
-    "NumbersStation/nsql-llama-2-7B",
-    "WizardLM/WizardCoder-15B-V1.0",
-    "WizardLM/WizardCoder-Python-34B-V1.0",
-    # language llms
-    "NousResearch/Nous-Hermes-Llama2-13b",
-    "Austism/chronos-hermes-13b",
-    "upstage/SOLAR-0-70b-16bit",
-    "WizardLM/WizardLM-70B-V1.0",
-])
-  # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
+clarifai_models: set = set(
+    [
+        "clarifai/meta.Llama-3.Llama-3-8B-Instruct",
+        "clarifai/gcp.generate.gemma-1_1-7b-it",
+        "clarifai/mistralai.completion.mixtral-8x22B",
+        "clarifai/cohere.generate.command-r-plus",
+        "clarifai/databricks.drbx.dbrx-instruct",
+        "clarifai/mistralai.completion.mistral-large",
+        "clarifai/mistralai.completion.mistral-medium",
+        "clarifai/mistralai.completion.mistral-small",
+        "clarifai/mistralai.completion.mixtral-8x7B-Instruct-v0_1",
+        "clarifai/gcp.generate.gemma-2b-it",
+        "clarifai/gcp.generate.gemma-7b-it",
+        "clarifai/deci.decilm.deciLM-7B-instruct",
+        "clarifai/mistralai.completion.mistral-7B-Instruct",
+        "clarifai/gcp.generate.gemini-pro",
+        "clarifai/anthropic.completion.claude-v1",
+        "clarifai/anthropic.completion.claude-instant-1_2",
+        "clarifai/anthropic.completion.claude-instant",
+        "clarifai/anthropic.completion.claude-v2",
+        "clarifai/anthropic.completion.claude-2_1",
+        "clarifai/meta.Llama-2.codeLlama-70b-Python",
+        "clarifai/meta.Llama-2.codeLlama-70b-Instruct",
+        "clarifai/openai.completion.gpt-3_5-turbo-instruct",
+        "clarifai/meta.Llama-2.llama2-7b-chat",
+        "clarifai/meta.Llama-2.llama2-13b-chat",
+        "clarifai/meta.Llama-2.llama2-70b-chat",
+        "clarifai/openai.chat-completion.gpt-4-turbo",
+        "clarifai/microsoft.text-generation.phi-2",
+        "clarifai/meta.Llama-2.llama2-7b-chat-vllm",
+        "clarifai/upstage.solar.solar-10_7b-instruct",
+        "clarifai/openchat.openchat.openchat-3_5-1210",
+        "clarifai/togethercomputer.stripedHyena.stripedHyena-Nous-7B",
+        "clarifai/gcp.generate.text-bison",
+        "clarifai/meta.Llama-2.llamaGuard-7b",
+        "clarifai/fblgit.una-cybertron.una-cybertron-7b-v2",
+        "clarifai/openai.chat-completion.GPT-4",
+        "clarifai/openai.chat-completion.GPT-3_5-turbo",
+        "clarifai/ai21.complete.Jurassic2-Grande",
+        "clarifai/ai21.complete.Jurassic2-Grande-Instruct",
+        "clarifai/ai21.complete.Jurassic2-Jumbo-Instruct",
+        "clarifai/ai21.complete.Jurassic2-Jumbo",
+        "clarifai/ai21.complete.Jurassic2-Large",
+        "clarifai/cohere.generate.cohere-generate-command",
+        "clarifai/wizardlm.generate.wizardCoder-Python-34B",
+        "clarifai/wizardlm.generate.wizardLM-70B",
+        "clarifai/tiiuae.falcon.falcon-40b-instruct",
+        "clarifai/togethercomputer.RedPajama.RedPajama-INCITE-7B-Chat",
+        "clarifai/gcp.generate.code-gecko",
+        "clarifai/gcp.generate.code-bison",
+        "clarifai/mistralai.completion.mistral-7B-OpenOrca",
+        "clarifai/mistralai.completion.openHermes-2-mistral-7B",
+        "clarifai/wizardlm.generate.wizardLM-13B",
+        "clarifai/huggingface-research.zephyr.zephyr-7B-alpha",
+        "clarifai/wizardlm.generate.wizardCoder-15B",
+        "clarifai/microsoft.text-generation.phi-1_5",
+        "clarifai/databricks.Dolly-v2.dolly-v2-12b",
+        "clarifai/bigcode.code.StarCoder",
+        "clarifai/salesforce.xgen.xgen-7b-8k-instruct",
+        "clarifai/mosaicml.mpt.mpt-7b-instruct",
+        "clarifai/anthropic.completion.claude-3-opus",
+        "clarifai/anthropic.completion.claude-3-sonnet",
+        "clarifai/gcp.generate.gemini-1_5-pro",
+        "clarifai/gcp.generate.imagen-2",
+        "clarifai/salesforce.blip.general-english-image-caption-blip-2",
+    ]
+)
 
 
-baseten_models: set = set([
-    "qvv0xeq",
-    "q841o8w",
-    "31dxrj3",
-])  # FALCON 7B  # WizardLM  # Mosaic ML
+huggingface_models: set = set(
+    [
+        "meta-llama/Llama-2-7b-hf",
+        "meta-llama/Llama-2-7b-chat-hf",
+        "meta-llama/Llama-2-13b-hf",
+        "meta-llama/Llama-2-13b-chat-hf",
+        "meta-llama/Llama-2-70b-hf",
+        "meta-llama/Llama-2-70b-chat-hf",
+        "meta-llama/Llama-2-7b",
+        "meta-llama/Llama-2-7b-chat",
+        "meta-llama/Llama-2-13b",
+        "meta-llama/Llama-2-13b-chat",
+        "meta-llama/Llama-2-70b",
+        "meta-llama/Llama-2-70b-chat",
+    ]
+)  # these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/providers
+empower_models = set(
+    [
+        "empower/empower-functions",
+        "empower/empower-functions-small",
+    ]
+)
 
-featherless_ai_models: set = set([
-    "featherless-ai/Qwerky-72B",
-    "featherless-ai/Qwerky-QwQ-32B",
-    "Qwen/Qwen2.5-72B-Instruct",
-    "all-hands/openhands-lm-32b-v0.1",
-    "Qwen/Qwen2.5-Coder-32B-Instruct",
-    "deepseek-ai/DeepSeek-V3-0324",
-    "mistralai/Mistral-Small-24B-Instruct-2501",
-    "mistralai/Mistral-Nemo-Instruct-2407",
-    "ProdeusUnity/Stellar-Odyssey-12b-v0.0",
-])
+together_ai_models: set = set(
+    [
+        # llama llms - chat
+        "togethercomputer/llama-2-70b-chat",
+        # llama llms - language / instruct
+        "togethercomputer/llama-2-70b",
+        "togethercomputer/LLaMA-2-7B-32K",
+        "togethercomputer/Llama-2-7B-32K-Instruct",
+        "togethercomputer/llama-2-7b",
+        # falcon llms
+        "togethercomputer/falcon-40b-instruct",
+        "togethercomputer/falcon-7b-instruct",
+        # alpaca
+        "togethercomputer/alpaca-7b",
+        # chat llms
+        "HuggingFaceH4/starchat-alpha",
+        # code llms
+        "togethercomputer/CodeLlama-34b",
+        "togethercomputer/CodeLlama-34b-Instruct",
+        "togethercomputer/CodeLlama-34b-Python",
+        "defog/sqlcoder",
+        "NumbersStation/nsql-llama-2-7B",
+        "WizardLM/WizardCoder-15B-V1.0",
+        "WizardLM/WizardCoder-Python-34B-V1.0",
+        # language llms
+        "NousResearch/Nous-Hermes-Llama2-13b",
+        "Austism/chronos-hermes-13b",
+        "upstage/SOLAR-0-70b-16bit",
+        "WizardLM/WizardLM-70B-V1.0",
+    ]
+)
+# supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
-nebius_models: set = set([
-    # deepseek models
-    "deepseek-ai/DeepSeek-R1-0528",
-    "deepseek-ai/DeepSeek-V3-0324",
-    "deepseek-ai/DeepSeek-V3",
-    "deepseek-ai/DeepSeek-R1",
-    "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
-    # google models
-    "google/gemma-2-2b-it",
-    "google/gemma-2-9b-it-fast",
-    # llama models
-    "meta-llama/Llama-3.3-70B-Instruct",
-    "meta-llama/Meta-Llama-3.1-70B-Instruct",
-    "meta-llama/Meta-Llama-3.1-8B-Instruct",
-    "meta-llama/Meta-Llama-3.1-405B-Instruct",
-    "NousResearch/Hermes-3-Llama-405B",
-    # microsoft models
-    "microsoft/phi-4",
-    # mistral models
-    "mistralai/Mistral-Nemo-Instruct-2407",
-    "mistralai/Devstral-Small-2505",
-    # moonshot models
-    "moonshotai/Kimi-K2-Instruct",
-    # nvidia models
-    "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
-    "nvidia/Llama-3_3-Nemotron-Super-49B-v1",
-    # openai models
-    "openai/gpt-oss-120b",
-    "openai/gpt-oss-20b",
-    # qwen models
-    "Qwen/Qwen3-Coder-480B-A35B-Instruct",
-    "Qwen/Qwen3-235B-A22B-Instruct-2507",
-    "Qwen/Qwen3-235B-A22B",
-    "Qwen/Qwen3-30B-A3B",
-    "Qwen/Qwen3-32B",
-    "Qwen/Qwen3-14B",
-    "Qwen/Qwen3-4B-fast",
-    "Qwen/Qwen2.5-Coder-7B",
-    "Qwen/Qwen2.5-Coder-32B-Instruct",
-    "Qwen/Qwen2.5-72B-Instruct",
-    "Qwen/QwQ-32B",
-    "Qwen/Qwen3-30B-A3B-Thinking-2507",
-    "Qwen/Qwen3-30B-A3B-Instruct-2507",
-    # zai models
-    "zai-org/GLM-4.5",
-    "zai-org/GLM-4.5-Air",
-    # other models
-    "aaditya/Llama3-OpenBioLLM-70B",
-    "ProdeusUnity/Stellar-Odyssey-12b-v0.0",
-    "all-hands/openhands-lm-32b-v0.1",
-])
 
-dashscope_models: set = set([
-    "qwen-turbo",
-    "qwen-plus",
-    "qwen-max",
-    "qwen-turbo-latest",
-    "qwen-plus-latest",
-    "qwen-max-latest",
-    "qwq-32b",
-    "qwen3-235b-a22b",
-    "qwen3-32b",
-    "qwen3-30b-a3b",
-])
+baseten_models: set = set(
+    [
+        "qvv0xeq",
+        "q841o8w",
+        "31dxrj3",
+    ]
+)  # FALCON 7B  # WizardLM  # Mosaic ML
 
-nebius_embedding_models: set = set([
-    "BAAI/bge-en-icl",
-    "BAAI/bge-multilingual-gemma2",
-    "intfloat/e5-mistral-7b-instruct",
-])
+featherless_ai_models: set = set(
+    [
+        "featherless-ai/Qwerky-72B",
+        "featherless-ai/Qwerky-QwQ-32B",
+        "Qwen/Qwen2.5-72B-Instruct",
+        "all-hands/openhands-lm-32b-v0.1",
+        "Qwen/Qwen2.5-Coder-32B-Instruct",
+        "deepseek-ai/DeepSeek-V3-0324",
+        "mistralai/Mistral-Small-24B-Instruct-2501",
+        "mistralai/Mistral-Nemo-Instruct-2407",
+        "ProdeusUnity/Stellar-Odyssey-12b-v0.0",
+    ]
+)
+
+nebius_models: set = set(
+    [
+        # deepseek models
+        "deepseek-ai/DeepSeek-R1-0528",
+        "deepseek-ai/DeepSeek-V3-0324",
+        "deepseek-ai/DeepSeek-V3",
+        "deepseek-ai/DeepSeek-R1",
+        "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+        # google models
+        "google/gemma-2-2b-it",
+        "google/gemma-2-9b-it-fast",
+        # llama models
+        "meta-llama/Llama-3.3-70B-Instruct",
+        "meta-llama/Meta-Llama-3.1-70B-Instruct",
+        "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        "meta-llama/Meta-Llama-3.1-405B-Instruct",
+        "NousResearch/Hermes-3-Llama-405B",
+        # microsoft models
+        "microsoft/phi-4",
+        # mistral models
+        "mistralai/Mistral-Nemo-Instruct-2407",
+        "mistralai/Devstral-Small-2505",
+        # moonshot models
+        "moonshotai/Kimi-K2-Instruct",
+        # nvidia models
+        "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
+        "nvidia/Llama-3_3-Nemotron-Super-49B-v1",
+        # openai models
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        # qwen models
+        "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "Qwen/Qwen3-235B-A22B",
+        "Qwen/Qwen3-30B-A3B",
+        "Qwen/Qwen3-32B",
+        "Qwen/Qwen3-14B",
+        "Qwen/Qwen3-4B-fast",
+        "Qwen/Qwen2.5-Coder-7B",
+        "Qwen/Qwen2.5-Coder-32B-Instruct",
+        "Qwen/Qwen2.5-72B-Instruct",
+        "Qwen/QwQ-32B",
+        "Qwen/Qwen3-30B-A3B-Thinking-2507",
+        "Qwen/Qwen3-30B-A3B-Instruct-2507",
+        # zai models
+        "zai-org/GLM-4.5",
+        "zai-org/GLM-4.5-Air",
+        # other models
+        "aaditya/Llama3-OpenBioLLM-70B",
+        "ProdeusUnity/Stellar-Odyssey-12b-v0.0",
+        "all-hands/openhands-lm-32b-v0.1",
+    ]
+)
+
+dashscope_models: set = set(
+    [
+        "qwen-turbo",
+        "qwen-plus",
+        "qwen-max",
+        "qwen-turbo-latest",
+        "qwen-plus-latest",
+        "qwen-max-latest",
+        "qwq-32b",
+        "qwen3-235b-a22b",
+        "qwen3-32b",
+        "qwen3-30b-a3b",
+    ]
+)
+
+nebius_embedding_models: set = set(
+    [
+        "BAAI/bge-en-icl",
+        "BAAI/bge-multilingual-gemma2",
+        "intfloat/e5-mistral-7b-instruct",
+    ]
+)
+
+WANDB_MODELS: set = set(
+    [
+        # openai models
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+
+        # zai-org models
+        "zai-org/GLM-4.5",
+
+        # Qwen models
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        "Qwen/Qwen3-235B-A22B-Thinking-2507",
+
+        # moonshotai
+        "moonshotai/Kimi-K2-Instruct",
+
+        # meta models
+        "meta-llama/Llama-3.1-8B-Instruct",
+        "meta-llama/Llama-3.3-70B-Instruct",
+        "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+
+        # deepseek-ai
+        "deepseek-ai/DeepSeek-V3.1",
+        "deepseek-ai/DeepSeek-R1-0528",
+        "deepseek-ai/DeepSeek-V3-0324",
+
+        # microsoft
+        "microsoft/Phi-4-mini-instruct",
+    ]
+)
 
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "cohere",
@@ -720,21 +835,75 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "deepseek_r1",
 ]
 
+BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
+    "cohere",
+    "amazon",
+    "twelvelabs",
+]
+
+BEDROCK_CONVERSE_MODELS = [
+    "qwen.qwen3-coder-480b-a35b-v1:0",
+    "qwen.qwen3-235b-a22b-2507-v1:0",
+    "qwen.qwen3-coder-30b-a3b-v1:0",
+    "qwen.qwen3-32b-v1:0",
+    "deepseek.v3-v1:0",
+    "openai.gpt-oss-20b-1:0",
+    "openai.gpt-oss-120b-1:0",
+    "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-opus-4-1-20250805-v1:0",
+    "anthropic.claude-opus-4-20250514-v1:0",
+    "anthropic.claude-sonnet-4-20250514-v1:0",
+    "anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "anthropic.claude-3-5-haiku-20241022-v1:0",
+    "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "anthropic.claude-3-opus-20240229-v1:0",
+    "anthropic.claude-3-sonnet-20240229-v1:0",
+    "anthropic.claude-3-haiku-20240307-v1:0",
+    "anthropic.claude-v2",
+    "anthropic.claude-v2:1",
+    "anthropic.claude-v1",
+    "anthropic.claude-instant-v1",
+    "ai21.jamba-instruct-v1:0",
+    "ai21.jamba-1-5-mini-v1:0",
+    "ai21.jamba-1-5-large-v1:0",
+    "meta.llama3-70b-instruct-v1:0",
+    "meta.llama3-8b-instruct-v1:0",
+    "meta.llama3-1-8b-instruct-v1:0",
+    "meta.llama3-1-70b-instruct-v1:0",
+    "meta.llama3-1-405b-instruct-v1:0",
+    "meta.llama3-70b-instruct-v1:0",
+    "mistral.mistral-large-2407-v1:0",
+    "mistral.mistral-large-2402-v1:0",
+    "mistral.mistral-small-2402-v1:0",
+    "meta.llama3-2-1b-instruct-v1:0",
+    "meta.llama3-2-3b-instruct-v1:0",
+    "meta.llama3-2-11b-instruct-v1:0",
+    "meta.llama3-2-90b-instruct-v1:0",
+]
+
+
 open_ai_embedding_models: set = set(["text-embedding-ada-002"])
-cohere_embedding_models: set = set([
-    "embed-v4.0",
-    "embed-english-v3.0",
-    "embed-english-light-v3.0",
-    "embed-multilingual-v3.0",
-    "embed-english-v2.0",
-    "embed-english-light-v2.0",
-    "embed-multilingual-v2.0",
-])
-bedrock_embedding_models: set = set([
-    "amazon.titan-embed-text-v1",
-    "cohere.embed-english-v3",
-    "cohere.embed-multilingual-v3",
-])
+cohere_embedding_models: set = set(
+    [
+        "embed-v4.0",
+        "embed-english-v3.0",
+        "embed-english-light-v3.0",
+        "embed-multilingual-v3.0",
+        "embed-english-v2.0",
+        "embed-english-light-v2.0",
+        "embed-multilingual-v2.0",
+    ]
+)
+bedrock_embedding_models: set = set(
+    [
+        "amazon.titan-embed-text-v1",
+        "cohere.embed-english-v3",
+        "cohere.embed-multilingual-v3",
+        "cohere.embed-v4:0",
+        "twelvelabs.marengo-embed-2-7-v1:0",
+    ]
+)
 
 known_tokenizer_config = {
     "mistralai/Mistral-7B-Instruct-v0.1": {
@@ -805,6 +974,9 @@ AZURE_STORAGE_MSFT_VERSION = "2019-07-07"
 PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES = int(
     os.getenv("PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES", 5)
 )
+CLOUDZERO_EXPORT_INTERVAL_MINUTES = int(
+    os.getenv("CLOUDZERO_EXPORT_INTERVAL_MINUTES", 60)
+)
 MCP_TOOL_NAME_PREFIX = "mcp_tool"
 MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG", 100))
 
@@ -848,7 +1020,12 @@ HEALTH_CHECK_TIMEOUT_SECONDS = int(
     os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60)
 )  # 60 seconds
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
+LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
+LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
 
+# Key Rotation Constants
+LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
+LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400))  # 24 hours default
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
@@ -859,6 +1036,10 @@ LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
+CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME = "cloudzero_export_usage_data"
+CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
+    os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000)
+)
 SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
@@ -876,6 +1057,12 @@ PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
 )  # 5 minutes
+DEFAULT_SHARED_HEALTH_CHECK_TTL = int(
+    os.getenv("DEFAULT_SHARED_HEALTH_CHECK_TTL", 300)
+)  # 5 minutes - TTL for cached health check results
+DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL = int(
+    os.getenv("DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL", 60)
+)  # 1 minute - TTL for health check lock
 PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS = int(
     os.getenv("PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS", 9)
 )
@@ -928,6 +1115,7 @@ SENTRY_DENYLIST = [
     "FIREWORKS_API_KEY",
     "FIREWORKS_AI_API_KEY",
     "FIREWORKSAI_API_KEY",
+    "OVHCLOUD_API_KEY",
     # Database and Connection Strings
     "database_url",
     "redis_url",
@@ -966,3 +1154,8 @@ SENTRY_PII_DENYLIST = [
     "SMTP_SENDER_EMAIL",
     "TEST_EMAIL_ADDRESS",
 ]
+
+# CoroutineChecker cache configuration
+COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
+    os.getenv("COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY", 1000)
+)

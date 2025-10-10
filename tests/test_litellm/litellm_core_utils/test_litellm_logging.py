@@ -439,6 +439,97 @@ async def test_e2e_generate_cold_storage_object_key_successful():
 
 
 @pytest.mark.asyncio
+async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path():
+    """
+    Test that _generate_cold_storage_object_key uses s3_path from custom logger instance.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock, patch
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Create test data
+    start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
+    response_id = "chatcmpl-test-12345"
+    
+    # Create mock custom logger with s3_path
+    mock_custom_logger = MagicMock()
+    mock_custom_logger.s3_path = "storage"
+    
+    with patch("litellm.configured_cold_storage_logger", "s3_v2"), \
+         patch("litellm.logging_callback_manager.get_active_custom_logger_for_callback_name") as mock_get_logger, \
+         patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key:
+        
+        # Setup mocks
+        mock_get_logger.return_value = mock_custom_logger
+        mock_get_s3_key.return_value = "storage/2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
+        
+        # Call the function
+        result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+            start_time=start_time,
+            response_id=response_id
+        )
+        
+        # Verify logger was queried correctly
+        mock_get_logger.assert_called_once_with("s3_v2")
+        
+        # Verify the S3 function was called with the custom logger's s3_path
+        mock_get_s3_key.assert_called_once_with(
+            s3_path="storage",  # Should use custom logger's s3_path
+            team_alias_prefix="",
+            start_time=start_time,
+            s3_file_name="time-10-30-45-123456_chatcmpl-test-12345"
+        )
+        
+        # Verify the result
+        assert result == "storage/2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
+
+
+@pytest.mark.asyncio
+async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
+    """
+    Test that _generate_cold_storage_object_key falls back to empty s3_path when logger has no s3_path.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock, patch
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Create test data
+    start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
+    response_id = "chatcmpl-test-12345"
+    
+    # Create mock custom logger without s3_path
+    mock_custom_logger = MagicMock()
+    mock_custom_logger.s3_path = None  # or could be missing attribute
+    
+    with patch("litellm.configured_cold_storage_logger", "s3_v2"), \
+         patch("litellm.logging_callback_manager.get_active_custom_logger_for_callback_name") as mock_get_logger, \
+         patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key:
+        
+        # Setup mocks
+        mock_get_logger.return_value = mock_custom_logger
+        mock_get_s3_key.return_value = "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
+        
+        # Call the function
+        result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+            start_time=start_time,
+            response_id=response_id
+        )
+        
+        # Verify the S3 function was called with empty s3_path (fallback)
+        mock_get_s3_key.assert_called_once_with(
+            s3_path="",  # Should fall back to empty string
+            team_alias_prefix="",
+            start_time=start_time,
+            s3_file_name="time-10-30-45-123456_chatcmpl-test-12345"
+        )
+        
+        # Verify the result
+        assert result == "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
+
+
+@pytest.mark.asyncio
 async def test_e2e_generate_cold_storage_object_key_not_configured():
     """
     Test end-to-end generation of cold storage object key when cold storage is not configured.

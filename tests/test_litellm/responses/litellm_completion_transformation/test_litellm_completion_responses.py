@@ -265,7 +265,7 @@ class TestLiteLLMCompletionResponsesConfig:
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
 
         reasoning_item = reasoning_items[0]
-        assert reasoning_item.id == "test-response-id_reasoning"
+        assert reasoning_item.id.startswith("rs_"), f"Expected ID to start with 'rs_', got: {reasoning_item.id}"
         assert reasoning_item.status == "stop"
         assert reasoning_item.role == "assistant"
         assert len(reasoning_item.content) == 1
@@ -541,7 +541,8 @@ class TestFunctionCallTransformation:
         result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
             model="gemini/gemini-2.0-flash",
             input=test_input,
-            responses_api_request=responses_api_request
+            responses_api_request=responses_api_request,
+            extra_headers={"X-Test-Header": "test-value"}
         )
         
         assert "messages" in result
@@ -562,6 +563,8 @@ class TestFunctionCallTransformation:
         
         tool_msg = messages[2]
         assert tool_msg["role"] == "tool"
+
+        assert result["extra_headers"] == {"X-Test-Header": "test-value"}
 
     def test_function_call_without_call_id_fallback_to_id(self):
         """Test that function_call items can use 'id' field when 'call_id' is missing"""

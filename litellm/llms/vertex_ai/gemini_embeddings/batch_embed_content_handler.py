@@ -43,7 +43,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
-        aembedding=False,
+        aembedding: Optional[bool] = False,
         timeout=300,
         client=None,
     ) -> EmbeddingResponse:

@@ -12,6 +12,8 @@ import click
 import httpx
 from dotenv import load_dotenv
 
+from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 else:
@@ -183,6 +185,7 @@ class ProxyInitializationHelpers:
         num_workers: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
+        max_requests_before_restart: Optional[int] = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -263,6 +266,10 @@ class ProxyInitializationHelpers:
             "access_log_format": '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s',
         }
 
+        # Optional: recycle workers after N requests to mitigate memory growth
+        if max_requests_before_restart is not None:
+            gunicorn_options["max_requests"] = max_requests_before_restart
+
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
             print(  # noqa
                 f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
@@ -308,8 +315,8 @@ class ProxyInitializationHelpers:
 @click.option("--port", default=4000, help="Port to bind the server to.", envvar="PORT")
 @click.option(
     "--num_workers",
-    default=1,
-    help="Number of uvicorn / gunicorn workers to spin up. By default, 1 uvicorn is used.",
+    default=DEFAULT_NUM_WORKERS_LITELLM_PROXY,
+    help="Number of uvicorn / gunicorn workers to spin up. By default, it equals the number of logical CPUs in the system, or 4 workers if that cannot be determined.",
     envvar="NUM_WORKERS",
 )
 @click.option("--api_base", default=None, help="API base URL.")
@@ -484,6 +491,13 @@ class ProxyInitializationHelpers:
     help="Set the uvicorn keepalive timeout in seconds (uvicorn timeout_keep_alive parameter)",
     envvar="KEEPALIVE_TIMEOUT",
 )
+@click.option(
+    "--max_requests_before_restart",
+    default=None,
+    type=int,
+    help="Restart worker after this many requests (uvicorn: limit_max_requests, gunicorn: max_requests)",
+    envvar="MAX_REQUESTS_BEFORE_RESTART",
+)
 def run_server(  # noqa: PLR0915
     host,
     port,
@@ -522,6 +536,7 @@ def run_server(  # noqa: PLR0915
     use_prisma_db_push: bool,
     skip_server_startup,
     keepalive_timeout,
+    max_requests_before_restart,
 ):
     args = locals()
     if local:
@@ -811,6 +826,9 @@ def run_server(  # noqa: PLR0915
             log_config=log_config,
             keepalive_timeout=keepalive_timeout,
         )
+        # Optional: recycle uvicorn workers after N requests
+        if max_requests_before_restart is not None:
+            uvicorn_args["limit_max_requests"] = max_requests_before_restart
         if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(  # noqa
@@ -835,6 +853,7 @@ def run_server(  # noqa: PLR0915
                 num_workers=num_workers,
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
+                max_requests_before_restart=max_requests_before_restart,
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers._init_hypercorn_server(
