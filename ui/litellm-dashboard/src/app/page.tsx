@@ -8,7 +8,7 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import UserDashboard from "@/components/user_dashboard";
-import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/model_dashboard";
+import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import ViewUserDashboard from "@/components/view_users";
 import TeamsView from "@/app/(dashboard)/teams/TeamsView";
 import Organizations from "@/components/organizations";
