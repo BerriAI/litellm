@@ -30,6 +30,18 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def __init__(self) -> None:
         super().__init__()
 
+    def should_fake_stream(
+        self,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        """
+        Vertex AI Gemma models do not support streaming.
+        Return True to enable fake streaming on the client side.
+        """
+        return True
+
     def transform_request(
         self,
         model: str,
@@ -53,8 +65,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             headers=headers,
         )
         
-        # Remove 'model' from the request as it's not needed in the instance
+        # Remove params not needed/supported by Vertex Gemma
         openai_request.pop("model", None)
+        openai_request.pop("stream", None)  # Streaming not supported, will be faked client-side
         
         # Wrap in Vertex Gemma format
         return {
@@ -105,16 +118,8 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     ):
         """
         Make completion request to Vertex Gemma endpoint.
-        Supports both sync and async requests.
+        Supports both sync and async requests with fake streaming.
         """
-        # Handle streaming
-        stream = optional_params.get("stream", False)
-        if stream:
-            raise BaseLLMException(
-                status_code=400,
-                message="Streaming is not yet supported for Vertex AI Gemma models",
-            )
-
         if acompletion:
             return self._async_completion(
                 model=model,

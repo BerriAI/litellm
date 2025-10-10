@@ -155,6 +155,9 @@ class TestVertexGemmaCompletion:
             assert instance["messages"][0]["content"] == "What is machine learning?"
             assert instance["max_tokens"] == 100
             
+            # Verify stream parameter is NOT sent to Vertex (will be faked client-side)
+            assert "stream" not in instance
+            
             # Validate LiteLLM Response (OpenAI format)
             assert response.id == "chatcmpl-aaa4288f-2b8e-4bc0-8b14-4e444decd2c4"
             assert response.object == "chat.completion"
