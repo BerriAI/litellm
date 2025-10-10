@@ -152,14 +152,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const [selectedTabIndex, setSelectedTabIndex] = useState(0);
-
-  const handleCreateNewModelClick = () => {
-    if (selectedModelId) {
-      setSelectedModelId(null);
-    }
-    setSelectedTabIndex(1);
-  };
-
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
     setProviderModels(_providerModels);
@@ -186,25 +178,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
-
-  function formatCreatedAt(createdAt: string | null) {
-    if (createdAt) {
-      const date = new Date(createdAt);
-      const options = { month: "long", day: "numeric", year: "numeric" };
-      return date.toLocaleDateString("en-US");
-    }
-    return null;
-  }
-
-  const handleEditClick = (model: any) => {
-    setSelectedModel(model);
-    setEditModalVisible(true);
-  };
-
-  const handleEditCancel = () => {
-    setEditModalVisible(false);
-    setSelectedModel(null);
-  };
 
   const uploadProps: UploadProps = {
     name: "file",
@@ -629,11 +602,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
 
   console.log(`selectedProvider: ${selectedProvider}`);
   console.log(`providerModels.length: ${providerModels.length}`);
-
-  const providerKey = Object.keys(Providers).find(
-    (key) => (Providers as { [index: string]: any })[key] === selectedProvider,
-  );
-
+  Object.keys(Providers).find((key) => (Providers as { [index: string]: any })[key] === selectedProvider);
   // If a team is selected, render TeamInfoView in full page layout
   if (selectedTeamId) {
     return (
