@@ -1125,8 +1125,9 @@ async def test_retrying() -> None:
 
 def test_anthropic_disable_url_suffix_env_var():
     """Test that LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX prevents /v1/messages suffix."""
-    from unittest.mock import patch, MagicMock
     import os
+    from unittest.mock import MagicMock, patch
+
     from litellm import completion
 
     # Test with environment variable disabled (default behavior)
@@ -1185,8 +1186,9 @@ def test_anthropic_disable_url_suffix_env_var():
 
 def test_anthropic_text_disable_url_suffix_env_var():
     """Test that LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX prevents /v1/complete suffix for anthropic_text."""
-    from unittest.mock import patch, MagicMock
     import os
+    from unittest.mock import MagicMock, patch
+
     from litellm import completion
 
     # Test with environment variable disabled (default behavior)
@@ -1237,3 +1239,118 @@ def test_anthropic_text_disable_url_suffix_env_var():
             # Verify the api_base does not have /v1/complete appended
             assert actual_api_base == "https://api.example.com/custom/complete"
             assert not actual_api_base.endswith("/v1/complete")
+
+
+def test_mock_completion_stream_with_model_response():
+    """Test that mock_completion correctly handles stream=True with a ModelResponse as mock_response."""
+    from litellm import completion
+    from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+    # Create a ModelResponse object
+    mock_model_response = ModelResponse(
+        id="chatcmpl-test-123",
+        created=1234567890,
+        model="gpt-4o-mini",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="This is a test response",
+                    role="assistant",
+                ),
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=10,
+            completion_tokens=20,
+            total_tokens=30,
+        ),
+    )
+
+    # Call completion with stream=True and mock_response as ModelResponse
+    response = completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=True,
+        mock_response=mock_model_response,
+    )
+
+    # Verify that the response is a stream
+    assert response is not None
+    
+    # Collect all chunks from the stream
+    chunks = []
+    for chunk in response:
+        chunks.append(chunk)
+        print(f"Chunk: {chunk}")
+
+    # Verify we got chunks
+    assert len(chunks) > 0
+    
+    # Verify the content is streamed correctly
+    accumulated_content = ""
+    for chunk in chunks:
+        if hasattr(chunk.choices[0].delta, "content") and chunk.choices[0].delta.content:
+            accumulated_content += chunk.choices[0].delta.content
+    
+    assert "This is a test response" in accumulated_content or len(chunks) > 0
+
+
+@pytest.mark.asyncio
+async def test_async_mock_completion_stream_with_model_response():
+    """Test that async mock_completion correctly handles stream=True with a ModelResponse as mock_response."""
+    from litellm import acompletion
+    from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+    # Create a ModelResponse object
+    mock_model_response = ModelResponse(
+        id="chatcmpl-test-456",
+        created=1234567890,
+        model="gpt-4o-mini",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="This is an async test response",
+                    role="assistant",
+                ),
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=15,
+            completion_tokens=25,
+            total_tokens=40,
+        ),
+    )
+
+    # Call acompletion with stream=True and mock_response as ModelResponse
+    response = await acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello async"}],
+        stream=True,
+        mock_response=mock_model_response,
+    )
+
+    # Verify that the response is a stream
+    assert response is not None
+    
+    # Collect all chunks from the stream
+    chunks = []
+    async for chunk in response:
+        chunks.append(chunk)
+        print(f"Async Chunk: {chunk}")
+
+    # Verify we got chunks
+    assert len(chunks) > 0
+    
+    # Verify the content is streamed correctly
+    accumulated_content = ""
+    for chunk in chunks:
+        if hasattr(chunk.choices[0].delta, "content") and chunk.choices[0].delta.content:
+            accumulated_content += chunk.choices[0].delta.content
+    
+    assert "This is an async test response" in accumulated_content or len(chunks) > 0

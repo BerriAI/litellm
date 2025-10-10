@@ -592,7 +592,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def create_guardrail_blocked_response(
         self, response: str, stream: bool = False
-    ) -> dict:
+    ) -> ModelResponse:
         from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
         return ModelResponse(
@@ -607,7 +607,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 completion_tokens=0,
                 total_tokens=0,
             ),
-        ).model_dump()
+        )
 
     async def async_pre_call_hook(
         self,

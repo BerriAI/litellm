@@ -86,7 +86,14 @@ class MCPClient:
     async def connect(self):
         """Initialize the transport and session."""
         if self._session:
+            verbose_logger.debug(
+                f"MCP client already connected to {self.server_url or 'stdio'}"
+            )
             return  # Already connected
+
+        verbose_logger.info(
+            f"MCP client connecting to {self.server_url or 'stdio'} via {self.transport_type}"
+        )
 
         try:
             if self.transport_type == MCPTransport.stdio:
@@ -107,6 +114,9 @@ class MCPClient:
                 )
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
+                verbose_logger.info(
+                    f"MCP client successfully connected via stdio: {self.stdio_config.get('command', '')}"
+                )
             elif self.transport_type == MCPTransport.sse:
                 headers = self._get_auth_headers()
                 httpx_client_factory = self._create_httpx_client_factory()
@@ -122,6 +132,9 @@ class MCPClient:
                 )
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
+                verbose_logger.info(
+                    f"MCP client successfully connected via SSE to {self.server_url}"
+                )
             else:  # http
                 headers = self._get_auth_headers()
                 httpx_client_factory = self._create_httpx_client_factory()
