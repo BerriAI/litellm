@@ -351,7 +351,6 @@ class VertexBase:
                 else:
                     # Fallback to simple format if we don't have all parameters
                     url = "{}:{}".format(api_base, endpoint)
-            print(f"🔥url: {url}")
             if stream is True:
                 url = url + "?alt=sse"
         return auth_header, url
