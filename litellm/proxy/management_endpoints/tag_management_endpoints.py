@@ -25,6 +25,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     get_daily_activity,
 )
+from litellm.proxy.management_helpers.utils import handle_budget_for_entity
 from litellm.types.tag_management import (
     LiteLLM_DailyTagSpendTable,
     TagConfig,
@@ -96,9 +97,23 @@ async def new_tag(
     - name: str - The name of the tag
     - description: Optional[str] - Description of what this tag represents
     - models: List[str] - List of either 'model_id' or 'model_name' allowed for this tag
+    - budget_id: Optional[str] - The id for a budget (tpm/rpm/max budget) for the tag
+    
+    ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
+    - max_budget: Optional[float] - Max budget for tag
+    - tpm_limit: Optional[int] - Max tpm limit for tag
+    - rpm_limit: Optional[int] - Max rpm limit for tag
+    - max_parallel_requests: Optional[int] - Max parallel requests for tag
+    - soft_budget: Optional[float] - Get a slack alert when this soft budget is reached
+    - model_max_budget: Optional[dict] - Max budget for a specific model
+    - budget_duration: Optional[str] - Frequency of resetting tag budget
     """
     from litellm.proxy._types import CommonProxyErrors
-    from litellm.proxy.proxy_server import llm_router, prisma_client
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        llm_router,
+        prisma_client,
+    )
 
     if prisma_client is None:
         raise HTTPException(
@@ -118,6 +133,15 @@ async def new_tag(
                 status_code=400, detail=f"Tag {tag.name} already exists"
             )
 
+        # Handle budget creation/assignment using common helper
+        budget_id = await handle_budget_for_entity(
+            data=tag,
+            existing_budget_id=None,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
+
         # Get model names for model_info
         model_info = await _get_model_names(prisma_client, tag.models or [])
 
@@ -129,6 +153,7 @@ async def new_tag(
                 "models": tag.models or [],
                 "model_info": json.dumps(model_info),
                 "spend": 0.0,
+                "budget_id": budget_id,
                 "created_by": user_api_key_dict.user_id,
             }
         )
@@ -207,6 +232,16 @@ async def update_tag(
     - name: str - The name of the tag to update
     - description: Optional[str] - Updated description
     - models: List[str] - Updated list of allowed LLM models
+    - budget_id: Optional[str] - The id for a budget to associate with the tag
+    
+    ### BUDGET UPDATE PARAMS ###
+    - max_budget: Optional[float] - Max budget for tag
+    - tpm_limit: Optional[int] - Max tpm limit for tag
+    - rpm_limit: Optional[int] - Max rpm limit for tag
+    - max_parallel_requests: Optional[int] - Max parallel requests for tag
+    - soft_budget: Optional[float] - Get a slack alert when this soft budget is reached
+    - model_max_budget: Optional[dict] - Max budget for a specific model
+    - budget_duration: Optional[str] - Frequency of resetting tag budget
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -221,17 +256,35 @@ async def update_tag(
         if existing_tag is None:
             raise HTTPException(status_code=404, detail=f"Tag {tag.name} not found")
 
+        from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+        # Handle budget updates using common helper
+        budget_id = await handle_budget_for_entity(
+            data=tag,
+            existing_budget_id=existing_tag.budget_id,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
+
         # Get model names for model_info
         model_info = await _get_model_names(prisma_client, tag.models or [])
+
+        # Prepare update data
+        update_data = {
+            "description": tag.description,
+            "models": tag.models or [],
+            "model_info": json.dumps(model_info),
+        }
+        
+        # Add budget_id if it changed
+        if budget_id != existing_tag.budget_id:
+            update_data["budget_id"] = budget_id
 
         # Update tag in database
         updated_tag_record = await prisma_client.db.litellm_tagtable.update(
             where={"tag_name": tag.name},
-            data={
-                "description": tag.description,
-                "models": tag.models or [],
-                "model_info": json.dumps(model_info),
-            },
+            data=update_data,
         )
 
         # Build response
@@ -275,9 +328,10 @@ async def info_tag(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        # Query tags from database
+        # Query tags from database with budget info
         tag_records = await prisma_client.db.litellm_tagtable.find_many(
-            where={"tag_name": {"in": data.names}}
+            where={"tag_name": {"in": data.names}},
+            include={"litellm_budget_table": True},
         )
 
         # Check if any requested tags don't exist
@@ -299,15 +353,21 @@ async def info_tag(
                 else:
                     model_info = tag_record.model_info
 
-            requested_tags[tag_record.tag_name] = TagConfig(
-                name=tag_record.tag_name,
-                description=tag_record.description,
-                models=tag_record.models,
-                model_info=model_info,
-                created_at=tag_record.created_at.isoformat(),
-                updated_at=tag_record.updated_at.isoformat(),
-                created_by=tag_record.created_by,
-            )
+            tag_dict = {
+                "name": tag_record.tag_name,
+                "description": tag_record.description,
+                "models": tag_record.models,
+                "model_info": model_info,
+                "created_at": tag_record.created_at.isoformat(),
+                "updated_at": tag_record.updated_at.isoformat(),
+                "created_by": tag_record.created_by,
+            }
+
+            # Add budget info if available
+            if hasattr(tag_record, "litellm_budget_table") and tag_record.litellm_budget_table:
+                tag_dict["litellm_budget_table"] = tag_record.litellm_budget_table
+
+            requested_tags[tag_record.tag_name] = tag_dict
 
         return requested_tags
     except Exception as e:
@@ -318,13 +378,12 @@ async def info_tag(
     "/tag/list",
     tags=["tag management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=List[TagConfig],
 )
 async def list_tags(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    List all available tags.
+    List all available tags with their budget information.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -333,7 +392,9 @@ async def list_tags(
 
     try:
         ## QUERY STORED TAGS ##
-        tag_records = await prisma_client.db.litellm_tagtable.find_many()
+        tag_records = await prisma_client.db.litellm_tagtable.find_many(
+            include={"litellm_budget_table": True}
+        )
 
         stored_tag_names = set()
         list_of_tags = []
@@ -347,17 +408,21 @@ async def list_tags(
                 else:
                     model_info = tag_record.model_info
 
-            list_of_tags.append(
-                TagConfig(
-                    name=tag_record.tag_name,
-                    description=tag_record.description,
-                    models=tag_record.models,
-                    model_info=model_info,
-                    created_at=tag_record.created_at.isoformat(),
-                    updated_at=tag_record.updated_at.isoformat(),
-                    created_by=tag_record.created_by,
-                )
-            )
+            tag_dict = {
+                "name": tag_record.tag_name,
+                "description": tag_record.description,
+                "models": tag_record.models,
+                "model_info": model_info,
+                "created_at": tag_record.created_at.isoformat(),
+                "updated_at": tag_record.updated_at.isoformat(),
+                "created_by": tag_record.created_by,
+            }
+
+            # Add budget info if available
+            if hasattr(tag_record, "litellm_budget_table") and tag_record.litellm_budget_table:
+                tag_dict["litellm_budget_table"] = tag_record.litellm_budget_table
+
+            list_of_tags.append(tag_dict)
 
         ## QUERY DYNAMIC TAGS ##
         dynamic_tags = await prisma_client.db.litellm_dailytagspend.find_many(
@@ -370,13 +435,13 @@ async def list_tags(
         ]
 
         dynamic_tag_config = [
-            TagConfig(
-                name=tag.tag,
-                description="This is just a spend tag that was passed dynamically in a request. It does not control any LLM models.",
-                models=None,
-                created_at=tag.created_at.isoformat(),
-                updated_at=tag.updated_at.isoformat(),
-            )
+            {
+                "name": tag.tag,
+                "description": "This is just a spend tag that was passed dynamically in a request. It does not control any LLM models.",
+                "models": None,
+                "created_at": tag.created_at.isoformat(),
+                "updated_at": tag.updated_at.isoformat(),
+            }
             for tag in dynamic_tags_list
             if tag.tag not in stored_tag_names
         ]
