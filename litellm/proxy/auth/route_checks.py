@@ -472,14 +472,25 @@ class RouteChecks:
         Supports both exact match and prefix match.
         """
         metadata = user_api_key_dict.metadata
-        if metadata is None:
+        team_metadata = user_api_key_dict.team_metadata or {}
+        if metadata is None and team_metadata is None:
             return False
-        if "allowed_passthrough_routes" not in metadata:
+        if (
+            "allowed_passthrough_routes" not in metadata
+            and "allowed_passthrough_routes" not in team_metadata
+        ):
             return False
-        if metadata["allowed_passthrough_routes"] is None:
+        if (
+            metadata.get("allowed_passthrough_routes") is None
+            and team_metadata.get("allowed_passthrough_routes") is None
+        ):
             return False
 
-        allowed_passthrough_routes = metadata["allowed_passthrough_routes"]
+        allowed_passthrough_routes = (
+            metadata.get("allowed_passthrough_routes")
+            or team_metadata.get("allowed_passthrough_routes")
+            or []
+        )
 
         # Check if route matches any allowed passthrough route (exact or prefix match)
         for allowed_route in allowed_passthrough_routes:
