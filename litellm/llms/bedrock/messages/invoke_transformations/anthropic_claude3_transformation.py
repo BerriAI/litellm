@@ -12,6 +12,7 @@ from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
+from litellm.litellm_core_utils.prompt_templates.image_handling import convert_url_to_base64
 from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk
@@ -140,7 +141,6 @@ class AmazonAnthropicClaudeMessagesConfig(
         return anthropic_messages_request
     
     def process_image_content(self, messages: List[Dict]) -> List[Dict]:
-        from litellm.litellm_core_utils.prompt_templates.image_handling import convert_url_to_base64
         for message in messages:
             if message.get("role") == "user" and isinstance(message.get("content"), list):
                 for content in message["content"]:

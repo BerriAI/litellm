@@ -5,7 +5,7 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
 )
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.types.router import GenericLiteLLMParams
-
+from litellm.litellm_core_utils.prompt_templates.image_handling import convert_url_to_base64
 from ....vertex_llm_base import VertexBase
 
 
@@ -91,7 +91,6 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         return anthropic_messages_request
 
     def process_image_content(self, messages: List[Dict]) -> List[Dict]:
-        from litellm.litellm_core_utils.prompt_templates.image_handling import convert_url_to_base64
         for message in messages:
             if message.get("role") == "user" and isinstance(message.get("content"), list):
                 for content in message["content"]:
