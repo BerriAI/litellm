@@ -2,46 +2,26 @@
  * Modal to add fallbacks to the proxy router config
  */
 
-import React, { useState, useEffect, useRef } from "react";
-import { Button, TextInput, Grid, Col, Switch } from "@tremor/react";
+import React, { useState } from "react";
+import { Button, TextInput, Switch } from "@tremor/react";
 import {
-  Select,
-  SelectItem,
-  MultiSelect,
-  MultiSelectItem,
   Card,
-  Metric,
-  Text,
   Title,
   Subtitle,
-  Accordion,
-  AccordionHeader,
-  AccordionBody,
 } from "@tremor/react";
 import { createPassThroughEndpoint } from "./networking";
 import {
-  Button as Button2,
   Modal,
   Form,
-  Input,
-  InputNumber,
   Select as Select2,
-  message,
   Tooltip,
   Alert,
-  Divider,
-  Collapse,
 } from "antd";
 import NumericalInput from "./shared/numerical_input";
 import {
   InfoCircleOutlined,
   ApiOutlined,
-  ExclamationCircleOutlined,
-  CheckCircleOutlined,
-  CopyOutlined,
 } from "@ant-design/icons";
-import { keyCreateCall, slackBudgetAlertsHealthCheck, modelAvailableCall } from "./networking";
-import { list } from "postcss";
 import KeyValueInput from "./key_value_input";
 import { passThroughItem } from "./pass_through_settings";
 import RoutePreview from "./route_preview";

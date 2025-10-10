@@ -1,6 +1,6 @@
 import React from "react";
 import { Upload, Tooltip } from "antd";
-import { PaperClipOutlined, DeleteOutlined } from "@ant-design/icons";
+import { PaperClipOutlined } from "@ant-design/icons";
 
 const { Dragger } = Upload;
 

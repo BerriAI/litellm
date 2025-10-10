@@ -1,5 +1,5 @@
 import { ModelGroup } from "./llm_calls/fetch_models";
-import { ModelMode, EndpointType, getEndpointType } from "./mode_endpoint_mapping";
+import { EndpointType, getEndpointType } from "./mode_endpoint_mapping";
 
 /**
  * Determines the appropriate endpoint type based on the selected model

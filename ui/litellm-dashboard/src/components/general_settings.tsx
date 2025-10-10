@@ -488,7 +488,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
 
               <TableBody>
                 {routerSettings["fallbacks"] &&
-                  routerSettings["fallbacks"].map((item: Object, index: number) =>
+                  routerSettings["fallbacks"].map((item: object, index: number) =>
                     Object.entries(item).map(([key, value]) => (
                       <TableRow key={index.toString() + key}>
                         <TableCell>{key}</TableCell>

@@ -1,5 +1,5 @@
 import React from "react";
-import { Typography, Space, Button, Divider, message } from "antd";
+import { Typography, Button, Divider } from "antd";
 import { WarningOutlined, InfoCircleOutlined, CopyOutlined } from "@ant-design/icons";
 import { testConnectionRequest } from "../networking";
 import { prepareModelAddRequest } from "./handle_add_model_submit";

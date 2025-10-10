@@ -4,14 +4,12 @@
  */
 
 import React, { useState, useEffect } from "react";
-import BudgetSettings from "./budget_settings";
 import BudgetModal from "./budget_modal";
 import EditBudgetModal from "./edit_budget_modal";
 import {
   Table,
   TableBody,
   TableCell,
-  TableFoot,
   TableHead,
   TableHeaderCell,
   TableRow,
@@ -24,18 +22,10 @@ import {
   TabList,
   TabPanel,
   TabPanels,
-  Grid,
 } from "@tremor/react";
 import {
-  InformationCircleIcon,
   PencilAltIcon,
-  PencilIcon,
-  StatusOnlineIcon,
   TrashIcon,
-  RefreshIcon,
-  CheckCircleIcon,
-  XCircleIcon,
-  QuestionMarkCircleIcon,
 } from "@heroicons/react/outline";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { getBudgetList, budgetDeleteCall } from "../networking";
