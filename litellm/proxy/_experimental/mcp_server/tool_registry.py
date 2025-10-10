@@ -1,6 +1,8 @@
 import json
 from typing import Any, Callable, Dict, List, Optional
 
+from mcp.types import Tool as MCPToolSDKTool
+
 from litellm._logging import verbose_logger
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.types.mcp_server.tool_registry import MCPTool
@@ -39,11 +41,29 @@ class MCPToolRegistry:
         """
         return self.tools.get(name)
 
-    def list_tools(self) -> List[MCPTool]:
+    def list_tools(self, tool_prefix: Optional[str] = None) -> List[MCPTool]:
         """
         List all registered tools
         """
+        if tool_prefix:
+            return [
+                tool
+                for tool in self.tools.values()
+                if tool.name.startswith(tool_prefix)
+            ]
         return list(self.tools.values())
+
+    def convert_tools_to_mcp_sdk_tool_type(
+        self, tools: List[MCPTool]
+    ) -> List[MCPToolSDKTool]:
+        return [
+            MCPToolSDKTool(
+                name=tool.name,
+                description=tool.description,
+                inputSchema=tool.input_schema,
+            )
+            for tool in tools
+        ]
 
     def load_tools_from_config(
         self, mcp_tools_config: Optional[Dict[str, Any]] = None
