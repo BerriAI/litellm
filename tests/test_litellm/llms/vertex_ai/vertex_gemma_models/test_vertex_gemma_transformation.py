@@ -41,7 +41,7 @@ class TestVertexGemmaCompletion:
         
         Expected Vertex Response:
         {
-            "deployedModelId": "6907280479758581760",
+            "deployedModelId": "1207280419999999999",
             "model": "projects/993702345710/locations/us-central1/models/gemma-3-12b-it-1759525599171",
             "modelDisplayName": "gemma-3-12b-it-1759525599171",
             "modelVersionId": "1",
@@ -78,7 +78,7 @@ class TestVertexGemmaCompletion:
         """
         # Real Vertex response from user's spec
         mock_vertex_response = {
-            "deployedModelId": "6907280479758581760",
+            "deployedModelId": "1207280419999999999",
             "model": "projects/993702345710/locations/us-central1/models/gemma-3-12b-it-1759525599171",
             "modelDisplayName": "gemma-3-12b-it-1759525599171",
             "modelVersionId": "1",
