@@ -945,6 +945,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         !premiumUser ? "Premium feature - Upgrade to set pass through routes by key" : "Select or enter pass through routes"
                       }
                       disabled={!premiumUser}
+                      teamId={selectedCreateKeyTeam ? selectedCreateKeyTeam.team_id : null}
                     />
                   </Form.Item>
                   <Form.Item
