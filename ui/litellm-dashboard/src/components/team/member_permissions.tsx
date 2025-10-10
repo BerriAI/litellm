@@ -11,7 +11,7 @@ import {
   TableRow,
   TableCell,
 } from "@tremor/react";
-import { Button, message, Checkbox, Empty } from "antd";
+import { Button, Checkbox, Empty } from "antd";
 import { ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { getTeamPermissionsCall, teamPermissionsUpdateCall } from "@/components/networking";
 import { getPermissionInfo } from "./permission_definitions";

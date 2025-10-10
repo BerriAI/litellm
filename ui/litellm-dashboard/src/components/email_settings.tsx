@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React from "react";
 import { Card, Text, Grid, Button, TextInput, TableCell } from "@tremor/react";
 import { Typography } from "antd";
 import NotificationManager from "./molecules/notifications_manager";

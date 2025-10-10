@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { LogEntry } from "./columns";
 import { DataTable } from "./table";
 import { columns } from "./columns";
-import { Card, Title, Text, Metric, AreaChart, Button as TremorButton } from "@tremor/react";
+import { Card, Title, Text, Metric, Button as TremorButton } from "@tremor/react";
 import { RequestViewer } from "./index";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { ArrowLeftIcon } from "@heroicons/react/outline";

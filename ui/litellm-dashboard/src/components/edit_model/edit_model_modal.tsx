@@ -1,5 +1,5 @@
 import React from "react";
-import { Modal, Form, InputNumber, message } from "antd";
+import { Modal, Form, InputNumber } from "antd";
 import { TextInput } from "@tremor/react";
 import { Button as Button2 } from "antd";
 import { modelUpdateCall } from "../networking";
