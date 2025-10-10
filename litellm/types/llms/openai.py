@@ -1189,7 +1189,21 @@ class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
 class OutputItemDoneEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
     output_index: int
+    sequence_number: int = 1
     item: BaseLiteLLMOpenAIResponseObject
+
+
+class OpenAIChatCompletionLogprobsContentTopLogprobs(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+
+
+class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+    top_logprobs: List[OpenAIChatCompletionLogprobsContentTopLogprobs]
 
 
 class ContentPartAddedEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1200,12 +1214,33 @@ class ContentPartAddedEvent(BaseLiteLLMOpenAIResponseObject):
     part: BaseLiteLLMOpenAIResponseObject
 
 
+class ContentPartDonePartOutputText(BaseLiteLLMOpenAIResponseObject):
+    type: Literal["output_text"]
+    text: str
+    annotations: List[BaseLiteLLMOpenAIResponseObject]
+    logprobs: Optional[List[OpenAIChatCompletionLogprobsContent]]
+
+
+class ContentPartDonePartRefusal(BaseLiteLLMOpenAIResponseObject):
+    type: Literal["refusal"]
+    refusal: str
+
+
+class ContentPartDonePartReasoningText(BaseLiteLLMOpenAIResponseObject):
+    type: Literal["reasoning_text"]
+    reasoning: str
+
+
 class ContentPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.CONTENT_PART_DONE]
     item_id: str
     output_index: int
     content_index: int
-    part: BaseLiteLLMOpenAIResponseObject
+    part: Union[
+        ContentPartDonePartOutputText,
+        ContentPartDonePartRefusal,
+        ContentPartDonePartReasoningText,
+    ]
 
 
 class OutputTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1733,19 +1768,6 @@ class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
-
-
-class OpenAIChatCompletionLogprobsContentTopLogprobs(TypedDict, total=False):
-    bytes: List
-    logprob: Required[float]
-    token: Required[str]
-
-
-class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
-    bytes: List
-    logprob: Required[float]
-    token: Required[str]
-    top_logprobs: List[OpenAIChatCompletionLogprobsContentTopLogprobs]
 
 
 class OpenAIChatCompletionLogprobs(TypedDict, total=False):

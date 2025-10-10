@@ -1,6 +1,6 @@
 import time
 import uuid
-from typing import List, Optional, Union
+from typing import List, Optional, Union, cast
 
 import litellm
 from litellm.main import stream_chunk_builder
@@ -12,8 +12,13 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ContentPartAddedEvent,
+    ContentPartDoneEvent,
+    ContentPartDonePartOutputText,
+    ContentPartDonePartReasoningText,
     OutputItemAddedEvent,
+    OutputItemDoneEvent,
     OutputTextDeltaEvent,
+    OutputTextDoneEvent,
     ReasoningSummaryTextDeltaEvent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
@@ -64,6 +69,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.sent_response_in_progress_event: bool = False
         self.sent_output_item_added_event: bool = False
         self.sent_content_part_added_event: bool = False
+        self.sent_output_text_done_event: bool = False
+        self.sent_output_content_part_done_event: bool = False
+        self.sent_output_item_done_event: bool = False
+        self.litellm_model_response: Optional[
+            Union[ModelResponse, TextCompletionResponse]
+        ] = None
+        self.final_text: str = ""
 
     def _default_response_created_event_data(self) -> dict:
         response_created_event_data = {
@@ -161,6 +173,97 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             ),
         )
 
+    def create_litellm_model_response(
+        self,
+    ) -> Optional[ModelResponse]:
+        return cast(
+            Optional[ModelResponse],
+            stream_chunk_builder(
+                chunks=self.collected_chat_completion_chunks,
+                logging_obj=self.litellm_logging_obj,
+            ),
+        )
+
+    def create_output_text_done_event(
+        self, litellm_complete_object: ModelResponse
+    ) -> OutputTextDoneEvent:
+        return OutputTextDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            item_id=f"msg_{str(uuid.uuid4())}",
+            output_index=0,
+            content_index=0,
+            text=getattr(litellm_complete_object.choices[0].message, "content", "")  # type: ignore
+            or "",
+        )
+
+    def create_output_content_part_done_event(
+        self, litellm_complete_object: ModelResponse
+    ) -> ContentPartDoneEvent:
+
+        text = getattr(litellm_complete_object.choices[0].message, "content", "") or ""  # type: ignore
+        reasoning_content = getattr(litellm_complete_object.choices[0].message, "reasoning_content", "") or ""  # type: ignore
+
+        if reasoning_content:
+            part = ContentPartDonePartReasoningText(
+                type="reasoning_text",
+                reasoning=reasoning_content,
+            )
+
+        else:
+            part = ContentPartDonePartOutputText(
+                type="output_text",
+                text=text,
+                annotations=[],
+                logprobs=None,
+            )
+
+        return ContentPartDoneEvent(
+            type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+            item_id=f"msg_{str(uuid.uuid4())}",
+            output_index=0,
+            content_index=0,
+            part=part,
+        )
+
+    def create_output_item_done_event(
+        self, litellm_complete_object: ModelResponse
+    ) -> OutputItemDoneEvent:
+        text = self.litellm_model_response.choices[0].message.content or ""  # type: ignore
+        return OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            sequence_number=1,
+            item=BaseLiteLLMOpenAIResponseObject(
+                **{
+                    "id": f"msg_{str(uuid.uuid4())}",
+                    "status": "completed",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": text,
+                            "annotations": [],
+                        }
+                    ],
+                }
+            ),
+        )
+
+    def return_default_done_events(
+        self, litellm_complete_object: ModelResponse
+    ) -> Optional[BaseLiteLLMOpenAIResponseObject]:
+        if self.sent_output_text_done_event is False:
+            self.sent_output_text_done_event = True
+            return self.create_output_text_done_event(litellm_complete_object)
+        if self.sent_output_content_part_done_event is False:
+            self.sent_output_content_part_done_event = True
+            return self.create_output_content_part_done_event(litellm_complete_object)
+        if self.sent_output_item_done_event is False:
+            self.sent_output_item_done_event = True
+            return self.create_output_item_done_event(litellm_complete_object)
+        return None
+
     def return_default_initial_events(
         self,
     ) -> Optional[BaseLiteLLMOpenAIResponseObject]:
@@ -177,6 +280,44 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self.sent_content_part_added_event = True
             return self.create_content_part_added_event()
         return None
+
+    def is_stream_finished(self) -> bool:
+        if (
+            self.sent_output_text_done_event is True
+            and self.sent_output_content_part_done_event is True
+            and self.sent_output_item_done_event is True
+        ):
+            return True
+        return False
+
+    def common_done_event_logic(
+        self, sync_mode: bool = True
+    ) -> BaseLiteLLMOpenAIResponseObject:
+        if not self.litellm_model_response or isinstance(
+            self.litellm_model_response, TextCompletionResponse
+        ):
+            self.litellm_model_response = self.create_litellm_model_response()
+        if self.litellm_model_response:
+            done_event = self.return_default_done_events(self.litellm_model_response)
+            if done_event:
+                return done_event
+        else:
+            if sync_mode:
+                raise StopIteration
+            else:
+                raise StopAsyncIteration
+
+        self.finished = self.is_stream_finished()
+        response_completed_event = self._emit_response_completed_event(
+            self.litellm_model_response
+        )
+        if response_completed_event:
+            return response_completed_event
+        else:
+            if sync_mode:
+                raise StopIteration
+            else:
+                raise StopAsyncIteration
 
     async def __anext__(
         self,
@@ -205,12 +346,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     if response_api_chunk:
                         return response_api_chunk
                 except StopAsyncIteration:
-                    self.finished = True
-                    response_completed_event = self._emit_response_completed_event()
-                    if response_completed_event:
-                        return response_completed_event
-                    else:
-                        raise StopAsyncIteration
+                    return self.common_done_event_logic(sync_mode=False)
 
         except Exception as e:
             # Handle HTTP errors
@@ -247,13 +383,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     if response_api_chunk:
                         return response_api_chunk
                 except StopIteration:
-                    self.finished = True
-                    response_completed_event = self._emit_response_completed_event()
-                    if response_completed_event:
-                        return response_completed_event
-                    else:
-                        raise StopIteration
-
+                    return self.common_done_event_logic(sync_mode=True)
         except Exception as e:
             # Handle HTTP errors
             self.finished = True
@@ -308,14 +438,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         chat_completion_delta: ChatCompletionDelta = choice.delta
         return chat_completion_delta.content or ""
 
-    def _emit_response_completed_event(self) -> Optional[ResponseCompletedEvent]:
-        litellm_model_response: Optional[
-            Union[ModelResponse, TextCompletionResponse]
-        ] = stream_chunk_builder(
-            chunks=self.collected_chat_completion_chunks,
-            logging_obj=self.litellm_logging_obj,
-        )
-        if litellm_model_response and isinstance(litellm_model_response, ModelResponse):
+    def _emit_response_completed_event(
+        self, litellm_model_response: ModelResponse
+    ) -> Optional[ResponseCompletedEvent]:
+
+        if litellm_model_response:
             # Add cost to usage object if include_cost_in_streaming_usage is True
             if (
                 litellm.include_cost_in_streaming_usage
