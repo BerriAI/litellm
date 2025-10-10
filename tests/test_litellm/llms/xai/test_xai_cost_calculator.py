@@ -215,9 +215,9 @@ class TestXAICostCalculator:
         prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
 
         # Expected costs for grok-4-fast-reasoning with tiered pricing:
-        # Input: (128000 * $0.2e-6) + (22000 * $0.4e-6) = $0.0256 + $0.0088 = $0.0344
+        # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
         # Completion: (100000 + 50000) tokens * $1e-6 (tiered rate since input > 128k) = $0.15
-        expected_prompt_cost = (128000 * 0.2e-6) + (22000 * 0.4e-6)
+        expected_prompt_cost = 150000 * 0.4e-6
         expected_completion_cost = (100000 + 50000) * 1e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
@@ -268,9 +268,9 @@ class TestXAICostCalculator:
         prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-latest", usage=usage)
 
         # Expected costs for grok-4-latest with tiered pricing:
-        # Input: (128000 * $3e-6) + (72000 * $6e-6) = $0.384 + $0.432 = $0.816
+        # Input: 200000 tokens * $6e-6 (ALL tokens at tiered rate since input > 128k) = $1.2
         # Completion: (100000 + 50000) tokens * $30e-6 (tiered rate since input > 128k) = $4.5
-        expected_prompt_cost = (128000 * 3e-6) + (72000 * 6e-6)
+        expected_prompt_cost = 200000 * 6e-6
         expected_completion_cost = (100000 + 50000) * 30e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
@@ -294,9 +294,9 @@ class TestXAICostCalculator:
         prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
 
         # Expected costs for grok-4-fast-reasoning:
-        # Input: (128000 * $0.2e-6) + (22000 * $0.4e-6) = $0.0256 + $0.0088 = $0.0344
+        # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
         # Completion: (50000 + 10000) tokens * $1e-6 (tiered rate since input > 128k) = $0.06
-        expected_prompt_cost = (128000 * 0.2e-6) + (22000 * 0.4e-6)
+        expected_prompt_cost = 150000 * 0.4e-6
         expected_completion_cost = (50000 + 10000) * 1e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
