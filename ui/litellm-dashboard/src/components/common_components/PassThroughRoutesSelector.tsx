@@ -9,6 +9,7 @@ interface PassThroughRoutesSelectorProps {
   accessToken: string;
   placeholder?: string;
   disabled?: boolean;
+  teamId?: string | null;
 }
 
 const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
@@ -18,6 +19,7 @@ const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
   accessToken,
   placeholder = "Select pass through routes",
   disabled = false,
+  teamId,
 }) => {
   const [passThroughRoutes, setPassThroughRoutes] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -28,7 +30,7 @@ const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
 
       setLoading(true);
       try {
-        const response = await getPassThroughEndpointsCall(accessToken);
+        const response = await getPassThroughEndpointsCall(accessToken, teamId);
         if (response.endpoints) {
           const routes = response.endpoints.map((route: { path: string }) => route.path);
           setPassThroughRoutes(routes);
@@ -41,7 +43,7 @@ const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
     };
 
     fetchPassThroughRoutes();
-  }, [accessToken]);
+  }, [accessToken, teamId]);
 
   return (
     <Select
