@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm import embedding
 from litellm.llms.sagemaker.completion.transformation import SagemakerEmbeddingConfig
-from litellm.llms.sagemaker.transformation_voyage import VoyageSagemakerEmbeddingConfig
+from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from litellm.types.utils import EmbeddingResponse, Usage
 
 
@@ -26,10 +26,10 @@ class TestSagemakerEmbeddingFactory:
     """Test the factory pattern for SageMaker embedding configurations"""
 
     def test_get_model_config_voyage_model(self):
-        """Test that Voyage models return VoyageSagemakerEmbeddingConfig"""
+        """Test that Voyage models return VoyageEmbeddingConfig"""
         config = SagemakerEmbeddingConfig.get_model_config("voyage-3-5-embedding")
         
-        assert isinstance(config, VoyageSagemakerEmbeddingConfig)
+        assert isinstance(config, VoyageEmbeddingConfig)
         assert config.get_supported_openai_params("voyage-3-5-embedding") == ["encoding_format", "dimensions"]
 
     def test_get_model_config_hf_model(self):
@@ -45,16 +45,16 @@ class TestSagemakerEmbeddingFactory:
         config2 = SagemakerEmbeddingConfig.get_model_config("Voyage-3-5-Embedding")
         config3 = SagemakerEmbeddingConfig.get_model_config("voyage-3-5-embedding")
         
-        assert isinstance(config1, VoyageSagemakerEmbeddingConfig)
-        assert isinstance(config2, VoyageSagemakerEmbeddingConfig)
-        assert isinstance(config3, VoyageSagemakerEmbeddingConfig)
+        assert isinstance(config1, VoyageEmbeddingConfig)
+        assert isinstance(config2, VoyageEmbeddingConfig)
+        assert isinstance(config3, VoyageEmbeddingConfig)
 
 
-class TestVoyageSagemakerEmbeddingConfig:
+class TestVoyageEmbeddingConfig:
     """Test Voyage-specific embedding configuration"""
 
     def setup_method(self):
-        self.config = VoyageSagemakerEmbeddingConfig()
+        self.config = VoyageEmbeddingConfig()
 
     def test_get_supported_openai_params(self):
         """Test supported parameters for Voyage models"""
@@ -82,24 +82,24 @@ class TestVoyageSagemakerEmbeddingConfig:
         assert result == {"output_dimension": 1024}
 
     def test_map_openai_params_unsupported_encoding(self):
-        """Test handling of unsupported encoding_format values"""
-        with pytest.raises(ValueError, match="Unsupported encoding_format"):
-            self.config.map_openai_params(
-                non_default_params={"encoding_format": "invalid"},
-                optional_params={},
-                model="voyage-3-5-embedding",
-                drop_params=False
-            )
+        """Test handling of unsupported encoding_format values - VoyageEmbeddingConfig passes through without validation"""
+        result = self.config.map_openai_params(
+            non_default_params={"encoding_format": "invalid"},
+            optional_params={},
+            model="voyage-3-5-embedding",
+            drop_params=False
+        )
+        assert result == {"encoding_format": "invalid"}
 
     def test_map_openai_params_drop_unsupported(self):
-        """Test dropping unsupported parameters when drop_params=True"""
+        """Test that VoyageEmbeddingConfig doesn't drop parameters based on drop_params flag"""
         result = self.config.map_openai_params(
             non_default_params={"encoding_format": "invalid", "dimensions": 512},
             optional_params={},
             model="voyage-3-5-embedding",
             drop_params=True
         )
-        assert result == {"output_dimension": 512}
+        assert result == {"encoding_format": "invalid", "output_dimension": 512}
 
     def test_transform_embedding_request(self):
         """Test Voyage request transformation"""
@@ -111,6 +111,7 @@ class TestVoyageSagemakerEmbeddingConfig:
         )
         expected = {
             "input": ["Hello", "World"],
+            "model": "voyage-3-5-embedding",
             "encoding_format": "float"
         }
         assert result == expected
@@ -300,7 +301,7 @@ class TestSagemakerEmbeddingIntegration:
     def test_parameter_validation_voyage(self):
         """Test parameter validation for Voyage models"""
         # Test valid parameters
-        config = VoyageSagemakerEmbeddingConfig()
+        config = VoyageEmbeddingConfig()
         result = config.map_openai_params(
             non_default_params={"encoding_format": "float", "dimensions": 512},
             optional_params={},
@@ -327,7 +328,7 @@ class TestErrorHandling:
 
     def test_voyage_response_missing_data(self):
         """Test handling of Voyage response missing data field"""
-        config = VoyageSagemakerEmbeddingConfig()
+        config = VoyageEmbeddingConfig()
         
         # Mock response without data field
         mock_response = httpx.Response(
@@ -338,14 +339,15 @@ class TestErrorHandling:
         
         model_response = EmbeddingResponse()
         
-        with pytest.raises(Exception, match="Voyage response missing 'data' field"):
-            config.transform_embedding_response(
-                model="voyage-3-5-embedding",
-                raw_response=mock_response,
-                model_response=model_response,
-                logging_obj=None,
-                request_data={"input": ["Hello"]}
-            )
+        # VoyageEmbeddingConfig doesn't validate for missing data field, it just sets it to None
+        result = config.transform_embedding_response(
+            model="voyage-3-5-embedding",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=None,
+            request_data={"input": ["Hello"]}
+        )
+        assert result.data is None
 
     def test_hf_response_missing_embedding(self):
         """Test handling of HF response missing embedding field"""

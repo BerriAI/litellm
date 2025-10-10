@@ -23,7 +23,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage, EmbeddingResponse
-from ..transformation_voyage import VoyageSagemakerEmbeddingConfig
+from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from litellm.utils import token_counter
 
 from ..common_utils import SagemakerError
@@ -304,14 +304,14 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
             Appropriate embedding config instance
         """
         if "voyage" in model.lower():
-            return VoyageSagemakerEmbeddingConfig()
+            return VoyageEmbeddingConfig()
         else:
             return cls()
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         # Check if this is an embedding model
         if "voyage" in model.lower():
-            return VoyageSagemakerEmbeddingConfig().get_supported_openai_params(model)
+            return VoyageEmbeddingConfig().get_supported_openai_params(model)
         else:
             return []
 
