@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { Card, Text, Title, Button, Badge } from "@tremor/react";
-import { Form, Input, Select as Select2, message, Tooltip } from "antd";
+import { Form, Input, Select as Select2, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { fetchUserModels } from "../organisms/create_key_button";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { tagInfoCall, tagUpdateCall } from "../networking";
-import { Tag, TagInfoResponse } from "./types";
+import { Tag } from "./types";
 import NotificationsManager from "../molecules/notifications_manager";
 
 interface TagInfoViewProps {

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Button, Select, Tabs, message } from "antd";
+import { Button } from "antd";
 import { CopyOutlined } from "@ant-design/icons";
 import { Title } from "@tremor/react";
 import { transformRequestCall } from "./networking";
