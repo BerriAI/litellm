@@ -13,9 +13,10 @@ from typing import Any, Callable, Dict, List, Optional, Union, cast
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import LlmProviders, ModelResponse
 
 
 class VertexGemmaConfig(OpenAIGPTConfig):
@@ -45,39 +46,6 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         """
         # Get the base OpenAI request from parent class
         openai_request = super().transform_request(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            headers=headers,
-        )
-        
-        # Remove 'model' from the request as it's not needed in the instance
-        openai_request.pop("model", None)
-        
-        # Wrap in Vertex Gemma format
-        return {
-            "instances": [
-                {
-                    "@requestFormat": "chatCompletions",
-                    **openai_request,
-                }
-            ]
-        }
-    
-    async def async_transform_request(
-        self,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
-        """
-        Async version of transform_request.
-        """
-        # Get the base OpenAI request from parent class
-        openai_request = await super().async_transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -306,7 +274,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Make the HTTP request
-        http_handler = AsyncHTTPHandler(concurrent_limit=1)
+        http_handler = get_async_httpx_client(
+            llm_provider=LlmProviders.VERTEX_AI,
+        )
         response = await http_handler.post(
             url=api_base,
             headers=headers,
