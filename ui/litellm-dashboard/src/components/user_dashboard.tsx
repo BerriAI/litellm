@@ -59,7 +59,7 @@ interface UserDashboardProps {
 type TeamInterface = {
   models: any[];
   team_id: null;
-  team_alias: String;
+  team_alias: string;
 };
 
 const UserDashboard: React.FC<UserDashboardProps> = ({
