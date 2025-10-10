@@ -309,3 +309,83 @@ class TestVertexGemmaCompletion:
             assert len(chunk.choices) > 0
             assert chunk.choices[0].delta.content == "Streaming test response"
 
+    @pytest.mark.asyncio
+    async def test_acompletion_filters_stream_and_stream_options(self):
+        """
+        Test that both stream and stream_options are filtered out from the request.
+        
+        Verifies that when stream=True and stream_options={'include_usage': True} are passed,
+        neither parameter is sent to the Vertex API since Vertex Gemma doesn't support them.
+        """
+        # Mock Vertex response
+        mock_vertex_response = {
+            "deployedModelId": "1207280419999999999",
+            "model": "projects/993702345710/locations/us-central1/models/gemma-3-12b-it-1222199011122",
+            "modelDisplayName": "gemma-3-12b-it-1222199011122",
+            "modelVersionId": "1",
+            "predictions": {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "logprobs": None,
+                        "message": {
+                            "content": "Test response",
+                            "reasoning_content": None,
+                            "role": "assistant",
+                            "tool_calls": [],
+                        },
+                        "stop_reason": None,
+                    }
+                ],
+                "created": 1759863903,
+                "id": "chatcmpl-test",
+                "model": "google/gemma-3-12b-it",
+                "object": "chat.completion",
+                "prompt_logprobs": None,
+                "usage": {
+                    "completion_tokens": 2,
+                    "prompt_tokens": 10,
+                    "prompt_tokens_details": None,
+                    "total_tokens": 12,
+                },
+            },
+        }
+        
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_client = Mock()
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = mock_vertex_response
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
+            
+            # Call with both stream and stream_options
+            response = await litellm.acompletion(
+                model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
+                messages=[{"role": "user", "content": "Test"}],
+                stream=True,
+                stream_options={"include_usage": True},
+                api_base="https://test.us-central1-project.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+                vertex_project="PROJECT_ID",
+                vertex_location="us-central1",
+            )
+            
+            # Verify the request sent to Vertex
+            call_args = mock_client.post.call_args
+            assert call_args is not None, "HTTP client was not called"
+            
+            request_data = call_args.kwargs["json"]
+            print("request body=", json.dumps(request_data, indent=4))
+            instance = request_data["instances"][0]
+            
+            # Critical: Verify both stream and stream_options are NOT sent to Vertex API
+            assert "stream" not in instance, "stream parameter should not be sent to Vertex API"
+            assert "stream_options" not in instance, "stream_options parameter should not be sent to Vertex API"
+            
+            # Verify other parameters are present
+            assert "messages" in instance
+            assert instance["@requestFormat"] == "chatCompletions"
+

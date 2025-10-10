@@ -423,6 +423,7 @@ const sidebars = {
           items: [
             "providers/vertex",
             "providers/vertex_partner",
+            "providers/vertex_self_deployed",
             "providers/vertex_image",
             "providers/vertex_batch",
           ]
