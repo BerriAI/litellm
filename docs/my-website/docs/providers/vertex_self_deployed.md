@@ -124,10 +124,7 @@ Deploy Gemma models on custom Vertex AI prediction endpoints with OpenAI-compati
 | Vertex Documentation | [Vertex AI Prediction](https://cloud.google.com/vertex-ai/docs/predictions/get-predictions) |
 | Required Parameter | `api_base` - Full prediction endpoint URL |
 
-### Usage
-
-<Tabs>
-<TabItem value="proxy" label="Proxy">
+**Proxy Usage:**
 
 **1. Add to config.yaml**
 
@@ -160,9 +157,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
   }'
 ```
 
-</TabItem>
-
-<TabItem value="sdk" label="SDK">
+**SDK Usage:**
 
 ```python
 from litellm import completion
@@ -176,5 +171,59 @@ response = completion(
 )
 ```
 
-</TabItem>
-</Tabs>
+## MedGemma Models (Custom Endpoints)
+
+Deploy MedGemma models on custom Vertex AI prediction endpoints with OpenAI-compatible format. MedGemma models use the same `vertex_ai/gemma/` route.
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `vertex_ai/gemma/{MODEL_NAME}` |
+| Vertex Documentation | [Vertex AI Prediction](https://cloud.google.com/vertex-ai/docs/predictions/get-predictions) |
+| Required Parameter | `api_base` - Full prediction endpoint URL |
+
+**Proxy Usage:**
+
+**1. Add to config.yaml**
+
+```yaml
+model_list:
+  - model_name: medgemma-model
+    litellm_params:
+      model: vertex_ai/gemma/medgemma-2b-v1
+      api_base: https://ENDPOINT.us-central1-PROJECT.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict
+      vertex_project: "my-project-id"
+      vertex_location: "us-central1"
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+**3. Test it**
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "medgemma-model",
+    "messages": [{"role": "user", "content": "What are the symptoms of hypertension?"}],
+    "max_tokens": 100
+  }'
+```
+
+**SDK Usage:**
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/gemma/medgemma-2b-v1",
+    messages=[{"role": "user", "content": "What are the symptoms of hypertension?"}],
+    api_base="https://ENDPOINT.us-central1-PROJECT.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+    vertex_project="my-project-id",
+    vertex_location="us-central1",
+)
+```
