@@ -168,6 +168,11 @@ litellm_settings:
       langfuse_public_key: os.environ/LANGFUSE_PROJECT2_PUBLIC # Project 2
       langfuse_secret: os.environ/LANGFUSE_PROJECT2_SECRET # Project 2
       langfuse_host: https://us.cloud.langfuse.com
+  # cache: true   # [OPTIONAL] use for caching responses 
+  # cache_params:  # And for shared health check
+  #   type: redis
+  #   host: localhost
+  #   port: 6379
 
 # For /fine_tuning/jobs endpoints
 finetune_settings:
@@ -202,6 +207,9 @@ general_settings:
   proxy_budget_rescheduler_max_time: 64
   proxy_batch_write_at: 1
   database_connection_pool_limit: 10
+  # background_health_checks: true
+  # use_shared_health_check: true
+  # health_check_interval: 30
   # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy
 
   pass_through_endpoints:
