@@ -15,6 +15,25 @@ For example, NextJS will automatically render the admin settings page when the u
 
 You can use parenthesis around directory names to hide them from the user route, for example `(dashboard)`, while still getting the benefits of `layout` and file structure.
 
+### File Structure
+Every page must follow the following file structure pattern.
+```
+├── teams
+│   ├── TeamsView.tsx
+│   ├── components
+│   │   ├── TeamsFilters.tsx
+│   │   ├── TeamsHeaderTabs.tsx
+│   │   ├── TeamsTable
+│   │   │   ├── ModelsCell.tsx
+│   │   │   └── TeamsTable.tsx
+│   │   └── modals
+│   │       ├── CreateTeamModal.tsx
+│   │       └── DeleteTeamModal.tsx
+│   ├── hooks
+│   │   └── useFetchTeams.ts
+│   └── page.tsx
+```
+
 ### Component  Files
 
 All component files should ideally be as dumb as possible. Their only job should be to take the data they need from hooks or props and render them to the UI. If a component file becomes too large (over `300` lines or so), **please break it down** into smaller components.
@@ -25,7 +44,7 @@ A component should only be placed where it will be used. For example, if a compo
 
 ### Hooks
 
-All hooks should be pure `.ts` files unless they serve as context managers.
+All hooks should be pure `.ts` files in a dedicated `hooks` folder unless they serve as context managers.
 
 **Common hooks should be moved to the lowest common ancestor hooks folder.**
 
