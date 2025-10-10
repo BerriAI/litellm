@@ -11,13 +11,9 @@ import { Table as TableInstance, PaginationState } from "@tanstack/react-table";
 type ModelViewMode = "all" | "current_team";
 
 interface AllModelsTabProps {
-  modelNameSearch: string;
-  setModelNameSearch: (nameSearch: string) => void;
   selectedModelGroup: string | null;
   setSelectedModelGroup: (selectedModelGroup: string) => void;
   availableModelGroups: string[];
-  selectedModelAccessGroupFilter: string | null;
-  setSelectedModelAccessGroupFilter: (selectedModelAccessGroupFilter: string | null) => void;
   availableModelAccessGroups: string[];
   setSelectedModelId: (id: string) => void;
   setSelectedTeamId: (id: string) => void;
@@ -26,13 +22,9 @@ interface AllModelsTabProps {
 }
 
 const AllModelsTab = ({
-  modelNameSearch,
-  setModelNameSearch,
   selectedModelGroup,
   setSelectedModelGroup,
   availableModelGroups,
-  selectedModelAccessGroupFilter,
-  setSelectedModelAccessGroupFilter,
   availableModelAccessGroups,
   setSelectedModelId,
   setSelectedTeamId,
@@ -42,9 +34,11 @@ const AllModelsTab = ({
   const { userId, userRole, premiumUser } = useAuthorized();
   const { teams } = useTeams();
 
+  const [modelNameSearch, setModelNameSearch] = useState<string>("");
   const [modelViewMode, setModelViewMode] = useState<ModelViewMode>("current_team");
   const [currentTeam, setCurrentTeam] = useState<string>("personal"); // 'personal' or team_id
   const [showFilters, setShowFilters] = useState<boolean>(false);
+  const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] = useState<string | null>(null);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
