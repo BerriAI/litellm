@@ -7,7 +7,7 @@ import { handleAddModelSubmit } from "../../../components/add_model/handle_add_m
 import CredentialsPanel from "@/components/model_add/credentials";
 import { getDisplayModelName } from "../../../components/view_model/model_name_display";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, Icon } from "@tremor/react";
-import { Select, SelectItem, DateRangePickerValue } from "@tremor/react";
+import { DateRangePickerValue } from "@tremor/react";
 import {
   modelInfoCall,
   modelCostMap,
@@ -152,8 +152,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
 
-  const [selectedTeamFilter, setSelectedTeamFilter] = useState<string | null>(null);
-
   // Add state for showing/hiding filters
   const [showFilters, setShowFilters] = useState<boolean>(false);
 
@@ -177,109 +175,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     console.log(`providerModels: ${_providerModels}`);
   };
 
-  const updateModelMetrics = async (
-    modelGroup: string | null,
-    startTime: Date | undefined,
-    endTime: Date | undefined,
-  ) => {
-    console.log("Updating model metrics for group:", modelGroup);
-    if (!accessToken || !userID || !userRole || !startTime || !endTime) {
-      return;
-    }
-    console.log("inside updateModelMetrics - startTime:", startTime, "endTime:", endTime);
-    setSelectedModelGroup(modelGroup);
-
-    let selected_token = selectedAPIKey?.token;
-    if (selected_token === undefined) {
-      selected_token = null;
-    }
-
-    let selected_customer = selectedCustomer;
-    if (selected_customer === undefined) {
-      selected_customer = null;
-    }
-
-    try {
-      const modelMetricsResponse = await modelMetricsCall(
-        accessToken,
-        userID,
-        userRole,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
-        selected_token,
-        selected_customer,
-      );
-      console.log("Model metrics response:", modelMetricsResponse);
-
-      // Assuming modelMetricsResponse now contains the metric data for the specified model group
-      setModelMetrics(modelMetricsResponse.data);
-      setModelMetricsCategories(modelMetricsResponse.all_api_bases);
-
-      const streamingModelMetricsResponse = await streamingModelMetricsCall(
-        accessToken,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
-      );
-
-      // Assuming modelMetricsResponse now contains the metric data for the specified model group
-      setStreamingModelMetrics(streamingModelMetricsResponse.data);
-      setStreamingModelMetricsCategories(streamingModelMetricsResponse.all_api_bases);
-
-      const modelExceptionsResponse = await modelExceptionsCall(
-        accessToken,
-        userID,
-        userRole,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
-        selected_token,
-        selected_customer,
-      );
-      console.log("Model exceptions response:", modelExceptionsResponse);
-      setModelExceptions(modelExceptionsResponse.data);
-      setAllExceptions(modelExceptionsResponse.exception_types);
-
-      const slowResponses = await modelMetricsSlowResponsesCall(
-        accessToken,
-        userID,
-        userRole,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
-        selected_token,
-        selected_customer,
-      );
-
-      console.log("slowResponses:", slowResponses);
-
-      setSlowResponsesData(slowResponses);
-
-      if (modelGroup) {
-        const dailyExceptions = await adminGlobalActivityExceptions(
-          accessToken,
-          startTime?.toISOString().split("T")[0],
-          endTime?.toISOString().split("T")[0],
-          modelGroup,
-        );
-
-        setGlobalExceptionData(dailyExceptions);
-
-        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
-          accessToken,
-          startTime?.toISOString().split("T")[0],
-          endTime?.toISOString().split("T")[0],
-          modelGroup,
-        );
-
-        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
-      }
-    } catch (error) {
-      console.error("Failed to fetch model metrics", error);
-    }
-  };
-
   const fetchCredentials = async (accessToken: string) => {
     try {
       const response: CredentialsResponse = await credentialListCall(accessToken);
@@ -289,10 +184,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
       console.error("Error fetching credentials:", error);
     }
   };
-
-  useEffect(() => {
-    updateModelMetrics(selectedModelGroup, dateValue.from, dateValue.to);
-  }, [selectedAPIKey, selectedCustomer, selectedTeam]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -921,7 +812,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                   selectedModelGroup={selectedModelGroup}
                   availableModelGroups={availableModelGroups}
                   setShowAdvancedFilters={setShowAdvancedFilters}
-                  updateModelMetrics={updateModelMetrics}
                   modelMetrics={modelMetrics}
                   modelMetricsCategories={modelMetricsCategories}
                   streamingModelMetrics={streamingModelMetrics}
@@ -934,11 +824,22 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                   globalExceptionPerDeployment={globalExceptionPerDeployment}
                   allEndUsers={allEndUsers}
                   keys={keys}
-                  selectedTeamFilter={selectedTeamFilter}
                   setSelectedAPIKey={setSelectedAPIKey}
                   setSelectedCustomer={setSelectedCustomer}
-                  setSelectedTeamFilter={setSelectedTeamFilter}
                   teams={teams}
+                  selectedAPIKey={selectedAPIKey}
+                  selectedCustomer={selectedCustomer}
+                  selectedTeam={selectedTeam}
+                  setAllExceptions={setAllExceptions}
+                  setGlobalExceptionData={setGlobalExceptionData}
+                  setGlobalExceptionPerDeployment={setGlobalExceptionPerDeployment}
+                  setModelExceptions={setModelExceptions}
+                  setModelMetrics={setModelMetrics}
+                  setModelMetricsCategories={setModelMetricsCategories}
+                  setSelectedModelGroup={setSelectedModelGroup}
+                  setSlowResponsesData={setSlowResponsesData}
+                  setStreamingModelMetrics={setStreamingModelMetrics}
+                  setStreamingModelMetricsCategories={setStreamingModelMetricsCategories}
                 />
                 <ModelRetrySettingsTab
                   selectedModelGroup={selectedModelGroup}
