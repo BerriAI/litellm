@@ -13,10 +13,9 @@ from typing import Any, Callable, Dict, List, Optional, Union, cast
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import LlmProviders, ModelResponse
+from litellm.types.utils import ModelResponse
 
 
 class VertexGemmaConfig(OpenAIGPTConfig):
