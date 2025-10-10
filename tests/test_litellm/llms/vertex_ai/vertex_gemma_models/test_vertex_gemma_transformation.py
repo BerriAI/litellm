@@ -135,6 +135,7 @@ class TestVertexGemmaCompletion:
             assert call_args is not None, "HTTP handler was not called"
             
             request_data = call_args.kwargs["json"]
+            print("request body=", json.dumps(request_data, indent=4))
             request_url = call_args.kwargs["url"]
             
             # Validate exact URL matches what we sent
@@ -145,17 +146,14 @@ class TestVertexGemmaCompletion:
             assert "instances" in request_data
             assert len(request_data["instances"]) == 1
             
-            outer_instance = request_data["instances"][0]
-            assert outer_instance["@requestFormat"] == "chatCompletions"
+            instance = request_data["instances"][0]
+            assert instance["@requestFormat"] == "chatCompletions"
             
-            # The actual instance with messages is nested inside
-            assert "instances" in outer_instance
-            inner_instance = outer_instance["instances"][0]
-            assert inner_instance["@requestFormat"] == "chatCompletions"
-            assert "messages" in inner_instance
-            assert inner_instance["messages"][0]["role"] == "user"
-            assert inner_instance["messages"][0]["content"] == "What is machine learning?"
-            assert inner_instance["max_tokens"] == 100
+            # Messages should be directly in the instance, not double-nested
+            assert "messages" in instance
+            assert instance["messages"][0]["role"] == "user"
+            assert instance["messages"][0]["content"] == "What is machine learning?"
+            assert instance["max_tokens"] == 100
             
             # Validate LiteLLM Response (OpenAI format)
             assert response.id == "chatcmpl-aaa4288f-2b8e-4bc0-8b14-4e444decd2c4"
