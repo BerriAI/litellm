@@ -22,6 +22,7 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.exceptions import GuardrailInterventionNormalStringError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
@@ -385,7 +386,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
             # Re-raise the exception to maintain existing behavior
             raise
-        
+
         #########################################################
         # Add guardrail information to request trace
         #########################################################
@@ -460,7 +461,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     ) -> GuardrailStatus:
         """
         Get the status of the bedrock guardrail response.
-        
+
         Returns:
             "success": Content allowed through with no violations
             "guardrail_intervened": Content blocked due to policy violations
@@ -469,22 +470,24 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if response.status_code == 200:
             if self._check_bedrock_response_for_exception(response):
                 return "guardrail_failed_to_respond"
-            
+
             # Check if the guardrail would block content
             try:
                 _json_response = response.json()
                 bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
-                if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
+                if self._should_raise_guardrail_blocked_exception(
+                    bedrock_guardrail_response
+                ):
                     return "guardrail_intervened"
             except Exception:
                 pass
-            
+
             return "success"
         return "guardrail_failed_to_respond"
 
     def _get_http_exception_for_blocked_guardrail(
         self, response: BedrockGuardrailResponse
-    ) -> HTTPException:
+    ) -> Union[HTTPException, GuardrailInterventionNormalStringError]:
         """
         Get the HTTP exception for a blocked guardrail.
         """
@@ -497,13 +500,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 if output.get("text"):
                     bedrock_guardrail_output_text += output.get("text") or ""
 
-        return HTTPException(
-            status_code=400,
-            detail={
-                "error": "Violated guardrail policy",
-                "bedrock_guardrail_response": bedrock_guardrail_output_text,
-            },
-        )
+        if self.disable_exception_on_block is True:
+            return GuardrailInterventionNormalStringError(
+                message=bedrock_guardrail_output_text
+            )
+        else:
+            return HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Violated guardrail policy",
+                    "bedrock_guardrail_response": bedrock_guardrail_output_text,
+                },
+            )
 
     def _should_raise_guardrail_blocked_exception(
         self, response: BedrockGuardrailResponse
@@ -516,9 +524,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # if user opted into masking, return False. since we'll use the masked output from the guardrail
         if self.mask_request_content or self.mask_response_content:
-            return False
-
-        if self.disable_exception_on_block is True:
             return False
 
         # if no intervention, return False
@@ -585,6 +590,25 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # This means all actions were ANONYMIZED or NONE, so don't raise exception
         return False
 
+    def create_guardrail_blocked_response(
+        self, response: str, stream: bool = False
+    ) -> dict:
+        from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+        return ModelResponse(
+            choices=[
+                Choices(
+                    message=Message(content=response),
+                )
+            ],
+            model="bedrock-guardrail",
+            usage=Usage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            ),
+        ).model_dump()
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -622,9 +646,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response = await self.make_bedrock_api_request(
-            source="INPUT", messages=new_messages, request_data=data
+        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
+            None
         )
+        try:
+            bedrock_guardrail_response = await self.make_bedrock_api_request(
+                source="INPUT", messages=new_messages, request_data=data
+            )
+        except GuardrailInterventionNormalStringError as e:
+            bedrock_guardrail_response = e.message
         #########################################################
 
         #########################################################
@@ -636,6 +666,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 bedrock_guardrail_response=bedrock_guardrail_response,
             )
         )
+        if isinstance(bedrock_guardrail_response, str):
+            data["mock_response"] = self.create_guardrail_blocked_response(
+                response=bedrock_guardrail_response, stream=False
+            )
 
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########
@@ -691,6 +725,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 bedrock_guardrail_response=bedrock_guardrail_response,
             )
         )
+        if isinstance(bedrock_guardrail_response, str):
+            data["mock_response"] = bedrock_guardrail_response
 
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########
@@ -733,10 +769,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             has_text_content = False
             for choice in response.choices:
                 if isinstance(choice, litellm.Choices):
-                    if choice.message.content and isinstance(choice.message.content, str):
+                    if choice.message.content and isinstance(
+                        choice.message.content, str
+                    ):
                         has_text_content = True
                         break
-            
+
             if not has_text_content:
                 verbose_proxy_logger.warning(
                     "Bedrock AI: not running guardrail. No output text in response"
@@ -771,7 +809,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _update_messages_with_updated_bedrock_guardrail_response(
         self,
         messages: List[AllMessageValues],
-        bedrock_guardrail_response: BedrockGuardrailResponse,
+        bedrock_guardrail_response: Union[BedrockGuardrailResponse, str],
     ) -> List[AllMessageValues]:
         """
         Use the output from the bedrock guardrail to mask sensitive content in messages.
@@ -783,6 +821,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Returns:
             List of messages with content masked according to guardrail response
         """
+        if isinstance(bedrock_guardrail_response, str):
+            return messages
         # Get masked texts from guardrail response
         masked_texts = self._extract_masked_texts_from_response(
             bedrock_guardrail_response
