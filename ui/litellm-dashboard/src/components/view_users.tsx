@@ -34,7 +34,7 @@ interface ViewUserDashboardProps {
   userRole: string | null;
   userID: string | null;
   teams: any[] | null;
-  setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setKeys: React.Dispatch<React.SetStateAction<object[] | null>>;
 }
 
 interface FilterState {
