@@ -55,6 +55,26 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
+### Team-Based Logging
+
+Configure different PostHog credentials per team using the team callback settings:
+
+```bash
+curl -X POST 'http://localhost:4000/team/{team_id}/callback' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "callback_name": "posthog",
+    "callback_type": "success",
+    "callback_vars": {
+      "posthog_api_key": "ph_team_specific_key",
+      "posthog_api_url": "https://custom.posthog.com"
+    }
+  }'
+```
+
+Now all requests from that team will be logged to their specific PostHog project.
+
 ## Usage with LiteLLM Python SDK
 
 ### Quick Start
@@ -141,6 +161,31 @@ response = client.chat.completions.create(
     }
 )
 ```
+
+#### Per-Request Credentials
+
+You can override PostHog credentials on a per-request basis:
+
+```python
+import litellm
+
+litellm.success_callback = ["posthog"]
+
+# Use custom PostHog credentials for this specific request
+response = litellm.completion(
+    model="gpt-3.5-turbo",
+    messages=[
+        {"role": "user", "content": "Hello world"}
+    ],
+    posthog_api_key="ph_custom_project_key",
+    posthog_api_url="https://custom.posthog.com"
+)
+```
+
+This is useful when you need to:
+- Log different teams/projects to separate PostHog instances
+- Use different PostHog projects for staging vs production
+- Route logs based on customer or tenant
 
 #### Disable Logging for Specific Calls
 

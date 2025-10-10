@@ -36,6 +36,7 @@ const sidebars = {
           "proxy/guardrails/aporia_api",
           "proxy/guardrails/azure_content_guardrail",
           "proxy/guardrails/bedrock",
+          "proxy/guardrails/enkryptai",
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
@@ -333,7 +334,17 @@ const sidebars = {
             "image_variations",
           ]
         },
-        "mcp",
+        {
+          type: "category",
+          label: "/mcp - Model Context Protocol",
+          items: [
+            "mcp",
+            "mcp_usage",
+            "mcp_control",
+            "mcp_cost",
+            "mcp_guardrail",
+          ]
+        },
         "moderation",
         {
           type: "category",
@@ -522,22 +533,17 @@ const sidebars = {
         "providers/oci",
         "providers/datarobot",
         "providers/ovhcloud",  
+        "providers/wandb_inference",
       ],
     },
     {
       type: "category",
       label: "Guides",
       items: [
-        {
-          type: "category",
-          label: "Tools",
-          items: [
-            "completion/computer_use",
-            "completion/web_search",
-            "completion/web_fetch",
-            "completion/function_call",
-          ]
-        },
+        "completion/computer_use",
+        "completion/web_search",
+        "completion/web_fetch",
+        "completion/function_call",
         "completion/audio",
         "completion/document_understanding",
         "completion/drop_params",
