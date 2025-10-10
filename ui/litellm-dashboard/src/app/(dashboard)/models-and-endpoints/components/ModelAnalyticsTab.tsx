@@ -27,9 +27,17 @@ import UsageDatePicker from "@/components/shared/usage_date_picker";
 import { Popover } from "antd";
 import { FilterIcon } from "@heroicons/react/outline";
 import TimeToFirstToken from "@/components/model_metrics/time_to_first_token";
-import React from "react";
+import React, { useEffect, useState } from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Team } from "@/components/key_team_helpers/key_list";
+import {
+  adminGlobalActivityExceptions,
+  adminGlobalActivityExceptionsPerDeployment,
+  modelExceptionsCall,
+  modelMetricsCall,
+  modelMetricsSlowResponsesCall,
+  streamingModelMetricsCall,
+} from "@/components/networking";
 
 interface GlobalExceptionActivityData {
   sum_num_rate_limit_exceptions: number;
@@ -42,11 +50,6 @@ interface ModelAnalyticsTabProps {
   selectedModelGroup: string | null;
   availableModelGroups: string[];
   setShowAdvancedFilters: (showAdvancedFilters: boolean) => void;
-  updateModelMetrics: (
-    modelGroup: string | null,
-    startTime: Date | undefined,
-    endTime: Date | undefined,
-  ) => Promise<void>;
   modelMetrics: any[];
   modelMetricsCategories: any[];
   streamingModelMetrics: any[];
@@ -62,8 +65,19 @@ interface ModelAnalyticsTabProps {
   setSelectedCustomer: (selectedCustomer: string | null) => void;
   teams: Team[] | null;
   allEndUsers: any[];
-  selectedTeamFilter: string | null;
-  setSelectedTeamFilter: (filter: string | null) => void;
+  selectedAPIKey: any;
+  selectedCustomer: string | null;
+  selectedTeam: string | null;
+  setSelectedModelGroup: (selectedModelGroup: string | null) => void;
+  setModelMetrics: (metrics: any) => void;
+  setModelMetricsCategories: (categories: any) => void;
+  setStreamingModelMetrics: (metrics: any) => void;
+  setStreamingModelMetricsCategories: (categories: any) => void;
+  setSlowResponsesData: (data: any) => void;
+  setModelExceptions: (exceptions: any) => void;
+  setAllExceptions: (exceptions: any) => void;
+  setGlobalExceptionData: (data: any) => void;
+  setGlobalExceptionPerDeployment: (data: any) => void;
 }
 
 const ModelAnalyticsTab = ({
@@ -72,7 +86,6 @@ const ModelAnalyticsTab = ({
   selectedModelGroup,
   availableModelGroups,
   setShowAdvancedFilters,
-  updateModelMetrics,
   modelMetrics,
   modelMetricsCategories,
   streamingModelMetrics,
@@ -88,10 +101,27 @@ const ModelAnalyticsTab = ({
   setSelectedCustomer,
   teams,
   allEndUsers,
-  selectedTeamFilter,
-  setSelectedTeamFilter,
+  selectedAPIKey,
+  selectedCustomer,
+  selectedTeam,
+  setSelectedModelGroup,
+  setModelMetrics,
+  setModelMetricsCategories,
+  setStreamingModelMetrics,
+  setStreamingModelMetricsCategories,
+  setSlowResponsesData,
+  setModelExceptions,
+  setAllExceptions,
+  setGlobalExceptionData,
+  setGlobalExceptionPerDeployment,
 }: ModelAnalyticsTabProps) => {
-  const { premiumUser } = useAuthorized();
+  const { accessToken, userId, userRole, premiumUser } = useAuthorized();
+
+  const [selectedTeamFilter, setSelectedTeamFilter] = useState<string | null>(null);
+
+  useEffect(() => {
+    updateModelMetrics(selectedModelGroup, dateValue.from, dateValue.to);
+  }, [selectedAPIKey, selectedCustomer, selectedTeam]);
 
   const FilterByContent = (
     <div>
@@ -200,6 +230,109 @@ const ModelAnalyticsTab = ({
       )}
     </div>
   );
+
+  const updateModelMetrics = async (
+    modelGroup: string | null,
+    startTime: Date | undefined,
+    endTime: Date | undefined,
+  ) => {
+    console.log("Updating model metrics for group:", modelGroup);
+    if (!accessToken || !userId || !userRole || !startTime || !endTime) {
+      return;
+    }
+    console.log("inside updateModelMetrics - startTime:", startTime, "endTime:", endTime);
+    setSelectedModelGroup(modelGroup);
+
+    let selected_token = selectedAPIKey?.token;
+    if (selected_token === undefined) {
+      selected_token = null;
+    }
+
+    let selected_customer = selectedCustomer;
+    if (selected_customer === undefined) {
+      selected_customer = null;
+    }
+
+    try {
+      const modelMetricsResponse = await modelMetricsCall(
+        accessToken,
+        userId,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString(),
+        selected_token,
+        selected_customer,
+      );
+      console.log("Model metrics response:", modelMetricsResponse);
+
+      // Assuming modelMetricsResponse now contains the metric data for the specified model group
+      setModelMetrics(modelMetricsResponse.data);
+      setModelMetricsCategories(modelMetricsResponse.all_api_bases);
+
+      const streamingModelMetricsResponse = await streamingModelMetricsCall(
+        accessToken,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString(),
+      );
+
+      // Assuming modelMetricsResponse now contains the metric data for the specified model group
+      setStreamingModelMetrics(streamingModelMetricsResponse.data);
+      setStreamingModelMetricsCategories(streamingModelMetricsResponse.all_api_bases);
+
+      const modelExceptionsResponse = await modelExceptionsCall(
+        accessToken,
+        userId,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString(),
+        selected_token,
+        selected_customer,
+      );
+      console.log("Model exceptions response:", modelExceptionsResponse);
+      setModelExceptions(modelExceptionsResponse.data);
+      setAllExceptions(modelExceptionsResponse.exception_types);
+
+      const slowResponses = await modelMetricsSlowResponsesCall(
+        accessToken,
+        userId,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString(),
+        selected_token,
+        selected_customer,
+      );
+
+      console.log("slowResponses:", slowResponses);
+
+      setSlowResponsesData(slowResponses);
+
+      if (modelGroup) {
+        const dailyExceptions = await adminGlobalActivityExceptions(
+          accessToken,
+          startTime?.toISOString().split("T")[0],
+          endTime?.toISOString().split("T")[0],
+          modelGroup,
+        );
+
+        setGlobalExceptionData(dailyExceptions);
+
+        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
+          accessToken,
+          startTime?.toISOString().split("T")[0],
+          endTime?.toISOString().split("T")[0],
+          modelGroup,
+        );
+
+        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
+      }
+    } catch (error) {
+      console.error("Failed to fetch model metrics", error);
+    }
+  };
 
   return (
     <TabPanel>
