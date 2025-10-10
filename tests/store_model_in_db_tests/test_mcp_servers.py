@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 import pytest
-import uuid
+from litellm._uuid import uuid
 import os
 import asyncio
 from unittest import mock
@@ -12,8 +12,6 @@ from starlette import status
 
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
-    MCPSpecVersion,
-    MCPSpecVersionType,
     MCPTransportType,
     MCPTransport,
     NewMCPServerRequest,

@@ -24,6 +24,19 @@ model_list:
     litellm_params:
       model: anthropic/*
       api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: openai/*
+    litellm_params:
+      model: openai/*
+      api_key: os.environ/OPENAI_API_KEY
 general_settings: 
   master_key: sk-1234 
   custom_auth: custom_auth_basic.user_api_key_auth
+  pass_through_endpoints:
+    - path: "/azure-config-passthrough"
+      target: os.environ/AZURE_API_BASE_PASSHROUGH
+      include_subpath: true
+      headers:
+        Authorization: os.environ/AZURE_API_KEY_PASSHROUGH
+
+litellm_settings:
+  include_cost_in_streaming_usage: true

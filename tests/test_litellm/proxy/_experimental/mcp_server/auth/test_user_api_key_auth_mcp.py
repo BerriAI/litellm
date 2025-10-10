@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
@@ -24,98 +25,80 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 @pytest.mark.asyncio
 class TestMCPRequestHandler:
     @pytest.mark.parametrize(
-        "user_api_key_auth,object_permission_id,prisma_client_available,db_result,expected_result",
+        "key_servers,team_servers,expected_result,scenario",
         [
-            # Test case 1: user_api_key_auth is None
-            (None, None, True, None, []),
-            # Test case 2: object_permission_id is None
-            (UserAPIKeyAuth(), None, True, None, []),
-            # Test case 3: prisma_client is None
+            # Test case 1: No key servers, no team servers
+            ([], [], [], "no_permissions"),
+            # Test case 2: Key has servers, no team servers
+            (["server1", "server2"], [], ["server1", "server2"], "key_only"),
+            # Test case 3: No key servers, team has servers (inherit from team)
             (
-                UserAPIKeyAuth(object_permission_id="test-id"),
-                "test-id",
-                False,
-                None,
                 [],
+                ["team_server1", "team_server2"],
+                ["team_server1", "team_server2"],
+                "inherit_from_team",
             ),
-            # Test case 4: Database query returns None
-            (UserAPIKeyAuth(object_permission_id="test-id"), "test-id", True, None, []),
-            # Test case 5: Database query returns object with mcp_servers
+            # Test case 4: Key and team both have servers (intersection)
             (
-                UserAPIKeyAuth(object_permission_id="test-id"),
-                "test-id",
-                True,
-                MagicMock(mcp_servers=["server1", "server2"]),
                 ["server1", "server2"],
+                ["server1", "team_server"],
+                ["server1"],
+                "intersection",
             ),
-            # Test case 6: Database query returns object with None mcp_servers
+            # Test case 5: Key and team have no overlap (empty result)
             (
-                UserAPIKeyAuth(object_permission_id="test-id"),
-                "test-id",
-                True,
-                MagicMock(mcp_servers=None),
+                ["server1", "server2"],
+                ["team_server1", "team_server2"],
                 [],
+                "no_overlap",
             ),
-            # Test case 7: Database query returns object with empty mcp_servers
+            # Test case 6: Key and team have complete overlap
             (
-                UserAPIKeyAuth(object_permission_id="test-id"),
-                "test-id",
-                True,
-                MagicMock(mcp_servers=[]),
-                [],
+                ["server1", "server2"],
+                ["server1", "server2"],
+                ["server1", "server2"],
+                "complete_overlap",
             ),
         ],
     )
-    async def test_get_allowed_mcp_servers_for_key(
+    async def test_get_allowed_mcp_servers(
         self,
-        user_api_key_auth,
-        object_permission_id,
-        prisma_client_available,
-        db_result,
+        key_servers,
+        team_servers,
         expected_result,
+        scenario,
     ):
-        """Test _get_allowed_mcp_servers_for_key with various scenarios"""
+        """Test get_allowed_mcp_servers with various key/team permission scenarios"""
 
-        # Setup user_api_key_auth object_permission_id if provided
-        if user_api_key_auth and object_permission_id:
-            user_api_key_auth.object_permission_id = object_permission_id
+        # Create a mock user
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="test-team",
+        )
 
-            # Mock prisma_client
-        mock_prisma_client = MagicMock() if prisma_client_available else None
-        mock_find_unique = None
+        # Mock the helper methods instead of database calls
+        with patch.object(
+            MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
+        ) as mock_key_servers:
+            with patch.object(
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
+            ) as mock_team_servers:
+                # Set up return values
+                mock_key_servers.return_value = key_servers
+                mock_team_servers.return_value = team_servers
 
-        if mock_prisma_client:
-            # Mock the database query
-            mock_find_unique = AsyncMock(return_value=db_result)
-            mock_prisma_client.db.litellm_objectpermissiontable.find_unique = (
-                mock_find_unique
-            )
-
-        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-            # Call the method
-            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
-                user_api_key_auth
-            )
-
-            # Assert the result (order-independent comparison)
-            assert sorted(result) == sorted(expected_result)
-
-            # Verify database call was made correctly when expected
-            if (
-                user_api_key_auth
-                and user_api_key_auth.object_permission_id
-                and prisma_client_available
-                and mock_find_unique
-            ):
-                mock_find_unique.assert_called_once_with(
-                    where={
-                        "object_permission_id": user_api_key_auth.object_permission_id
-                    }
+                # Call the method
+                result = await MCPRequestHandler.get_allowed_mcp_servers(
+                    user_api_key_auth=mock_user_auth
                 )
-            elif mock_find_unique:
-                # If prisma_client exists but conditions aren't met, no call should be made
-                if not user_api_key_auth or not user_api_key_auth.object_permission_id:
-                    mock_find_unique.assert_not_called()
+
+                # Assert the result (order-independent comparison)
+                assert sorted(result) == sorted(expected_result)
+
+                # Verify helper methods were called
+                mock_key_servers.assert_called_once_with(mock_user_auth)
+                mock_team_servers.assert_called_once_with(mock_user_auth)
 
     @pytest.mark.parametrize(
         "team_servers,key_servers,expected_servers,scenario",
@@ -286,7 +269,10 @@ class TestMCPRequestHandler:
                 ],
                 "test-api-key-123",
                 None,
-                {"github": "Bearer github-token", "zapier_x_api": "zapier-api-key"},
+                {
+                    "github": {"Authorization": "Bearer github-token"},
+                    "zapier_x_api": {"key": "zapier-api-key"},
+                },
             ),
             # Test case 10: Both legacy and server-specific auth headers
             (
@@ -297,7 +283,7 @@ class TestMCPRequestHandler:
                 ],
                 "test-api-key-123",
                 "legacy-token",
-                {"github": "Bearer github-token"},
+                {"github": {"Authorization": "Bearer github-token"}},
             ),
             # Test case 11: Server-specific auth headers with different header types
             (
@@ -308,7 +294,10 @@ class TestMCPRequestHandler:
                 ],
                 "test-api-key-123",
                 None,
-                {"deepwiki": "Basic base64-encoded", "custom_x_custom": "custom-value"},
+                {
+                    "deepwiki": {"Authorization": "Basic base64-encoded"},
+                    "custom_x_custom": {"header": "custom-value"},
+                },
             ),
             # Test case 12: Case insensitive server-specific headers
             (
@@ -318,7 +307,7 @@ class TestMCPRequestHandler:
                 ],
                 "test-api-key-123",
                 None,
-                {"github": "Bearer github-token"},
+                {"github": {"Authorization": "Bearer github-token"}},
             ),
         ],
     )
@@ -364,6 +353,8 @@ class TestMCPRequestHandler:
                 mcp_auth_header,
                 mcp_servers,
                 mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
             ) = await MCPRequestHandler.process_mcp_request(scope)
 
             # Assert the results
@@ -543,6 +534,8 @@ class TestMCPRequestHandler:
                 mcp_auth_header,
                 mcp_servers_result,
                 mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
             ) = await MCPRequestHandler.process_mcp_request(scope)
             assert auth_result == mock_auth_result
             assert mcp_auth_header == expected_result["mcp_auth"]
@@ -716,6 +709,8 @@ class TestMCPCustomHeaderName:
                     mcp_auth_header,
                     mcp_servers,
                     mcp_server_auth_headers,
+                    oauth2_headers,
+                    raw_headers,
                 ) = await MCPRequestHandler.process_mcp_request(scope)
 
                 # Assert the results
@@ -748,7 +743,7 @@ class TestMCPCustomHeaderName:
             }
         )
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
-        assert result == {"github": "Bearer github-token"}
+        assert result == {"github": {"Authorization": "Bearer github-token"}}
 
         # Test case 3: Multiple server-specific headers
         headers = Headers(
@@ -761,9 +756,9 @@ class TestMCPCustomHeaderName:
         )
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
         expected = {
-            "github": "Bearer github-token",
-            "zapier_x_api": "zapier-api-key",
-            "deepwiki": "Basic base64-encoded",
+            "github": {"Authorization": "Bearer github-token"},
+            "zapier_x_api": {"key": "zapier-api-key"},
+            "deepwiki": {"Authorization": "Basic base64-encoded"},
         }
         assert result == expected
 
@@ -772,11 +767,14 @@ class TestMCPCustomHeaderName:
             {
                 "x-litellm-api-key": "test-key",
                 "X-MCP-GITHUB-AUTHORIZATION": "Bearer github-token",
-                "x-mcp-ZAPIER_x_api-key": "zapier-api-key",
+                "x-mcp-ZAPIER-x-api-key": "zapier-api-key",
             }
         )
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
-        expected = {"github": "Bearer github-token", "zapier_x_api": "zapier-api-key"}
+        expected = {
+            "github": {"Authorization": "Bearer github-token"},
+            "zapier": {"x-api-key": "zapier-api-key"},
+        }
         assert result == expected
 
         # Test case 5: Invalid format headers (should be ignored)
@@ -789,7 +787,7 @@ class TestMCPCustomHeaderName:
             }
         )
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
-        assert result == {"github": "Bearer github-token"}
+        assert result == {"github": {"Authorization": "Bearer github-token"}}
 
         # Test case 6: Edge case - header with multiple hyphens in server alias
         headers = Headers(
@@ -801,8 +799,8 @@ class TestMCPCustomHeaderName:
         )
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
         expected = {
-            "github_mcp": "Bearer github-mcp-token",
-            "gh_mcp2": "Bearer gh-mcp2-token",
+            "github_mcp": {"Authorization": "Bearer github-mcp-token"},
+            "gh_mcp2": {"Authorization": "Bearer gh-mcp2-token"},
         }
         assert result == expected
 
@@ -814,14 +812,14 @@ class TestMCPCustomHeaderName:
             }
         )
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
-        assert result == {"github_mcp": "Bearer github-mcp-token"}
+        assert result == {"github_mcp": {"Authorization": "Bearer github-mcp-token"}}
 
         # Test case 8: Edge case - empty header value
         headers = Headers(
             {"x-litellm-api-key": "test-key", "x-mcp-github-authorization": ""}
         )
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
-        assert result == {"github": ""}
+        assert result == {"github": {"Authorization": ""}}
 
         # Test case 9: Edge case - very long header value
         long_token = "Bearer " + "x" * 1000
@@ -829,7 +827,7 @@ class TestMCPCustomHeaderName:
             {"x-litellm-api-key": "test-key", "x-mcp-github-authorization": long_token}
         )
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
-        assert result == {"github": long_token}
+        assert result == {"github": {"Authorization": long_token}}
 
         # Test case 10: Edge case - special characters in server alias
         headers = Headers(
@@ -841,8 +839,8 @@ class TestMCPCustomHeaderName:
         )
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
         expected = {
-            "github-123": "Bearer github-123-token",
-            "github_test": "Bearer github-test-token",
+            "github": {"123-authorization": "Bearer github-123-token"},
+            "github_test": {"Authorization": "Bearer github-test-token"},
         }
         assert result == expected
 
@@ -886,6 +884,8 @@ class TestMCPAccessGroupsE2E:
                 mcp_auth_header,
                 mcp_servers,
                 mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
             ) = await MCPRequestHandler.process_mcp_request(scope)
 
             # Assert the results
@@ -935,6 +935,8 @@ class TestMCPAccessGroupsE2E:
                 mcp_auth_header,
                 mcp_servers,
                 mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
             ) = await MCPRequestHandler.process_mcp_request(scope)
 
             # Assert the results
@@ -963,6 +965,8 @@ def test_mcp_path_based_server_segregation(monkeypatch):
             mcp_auth_header,
             mcp_servers,
             mcp_server_auth_headers,
+            oauth2_headers,
+            raw_headers,
         ) = get_auth_context()
 
         # Capture the MCP servers for testing
@@ -1008,3 +1012,249 @@ def test_mcp_path_based_server_segregation(monkeypatch):
 
     # The context should have mcp_servers set to ["zapier", "group1"]
     assert list(captured_mcp_servers.values())[0] == ["zapier", "group1"]
+
+
+@pytest.mark.parametrize(
+    "headers,expected_result",
+    [
+        (
+            Headers(
+                {
+                    "x-litellm-api-key": "test-key",
+                    "x-mcp-github-authorization": "Bearer github-token",
+                }
+            ),
+            {"github": {"Authorization": "Bearer github-token"}},
+        ),
+        (
+            Headers(
+                {
+                    "x-litellm-api-key": "test-key",
+                    "x-mcp-github-x-api-key": "Basic base64-encoded-creds",
+                }
+            ),
+            {"github": {"x-api-key": "Basic base64-encoded-creds"}},
+        ),
+    ],
+)
+def test_get_mcp_server_auth_headers_from_headers(headers, expected_result):
+    """Test _get_mcp_server_auth_headers_from_headers method"""
+    from starlette.datastructures import Headers
+
+    headers = Headers(headers)
+    result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+    assert result == expected_result
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_permission_with_already_loaded_permission():
+    """
+    Test that _get_team_object_permission returns the already loaded object_permission
+    from the team object without making an additional DB call.
+    """
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
+
+    # Create mock object permission
+    mock_object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-123",
+        mcp_servers=["server1", "server2"],
+        mcp_access_groups=["group1"],
+        vector_stores=["store1"],
+    )
+    
+    # Create mock team object with object_permission already loaded
+    mock_team_obj = LiteLLM_TeamTable(
+        team_id="team-123",
+        object_permission=mock_object_permission,
+        object_permission_id="perm-123",
+    )
+    
+    # Create mock user auth
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="team-123",
+    )
+    
+    # Mock get_team_object to return our team with loaded permission
+    # Also need to mock prisma_client from proxy_server
+    mock_prisma = MagicMock()
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma,
+    ):
+        with patch(
+            "litellm.proxy.auth.auth_checks.get_team_object"
+        ) as mock_get_team:
+            with patch(
+                "litellm.proxy.auth.auth_checks.get_object_permission"
+            ) as mock_get_perm:
+                mock_get_team.return_value = mock_team_obj
+                
+                # Call the method
+                result = await MCPRequestHandler._get_team_object_permission(
+                    mock_user_auth
+                )
+                
+                # Assert we got the object permission
+                assert result == mock_object_permission
+                assert result.mcp_servers == ["server1", "server2"]
+                
+                # Verify get_team_object was called
+                mock_get_team.assert_called_once()
+                
+                # Verify get_object_permission was NOT called (since it was already loaded)
+                mock_get_perm.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_permission_fetches_from_db_when_not_loaded():
+    """
+    Test that _get_team_object_permission fetches from DB when object_permission
+    is not loaded but object_permission_id exists.
+    """
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
+
+    # Create mock object permission (to be returned from DB)
+    mock_object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-456",
+        mcp_servers=["server3", "server4"],
+        mcp_access_groups=["group2"],
+        vector_stores=["store2"],
+    )
+    
+    # Create mock team object WITHOUT object_permission loaded (but has ID)
+    mock_team_obj = LiteLLM_TeamTable(
+        team_id="team-456",
+        object_permission=None,
+        object_permission_id="perm-456",
+    )
+    
+    # Create mock user auth
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="team-456",
+    )
+    
+    # Mock the methods
+    # Also need to mock prisma_client from proxy_server
+    mock_prisma = MagicMock()
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma,
+    ):
+        with patch(
+            "litellm.proxy.auth.auth_checks.get_team_object"
+        ) as mock_get_team:
+            with patch(
+                "litellm.proxy.auth.auth_checks.get_object_permission"
+            ) as mock_get_perm:
+                mock_get_team.return_value = mock_team_obj
+                mock_get_perm.return_value = mock_object_permission
+                
+                # Call the method
+                result = await MCPRequestHandler._get_team_object_permission(
+                    mock_user_auth
+                )
+                
+                # Assert we got the object permission
+                assert result == mock_object_permission
+                assert result.mcp_servers == ["server3", "server4"]
+                
+                # Verify get_team_object was called
+                mock_get_team.assert_called_once()
+                
+                # Verify get_object_permission WAS called (since it wasn't loaded)
+                mock_get_perm.assert_called_once_with(
+                    object_permission_id="perm-456",
+                    prisma_client=mock.ANY,
+                    user_api_key_cache=mock.ANY,
+                    parent_otel_span=mock_user_auth.parent_otel_span,
+                    proxy_logging_obj=mock.ANY,
+                )
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_for_team_uses_helper():
+    """
+    Test that _get_allowed_mcp_servers_for_team properly uses _get_team_object_permission
+    helper which handles both loaded and unloaded object_permission cases.
+    """
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    # Create mock object permission with servers and access groups
+    mock_object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-789",
+        mcp_servers=["direct-server1", "direct-server2"],
+        mcp_access_groups=["dev-group"],
+        vector_stores=[],
+    )
+    
+    # Create mock user auth
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="team-789",
+    )
+    
+    # Mock the helper methods
+    with patch.object(
+        MCPRequestHandler, "_get_team_object_permission"
+    ) as mock_get_team_perm:
+        with patch.object(
+            MCPRequestHandler, "_get_mcp_servers_from_access_groups"
+        ) as mock_get_access_group_servers:
+            # Configure mocks
+            mock_get_team_perm.return_value = mock_object_permission
+            mock_get_access_group_servers.return_value = ["group-server1", "group-server2"]
+            
+            # Call the method
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
+                mock_user_auth
+            )
+            
+            # Assert the result contains both direct and access group servers
+            assert set(result) == {
+                "direct-server1",
+                "direct-server2",
+                "group-server1",
+                "group-server2",
+            }
+            
+            # Verify _get_team_object_permission was called (the helper we fixed)
+            mock_get_team_perm.assert_called_once_with(mock_user_auth)
+            
+            # Verify access groups were resolved
+            mock_get_access_group_servers.assert_called_once_with(["dev-group"])
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_for_team_with_no_object_permission():
+    """
+    Test that _get_allowed_mcp_servers_for_team returns empty list when
+    team has no object_permission.
+    """
+    # Create mock user auth
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="team-no-perm",
+    )
+    
+    # Mock the helper to return None (no object permission)
+    with patch.object(
+        MCPRequestHandler, "_get_team_object_permission"
+    ) as mock_get_team_perm:
+        mock_get_team_perm.return_value = None
+        
+        # Call the method
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
+            mock_user_auth
+        )
+        
+        # Assert empty list is returned
+        assert result == []
+        
+        # Verify the helper was called
+        mock_get_team_perm.assert_called_once_with(mock_user_auth)

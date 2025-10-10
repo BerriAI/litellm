@@ -21,6 +21,7 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.types.integrations.prometheus import *
+from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -794,9 +795,16 @@ class PrometheusLogger(CustomLogger):
         output_tokens = standard_logging_payload["completion_tokens"]
         tokens_used = standard_logging_payload["total_tokens"]
         response_cost = standard_logging_payload["response_cost"]
-        _requester_metadata = standard_logging_payload["metadata"].get(
+        _requester_metadata: Optional[dict] = standard_logging_payload["metadata"].get(
             "requester_metadata"
         )
+        user_api_key_auth_metadata: Optional[dict] = standard_logging_payload[
+            "metadata"
+        ].get("user_api_key_auth_metadata")
+        combined_metadata: Dict[str, Any] = {
+            **(_requester_metadata if _requester_metadata else {}),
+            **(user_api_key_auth_metadata if user_api_key_auth_metadata else {}),
+        }
         if standard_logging_payload is not None and isinstance(
             standard_logging_payload, dict
         ):
@@ -828,8 +836,7 @@ class PrometheusLogger(CustomLogger):
             exception_status=None,
             exception_class=None,
             custom_metadata_labels=get_custom_labels_from_metadata(
-                metadata=standard_logging_payload["metadata"].get("requester_metadata")
-                or {}
+                metadata=combined_metadata
             ),
             route=standard_logging_payload["metadata"].get(
                 "user_api_key_request_route"
@@ -1649,9 +1656,22 @@ class PrometheusLogger(CustomLogger):
         api_base: Optional[str],
         api_provider: str,
     ):
-        self.litellm_deployment_state.labels(
-            litellm_model_name, model_id, api_base, api_provider
-        ).set(state)
+        """
+        Set the deployment state.
+        """
+        ### get labels
+        _labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_deployment_state"
+            ),
+            enum_values=UserAPIKeyLabelValues(
+                litellm_model_name=litellm_model_name,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=api_provider,
+            ),
+        )
+        self.litellm_deployment_state.labels(**_labels).set(state)
 
     def set_deployment_healthy(
         self,
@@ -2228,8 +2248,10 @@ def prometheus_label_factory(
 
     if enum_values.custom_metadata_labels is not None:
         for key, value in enum_values.custom_metadata_labels.items():
-            if key in supported_enum_labels:
-                filtered_labels[key] = value
+            # check sanitized key
+            sanitized_key = _sanitize_prometheus_label_name(key)
+            if sanitized_key in supported_enum_labels:
+                filtered_labels[sanitized_key] = value
 
     # Add custom tags if configured
     if enum_values.tags is not None:
@@ -2262,9 +2284,12 @@ def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
 
         keys_parts = key.split(".")
         # Traverse through the dictionary using the parts
-        value = metadata
+        value: Any = metadata
         for part in keys_parts:
-            value = value.get(part, None)  # Get the value, return None if not found
+            if isinstance(value, dict):
+                value = value.get(part, None)  # Get the value, return None if not found
+            else:
+                value = None
             if value is None:
                 break
 
@@ -2328,7 +2353,6 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
         "tag_Service_web_app_v1": "false",
     }
     """
-    import re
 
     from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
     from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name

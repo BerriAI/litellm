@@ -44,7 +44,6 @@ class TestMCPClientUnitTests:
         headers = client._get_auth_headers()
         assert headers == {
             "Authorization": "Bearer test_token",
-            "MCP-Protocol-Version": "2025-06-18",
         }
 
         # Basic auth
@@ -55,7 +54,6 @@ class TestMCPClientUnitTests:
         headers = client._get_auth_headers()
         assert headers == {
             "Authorization": f"Basic {expected_encoded}",
-            "MCP-Protocol-Version": "2025-06-18",
         }
 
         # API key
@@ -65,7 +63,6 @@ class TestMCPClientUnitTests:
         headers = client._get_auth_headers()
         assert headers == {
             "X-API-Key": "api_key_123",
-            "MCP-Protocol-Version": "2025-06-18",
         }
 
         # Custom authorization header
@@ -77,13 +74,12 @@ class TestMCPClientUnitTests:
         headers = client._get_auth_headers()
         assert headers == {
             "Authorization": "Token custom_token",
-            "MCP-Protocol-Version": "2025-06-18",
         }
 
         # No auth
         client = MCPClient("http://example.com")
         headers = client._get_auth_headers()
-        assert headers == {"MCP-Protocol-Version": "2025-06-18"}
+        assert headers == {}
 
     @pytest.mark.asyncio
     @patch("litellm.experimental_mcp_client.client.streamablehttp_client")
@@ -112,7 +108,6 @@ class TestMCPClientUnitTests:
         call_args = mock_transport.call_args
         assert call_args[1]["headers"] == {
             "Authorization": "Bearer test_token",
-            "MCP-Protocol-Version": "2025-06-18",
         }
 
         # Verify session was initialized
@@ -188,84 +183,6 @@ class TestMCPClientUnitTests:
             name="test_tool", arguments={"arg1": "value1"}
         )
 
-    def test_protocol_version_header_extraction(self):
-        """Test that MCP protocol version header is correctly extracted from requests."""
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-            MCPRequestHandler,
-        )
-
-        # Mock scope with headers
-        mock_scope = {
-            "type": "http",
-            "method": "GET",
-            "path": "/test",
-            "headers": [
-                (b"authorization", b"Bearer test_token"),
-                (b"mcp-protocol-version", b"2025-06-18"),
-                (b"content-type", b"application/json"),
-            ],
-        }
-
-        # Mock the user_api_key_auth function
-        with patch(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth"
-        ) as mock_auth:
-            mock_auth.return_value = MagicMock()
-
-            # Call process_mcp_request
-            import asyncio
-
-            result = asyncio.run(MCPRequestHandler.process_mcp_request(mock_scope))
-
-            # Verify the protocol version is extracted
-            (
-                user_api_key_auth,
-                mcp_auth_header,
-                mcp_servers,
-                mcp_server_auth_headers,
-                mcp_protocol_version,
-            ) = result
-
-            assert mcp_protocol_version == "2025-06-18"
-
-    def test_protocol_version_header_missing(self):
-        """Test that MCP protocol version header is None when not provided."""
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-            MCPRequestHandler,
-        )
-
-        # Mock scope without protocol version header
-        mock_scope = {
-            "type": "http",
-            "method": "GET",
-            "path": "/test",
-            "headers": [
-                (b"authorization", b"Bearer test_token"),
-                (b"content-type", b"application/json"),
-            ],
-        }
-
-        # Mock the user_api_key_auth function
-        with patch(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth"
-        ) as mock_auth:
-            mock_auth.return_value = MagicMock()
-
-            # Call process_mcp_request
-            import asyncio
-
-            result = asyncio.run(MCPRequestHandler.process_mcp_request(mock_scope))
-
-            # Verify the protocol version is None
-            (
-                user_api_key_auth,
-                mcp_auth_header,
-                mcp_servers,
-                mcp_server_auth_headers,
-                mcp_protocol_version,
-            ) = result
-
-            assert mcp_protocol_version is None
 
 
 if __name__ == "__main__":

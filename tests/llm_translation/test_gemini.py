@@ -3,8 +3,6 @@ import sys
 
 import pytest
 
-from litellm.utils import supports_url_context
-
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system paths
@@ -269,7 +267,124 @@ def test_gemini_image_generation():
     assert len(response.choices[0].message.images) > 0
     assert response.choices[0].message.images[0]["image_url"] is not None
     assert response.choices[0].message.images[0]["image_url"]["url"] is not None
-    assert response.choices[0].message.images[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert (
+        response.choices[0]
+        .message.images[0]["image_url"]["url"]
+        .startswith("data:image/png;base64,")
+    )
+
+
+def test_gemini_2_5_flash_image_preview():
+    """
+    Test for GitHub issue #14120 - gemini-2.5-flash-image-preview model routing fix
+    Validates that the model correctly routes to image generation instead of chat completion
+    """
+    from unittest.mock import patch, MagicMock
+    from litellm.types.utils import ImageResponse, ImageObject
+
+    # Mock successful response to avoid API limits
+    mock_response = ImageResponse()
+    mock_response.data = [ImageObject(b64_json="test_base64_data", url=None)]
+
+    with patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post") as mock_post:
+        # Mock successful HTTP response
+        mock_http_response = MagicMock()
+        mock_http_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "data": "test_base64_image_data"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        mock_http_response.status_code = 200
+        mock_post.return_value = mock_http_response
+
+        # Test that the function works without throwing the original 400 error
+        response = litellm.image_generation(
+            model="gemini/gemini-2.5-flash-image-preview",
+            prompt="Generate a simple test image",
+            api_key="test_api_key"
+        )
+
+        # Validate response structure
+        assert response is not None
+        assert hasattr(response, 'data')
+        assert response.data is not None
+        assert len(response.data) > 0
+
+        # Validate the correct endpoint was called
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        called_url = call_args[0][0] if call_args[0] else call_args.kwargs.get('url', '')
+
+        # Verify it uses generateContent endpoint for gemini-2.5-flash-image-preview (not predict)
+        assert ":generateContent" in called_url
+        assert "gemini-2.5-flash-image-preview" in called_url
+
+        # Verify request format is Gemini format (not Imagen)
+        request_data = call_args.kwargs.get('json', {})
+        assert "contents" in request_data
+        assert "parts" in request_data["contents"][0]
+
+        # Verify response_modalities is set correctly for image generation
+        assert "generationConfig" in request_data
+        assert "response_modalities" in request_data["generationConfig"]
+        assert request_data["generationConfig"]["response_modalities"] == ["IMAGE", "TEXT"]
+
+
+def test_gemini_imagen_models_use_predict_endpoint():
+    """
+    Test that Imagen models still use :predict endpoint (not broken by gemini-2.5-flash-image-preview fix)
+    """
+    from unittest.mock import patch, MagicMock
+    from litellm.types.utils import ImageResponse, ImageObject
+
+    with patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post") as mock_post:
+        # Mock successful HTTP response for Imagen
+        mock_http_response = MagicMock()
+        mock_http_response.json.return_value = {
+            "predictions": [
+                {
+                    "bytesBase64Encoded": "test_base64_image_data"
+                }
+            ]
+        }
+        mock_http_response.status_code = 200
+        mock_post.return_value = mock_http_response
+
+        # Test an Imagen model
+        response = litellm.image_generation(
+            model="gemini/imagen-3.0-generate-001",
+            prompt="Generate a simple test image",
+            api_key="test_api_key"
+        )
+
+        # Validate response structure
+        assert response is not None
+        assert hasattr(response, 'data')
+
+        # Validate the correct endpoint was called for Imagen models
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        called_url = call_args[0][0] if call_args[0] else call_args.kwargs.get('url', '')
+
+        # Verify Imagen models use predict endpoint (not generateContent)
+        assert ":predict" in called_url
+        assert "imagen-3.0-generate-001" in called_url
+        assert ":generateContent" not in called_url
+
+        # Verify request format is Imagen format (not Gemini)
+        request_data = call_args.kwargs.get('json', {})
+        assert "instances" in request_data
+        assert "parameters" in request_data
 
 
 def test_gemini_thinking():
@@ -341,7 +456,7 @@ def test_gemini_finish_reason():
 
     litellm._turn_on_debug()
     response = completion(
-        model="gemini/gemini-1.5-pro",
+        model="gemini/gemini-2.5-flash-lite",
         messages=[{"role": "user", "content": "give me 3 random words"}],
         max_tokens=2,
     )
@@ -354,11 +469,11 @@ def test_gemini_url_context():
     from litellm import completion
 
     litellm._turn_on_debug()
+    URL1 = "https://www.foodnetwork.com/recipes/ina-garten/perfect-roast-chicken-recipe-1940592"
 
-    url = "https://ai.google.dev/gemini-api/docs/models"
     prompt = f"""
-    Summarize this document:
-    {url}
+    Get the recipes listed on the following website
+    {URL1}
     """
     response = completion(
         model="gemini/gemini-2.5-flash",
@@ -371,7 +486,7 @@ def test_gemini_url_context():
     url_context_metadata = response.model_extra["vertex_ai_url_context_metadata"]
     assert url_context_metadata is not None
     urlMetadata = url_context_metadata[0]["urlMetadata"][0]
-    assert urlMetadata["retrievedUrl"] == url
+    assert urlMetadata["retrievedUrl"] == URL1
     assert urlMetadata["urlRetrievalStatus"] == "URL_RETRIEVAL_STATUS_SUCCESS"
 
 
@@ -661,7 +776,8 @@ def test_system_message_with_no_user_message():
     assert response is not None
 
     assert response.choices[0].message.content is not None
-  
+
+
 def get_current_weather(location, unit="fahrenheit"):
     """Get the current weather in a given location"""
     if "tokyo" in location.lower():
@@ -778,9 +894,9 @@ def test_gemini_reasoning_effort_minimal():
 
     # Test with different Gemini models to verify model-specific mapping
     test_cases = [
-        ("gemini/gemini-2.5-flash", 1),      # Flash: minimum 1 token
-        ("gemini/gemini-2.5-pro", 128),      # Pro: minimum 128 tokens  
-        ("gemini/gemini-2.5-flash-lite", 512), # Flash-Lite: minimum 512 tokens
+        ("gemini/gemini-2.5-flash", 1),  # Flash: minimum 1 token
+        ("gemini/gemini-2.5-pro", 128),  # Pro: minimum 128 tokens
+        ("gemini/gemini-2.5-flash-lite", 512),  # Flash-Lite: minimum 512 tokens
     ]
 
     for model, expected_min_budget in test_cases:
@@ -793,24 +909,32 @@ def test_gemini_reasoning_effort_minimal():
                 "reasoning_effort": "minimal",
             },
         )
-        
+
         # Verify that the thinking config is set correctly
         request_body = raw_request["raw_request_body"]
-        assert "generationConfig" in request_body, f"Model {model} should have generationConfig"
-        
+        assert (
+            "generationConfig" in request_body
+        ), f"Model {model} should have generationConfig"
+
         generation_config = request_body["generationConfig"]
-        assert "thinkingConfig" in generation_config, f"Model {model} should have thinkingConfig"
-        
+        assert (
+            "thinkingConfig" in generation_config
+        ), f"Model {model} should have thinkingConfig"
+
         thinking_config = generation_config["thinkingConfig"]
-        assert "thinkingBudget" in thinking_config, f"Model {model} should have thinkingBudget"
-        
+        assert (
+            "thinkingBudget" in thinking_config
+        ), f"Model {model} should have thinkingBudget"
+
         actual_budget = thinking_config["thinkingBudget"]
-        assert actual_budget == expected_min_budget, \
-            f"Model {model} should map 'minimal' to {expected_min_budget} tokens, got {actual_budget}"
-        
+        assert (
+            actual_budget == expected_min_budget
+        ), f"Model {model} should map 'minimal' to {expected_min_budget} tokens, got {actual_budget}"
+
         # Verify that includeThoughts is True for minimal reasoning effort
-        assert thinking_config.get("includeThoughts", True), \
-            f"Model {model} should have includeThoughts=True for minimal reasoning effort"
+        assert thinking_config.get(
+            "includeThoughts", True
+        ), f"Model {model} should have includeThoughts=True for minimal reasoning effort"
 
     # Test with unknown model (should use generic fallback)
     try:
@@ -822,15 +946,149 @@ def test_gemini_reasoning_effort_minimal():
                 "reasoning_effort": "minimal",
             },
         )
-        
+
         request_body = raw_request["raw_request_body"]
         generation_config = request_body["generationConfig"]
         thinking_config = generation_config["thinkingConfig"]
         # Should use generic fallback (128 tokens)
-        assert thinking_config["thinkingBudget"] == 128, \
-            "Unknown model should use generic fallback of 128 tokens"
+        assert (
+            thinking_config["thinkingBudget"] == 128
+        ), "Unknown model should use generic fallback of 128 tokens"
     except Exception as e:
         # If return_raw_request doesn't work for unknown models, that's okay
         # The important part is that our known models work correctly
         print(f"Note: Unknown model test skipped due to: {e}")
         pass
+
+
+def test_gemini_exception_message_format():
+    """
+    Test that Gemini provider exceptions show as 'GeminiException' not 'VertexAIException'.
+
+    This addresses issue #14586 where Gemini API errors were incorrectly showing as
+    VertexAIException instead of GeminiException due to incorrect exception mapping.
+    """
+    import httpx
+    from unittest.mock import Mock
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm import BadRequestError
+
+    # Mock a typical Gemini API error response
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 400
+    mock_response.text = "Invalid API key provided"
+    mock_response.headers = {}
+
+    # Create a mock exception that simulates a Gemini API error
+    mock_exception = httpx.HTTPStatusError(
+        message="Bad Request",
+        request=Mock(),
+        response=mock_response
+    )
+    mock_exception.response = mock_response
+    mock_exception.status_code = 400
+
+    # Test the exception mapping for Gemini provider
+    try:
+        exception_type(
+            model="gemini-pro",
+            original_exception=mock_exception,
+            custom_llm_provider="gemini",
+            completion_kwargs={},
+            extra_kwargs={}
+        )
+        # Should not reach here - exception should be raised
+        assert False, "Expected BadRequestError to be raised"
+    except BadRequestError as e:
+        # The test should FAIL initially (before fix) because it will show VertexAIException
+        # After the fix, it should show GeminiException
+        error_message = str(e)
+        print(f"Error message: {error_message}")  # For debugging
+
+        # This assertion will initially FAIL - that's expected for TDD
+        assert "GeminiException" in error_message, (
+            f"Expected 'GeminiException' in error message, got: {error_message}. "
+            f"This test should fail before the fix is implemented."
+        )
+        assert "VertexAIException" not in error_message, (
+            f"Should not contain 'VertexAIException' in error message, got: {error_message}"
+        )
+
+
+@pytest.mark.parametrize("status_code,expected_exception", [
+    (400, "BadRequestError"),
+    (401, "AuthenticationError"),
+    (403, "PermissionDeniedError"),
+    (404, "NotFoundError"),
+    (408, "Timeout"),
+    (429, "RateLimitError"),
+    (500, "InternalServerError"),
+    (502, "APIConnectionError"),
+    (503, "ServiceUnavailableError"),
+])
+def l(status_code, expected_exception):
+    """
+    Test comprehensive Gemini error handling for all HTTP status codes.
+
+    This ensures that Gemini API errors of different types are properly mapped
+    to the correct LiteLLM exception types with GeminiException prefix.
+    """
+    import httpx
+    from unittest.mock import Mock
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.exceptions import (
+        BadRequestError, AuthenticationError, PermissionDeniedError, NotFoundError,
+        Timeout, RateLimitError, InternalServerError, APIConnectionError, ServiceUnavailableError
+    )
+
+    # Mock the appropriate error response
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = status_code
+    mock_response.text = f"API Error {status_code}"
+    mock_response.headers = {}
+
+    # Create a mock exception
+    mock_exception = httpx.HTTPStatusError(
+        message=f"HTTP {status_code}",
+        request=Mock(),
+        response=mock_response
+    )
+    mock_exception.response = mock_response
+    mock_exception.status_code = status_code
+    # Set message attribute for compatibility with exception mapping
+    mock_exception.message = f"HTTP {status_code}"
+
+    # Test the exception mapping
+    try:
+        exception_type(
+            model="gemini-pro",
+            original_exception=mock_exception,
+            custom_llm_provider="gemini",
+            completion_kwargs={},
+            extra_kwargs={}
+        )
+        assert False, f"Expected {expected_exception} to be raised for status {status_code}"
+    except Exception as e:
+        # Verify the correct exception type is raised
+        exception_classes = {
+            "BadRequestError": BadRequestError,
+            "AuthenticationError": AuthenticationError,
+            "PermissionDeniedError": PermissionDeniedError,
+            "NotFoundError": NotFoundError,
+            "Timeout": Timeout,
+            "RateLimitError": RateLimitError,
+            "InternalServerError": InternalServerError,
+            "APIConnectionError": APIConnectionError,
+            "ServiceUnavailableError": ServiceUnavailableError,
+        }
+        expected_class = exception_classes[expected_exception]
+        assert isinstance(e, expected_class), f"Expected {expected_exception}, got {type(e).__name__}"
+
+        # Verify the error message contains GeminiException
+        error_message = str(e)
+        assert "GeminiException" in error_message, (
+            f"Expected 'GeminiException' in error message for status {status_code}, got: {error_message}"
+        )
+        assert "VertexAIException" not in error_message, (
+            f"Should not contain 'VertexAIException' for status {status_code}, got: {error_message}"
+        )

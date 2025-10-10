@@ -4,7 +4,7 @@ Transformation logic from Cohere's /v1/rerank format to Infinity's  `/v1/rerank`
 Why separate file? Make it easy to see how transformation works
 """
 
-import uuid
+from litellm._uuid import uuid
 from typing import List, Optional
 
 import httpx
@@ -49,7 +49,7 @@ class InfinityRerankConfig(CohereRerankConfig):
             )
 
         default_headers = {
-            "Authorization": f"bearer {api_key}",
+            "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "content-type": "application/json",
         }

@@ -87,6 +87,35 @@ MAX_TOKEN_TRIMMING_ATTEMPTS = int(
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
+# Aiohttp connection pooling constants
+AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 0))
+AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
+AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
+
+# SSL/TLS cipher configuration for faster handshakes
+# Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
+# This balances performance with broad compatibility
+DEFAULT_SSL_CIPHERS = os.getenv(
+    "LITELLM_SSL_CIPHERS",
+    # Priority 1: TLS 1.3 ciphers (fastest, ~50ms handshake)
+    "TLS_AES_256_GCM_SHA384:"           # Fastest observed in testing
+    "TLS_AES_128_GCM_SHA256:"           # Slightly faster than 256-bit
+    "TLS_CHACHA20_POLY1305_SHA256:"     # Fast on ARM/mobile
+    # Priority 2: TLS 1.2 ECDHE+GCM (fast, ~100ms handshake, widely supported)
+    "ECDHE-RSA-AES256-GCM-SHA384:"
+    "ECDHE-RSA-AES128-GCM-SHA256:"
+    "ECDHE-ECDSA-AES256-GCM-SHA384:"
+    "ECDHE-ECDSA-AES128-GCM-SHA256:"
+    # Priority 3: Additional modern ciphers (good balance)
+    "ECDHE-RSA-CHACHA20-POLY1305:"
+    "ECDHE-ECDSA-CHACHA20-POLY1305:"
+    # Priority 4: Widely compatible fallbacks (slower but universally supported)
+    "ECDHE-RSA-AES256-SHA384:"          # Common fallback
+    "ECDHE-RSA-AES128-SHA256:"          # Very widely supported
+    "AES256-GCM-SHA384:"                # Non-PFS fallback (compatibility)
+    "AES128-GCM-SHA256",                # Last resort (maximum compatibility)
+)
+
 ########### v2 Architecture constants for managing writing updates to the database ###########
 REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_spend_update_buffer"
@@ -313,7 +342,9 @@ LITELLM_CHAT_PROVIDERS = [
     "morph",
     "lambda_ai",
     "vercel_ai_gateway",
+    "wandb",
     "ovhcloud",
+    "lemonade"
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -448,6 +479,7 @@ openai_compatible_endpoints: List = [
     "https://api.lambda.ai/v1",
     "https://api.hyperbolic.xyz/v1",
     "https://ai-gateway.vercel.sh/v1",
+    "https://api.inference.wandb.ai/v1",
 ]
 
 
@@ -492,6 +524,7 @@ openai_compatible_providers: List = [
     "hyperbolic",
     "vercel_ai_gateway",
     "aiml",
+    "wandb",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -507,6 +540,7 @@ openai_text_completion_compatible_providers: List = (
         "v0",
         "lambda_ai",
         "hyperbolic",
+        "wandb",
     ]
 )
 _openai_like_providers: List = [
@@ -757,6 +791,38 @@ nebius_embedding_models: set = set(
     ]
 )
 
+WANDB_MODELS: set = set(
+    [
+        # openai models
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+
+        # zai-org models
+        "zai-org/GLM-4.5",
+
+        # Qwen models
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        "Qwen/Qwen3-235B-A22B-Thinking-2507",
+
+        # moonshotai
+        "moonshotai/Kimi-K2-Instruct",
+
+        # meta models
+        "meta-llama/Llama-3.1-8B-Instruct",
+        "meta-llama/Llama-3.3-70B-Instruct",
+        "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+
+        # deepseek-ai
+        "deepseek-ai/DeepSeek-V3.1",
+        "deepseek-ai/DeepSeek-R1-0528",
+        "deepseek-ai/DeepSeek-V3-0324",
+
+        # microsoft
+        "microsoft/Phi-4-mini-instruct",
+    ]
+)
+
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "cohere",
     "anthropic",
@@ -776,8 +842,14 @@ BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
 ]
 
 BEDROCK_CONVERSE_MODELS = [
+    "qwen.qwen3-coder-480b-a35b-v1:0",
+    "qwen.qwen3-235b-a22b-2507-v1:0",
+    "qwen.qwen3-coder-30b-a3b-v1:0",
+    "qwen.qwen3-32b-v1:0",
+    "deepseek.v3-v1:0",
     "openai.gpt-oss-20b-1:0",
     "openai.gpt-oss-120b-1:0",
+    "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
@@ -828,6 +900,7 @@ bedrock_embedding_models: set = set(
         "amazon.titan-embed-text-v1",
         "cohere.embed-english-v3",
         "cohere.embed-multilingual-v3",
+        "cohere.embed-v4:0",
         "twelvelabs.marengo-embed-2-7-v1:0",
     ]
 )
@@ -947,7 +1020,12 @@ HEALTH_CHECK_TIMEOUT_SECONDS = int(
     os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60)
 )  # 60 seconds
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
+LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
+LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
 
+# Key Rotation Constants
+LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
+LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400))  # 24 hours default
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
@@ -979,6 +1057,12 @@ PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
 )  # 5 minutes
+DEFAULT_SHARED_HEALTH_CHECK_TTL = int(
+    os.getenv("DEFAULT_SHARED_HEALTH_CHECK_TTL", 300)
+)  # 5 minutes - TTL for cached health check results
+DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL = int(
+    os.getenv("DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL", 60)
+)  # 1 minute - TTL for health check lock
 PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS = int(
     os.getenv("PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS", 9)
 )

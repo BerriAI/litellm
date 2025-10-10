@@ -51,9 +51,36 @@ jobs:
           command: |
             python -m pytest tests/windows_tests/test_litellm_on_windows.py -v
     
+  mypy_linting:
+    docker:
+      - image: cimg/python:3.12
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: medium
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip uninstall fastuuid -y
+            pip install "mypy==1.18.2"
+      - run:
+          name: MyPy Type Checking
+          command: |
+            cd litellm
+            # Use the same approach as GitHub Actions, explicitly exclude fastuuid to avoid segfaults
+            python -m mypy .
+            cd ..
+          no_output_timeout: 10m
   local_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.12
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -79,7 +106,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install "mypy==1.15.0"
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -140,19 +167,6 @@ jobs:
             python -m pip install black
             python -m black .
             cd ..
-      - run:
-          name: Linting Testing
-          command: |
-            cd litellm
-            pip install "cryptography<40.0.0"
-            python -m pip install types-requests types-setuptools types-redis types-PyYAML
-            if ! python -m mypy . \
-                --config-file mypy.ini \
-                --ignore-missing-imports; then
-                echo "mypy detected errors"
-                exit 1
-            fi
-            cd ..
 
       # Run pytest and generate JUnit XML report
       - run:
@@ -160,7 +174,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache" -n 4
+            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache" -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -204,7 +218,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -311,7 +325,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -470,7 +484,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -x -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -552,14 +566,14 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y docker-ce docker-ce-cli containerd.io
       - run:
-          name: Install Python 3.9
+          name: Install Python 3.13
           command: |
             curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
             bash miniconda.sh -b -p $HOME/miniconda
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.13 -y
             conda activate myenv
             python --version
       - run:
@@ -574,7 +588,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -602,6 +616,24 @@ jobs:
             wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
             sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
             rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=circle_test \
+              -p 5432:5432 \
+              postgres:14
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - run:
+          name: Set DATABASE_URL environment variable
+          command: |
+            echo 'export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/circle_test"' >> $BASH_ENV
+            source $BASH_ENV
       - run:
           name: Run Security Scans
           command: |
@@ -668,7 +700,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "google-genai==1.22.0"
@@ -816,7 +848,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1048,8 +1080,53 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
+            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
           no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_mapped_tests_coverage.xml
+            mv .coverage litellm_mapped_tests_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_mapped_tests_coverage.xml
+            - litellm_mapped_tests_coverage
+  litellm_mapped_enterprise_tests:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.22.0"
+            pip install "hypercorn==0.17.3"
+            pip install "pydantic==2.10.2"
+            pip install "mcp==1.10.1"
+            pip install "requests-mock>=1.12.1"
+            pip install "responses==0.25.7"
+            pip install "pytest-xdist==3.6.1"
+            pip install "semantic_router==0.1.10"
+            pip install "fastapi-offline==1.7.3"
+      - setup_litellm_enterprise_pip
       - run:
           name: Run enterprise tests
           command: |
@@ -1141,6 +1218,7 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
+            pip install pytest-mock
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1476,6 +1554,7 @@ jobs:
       - run: python ./tests/code_coverage_tests/prevent_key_leaks_in_exceptions.py
       - run: python ./tests/code_coverage_tests/check_unsafe_enterprise_import.py
       - run: python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
+      - run: python ./tests/code_coverage_tests/check_fastuuid_usage.py
       - run: helm lint ./deploy/charts/litellm-helm
 
   db_migration_disable_update_check:
@@ -1590,7 +1669,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -1728,7 +1807,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "jsonlines==4.0.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
@@ -1779,8 +1858,8 @@ jobs:
             docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e AZURE_API_KEY=$AZURE_BATCHES_API_KEY \
-              -e AZURE_API_BASE=$AZURE_BATCHES_API_BASE \
+              -e AZURE_API_KEY=$AZURE_API_KEY \
+              -e AZURE_API_BASE=$AZURE_API_BASE \
               -e AZURE_API_VERSION="2024-05-01-preview" \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
@@ -1870,7 +1949,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -2373,7 +2452,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
       - run:
           name: Build Docker image
           command: |
@@ -2478,7 +2557,7 @@ jobs:
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "boto3==1.36.0"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install pyarrow
             pip install numpydoc
             pip install prisma
@@ -2527,6 +2606,8 @@ jobs:
               -e GEMINI_API_KEY=$GEMINI_API_KEY \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
               -e ASSEMBLYAI_API_KEY=$ASSEMBLYAI_API_KEY \
+              -e AZURE_API_KEY_PASSHROUGH=$AZURE_API_KEY_PASSHROUGH \
+              -e AZURE_API_BASE_PASSHROUGH=$AZURE_API_BASE_PASSHROUGH \
               -e USE_DDTRACE=True \
               -e DD_API_KEY=$DD_API_KEY \
               -e DD_SITE=$DD_SITE \
@@ -2867,7 +2948,7 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install pyarrow
             pip install numpydoc
             pip install prisma
@@ -3031,6 +3112,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - mypy_linting:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - local_testing:
           filters:
             branches:
@@ -3175,6 +3262,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - litellm_mapped_enterprise_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - litellm_mapped_tests:
           filters:
             branches:
@@ -3219,6 +3312,7 @@ workflows:
             - guardrails_testing
             - llm_responses_api_testing
             - litellm_mapped_tests
+            - litellm_mapped_enterprise_tests
             - batches_testing
             - litellm_utils_testing
             - pass_through_unit_testing
@@ -3270,6 +3364,7 @@ workflows:
                 - main
       - publish_to_pypi:
           requires:
+            - mypy_linting
             - local_testing
             - build_and_test
             - e2e_openai_endpoints
@@ -3279,6 +3374,7 @@ workflows:
             - google_generate_content_endpoint_testing
             - llm_responses_api_testing
             - litellm_mapped_tests
+            - litellm_mapped_enterprise_tests
             - batches_testing
             - litellm_utils_testing
             - pass_through_unit_testing

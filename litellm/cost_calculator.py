@@ -58,6 +58,9 @@ from litellm.llms.vertex_ai.cost_calculator import (
 )
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
+from litellm.llms.lemonade.cost_calculator import (
+    cost_per_token as lemonade_cost_per_token,
+)
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -148,6 +151,8 @@ def cost_per_token(  # noqa: PLR0915
     ### CALL TYPE ###
     call_type: CallTypesLiteral = "completion",
     audio_transcription_file_duration: float = 0.0,  # for audio transcription calls - the file time in seconds
+    ### SERVICE TIER ###
+    service_tier: Optional[str] = None,  # for OpenAI service tier pricing
 ) -> Tuple[float, float]:  # type: ignore
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -278,6 +283,7 @@ def cost_per_token(  # noqa: PLR0915
                 model=model_without_prefix,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
+                service_tier=service_tier,
             )
 
         return prompt_cost, completion_cost
@@ -327,7 +333,7 @@ def cost_per_token(  # noqa: PLR0915
     elif custom_llm_provider == "bedrock":
         return bedrock_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "openai":
-        return openai_cost_per_token(model=model, usage=usage_block)
+        return openai_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "fireworks_ai":
@@ -344,6 +350,8 @@ def cost_per_token(  # noqa: PLR0915
         return perplexity_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "xai":
         return xai_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "lemonade":
+        return lemonade_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "dashscope":
         from litellm.llms.dashscope.cost_calculator import (
             cost_per_token as dashscope_cost_per_token,
@@ -581,6 +589,42 @@ def _infer_call_type(
     return call_type
 
 
+def _store_cost_breakdown_in_logging_obj(
+    litellm_logging_obj: Optional[LitellmLoggingObject],
+    prompt_tokens_cost_usd_dollar: float,
+    completion_tokens_cost_usd_dollar: float,
+    cost_for_built_in_tools_cost_usd_dollar: float,
+    total_cost_usd_dollar: float,
+) -> None:
+    """
+    Helper function to store cost breakdown in the logging object.
+    
+    Args:
+        litellm_logging_obj: The logging object to store breakdown in
+        call_type: Type of call (completion, etc.)
+        prompt_tokens_cost_usd_dollar: Cost of input tokens
+        completion_tokens_cost_usd_dollar: Cost of completion tokens (includes reasoning if applicable)
+        cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
+        total_cost_usd_dollar: Total cost of request
+    """
+    if (litellm_logging_obj is None):
+        return
+    
+    try:
+        # Store the cost breakdown - reasoning cost is 0 since it's already included in completion cost
+        litellm_logging_obj.set_cost_breakdown(
+            input_cost=prompt_tokens_cost_usd_dollar,
+            output_cost=completion_tokens_cost_usd_dollar,
+            total_cost=total_cost_usd_dollar,
+            cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools_cost_usd_dollar
+        )
+        
+    except Exception as breakdown_error:
+        verbose_logger.debug(f"Error storing cost breakdown: {str(breakdown_error)}")
+        # Don't fail the main cost calculation if breakdown storage fails
+        pass
+
+
 def completion_cost(  # noqa: PLR0915
     completion_response=None,
     model: Optional[str] = None,
@@ -606,6 +650,8 @@ def completion_cost(  # noqa: PLR0915
     litellm_model_name: Optional[str] = None,
     router_model_id: Optional[str] = None,
     litellm_logging_obj: Optional[LitellmLoggingObject] = None,
+    ### SERVICE TIER ###
+    service_tier: Optional[str] = None,  # for OpenAI service tier pricing
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -658,6 +704,10 @@ def completion_cost(  # noqa: PLR0915
             completion_response=completion_response
         )
         rerank_billed_units: Optional[RerankBilledUnits] = None
+        
+        # Extract service_tier from optional_params if not provided directly
+        if service_tier is None and optional_params is not None:
+            service_tier = optional_params.get("service_tier")
 
         selected_model = _select_model_name_for_cost_calc(
             model=model,
@@ -909,11 +959,12 @@ def completion_cost(  # noqa: PLR0915
                     call_type=cast(CallTypesLiteral, call_type),
                     audio_transcription_file_duration=audio_transcription_file_duration,
                     rerank_billed_units=rerank_billed_units,
+                    service_tier=service_tier,
                 )
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 )
-                _final_cost += (
+                cost_for_built_in_tools = (
                     StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
                         model=model,
                         response_object=completion_response,
@@ -922,6 +973,17 @@ def completion_cost(  # noqa: PLR0915
                         custom_llm_provider=custom_llm_provider,
                     )
                 )
+                _final_cost += cost_for_built_in_tools
+                
+                # Store cost breakdown in logging object if available
+                _store_cost_breakdown_in_logging_obj(
+                    litellm_logging_obj=litellm_logging_obj,
+                    prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
+                    completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
+                    cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
+                    total_cost_usd_dollar=_final_cost
+                )
+                
                 return _final_cost
             except Exception as e:
                 verbose_logger.debug(
@@ -1003,6 +1065,8 @@ def response_cost_calculator(
     litellm_model_name: Optional[str] = None,
     router_model_id: Optional[str] = None,
     litellm_logging_obj: Optional[LitellmLoggingObject] = None,
+    ### SERVICE TIER ###
+    service_tier: Optional[str] = None,  # for OpenAI service tier pricing
 ) -> float:
     """
     Returns
@@ -1036,6 +1100,7 @@ def response_cost_calculator(
                 litellm_model_name=litellm_model_name,
                 router_model_id=router_model_id,
                 litellm_logging_obj=litellm_logging_obj,
+                service_tier=service_tier,
             )
         return response_cost
     except Exception as e:
