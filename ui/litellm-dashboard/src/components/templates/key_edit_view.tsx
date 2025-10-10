@@ -3,7 +3,7 @@ import { Form, Input, Select, Button as AntdButton, Tooltip } from "antd";
 import { Button as TremorButton, TextInput } from "@tremor/react";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { fetchTeamModels } from "../organisms/create_key_button";
-import { modelAvailableCall, getPromptsList, getPassThroughEndpointsCall } from "../networking";
+import { modelAvailableCall, getPromptsList } from "../networking";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -15,6 +15,7 @@ import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -59,7 +60,6 @@ export function KeyEditView({
   const [form] = Form.useForm();
   const [userModels, setUserModels] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
-  const [passThroughRoutesList, setPassThroughRoutesList] = useState<string[]>([]);
   const team = teams?.find((team) => team.team_id === keyData.team_id);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
@@ -114,19 +114,8 @@ export function KeyEditView({
       }
     };
 
-    const fetchPassThroughRoutes = async () => {
-      if (!accessToken) return;
-      try {
-        const response = await getPassThroughEndpointsCall(accessToken);
-        setPassThroughRoutesList(response.endpoints.map((route: { path: string }) => route.path));
-      } catch (error) {
-        console.error("Failed to fetch pass through routes:", error);
-      }
-    };
-
     fetchPrompts();
     fetchModels();
-    fetchPassThroughRoutes();
   }, [userID, userRole, accessToken, team, keyData.team_id]);
 
   // Sync disabled callbacks with form when component mounts
@@ -290,10 +279,10 @@ export function KeyEditView({
 
       <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
         <Tooltip title={!premiumUser ? "Setting allowed pass through routes by key is a premium feature" : ""} placement="top">
-          <Select
-            mode="tags"
-            style={{ width: "100%" }}
-            disabled={!premiumUser}
+          <PassThroughRoutesSelector
+            onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+            value={form.getFieldValue("allowed_passthrough_routes")}
+            accessToken={accessToken || ""}
             placeholder={
               !premiumUser
                 ? "Premium feature - Upgrade to set allowed pass through routes by key"
@@ -301,7 +290,7 @@ export function KeyEditView({
                   ? `Current: ${keyData.metadata.allowed_passthrough_routes.join(", ")}`
                   : "Select or enter allowed pass through routes"
             }
-            options={passThroughRoutesList.map((name) => ({ value: name, label: name }))}
+            disabled={!premiumUser}
           />
         </Tooltip>
       </Form.Item>
