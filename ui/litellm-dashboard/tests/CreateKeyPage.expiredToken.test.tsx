@@ -130,7 +130,6 @@ vi.mock("@/lib/cva.config", () => ({
 }));
 
 import CreateKeyPage from "@/app/page";
-import { FeatureFlagsProvider } from "@/hooks/useFeatureFlags";
 
 /** ----------------------------
  * Helpers

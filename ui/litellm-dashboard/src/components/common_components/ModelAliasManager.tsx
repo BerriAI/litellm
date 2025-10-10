@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { message } from "antd";
 import { PlusCircleIcon, PencilIcon, TrashIcon } from "@heroicons/react/outline";
 import { Card, Title, Text, Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
 import ModelSelector from "./ModelSelector";

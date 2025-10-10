@@ -1,23 +1,7 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import React from "react";
 import {
-  Badge,
-  Card,
-  Table,
-  Metric,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
   Text,
-  Title,
-  Icon,
-  Accordion,
-  AccordionBody,
-  AccordionHeader,
-  List,
-  ListItem,
   Tab,
   TabGroup,
   TabList,
@@ -25,8 +9,6 @@ import {
   TabPanels,
   Grid,
 } from "@tremor/react";
-import { Statistic } from "antd";
-import { modelAvailableCall } from "./networking";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 
 interface ApiRefProps {

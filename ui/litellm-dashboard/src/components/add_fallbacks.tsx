@@ -3,10 +3,10 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { Button, TextInput, Grid, Col } from "@tremor/react";
-import { Select, SelectItem, MultiSelect, MultiSelectItem, SearchSelect, SearchSelectItem } from "@tremor/react";
+import { Button } from "@tremor/react";
+import { SearchSelect, SearchSelectItem } from "@tremor/react";
 import { setCallbacksCall } from "./networking";
-import { Modal, Form, message } from "antd";
+import { Modal, Form } from "antd";
 import { fetchAvailableModels, ModelGroup } from "./chat_ui/llm_calls/fetch_models";
 import NotificationManager from "./molecules/notifications_manager";
 
