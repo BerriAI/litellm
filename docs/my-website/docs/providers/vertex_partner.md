@@ -3,7 +3,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# Vertex AI - Partner Models
+# Vertex AI - Anthropic, DeepSeek, Model Garden
 
 ## Supported Partner Providers
 
