@@ -65,7 +65,7 @@ class JavelinGuardrail(CustomGuardrail):
         )
         self.api_version = api_version
         self.guardrail_name = guardrail_name
-        self.javelin_guard_name = javelin_guard_name or guardrail_name
+        self.javelin_guard_name = javelin_guard_name or "javelin_guard"
         self.default_on = default_on
         self.metadata = metadata
         self.config = config
