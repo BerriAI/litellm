@@ -40,7 +40,7 @@ import NotificationsManager from "../../../components/molecules/notifications_ma
 import AllModelsTab from "@/app/(dashboard)/models-and-endpoints/components/AllModelsTab";
 import PriceDataManagementTab from "@/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab";
 import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab";
-import ModelAnalyticsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelAnalyticsTab";
+import ModelAnalyticsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelAnalyticsTab/ModelAnalyticsTab";
 
 interface ModelDashboardProps {
   accessToken: string | null;

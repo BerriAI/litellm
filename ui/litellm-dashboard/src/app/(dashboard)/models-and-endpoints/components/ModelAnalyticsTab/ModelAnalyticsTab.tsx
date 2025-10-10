@@ -27,7 +27,7 @@ import UsageDatePicker from "@/components/shared/usage_date_picker";
 import { Popover } from "antd";
 import { FilterIcon } from "@heroicons/react/outline";
 import TimeToFirstToken from "@/components/model_metrics/time_to_first_token";
-import React, { useEffect, useState } from "react";
+import React, { useEffect } from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
@@ -38,6 +38,7 @@ import {
   modelMetricsSlowResponsesCall,
   streamingModelMetricsCall,
 } from "@/components/networking";
+import FilterByContent from "@/app/(dashboard)/models-and-endpoints/components/ModelAnalyticsTab/FilterByContent";
 
 interface GlobalExceptionActivityData {
   sum_num_rate_limit_exceptions: number;
@@ -117,119 +118,9 @@ const ModelAnalyticsTab = ({
 }: ModelAnalyticsTabProps) => {
   const { accessToken, userId, userRole, premiumUser } = useAuthorized();
 
-  const [selectedTeamFilter, setSelectedTeamFilter] = useState<string | null>(null);
-
   useEffect(() => {
     updateModelMetrics(selectedModelGroup, dateValue.from, dateValue.to);
   }, [selectedAPIKey, selectedCustomer, selectedTeam]);
-
-  const FilterByContent = (
-    <div>
-      <Text className="mb-1">Select API Key Name</Text>
-
-      {premiumUser ? (
-        <div>
-          <Select defaultValue="all-keys">
-            <SelectItem
-              key="all-keys"
-              value="all-keys"
-              onClick={() => {
-                setSelectedAPIKey(null);
-              }}
-            >
-              All Keys
-            </SelectItem>
-            {keys?.map((key: any, index: number) => {
-              if (key && key["key_alias"] !== null && key["key_alias"].length > 0) {
-                return (
-                  <SelectItem
-                    key={index}
-                    value={String(index)}
-                    onClick={() => {
-                      setSelectedAPIKey(key);
-                    }}
-                  >
-                    {key["key_alias"]}
-                  </SelectItem>
-                );
-              }
-              return null;
-            })}
-          </Select>
-
-          <Text className="mt-1">Select Customer Name</Text>
-
-          <Select defaultValue="all-customers">
-            <SelectItem
-              key="all-customers"
-              value="all-customers"
-              onClick={() => {
-                setSelectedCustomer(null);
-              }}
-            >
-              All Customers
-            </SelectItem>
-            {allEndUsers?.map((user: any, index: number) => {
-              return (
-                <SelectItem
-                  key={index}
-                  value={user}
-                  onClick={() => {
-                    setSelectedCustomer(user);
-                  }}
-                >
-                  {user}
-                </SelectItem>
-              );
-            })}
-          </Select>
-
-          <Text className="mt-1">Select Team</Text>
-
-          <Select
-            className="w-64 relative z-50"
-            defaultValue="all"
-            value={selectedTeamFilter ?? "all"}
-            onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
-          >
-            <SelectItem value="all">All Teams</SelectItem>
-            {teams
-              ?.filter((team) => team.team_id)
-              .map((team) => (
-                <SelectItem key={team.team_id} value={team.team_id}>
-                  {team.team_alias
-                    ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
-                    : `Team ${team.team_id.slice(0, 8)}...`}
-                </SelectItem>
-              ))}
-          </Select>
-        </div>
-      ) : (
-        <div>
-          {/* ... existing non-premium user content ... */}
-          <Text className="mt-1">Select Team</Text>
-
-          <Select
-            className="w-64 relative z-50"
-            defaultValue="all"
-            value={selectedTeamFilter ?? "all"}
-            onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
-          >
-            <SelectItem value="all">All Teams</SelectItem>
-            {teams
-              ?.filter((team) => team.team_id)
-              .map((team) => (
-                <SelectItem key={team.team_id} value={team.team_id}>
-                  {team.team_alias
-                    ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
-                    : `Team ${team.team_id.slice(0, 8)}...`}
-                </SelectItem>
-              ))}
-          </Select>
-        </div>
-      )}
-    </div>
-  );
 
   const updateModelMetrics = async (
     modelGroup: string | null,
@@ -367,7 +258,15 @@ const ModelAnalyticsTab = ({
         <Col>
           <Popover
             trigger="click"
-            content={FilterByContent}
+            content={
+              <FilterByContent
+                allEndUsers={allEndUsers}
+                keys={keys}
+                setSelectedAPIKey={setSelectedAPIKey}
+                setSelectedCustomer={setSelectedCustomer}
+                teams={teams}
+              />
+            }
             overlayStyle={{
               width: "20vw",
             }}
