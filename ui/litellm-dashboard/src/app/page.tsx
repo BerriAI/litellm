@@ -10,7 +10,7 @@ import { ThemeProvider } from "@/contexts/ThemeContext";
 import UserDashboard from "@/components/user_dashboard";
 import ModelDashboard from "@/components/templates/model_dashboard";
 import ViewUserDashboard from "@/components/view_users";
-import Teams from "@/components/teams";
+import TeamsView from "@/app/(dashboard)/teams/TeamsView";
 import Organizations from "@/components/organizations";
 import { fetchOrganizations } from "@/components/organizations";
 import AdminPanel from "@/components/admins";
@@ -376,10 +376,9 @@ export default function CreateKeyPage() {
                     setKeys={setKeys}
                   />
                 ) : page == "teams" ? (
-                  <Teams
+                  <TeamsView
                     teams={teams}
                     setTeams={setTeams}
-                    searchParams={searchParams}
                     accessToken={accessToken}
                     userID={userID}
                     userRole={userRole}
