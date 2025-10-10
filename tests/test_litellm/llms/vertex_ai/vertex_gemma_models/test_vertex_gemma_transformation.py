@@ -21,7 +21,7 @@ class TestVertexGemmaCompletion:
         Test litellm.acompletion() with Vertex AI Gemma model
         
         Expected URL:
-        https://322775931984805888.us-central1-10582012152.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict
+        https://32277599999999999.us-central1-10582012152.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict
         
         Expected Request Body (sent to Vertex):
         {
@@ -125,7 +125,7 @@ class TestVertexGemmaCompletion:
                 model="vertex_ai/gemma/gemma-3-12b-it-1759525599171",
                 messages=[{"role": "user", "content": "What is machine learning?"}],
                 max_tokens=100,
-                api_base="https://322775931984805888.us-central1-10582012152.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+                api_base="https://32277599999999999.us-central1-10582012152.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
                 vertex_project="PROJECT_ID",
                 vertex_location="us-central1",
             )
@@ -138,7 +138,7 @@ class TestVertexGemmaCompletion:
             request_url = call_args.kwargs["url"]
             
             # Validate exact URL matches what we sent
-            expected_url = "https://322775931984805888.us-central1-10582012152.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict"
+            expected_url = "https://32277599999999999.us-central1-10582012152.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict"
             assert request_url == expected_url, f"Expected URL: {expected_url}\nActual URL: {request_url}"
             
             # Validate Request Body matches expected format
