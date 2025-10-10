@@ -1,27 +1,19 @@
 import React, { useState, useEffect } from "react";
-import Link from "next/link";
 import { Typography } from "antd";
 import {
   teamDeleteCall,
-  teamUpdateCall,
-  teamInfoCall,
   Organization,
-  DEFAULT_ORGANIZATION,
   fetchMCPAccessGroups,
 } from "./networking";
-import TeamMemberModal from "@/components/team/edit_membership";
 import { fetchTeams } from "./common_components/fetch_teams";
 import {
-  InformationCircleIcon,
   PencilAltIcon,
-  PencilIcon,
   RefreshIcon,
-  StatusOnlineIcon,
   TrashIcon,
   ChevronDownIcon,
   ChevronRightIcon,
 } from "@heroicons/react/outline";
-import { Button as Button2, Modal, Form, Input, Select as Select2, message, Tooltip } from "antd";
+import { Button as Button2, Modal, Form, Input, Select as Select2, Tooltip } from "antd";
 import NumericalInput from "./shared/numerical_input";
 import {
   fetchAvailableModelsForTeamOrKey,
@@ -31,7 +23,7 @@ import {
 import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { getGuardrailsList } from "./networking";
-import TeamInfoView, { TeamData } from "@/components/team/team_info";
+import TeamInfoView from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isAdminRole } from "@/utils/roles";
 import {
@@ -58,7 +50,6 @@ import {
   TabPanels,
   Tab,
 } from "@tremor/react";
-import { CogIcon } from "@heroicons/react/outline";
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
@@ -98,14 +89,10 @@ interface EditTeamModalProps {
 
 import {
   teamCreateCall,
-  teamMemberAddCall,
-  teamMemberUpdateCall,
   Member,
-  modelAvailableCall,
   v2TeamListCall,
 } from "./networking";
 import { updateExistingKeys } from "@/utils/dataUtils";
-import { deprecate } from "node:util";
 
 interface TeamInfo {
   members_with_roles: Member[];
