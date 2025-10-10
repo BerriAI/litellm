@@ -92,6 +92,30 @@ AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 0))
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
 
+# SSL/TLS cipher configuration for faster handshakes
+# Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
+# This balances performance with broad compatibility
+DEFAULT_SSL_CIPHERS = os.getenv(
+    "LITELLM_SSL_CIPHERS",
+    # Priority 1: TLS 1.3 ciphers (fastest, ~50ms handshake)
+    "TLS_AES_256_GCM_SHA384:"           # Fastest observed in testing
+    "TLS_AES_128_GCM_SHA256:"           # Slightly faster than 256-bit
+    "TLS_CHACHA20_POLY1305_SHA256:"     # Fast on ARM/mobile
+    # Priority 2: TLS 1.2 ECDHE+GCM (fast, ~100ms handshake, widely supported)
+    "ECDHE-RSA-AES256-GCM-SHA384:"
+    "ECDHE-RSA-AES128-GCM-SHA256:"
+    "ECDHE-ECDSA-AES256-GCM-SHA384:"
+    "ECDHE-ECDSA-AES128-GCM-SHA256:"
+    # Priority 3: Additional modern ciphers (good balance)
+    "ECDHE-RSA-CHACHA20-POLY1305:"
+    "ECDHE-ECDSA-CHACHA20-POLY1305:"
+    # Priority 4: Widely compatible fallbacks (slower but universally supported)
+    "ECDHE-RSA-AES256-SHA384:"          # Common fallback
+    "ECDHE-RSA-AES128-SHA256:"          # Very widely supported
+    "AES256-GCM-SHA384:"                # Non-PFS fallback (compatibility)
+    "AES128-GCM-SHA256",                # Last resort (maximum compatibility)
+)
+
 ########### v2 Architecture constants for managing writing updates to the database ###########
 REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_spend_update_buffer"
@@ -1033,6 +1057,12 @@ PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
 )  # 5 minutes
+DEFAULT_SHARED_HEALTH_CHECK_TTL = int(
+    os.getenv("DEFAULT_SHARED_HEALTH_CHECK_TTL", 300)
+)  # 5 minutes - TTL for cached health check results
+DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL = int(
+    os.getenv("DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL", 60)
+)  # 1 minute - TTL for health check lock
 PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS = int(
     os.getenv("PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS", 9)
 )
