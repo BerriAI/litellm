@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Card, Text, Title, Button, Badge } from "@tremor/react";
+import { Card, Text, Title, Button, Badge, Accordion, AccordionHeader, AccordionBody, Title as TremorTitle } from "@tremor/react";
 import { Form, Input, Select as Select2, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { fetchUserModels } from "../organisms/create_key_button";
@@ -7,6 +7,8 @@ import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_
 import { tagInfoCall, tagUpdateCall } from "../networking";
 import { Tag } from "./types";
 import NotificationsManager from "../molecules/notifications_manager";
+import NumericalInput from "../shared/numerical_input";
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 
 interface TagInfoViewProps {
   tagId: string;
@@ -34,6 +36,11 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
             name: tagData.name,
             description: tagData.description,
             models: tagData.models,
+            max_budget: tagData.litellm_budget_table?.max_budget,
+            soft_budget: tagData.litellm_budget_table?.soft_budget,
+            tpm_limit: tagData.litellm_budget_table?.tpm_limit,
+            rpm_limit: tagData.litellm_budget_table?.rpm_limit,
+            budget_duration: tagData.litellm_budget_table?.budget_duration,
           });
         }
       }
@@ -62,6 +69,11 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
         name: values.name,
         description: values.description,
         models: values.models,
+        max_budget: values.max_budget,
+        soft_budget: values.soft_budget,
+        tpm_limit: values.tpm_limit,
+        rpm_limit: values.rpm_limit,
+        budget_duration: values.budget_duration,
       });
       NotificationsManager.success("Tag updated successfully");
       setIsEditing(false);
@@ -120,6 +132,83 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
               </Select2>
             </Form.Item>
 
+            <Accordion className="mt-4 mb-4">
+              <AccordionHeader>
+                <TremorTitle className="m-0">Budget & Rate Limits</TremorTitle>
+              </AccordionHeader>
+              <AccordionBody>
+                <Form.Item
+                  label={
+                    <span>
+                      Max Budget (USD){" "}
+                      <Tooltip title="Maximum amount in USD this tag can spend">
+                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="max_budget"
+                >
+                  <NumericalInput step={0.01} precision={2} width={200} />
+                </Form.Item>
+
+                <Form.Item
+                  label={
+                    <span>
+                      Soft Budget (USD){" "}
+                      <Tooltip title="Get a slack alert when this soft budget is reached">
+                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="soft_budget"
+                >
+                  <NumericalInput step={0.01} precision={2} width={200} />
+                </Form.Item>
+
+                <Form.Item
+                  label={
+                    <span>
+                      Reset Budget{" "}
+                      <Tooltip title="How often the budget should reset">
+                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="budget_duration"
+                >
+                  <BudgetDurationDropdown onChange={(value) => form.setFieldValue("budget_duration", value)} />
+                </Form.Item>
+
+                <Form.Item
+                  label={
+                    <span>
+                      TPM Limit{" "}
+                      <Tooltip title="Maximum tokens per minute">
+                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="tpm_limit"
+                >
+                  <NumericalInput step={1} width={400} />
+                </Form.Item>
+
+                <Form.Item
+                  label={
+                    <span>
+                      RPM Limit{" "}
+                      <Tooltip title="Maximum requests per minute">
+                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="rpm_limit"
+                >
+                  <NumericalInput step={1} width={400} />
+                </Form.Item>
+              </AccordionBody>
+            </Accordion>
+
             <div className="flex justify-end space-x-2">
               <Button onClick={() => setIsEditing(false)}>Cancel</Button>
               <Button type="submit">Save Changes</Button>
@@ -163,6 +252,44 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
               </div>
             </div>
           </Card>
+
+          {tagDetails.litellm_budget_table && (
+            <Card>
+              <Title>Budget & Rate Limits</Title>
+              <div className="space-y-4 mt-4">
+                {tagDetails.litellm_budget_table.max_budget !== undefined && tagDetails.litellm_budget_table.max_budget !== null && (
+                  <div>
+                    <Text className="font-medium">Max Budget</Text>
+                    <Text>${tagDetails.litellm_budget_table.max_budget}</Text>
+                  </div>
+                )}
+                {tagDetails.litellm_budget_table.soft_budget !== undefined && tagDetails.litellm_budget_table.soft_budget !== null && (
+                  <div>
+                    <Text className="font-medium">Soft Budget</Text>
+                    <Text>${tagDetails.litellm_budget_table.soft_budget}</Text>
+                  </div>
+                )}
+                {tagDetails.litellm_budget_table.budget_duration && (
+                  <div>
+                    <Text className="font-medium">Budget Duration</Text>
+                    <Text>{tagDetails.litellm_budget_table.budget_duration}</Text>
+                  </div>
+                )}
+                {tagDetails.litellm_budget_table.tpm_limit !== undefined && tagDetails.litellm_budget_table.tpm_limit !== null && (
+                  <div>
+                    <Text className="font-medium">TPM Limit</Text>
+                    <Text>{tagDetails.litellm_budget_table.tpm_limit.toLocaleString()}</Text>
+                  </div>
+                )}
+                {tagDetails.litellm_budget_table.rpm_limit !== undefined && tagDetails.litellm_budget_table.rpm_limit !== null && (
+                  <div>
+                    <Text className="font-medium">RPM Limit</Text>
+                    <Text>{tagDetails.litellm_budget_table.rpm_limit.toLocaleString()}</Text>
+                  </div>
+                )}
+              </div>
+            </Card>
+          )}
         </div>
       )}
     </div>
