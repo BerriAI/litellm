@@ -177,9 +177,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
 
   const [selectedTeamFilter, setSelectedTeamFilter] = useState<string | null>(null);
-  const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] = useState<string | null>(null);
-
-  const [modelNameSearch, setModelNameSearch] = useState<string>("");
 
   // Add state for showing/hiding filters
   const [showFilters, setShowFilters] = useState<boolean>(false);
@@ -997,13 +994,9 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
               </TabList>
               <TabPanels>
                 <AllModelsTab
-                  modelNameSearch={modelNameSearch}
-                  setModelNameSearch={setModelNameSearch}
                   selectedModelGroup={selectedModelGroup}
                   setSelectedModelGroup={setSelectedModelGroup}
                   availableModelGroups={availableModelGroups}
-                  selectedModelAccessGroupFilter={selectedModelAccessGroupFilter}
-                  setSelectedModelAccessGroupFilter={setSelectedModelAccessGroupFilter}
                   availableModelAccessGroups={availableModelAccessGroups}
                   setSelectedModelId={setSelectedModelId}
                   setSelectedTeamId={setSelectedTeamId}
