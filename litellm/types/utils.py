@@ -2222,6 +2222,10 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     arize_space_key: Optional[str]
     arize_space_id: Optional[str]
 
+    # PostHog dynamic params
+    posthog_api_key: Optional[str]
+    posthog_api_url: Optional[str]
+
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
