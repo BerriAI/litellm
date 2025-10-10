@@ -1380,6 +1380,7 @@ class MCPServerManager:
         if not server:
             return {
                 "server_id": server_id,
+                "server_name": None,
                 "status": "unknown",
                 "error": "Server not found",
                 "last_health_check": datetime.now().isoformat(),
@@ -1394,6 +1395,7 @@ class MCPServerManager:
 
             return {
                 "server_id": server_id,
+                "server_name": server.name,
                 "status": "healthy",
                 "tools_count": len(tools),
                 "last_health_check": datetime.now().isoformat(),
@@ -1406,6 +1408,7 @@ class MCPServerManager:
 
             return {
                 "server_id": server_id,
+                "server_name": server.name,
                 "status": "unhealthy",
                 "last_health_check": datetime.now().isoformat(),
                 "response_time_ms": round(response_time, 2),
