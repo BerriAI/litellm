@@ -167,6 +167,9 @@ class VertexAITextEmbeddingConfig(BaseModel):
         vertex_request["parameters"] = TextEmbeddingFineTunedParameters(
             **optional_params
         )
+        # Remove 'shared_session' from parameters if present
+        if "shared_session" in vertex_request["parameters"]:
+            del vertex_request["parameters"]["shared_session"]
 
         return vertex_request
 
