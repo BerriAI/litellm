@@ -590,10 +590,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # This means all actions were ANONYMIZED or NONE, so don't raise exception
         return False
 
-    def create_guardrail_blocked_response(
-        self, response: str, stream: bool = False
-    ) -> ModelResponse:
-        from litellm.types.utils import Choices, Message, ModelResponse, Usage
+    def create_guardrail_blocked_response(self, response: str) -> ModelResponse:
+        from litellm.types.utils import Choices, Message, ModelResponse
 
         return ModelResponse(
             choices=[
@@ -602,11 +600,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
             ],
             model="bedrock-guardrail",
-            usage=Usage(
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
-            ),
         )
 
     async def async_pre_call_hook(
@@ -668,7 +661,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         if isinstance(bedrock_guardrail_response, str):
             data["mock_response"] = self.create_guardrail_blocked_response(
-                response=bedrock_guardrail_response, stream=False
+                response=bedrock_guardrail_response
             )
 
         #########################################################
@@ -733,7 +726,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         if isinstance(bedrock_guardrail_response, str):
             data["mock_response"] = self.create_guardrail_blocked_response(
-                response=bedrock_guardrail_response, stream=False
+                response=bedrock_guardrail_response
             )
 
         #########################################################
@@ -805,7 +798,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         if isinstance(output_content_bedrock, str):
             response = self.create_guardrail_blocked_response(
-                response=output_content_bedrock, stream=False
+                response=output_content_bedrock
             )
         else:
             self._apply_masking_to_response(
@@ -904,20 +897,33 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 messages=request_data.get("messages"),
                 request_data=request_data,
             )  # Only input messages
+            output_guardrail_response: Optional[
+                Union[BedrockGuardrailResponse, str]
+            ] = None
             output_task = self.make_bedrock_api_request(
                 source="OUTPUT", response=assembled_model_response
             )  # Only response
 
             # Execute both requests in parallel
-            _, output_guardrail_response = await asyncio.gather(input_task, output_task)
+            try:
+                _, output_guardrail_response = await asyncio.gather(
+                    input_task, output_task
+                )
+            except GuardrailInterventionNormalStringError as e:
+                output_guardrail_response = e.message
 
             #########################################################################
             ########## 2. Apply masking to response with output guardrail response ##########
             #########################################################################
-            self._apply_masking_to_response(
-                response=assembled_model_response,
-                bedrock_guardrail_response=output_guardrail_response,
-            )
+            if isinstance(output_guardrail_response, str):
+                assembled_model_response = self.create_guardrail_blocked_response(
+                    response=output_guardrail_response
+                )
+            else:
+                self._apply_masking_to_response(
+                    response=assembled_model_response,
+                    bedrock_guardrail_response=output_guardrail_response,
+                )
 
             #########################################################################
             ########## 3. Return the (potentially masked) chunks ##########
