@@ -2325,6 +2325,7 @@ all_litellm_params = [
     "litellm_session_id",
     "use_litellm_proxy",
     "prompt_label",
+    "shared_session",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
