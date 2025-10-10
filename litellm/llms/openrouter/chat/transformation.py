@@ -88,8 +88,8 @@ class OpenrouterConfig(OpenAIGPTConfig):
         Move cache_control from message level to content blocks.
         OpenRouter requires cache_control to be inside content blocks, not at message level.
         
-        When cache_control is at message level, it's added to ALL content blocks
-        to cache the entire message content.
+        To avoid exceeding Anthropic's limit of 4 cache breakpoints, cache_control is only
+        added to the LAST content block in each message.
         """
         transformed_messages = []
         for message in messages:
@@ -100,12 +100,14 @@ class OpenrouterConfig(OpenAIGPTConfig):
                 content = message_copy.get("content")
                 
                 if isinstance(content, list):
-                    # Content is already a list, add cache_control to all blocks
+                    # Content is already a list, add cache_control only to the last block
                     if len(content) > 0:
                         content_copy = []
-                        for block in content:
+                        for i, block in enumerate(content):
                             block_copy = dict(block)
-                            block_copy["cache_control"] = cache_control
+                            # Only add cache_control to the last content block
+                            if i == len(content) - 1:
+                                block_copy["cache_control"] = cache_control
                             content_copy.append(block_copy)
                         message_copy["content"] = content_copy
                 else:
