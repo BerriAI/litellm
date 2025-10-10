@@ -711,9 +711,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response = await self.make_bedrock_api_request(
-            source="INPUT", messages=new_messages, request_data=data
+        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
+            None
         )
+        try:
+            bedrock_guardrail_response = await self.make_bedrock_api_request(
+                source="INPUT", messages=new_messages, request_data=data
+            )
+        except GuardrailInterventionNormalStringError as e:
+            bedrock_guardrail_response = e.message
         #########################################################
 
         #########################################################
@@ -726,7 +732,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
         )
         if isinstance(bedrock_guardrail_response, str):
-            data["mock_response"] = bedrock_guardrail_response
+            data["mock_response"] = self.create_guardrail_blocked_response(
+                response=bedrock_guardrail_response, stream=False
+            )
 
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########
@@ -784,17 +792,26 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make parallel Bedrock API requests ##########
         #########################################################
-        output_content_bedrock = await self.make_bedrock_api_request(
-            source="OUTPUT", response=response, request_data=data
-        )  # Only response
+        output_content_bedrock: Optional[Union[BedrockGuardrailResponse, str]] = None
+        try:
+            output_content_bedrock = await self.make_bedrock_api_request(
+                source="OUTPUT", response=response, request_data=data
+            )
+        except GuardrailInterventionNormalStringError as e:
+            output_content_bedrock = e.message
 
         #########################################################
         ########## 2. Apply masking to response with output guardrail response ##########
         #########################################################
-        self._apply_masking_to_response(
-            response=response,
-            bedrock_guardrail_response=output_content_bedrock,
-        )
+        if isinstance(output_content_bedrock, str):
+            response = self.create_guardrail_blocked_response(
+                response=output_content_bedrock, stream=False
+            )
+        else:
+            self._apply_masking_to_response(
+                response=response,
+                bedrock_guardrail_response=output_content_bedrock,
+            )
 
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########
