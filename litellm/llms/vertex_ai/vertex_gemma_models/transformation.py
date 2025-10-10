@@ -42,6 +42,26 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         """
         return True
 
+    def _handle_fake_stream_response(
+        self,
+        model_response: ModelResponse,
+        stream: bool,
+    ) -> Union[ModelResponse, Any]:
+        """
+        Helper method to return fake stream iterator if streaming is requested.
+        
+        Args:
+            model_response: The completed model response
+            stream: Whether streaming was requested
+            
+        Returns:
+            MockResponseIterator if stream=True, otherwise the model_response
+        """
+        if stream:
+            from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+            return MockResponseIterator(model_response=model_response)
+        return model_response
+
     def transform_request(
         self,
         model: str,
@@ -167,6 +187,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
         from litellm.utils import convert_to_model_response_object
 
+        # Check if streaming is requested (will be faked)
+        stream = optional_params.get("stream", False)
+        
         # Transform the request using parent class methods
         request_data = self.transform_request(
             model=model,
@@ -233,7 +256,8 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             additional_args={"complete_input_dict": request_data},
         )
         
-        return model_response
+        # Return fake stream iterator if streaming was requested
+        return self._handle_fake_stream_response(model_response=model_response, stream=stream)
 
     async def _async_completion(
         self,
@@ -250,9 +274,13 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         encoding: Any,
     ):
         """Asynchronous completion request"""
-        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.utils import LlmProviders
         from litellm.utils import convert_to_model_response_object
 
+        # Check if streaming is requested (will be faked)
+        stream = optional_params.get("stream", False)
+        
         # Transform the request using parent class async methods
         request_data = await self.async_transform_request(
             model=model,
@@ -321,5 +349,6 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             additional_args={"complete_input_dict": request_data},
         )
         
-        return model_response
+        # Return fake stream iterator if streaming was requested
+        return self._handle_fake_stream_response(model_response=model_response, stream=stream)
 
