@@ -1292,7 +1292,7 @@ class MCPServerManager:
                 return server
         return None
 
-    def get_mcp_server_names_from_ids(self, server_ids: List[str]) -> List[MCPServer]:
+    def get_mcp_servers_from_ids(self, server_ids: List[str]) -> List[MCPServer]:
         servers = []
         registry = self.get_registry()
         for server in registry.values():

@@ -456,7 +456,7 @@ if MCP_AVAILABLE:
         allowed_mcp_server_ids = (
             await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         )
-        allowed_mcp_servers = global_mcp_server_manager.get_mcp_server_names_from_ids(
+        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(
             allowed_mcp_server_ids
         )
 
@@ -632,7 +632,7 @@ if MCP_AVAILABLE:
             user_api_key_auth=user_api_key_auth,
         )
 
-        allowed_mcp_servers = global_mcp_server_manager.get_mcp_server_names_from_ids(
+        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(
             allowed_mcp_server_ids
         )
 
@@ -679,7 +679,7 @@ if MCP_AVAILABLE:
         if local_tool:
             verbose_logger.debug(f"Executing local registry tool: {name}")
             response = await _handle_local_mcp_tool(name, arguments)
-        
+
         # Try managed MCP server tool (pass the full prefixed name)
         # Primary and recommended way to use external MCP servers
         #########################################################

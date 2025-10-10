@@ -110,7 +110,7 @@ class LiteLLM_Proxy_MCP_Handler:
         allowed_mcp_server_ids = (
             await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         )
-        allowed_mcp_servers = global_mcp_server_manager.get_mcp_server_names_from_ids(
+        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(
             allowed_mcp_server_ids
         )
 

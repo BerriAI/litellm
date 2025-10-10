@@ -1186,7 +1186,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="getpetbyid",
             arguments={"petId": "1"},
-            server_name_from_prefix="my_api_mcp",
+            server_name="my_api_mcp",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -1196,7 +1196,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="findpetsbystatus",
             arguments={"status": "available"},
-            server_name_from_prefix="my_api_mcp",
+            server_name="my_api_mcp",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -1207,7 +1207,7 @@ class TestMCPServerManager:
             await manager.pre_call_tool_check(
                 name="deletepet",
                 arguments={"petId": "1"},
-                server_name_from_prefix="my_api_mcp",
+                server_name="my_api_mcp",
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=server,
