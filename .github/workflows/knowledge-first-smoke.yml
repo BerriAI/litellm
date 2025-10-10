@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       binary_url:
-        description: "URL to codex/cxplus binary (Linux x86_64)"
-        required: true
+        description: "(Optional) URL to codex/cxplus binary (Linux x86_64). If empty, build from source."
+        required: false
         type: string
 
 jobs:
@@ -14,12 +14,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download binary
+      - name: Prepare binary directory
+        run: mkdir -p dist/bin
+
+      - name: Download provided binary
+        if: ${{ inputs.binary_url != '' }}
         run: |
-          mkdir -p dist/bin
           curl -fsSL "${{ inputs.binary_url }}" -o dist/bin/codex
           chmod +x dist/bin/codex
-          ./dist/bin/codex --help >/dev/null
+
+      - name: Build cxplus from source (fallback)
+        if: ${{ inputs.binary_url == '' }}
+        run: |
+          git clone https://github.com/grahama1970/codex _codex
+          cd _codex
+          make package
+          cp dist/bin/codex ../dist/bin/codex
+
+      - name: Sanity check binary
+        run: ./dist/bin/codex --help >/dev/null
 
       - name: Verify fixture presence
         run: |
