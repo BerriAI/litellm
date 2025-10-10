@@ -13,9 +13,10 @@ from typing import Any, Callable, Dict, List, Optional, Union, cast
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import LlmProviders, ModelResponse
 
 
 class VertexGemmaConfig(OpenAIGPTConfig):
@@ -28,6 +29,38 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
     def __init__(self) -> None:
         super().__init__()
+
+    def should_fake_stream(
+        self,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        """
+        Vertex AI Gemma models do not support streaming.
+        Return True to enable fake streaming on the client side.
+        """
+        return True
+
+    def _handle_fake_stream_response(
+        self,
+        model_response: ModelResponse,
+        stream: bool,
+    ) -> Union[ModelResponse, Any]:
+        """
+        Helper method to return fake stream iterator if streaming is requested.
+        
+        Args:
+            model_response: The completed model response
+            stream: Whether streaming was requested
+            
+        Returns:
+            MockResponseIterator if stream=True, otherwise the model_response
+        """
+        if stream:
+            from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+            return MockResponseIterator(model_response=model_response)
+        return model_response
 
     def transform_request(
         self,
@@ -52,41 +85,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             headers=headers,
         )
         
-        # Remove 'model' from the request as it's not needed in the instance
+        # Remove params not needed/supported by Vertex Gemma
         openai_request.pop("model", None)
-        
-        # Wrap in Vertex Gemma format
-        return {
-            "instances": [
-                {
-                    "@requestFormat": "chatCompletions",
-                    **openai_request,
-                }
-            ]
-        }
-    
-    async def async_transform_request(
-        self,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
-        """
-        Async version of transform_request.
-        """
-        # Get the base OpenAI request from parent class
-        openai_request = await super().async_transform_request(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            headers=headers,
-        )
-        
-        # Remove 'model' from the request as it's not needed in the instance
-        openai_request.pop("model", None)
+        openai_request.pop("stream", None)  # Streaming not supported, will be faked client-side
         
         # Wrap in Vertex Gemma format
         return {
@@ -137,16 +138,8 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     ):
         """
         Make completion request to Vertex Gemma endpoint.
-        Supports both sync and async requests.
+        Supports both sync and async requests with fake streaming.
         """
-        # Handle streaming
-        stream = optional_params.get("stream", False)
-        if stream:
-            raise BaseLLMException(
-                status_code=400,
-                message="Streaming is not yet supported for Vertex AI Gemma models",
-            )
-
         if acompletion:
             return self._async_completion(
                 model=model,
@@ -194,6 +187,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
         from litellm.utils import convert_to_model_response_object
 
+        # Check if streaming is requested (will be faked)
+        stream = optional_params.get("stream", False)
+        
         # Transform the request using parent class methods
         request_data = self.transform_request(
             model=model,
@@ -260,7 +256,8 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             additional_args={"complete_input_dict": request_data},
         )
         
-        return model_response
+        # Return fake stream iterator if streaming was requested
+        return self._handle_fake_stream_response(model_response=model_response, stream=stream)
 
     async def _async_completion(
         self,
@@ -277,9 +274,13 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         encoding: Any,
     ):
         """Asynchronous completion request"""
-        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.utils import LlmProviders
         from litellm.utils import convert_to_model_response_object
 
+        # Check if streaming is requested (will be faked)
+        stream = optional_params.get("stream", False)
+        
         # Transform the request using parent class async methods
         request_data = await self.async_transform_request(
             model=model,
@@ -306,7 +307,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Make the HTTP request
-        http_handler = AsyncHTTPHandler(concurrent_limit=1)
+        http_handler = get_async_httpx_client(
+            llm_provider=LlmProviders.VERTEX_AI,
+        )
         response = await http_handler.post(
             url=api_base,
             headers=headers,
@@ -346,5 +349,6 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             additional_args={"complete_input_dict": request_data},
         )
         
-        return model_response
+        # Return fake stream iterator if streaming was requested
+        return self._handle_fake_stream_response(model_response=model_response, stream=stream)
 
