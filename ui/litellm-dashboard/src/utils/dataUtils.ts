@@ -1,7 +1,6 @@
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { message } from "antd";
 
-export function updateExistingKeys<Source extends Object>(target: Source, source: Object): Source {
+export function updateExistingKeys<Source extends object>(target: Source, source: object): Source {
   const clonedTarget = structuredClone(target);
 
   for (const [key, value] of Object.entries(source)) {
