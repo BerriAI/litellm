@@ -40,6 +40,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
 import useFeatureFlags from "@/hooks/useFeatureFlags";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
+import OldTeams from "@/components/OldTeams";
 
 function getCookie(name: string) {
   // Safer cookie read + decoding; handles '=' inside values
@@ -376,7 +377,7 @@ export default function CreateKeyPage() {
                     setKeys={setKeys}
                   />
                 ) : page == "teams" ? (
-                  <TeamsView
+                  <OldTeams
                     teams={teams}
                     setTeams={setTeams}
                     accessToken={accessToken}
@@ -384,6 +385,7 @@ export default function CreateKeyPage() {
                     userRole={userRole}
                     organizations={organizations}
                     premiumUser={premiumUser}
+                    searchParams={searchParams}
                   />
                 ) : page == "organizations" ? (
                   <Organizations
