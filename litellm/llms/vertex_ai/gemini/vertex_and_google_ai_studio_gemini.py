@@ -229,8 +229,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "response_format",
             "n",
             "stop",
-            "frequency_penalty",
-            "presence_penalty",
             "extra_headers",
             "seed",
             "logprobs",
@@ -239,10 +237,24 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "parallel_tool_calls",
             "web_search_options",
         ]
+        
+        # Only add penalty parameters if the model supports them
+        if self._supports_penalty_parameters(model):
+            supported_params.extend(["frequency_penalty", "presence_penalty"])
+        
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
         return supported_params
+
+    def _supports_penalty_parameters(self, model: str) -> bool:
+        unsupported_models = ["gemini-2.5-pro-preview-06-05"]
+    
+        for pattern in unsupported_models:
+            if model in pattern:
+                return False
+        
+        return True
 
     def map_tool_choice_values(
         self, model: str, tool_choice: Union[str, dict]
@@ -679,9 +691,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     value=value, optional_params=optional_params
                 )
             elif param == "frequency_penalty":
-                optional_params["frequency_penalty"] = value
+                if self._supports_penalty_parameters(model):
+                    optional_params["frequency_penalty"] = value
+                elif not (drop_params or litellm.drop_params):
+                    # Log warning if penalty parameters are not supported and not dropping params
+                    verbose_logger.warning(
+                        f"Model {model} does not support frequency_penalty parameter. "
+                        "This parameter will be ignored. Consider using a model that supports penalty parameters."
+                    )
             elif param == "presence_penalty":
-                optional_params["presence_penalty"] = value
+                if self._supports_penalty_parameters(model):
+                    optional_params["presence_penalty"] = value
+                elif not (drop_params or litellm.drop_params):
+                    # Log warning if penalty parameters are not supported and not dropping params
+                    verbose_logger.warning(
+                        f"Model {model} does not support presence_penalty parameter. "
+                        "This parameter will be ignored. Consider using a model that supports penalty parameters."
+                    )
             elif param == "logprobs":
                 optional_params["responseLogprobs"] = value
             elif param == "top_logprobs":
