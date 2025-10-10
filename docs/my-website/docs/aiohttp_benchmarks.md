@@ -14,6 +14,7 @@ The load testing was conducted using the following parameters:
 - **Transport Comparison:** httpx (existing) vs aiohttp (new implementation)
 - **Number of pods/instance of litellm:** 1
 - **Machine Specs:** 2 vCPUs, 4GB RAM
+- **Recommendation for benchmarking:** 4 vCPUs, 8 GB RAM
 - **LiteLLM Settings:**
     - Tested against a [fake openai endpoint](https://exampleopenaiendpoint-production.up.railway.app/)
     - Set `USE_AIOHTTP_TRANSPORT="True"` in the environment variables. This feature flag enables the aiohttp transport.

@@ -52,12 +52,12 @@ In these tests the baseline latency characteristics are measured against a fake-
 | RPS | 950 |
 
 
-## Machine Spec used for testing
+## Recommended Machine Spec for Benchmarking
 
-Each machine deploying LiteLLM had the following specs:
+We recommend the following specs for running benchmarks:
 
-- 2 CPU
-- 4GB RAM
+- 4 vCPUs
+- 8 GB RAM
 
 ## How to measure LiteLLM Overhead
 
