@@ -3,22 +3,12 @@
 import importlib
 import os
 import sys
-import types
-import uuid as _uuid
 
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-
-if "fastuuid" not in sys.modules:
-    fastuuid_stub = types.ModuleType("fastuuid")
-    fastuuid_stub.uuid4 = _uuid.uuid4
-    fastuuid_stub.uuid1 = _uuid.uuid1
-    fastuuid_stub.uuid4_str = lambda: str(_uuid.uuid4())
-    sys.modules["fastuuid"] = fastuuid_stub
-
 import litellm
 
 

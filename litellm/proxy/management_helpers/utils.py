@@ -4,7 +4,7 @@ import inspect
 import uuid
 from datetime import datetime
 from functools import wraps
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
@@ -223,6 +223,7 @@ async def send_management_endpoint_alert(
     request_kwargs: dict,
     user_api_key_dict: UserAPIKeyAuth,
     function_name: str,
+    result: Optional[Any] = None,
 ):
     """
     Sends a slack alert when:
@@ -250,7 +251,8 @@ async def send_management_endpoint_alert(
     if function_name not in management_function_to_event_name:
         return
 
-    _event_name: AlertType = management_function_to_event_name[function_name]
+    alert_type: AlertType = management_function_to_event_name[function_name]
+    alert_type_value = getattr(alert_type, "value", str(alert_type))
     key_event = VirtualKeyEvent(
         created_by_user_id=user_api_key_dict.user_id or "Unknown",
         created_by_user_role=user_api_key_dict.user_role or "Unknown",
@@ -258,8 +260,7 @@ async def send_management_endpoint_alert(
         request_kwargs=request_kwargs,
     )
 
-    event_name = _event_name.replace("_", " ").title()
-    alert_type_value = _event_name.value if hasattr(_event_name, "value") else str(_event_name)
+    alert_title = alert_type_value.replace("_", " ").title()
 
     if (
         proxy_logging_obj is not None
@@ -267,19 +268,25 @@ async def send_management_endpoint_alert(
     ):
         await proxy_logging_obj.slack_alerting_instance.send_virtual_key_event_slack(
             key_event=key_event,
-            event_name=event_name,
-            alert_type=_event_name,
+            event_name=alert_title,
+            alert_type=alert_type,
         )
+
+    serialized_kwargs = _serialize_for_management_callbacks(request_kwargs)
+    serialized_result = (
+        _serialize_for_management_callbacks(result) if result is not None else None
+    )
 
     event_payload = {
         "alert_type": alert_type_value,
         "function_name": function_name,
-        "key_event": key_event,
+        "request": serialized_kwargs,
+        "result": serialized_result,
         "triggered_at": datetime.utcnow().isoformat() + "Z",
     }
 
     await _dispatch_management_callbacks(
-        event_name=event_name,
+        alert_title=alert_title,
         event_payload=event_payload,
         user_api_key_dict=user_api_key_dict,
     )
@@ -311,6 +318,7 @@ def management_endpoint_wrapper(func):
                     request_kwargs=kwargs,
                     user_api_key_dict=user_api_key_dict,
                     function_name=func.__name__,
+                    result=result,
                 )
                 _http_request = kwargs.get("http_request", None)
                 parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
@@ -388,7 +396,7 @@ def management_endpoint_wrapper(func):
 
 
 async def _dispatch_management_callbacks(
-    event_name: str,
+    alert_title: str,
     event_payload: dict,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
@@ -409,13 +417,16 @@ async def _dispatch_management_callbacks(
 
     for logger in custom_loggers:
         try:
+            # Check if the logger subclass provides its own async implementation.
+            # We use type(logger) to detect if the method was overridden vs. inherited from CustomLogger,
+            # avoiding calling the empty default hook and preventing mismatched async/sync usage.
             async_override = getattr(type(logger), "async_log_management_event", None)
             if (
                 async_override is not None
                 and async_override is not CustomLogger.async_log_management_event
             ):
                 result = logger.async_log_management_event(  # type: ignore[attr-defined]
-                    event_name=event_name,
+                    event_name=alert_title,
                     event_payload=serialized_payload,
                     user_api_key_dict=user_api_key_dict,
                 )
@@ -429,7 +440,7 @@ async def _dispatch_management_callbacks(
                 and sync_override is not CustomLogger.log_management_event
             ):
                 logger.log_management_event(  # type: ignore[attr-defined]
-                    event_name=event_name,
+                    event_name=alert_title,
                     event_payload=serialized_payload,
                     user_api_key_dict=user_api_key_dict,
                 )
