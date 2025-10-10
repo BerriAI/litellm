@@ -14,10 +14,8 @@ import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse, Usage
-from litellm.utils import CustomStreamWrapper
+from litellm.types.utils import ModelResponse
 
 
 class VertexGemmaConfig(OpenAIGPTConfig):
