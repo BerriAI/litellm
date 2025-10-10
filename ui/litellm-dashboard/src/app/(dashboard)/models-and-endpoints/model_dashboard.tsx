@@ -1,17 +1,16 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Text, Grid, Col } from "@tremor/react";
-import { CredentialItem, credentialListCall, CredentialsResponse } from "../../../components/networking";
+import { CredentialItem, credentialListCall, CredentialsResponse } from "@/components/networking";
 
-import { handleAddModelSubmit } from "../../../components/add_model/handle_add_model_submit";
+import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
 
 import CredentialsPanel from "@/components/model_add/credentials";
-import { getDisplayModelName } from "../../../components/view_model/model_name_display";
+import { getDisplayModelName } from "@/components/view_model/model_name_display";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, Icon } from "@tremor/react";
 import { DateRangePickerValue } from "@tremor/react";
 import {
   modelInfoCall,
   modelCostMap,
-  healthCheckCall,
   modelMetricsCall,
   streamingModelMetricsCall,
   modelExceptionsCall,
@@ -22,14 +21,14 @@ import {
   adminGlobalActivityExceptions,
   adminGlobalActivityExceptionsPerDeployment,
   allEndUsersCall,
-} from "../../../components/networking";
+} from "@/components/networking";
 import { Form } from "antd";
 import { Typography } from "antd";
 import { RefreshIcon } from "@heroicons/react/outline";
 import type { UploadProps } from "antd";
-import { Team } from "../../../components/key_team_helpers/key_list";
+import { Team } from "@/components/key_team_helpers/key_list";
 import TeamInfoView from "../../../components/team/team_info";
-import { Providers, provider_map, getPlaceholder, getProviderModels } from "../../../components/provider_info_helpers";
+import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
 import ModelInfoView from "../../../components/model_info_view";
 import AddModelTab from "../../../components/add_model/add_model_tab";
 
@@ -94,7 +93,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   teams,
 }) => {
   const [addModelForm] = Form.useForm();
-  const [autoRouterForm] = Form.useForm();
   const [modelMap, setModelMap] = useState<any>(null);
   const [lastRefreshed, setLastRefreshed] = useState("");
 
@@ -102,8 +100,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
 
   const [providerSettings, setProviderSettings] = useState<ProviderSettings[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
-  const [healthCheckResponse, setHealthCheckResponse] = useState<any>(null);
-  const [isHealthCheckLoading, setIsHealthCheckLoading] = useState<boolean>(false);
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
 
   const [selectedModel, setSelectedModel] = useState<any>(null);
@@ -151,11 +147,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
 
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
-
-  // Add state for showing/hiding filters
-  const [showFilters, setShowFilters] = useState<boolean>(false);
-
-  const [showColumnDropdown, setShowColumnDropdown] = useState(false);
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -572,22 +563,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
       </div>
     );
   }
-
-  const runHealthCheck = async () => {
-    try {
-      NotificationsManager.info("Running health check...");
-      setIsHealthCheckLoading(true);
-      setHealthCheckResponse(null);
-      const response = await healthCheckCall(accessToken);
-      setHealthCheckResponse(response);
-    } catch (error) {
-      console.error("Error running health check:", error);
-      setHealthCheckResponse("Error running health check");
-    } finally {
-      setIsHealthCheckLoading(false);
-    }
-  };
-
   const customTooltip = (props: any) => {
     const { payload, active } = props;
     if (!active || !payload) return null;
@@ -658,11 +633,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   const providerKey = Object.keys(Providers).find(
     (key) => (Providers as { [index: string]: any })[key] === selectedProvider,
   );
-
-  let dynamicProviderForm: ProviderSettings | undefined = undefined;
-  if (providerKey && providerSettings) {
-    dynamicProviderForm = providerSettings.find((provider) => provider.name === provider_map[providerKey]);
-  }
 
   // If a team is selected, render TeamInfoView in full page layout
   if (selectedTeamId) {
