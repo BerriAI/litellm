@@ -1,5 +1,4 @@
 import {
-  Badge,
   Button,
   Icon,
   Table,
@@ -12,9 +11,8 @@ import {
 } from "@tremor/react";
 import { Tooltip } from "antd";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { ChevronDownIcon, ChevronRightIcon, PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
-import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
-import React, { useState } from "react";
+import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import React from "react";
 import { type KeyResponse, Team } from "@/components/key_team_helpers/key_list";
 import { Member, Organization } from "@/components/networking";
 import ModelsCell from "@/app/(dashboard)/teams/components/TeamsTable/ModelsCell";
