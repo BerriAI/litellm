@@ -18,9 +18,9 @@ import {
   keyCreateServiceAccountCall,
   fetchMCPAccessGroups,
   getPromptsList,
-  getPassThroughEndpointsCall,
 } from "../networking";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import { Team } from "../key_team_helpers/key_list";
 import TeamDropdown from "../common_components/team_dropdown";
 import { InfoCircleOutlined } from "@ant-design/icons";
@@ -160,7 +160,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
-  const [passThroughRoutesList, setPassThroughRoutesList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
@@ -242,19 +241,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       }
     };
 
-    const fetchPassThroughEndpoints = async () => {
-      try {
-        const response = await getPassThroughEndpointsCall(accessToken);
-        const passThroughPaths = response.endpoints.map((endpoint: { path: string }) => endpoint.path);
-        setPassThroughRoutesList(passThroughPaths);
-      } catch (error) {
-        console.error("Failed to fetch pass through endpoints:", error);
-      }
-    };
-
     fetchGuardrails();
     fetchPrompts();
-    fetchPassThroughEndpoints();
   }, [accessToken]);
 
   // Fetch possible user roles when component mounts
@@ -931,9 +919,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     label={
                       <span>
                         Allowed Pass Through Routes{" "}
-                        <Tooltip title="Allow this key to use specific prompt templates">
+                        <Tooltip title="Allow this key to use specific pass through routes">
                           <a
-                            href="https://docs.litellm.ai/docs/proxy/prompt_management"
+                            href="https://docs.litellm.ai/docs/proxy/pass_through"
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
@@ -951,14 +939,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         : "Premium feature - Upgrade to set pass through routes by key"
                     }
                   >
-                    <Select
-                      mode="tags"
-                      style={{ width: "100%" }}
-                      disabled={!premiumUser}
+                    <PassThroughRoutesSelector
+                      onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+                      value={form.getFieldValue("allowed_passthrough_routes")}
+                      accessToken={accessToken}
                       placeholder={
                         !premiumUser ? "Premium feature - Upgrade to set pass through routes by key" : "Select or enter pass through routes"
                       }
-                      options={passThroughRoutesList.map((name) => ({ value: name, label: name }))}
+                      disabled={!premiumUser}
                     />
                   </Form.Item>
                   <Form.Item
