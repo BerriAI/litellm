@@ -37,7 +37,6 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
             description: tagData.description,
             models: tagData.models,
             max_budget: tagData.litellm_budget_table?.max_budget,
-            soft_budget: tagData.litellm_budget_table?.soft_budget,
             tpm_limit: tagData.litellm_budget_table?.tpm_limit,
             rpm_limit: tagData.litellm_budget_table?.rpm_limit,
             budget_duration: tagData.litellm_budget_table?.budget_duration,
@@ -70,7 +69,6 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
         description: values.description,
         models: values.models,
         max_budget: values.max_budget,
-        soft_budget: values.soft_budget,
         tpm_limit: values.tpm_limit,
         rpm_limit: values.rpm_limit,
         budget_duration: values.budget_duration,
@@ -147,20 +145,6 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
                     </span>
                   }
                   name="max_budget"
-                >
-                  <NumericalInput step={0.01} precision={2} width={200} />
-                </Form.Item>
-
-                <Form.Item
-                  label={
-                    <span>
-                      Soft Budget (USD){" "}
-                      <Tooltip title="Get a slack alert when this soft budget is reached">
-                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="soft_budget"
                 >
                   <NumericalInput step={0.01} precision={2} width={200} />
                 </Form.Item>
@@ -261,12 +245,6 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
                   <div>
                     <Text className="font-medium">Max Budget</Text>
                     <Text>${tagDetails.litellm_budget_table.max_budget}</Text>
-                  </div>
-                )}
-                {tagDetails.litellm_budget_table.soft_budget !== undefined && tagDetails.litellm_budget_table.soft_budget !== null && (
-                  <div>
-                    <Text className="font-medium">Soft Budget</Text>
-                    <Text>${tagDetails.litellm_budget_table.soft_budget}</Text>
                   </div>
                 )}
                 {tagDetails.litellm_budget_table.budget_duration && (

@@ -109,22 +109,6 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({
             >
               <NumericalInput step={0.01} precision={2} width={200} />
             </Form.Item>
-
-            <Form.Item
-              className="mt-4"
-              label={
-                <span>
-                  Soft Budget (USD){" "}
-                  <Tooltip title="Get a slack alert when this soft budget is reached. Requests are not blocked">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              }
-              name="soft_budget"
-            >
-              <NumericalInput step={0.01} precision={2} width={200} />
-            </Form.Item>
-
             <Form.Item
               className="mt-4"
               label={
