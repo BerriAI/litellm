@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.78.0-stable - MCP Gateway: Control Tool Access by Team/Key"
+title: "[Preview] v1.78.0-stable - MCP Gateway: Control Tool Access by Team, Key"
 slug: "v1-78-0"
 date: 2025-10-11T10:00:00
 authors:
@@ -58,7 +58,7 @@ pip install litellm==1.78.0.rc.1
 
 ## Key Highlights
 
-- **MCP Gateway - Control Tool Access by Team/Key** - Control MCP tool access by team/key. 
+- **MCP Gateway - Control Tool Access by Team, Key** - Control MCP tool access by team/key. 
 - **GPT-5 Pro & GPT-Image-1-Mini** - Day 0 support for OpenAI's GPT-5 Pro (400K context) and gpt-image-1-mini image generation
 - **UI Performance Boost** - Replaces bloated key list calls with lean key aliases endpoint, Turbopack for faster development, and major UI refactors
 - **EnkryptAI Guardrails** - New guardrail integration for content moderation
@@ -67,10 +67,20 @@ pip install litellm==1.78.0.rc.1
 
 ---
 
-## MCP Gateway - Control Tool Access by Team/Key
+## MCP Gateway - Control Tool Access by Team, Key
 
-From this release Proxy Admins can control MCP tool access by team/key. This is great for Proxy Admins
+<Image 
+  img={require('../../img/release_notes/tool_control.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
 
+<br/>
+
+Proxy admins can now control MCP tool access by team or key. This makes it easy to grant different teams selective access to tools from the same MCP server.
+
+For example, give your Engineering team access to `list_repositories`, `create_issue`, and `search_code` tools, while Sales only gets `search_code` and `close_issue` tools.
+
+[Get Started](../../docs/mcp_control#set-allowed-tools-for-a-key-team-or-organization)
 
 
 ## New Models / Updated Models
