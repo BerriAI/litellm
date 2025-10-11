@@ -15,6 +15,7 @@ import urllib.parse
 from unittest.mock import MagicMock, patch
 
 import litellm
+from litellm import CustomLLM, ModelResponse, completion
 
 
 @pytest.fixture(autouse=True)
@@ -418,6 +419,47 @@ async def test_extra_body_with_fallback(
     # Verify the response
     assert response is not None
     assert response.choices[0].message.content == "Hello from mocked response!"
+
+
+class MyCustomLLM(CustomLLM):
+    def completion(
+        self,
+        model: str,
+        messages: list,
+        api_base: str,
+        custom_prompt_dict: dict,
+        model_response: ModelResponse,
+        print_verbose,
+        encoding,
+        api_key,
+        logging_obj,
+        optional_params: dict,
+        acompletion=None,
+        litellm_params=None,
+        logger_fn=None,
+        headers={},
+        timeout=None,
+        client=None,
+    ) -> ModelResponse:
+        return litellm.completion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hello world"}],
+            mock_response="Hi!",
+        )  # type: ignore
+
+
+def test_simple_completion_gpt_4o():
+    """Test custom LLM provider with gpt-4o model name."""
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = completion(
+        model="custom_llm/gpt-4o",
+        messages=[{"role": "user", "content": "Hello world!"}],
+    )
+
+    assert resp.choices[0].message.content == "Hi!"
 
 
 @pytest.mark.parametrize("env_base", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])

@@ -2013,22 +2013,24 @@ def completion(  # type: ignore # noqa: PLR0915
                 input=messages, api_key=api_key, original_response=response
             )
         elif (
-            model in litellm.open_ai_chat_completion_models
-            or custom_llm_provider == "custom_openai"
-            or custom_llm_provider == "deepinfra"
-            or custom_llm_provider == "perplexity"
-            or custom_llm_provider == "nvidia_nim"
-            or custom_llm_provider == "cerebras"
-            or custom_llm_provider == "baseten"
-            or custom_llm_provider == "sambanova"
-            or custom_llm_provider == "volcengine"
-            or custom_llm_provider == "anyscale"
-            or custom_llm_provider == "openai"
-            or custom_llm_provider == "together_ai"
-            or custom_llm_provider == "nebius"
-            or custom_llm_provider == "wandb"
-            or custom_llm_provider in litellm.openai_compatible_providers
-            or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
+            custom_llm_provider not in litellm._custom_providers and (
+                model in litellm.open_ai_chat_completion_models
+                or custom_llm_provider == "custom_openai"
+                or custom_llm_provider == "deepinfra"
+                or custom_llm_provider == "perplexity"
+                or custom_llm_provider == "nvidia_nim"
+                or custom_llm_provider == "cerebras"
+                or custom_llm_provider == "baseten"
+                or custom_llm_provider == "sambanova"
+                or custom_llm_provider == "volcengine"
+                or custom_llm_provider == "anyscale"
+                or custom_llm_provider == "openai"
+                or custom_llm_provider == "together_ai"
+                or custom_llm_provider == "nebius"
+                or custom_llm_provider == "wandb"
+                or custom_llm_provider in litellm.openai_compatible_providers
+                or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
+            )
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
             # allow for the setting of dynamic and stateful api-bases
