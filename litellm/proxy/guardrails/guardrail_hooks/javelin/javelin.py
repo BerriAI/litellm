@@ -65,7 +65,7 @@ class JavelinGuardrail(CustomGuardrail):
         )
         self.api_version = api_version
         self.guardrail_name = guardrail_name
-        self.javelin_guard_name = javelin_guard_name or guardrail_name
+        self.javelin_guard_name = javelin_guard_name or "javelin_guard"
         self.default_on = default_on
         self.metadata = metadata
         self.config = config
@@ -102,10 +102,10 @@ class JavelinGuardrail(CustomGuardrail):
         exception_str = ""
 
         try:
-            verbose_proxy_logger.debug(
-                "Javelin Guardrail: Calling Javelin guard API with request: %s", request
-            )
             url = f"{self.api_base}/{self.api_version}/guardrail/{self.javelin_guard_name}/apply"
+            if self.javelin_guard_name == "javelin_guard":
+                # auto apply all enabled guardrails in app policy, overwrite url
+                url = f"{self.api_base}/{self.api_version}/guardrails/apply"
             verbose_proxy_logger.debug("Javelin Guardrail: Calling URL: %s", url)
             response = await self.async_handler.post(
                 url=url,
@@ -221,7 +221,7 @@ class JavelinGuardrail(CustomGuardrail):
         javelin_response = await self.call_javelin_guard(request=javelin_guard_request)
 
         assessments = javelin_response.get("assessments", [])
-        reject_prompt = ""
+        reject_prompt = "Violated guardrail policy"
         should_reject = False
 
         # Debug: Log the full Javelin response
@@ -276,11 +276,10 @@ class JavelinGuardrail(CustomGuardrail):
 
             # Raise HTTPException to prevent the request from going to the LLM
             raise HTTPException(
-                status_code=500,
+                status_code=400,
                 detail={
-                    "error": "Violated guardrail policy",
-                    "javelin_guardrail_response": javelin_response,
-                    "reject_prompt": reject_prompt,
+                    "error": reject_prompt,
+                    "javelin_guardrail_response": javelin_response
                 },
             )
 
