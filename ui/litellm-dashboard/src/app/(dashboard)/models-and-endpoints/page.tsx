@@ -1,9 +1,9 @@
 "use client";
 
-import ModelDashboard from "@/components/templates/model_dashboard";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useState } from "react";
+import ModelsAndEndpointsView from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 
 const ModelsAndEndpointsPage = () => {
   const { token, accessToken, userRole, userId, premiumUser } = useAuthorized();
@@ -12,7 +12,7 @@ const ModelsAndEndpointsPage = () => {
   const { teams } = useTeams();
 
   return (
-    <ModelDashboard
+    <ModelsAndEndpointsView
       accessToken={accessToken}
       token={token}
       userRole={userRole}

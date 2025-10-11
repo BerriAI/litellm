@@ -3996,6 +3996,7 @@ def embedding(  # noqa: PLR0915
     """
     azure = kwargs.get("azure", None)
     client = kwargs.pop("client", None)
+    shared_session = kwargs.get("shared_session", None)
     max_retries = kwargs.get("max_retries", None)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
@@ -4185,6 +4186,7 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
                 max_retries=max_retries,
+                shared_session=shared_session,
             )
         elif custom_llm_provider == "databricks":
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")  # type: ignore
