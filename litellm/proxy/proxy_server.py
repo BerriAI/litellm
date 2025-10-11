@@ -33,9 +33,9 @@ from litellm.constants import (
     AIOHTTP_TTL_DNS_CACHE,
     BASE_MCP_ROUTE,
     DEFAULT_MAX_RECURSE_DEPTH,
-    DEFAULT_SLACK_ALERTING_THRESHOLD,
-    DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
+    DEFAULT_SHARED_HEALTH_CHECK_TTL,
+    DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
 )
@@ -1157,6 +1157,7 @@ async def update_cache(  # noqa: PLR0915
     team_id: Optional[str],
     response_cost: Optional[float],
     parent_otel_span: Optional[Span],  # type: ignore
+    tags: Optional[List[str]] = None,
 ):
     """
     Use this to update the cache with new user spend.
@@ -1377,6 +1378,50 @@ async def update_cache(  # noqa: PLR0915
                 f"An error occurred updating end user cache: {str(e)}"
             )
 
+    ### UPDATE TAG SPEND ###
+    async def _update_tag_cache():
+        """
+        Update the tag cache with the new spend.
+        """
+        if tags is None or response_cost is None:
+            return
+        
+        try:
+            for tag_name in tags:
+                if not tag_name or not isinstance(tag_name, str):
+                    continue
+                
+                cache_key = f"tag:{tag_name}"
+                # Fetch the existing tag object from cache
+                existing_tag_obj = await user_api_key_cache.async_get_cache(key=cache_key)
+                if existing_tag_obj is None:
+                    # do nothing if tag not in api key cache
+                    continue
+                
+                verbose_proxy_logger.debug(
+                    f"_update_tag_cache: existing spend for tag={tag_name}: {existing_tag_obj}; response_cost: {response_cost}"
+                )
+                
+                if isinstance(existing_tag_obj, dict):
+                    existing_spend = existing_tag_obj.get("spend", 0) or 0
+                else:
+                    existing_spend = getattr(existing_tag_obj, "spend", 0) or 0
+                
+                # Calculate the new cost by adding the existing cost and response_cost
+                new_spend = existing_spend + response_cost
+                
+                # Update the spend column for the given tag
+                if isinstance(existing_tag_obj, dict):
+                    existing_tag_obj["spend"] = new_spend
+                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
+                else:
+                    existing_tag_obj.spend = new_spend
+                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"An error occurred updating tag cache: {str(e)}"
+            )
+
     if token is not None and response_cost is not None:
         await _update_key_cache(token=token, response_cost=response_cost)
 
@@ -1388,6 +1433,9 @@ async def update_cache(  # noqa: PLR0915
 
     if team_id is not None:
         await _update_team_cache()
+
+    if tags is not None:
+        await _update_tag_cache()
 
     asyncio.create_task(
         user_api_key_cache.async_set_cache_pipeline(
@@ -1431,7 +1479,9 @@ async def _run_background_health_check():
     # Initialize shared health check manager if Redis is available and feature is enabled
     shared_health_manager = None
     if use_shared_health_check and redis_usage_cache is not None:
-        from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
+        from litellm.proxy.health_check_utils.shared_health_check_manager import (
+            SharedHealthCheckManager,
+        )
         shared_health_manager = SharedHealthCheckManager(
             redis_cache=redis_usage_cache,
             health_check_ttl=DEFAULT_SHARED_HEALTH_CHECK_TTL,
@@ -1451,10 +1501,13 @@ async def _run_background_health_check():
         ]
 
         # Use shared health check if available, otherwise fall back to direct health check
+        # Convert health_check_details to bool for perform_shared_health_check (defaults to True if None)
+        details_bool = health_check_details if health_check_details is not None else True
+        
         if shared_health_manager is not None:
             try:
                 healthy_endpoints, unhealthy_endpoints = await shared_health_manager.perform_shared_health_check(
-                    model_list=_llm_model_list, details=health_check_details
+                    model_list=_llm_model_list, details=details_bool
                 )
             except Exception as e:
                 verbose_proxy_logger.error(
