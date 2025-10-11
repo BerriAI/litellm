@@ -1059,7 +1059,9 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     parallel_tool_calls: Optional[bool] = None
     temperature: Optional[float] = None
     tool_choice: Optional[ToolChoice] = None
-    tools: Optional[Union[List[Tool], List[ResponseFunctionToolCall], List[Dict[str, Any]]]] = None
+    tools: Optional[
+        Union[List[Tool], List[ResponseFunctionToolCall], List[Dict[str, Any]]]
+    ] = None
     top_p: Optional[float] = None
     max_output_tokens: Optional[int] = None
     previous_response_id: Optional[str] = None
@@ -1231,16 +1233,19 @@ class ContentPartDonePartReasoningText(BaseLiteLLMOpenAIResponseObject):
     reasoning: str
 
 
+PART_UNION_TYPES = Union[
+    ContentPartDonePartOutputText,
+    ContentPartDonePartRefusal,
+    ContentPartDonePartReasoningText,
+]
+
+
 class ContentPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.CONTENT_PART_DONE]
     item_id: str
     output_index: int
     content_index: int
-    part: Union[
-        ContentPartDonePartOutputText,
-        ContentPartDonePartRefusal,
-        ContentPartDonePartReasoningText,
-    ]
+    part: PART_UNION_TYPES
 
 
 class OutputTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
