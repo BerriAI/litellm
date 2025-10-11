@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from "vitest";
+import { render, screen, waitFor, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CreateTagModal from "./CreateTagModal";
 
@@ -44,6 +44,13 @@ describe("CreateTagModal", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   it("should submit form with correct values when user creates a tag", async () => {
@@ -91,6 +98,9 @@ describe("CreateTagModal", () => {
 
     // Verify onCancel was not called
     expect(mockOnCancel).not.toHaveBeenCalled();
+
+    // Clear any pending timers before test ends
+    vi.runOnlyPendingTimers();
   });
 });
 
