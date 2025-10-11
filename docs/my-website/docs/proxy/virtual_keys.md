@@ -66,16 +66,25 @@ curl 'http://0.0.0.0:4000/key/generate' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4"], "metadata": {"user": "ishaan@berri.ai"}}'
 ```
 
-## 🔁 Scheduled Key Rotations (NEW in v1.77.5)
+## Scheduled Key Rotations
 
-LiteLLM can now rotate **virtual keys automatically** on a schedule you define.
+LiteLLM can rotate **virtual keys automatically** based on time intervals you define.
 
-### How it works
-1. When creating a virtual key you set `rotation_schedule` – a [cron expression](https://crontab.guru/).
-2. LiteLLM stores the schedule in the DB and runs a background job that regenerates the key at the specified time.
-3. Existing key string is invalidated; a **notification webhook** (if configured) is sent with the new key value.
+#### Prerequisites
 
-### Create a key with rotation
+1. **Database connection required** - Key rotation requires a connected database to track rotation schedules
+2. **Enable the rotation worker** - Set environment variable `LITELLM_KEY_ROTATION_ENABLED=true`
+3. **Configure check interval** - Optionally set `LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS` (default: 86400 seconds / 24 hours)
+
+#### How it works
+
+1. When creating a virtual key, set `auto_rotate: true` and `rotation_interval` (duration string)
+2. LiteLLM calculates the next rotation time as `now + rotation_interval` and stores it in the database
+3. A background job periodically checks for keys where the rotation time has passed
+4. When a key is due for rotation, LiteLLM automatically regenerates it and invalidates the old key string
+5. The new rotation time is calculated and the cycle continues
+
+#### Create a key with auto rotation
 
 ```bash
 curl 'http://0.0.0.0:4000/key/generate' \
@@ -83,32 +92,48 @@ curl 'http://0.0.0.0:4000/key/generate' \
   -H 'Content-Type: application/json' \
   -d '{
         "models": ["gpt-4o"],
-        "rotation_schedule": "0 0 * * SUN",   # rotate every Sunday at 00:00 UTC
-        "webhook_url": "https://example.com/key-rotated"
+        "auto_rotate": true,
+        "rotation_interval": "30d"
       }'
 ```
 
-### Enable globally via env
+**Valid rotation_interval formats:**
+- `"30s"` - 30 seconds
+- `"30m"` - 30 minutes
+- `"30h"` - 30 hours
+- `"30d"` - 30 days
+- `"90d"` - 90 days
 
-Set these env vars when starting the proxy:
+#### Update existing key to enable rotation
+
+```bash
+curl 'http://0.0.0.0:4000/key/update' \
+  -H 'Authorization: Bearer <your-master-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "key": "sk-existing-key",
+        "auto_rotate": true,
+        "rotation_interval": "90d"
+      }'
+```
+
+#### Environment variables
+
+Set these environment variables when starting the proxy:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `LITELLM_KEY_ROTATION_ENABLED` | Enable the rotation worker | `false` |
-| `LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS` | How often to scan for keys to rotate | `86400` |
+| `LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS` | How often to scan for keys to rotate (in seconds) | `86400` (24 hours) |
 
-### Webhook payload
+**Example:**
+```bash
+export LITELLM_KEY_ROTATION_ENABLED=true
+export LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS=3600  # Check every hour
 
-```json
-{
-  "event": "virtual_key.rotated",
-  "old_key_id": "sk-abc...",
-  "new_key": "sk-def...",
-  "rotation_time": "2025-10-05T00:00:00Z"
-}
+litellm --config config.yaml
 ```
 
-If no `webhook_url` is provided the new key value is returned in the response of the `/key/rotate` REST call instead.
 
 ## Spend Tracking 
 
