@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { Card, Icon, Button, Col, Text, Grid, TextInput } from "@tremor/react";
-import { InformationCircleIcon, RefreshIcon } from "@heroicons/react/outline";
-import { Modal, Form, Select as Select2, message, Tooltip, Input } from "antd";
+import { Icon, Button, Col, Text, Grid, TextInput } from "@tremor/react";
+import { RefreshIcon } from "@heroicons/react/outline";
+import { Modal, Form, Select as Select2, Tooltip, Input } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import NumericalInput from "../shared/numerical_input";
 import TagInfoView from "./tag_info";
 import { modelInfoCall } from "../networking";
 import { tagCreateCall, tagListCall, tagDeleteCall } from "../networking";

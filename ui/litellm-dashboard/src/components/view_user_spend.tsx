@@ -1,27 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { keyDeleteCall, getTotalSpendCall } from "./networking";
-import { StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
-import { Accordion, AccordionHeader, AccordionList, DonutChart } from "@tremor/react";
-import {
-  Badge,
-  Card,
-  Table,
-  Metric,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Text,
-  Title,
-  Icon,
-  AccordionBody,
-  List,
-  ListItem,
-} from "@tremor/react";
-import { Statistic } from "antd";
-import { spendUsersCall, modelAvailableCall } from "./networking";
+import { modelAvailableCall } from "./networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 // Define the props type

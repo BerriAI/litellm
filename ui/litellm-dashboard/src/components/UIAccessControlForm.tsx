@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Form, Button as Button2, Select, message } from "antd";
+import { Form, Button as Button2, Select } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
 import NotificationManager from "./molecules/notifications_manager";

@@ -187,7 +187,8 @@ def test_openrouter_transform_request_with_cache_control():
 
 def test_openrouter_transform_request_with_cache_control_list_content():
     """
-    Test transform_request moves cache_control to all content blocks when content is already a list.
+    Test transform_request moves cache_control only to the last content block when content is already a list.
+    This prevents exceeding Anthropic's limit of 4 cache breakpoints.
     
     Input:
     {
@@ -205,8 +206,7 @@ def test_openrouter_transform_request_with_cache_control_list_content():
         "content": [
             {
                 "type": "text",
-                "text": "You are a historian...",
-                "cache_control": {"type": "ephemeral"}
+                "text": "You are a historian..."
             },
             {
                 "type": "text",
@@ -258,7 +258,8 @@ def test_openrouter_transform_request_with_cache_control_list_content():
     assert system_message["role"] == "system"
     assert isinstance(system_message["content"], list)
     assert len(system_message["content"]) == 2
-    assert system_message["content"][0]["cache_control"] == {"type": "ephemeral"}
+    # Only the last content block should have cache_control
+    assert "cache_control" not in system_message["content"][0]
     assert system_message["content"][1]["cache_control"] == {"type": "ephemeral"}
     assert "cache_control" not in system_message
 
@@ -316,4 +317,51 @@ def test_openrouter_transform_request_with_cache_control_gemini():
     assert isinstance(user_message["content"], list)
     assert user_message["content"][0]["type"] == "text"
     assert user_message["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_openrouter_transform_request_multiple_cache_controls():
+    """
+    Test that cache_control is only added to the last content block per message.
+    This prevents exceeding Anthropic's limit of 4 cache breakpoints.
+    
+    When a message has 5 content blocks with cache_control at message level,
+    only the 5th block should have cache_control, not all 5 blocks.
+    """
+    import json
+    config = OpenrouterConfig()
+    
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Block 1"},
+                {"type": "text", "text": "Block 2"},
+                {"type": "text", "text": "Block 3"},
+                {"type": "text", "text": "Block 4"},
+                {"type": "text", "text": "Block 5"}
+            ],
+            "cache_control": {"type": "ephemeral"}
+        }
+    ]
+    
+    transformed_request = config.transform_request(
+        model="openrouter/anthropic/claude-3-5-sonnet-20240620",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    
+    print("\n=== Transformed Request (Multiple Blocks) ===")
+    print(json.dumps(transformed_request, indent=4, default=str))
+    
+    system_message = transformed_request["messages"][0]
+    assert len(system_message["content"]) == 5
+    
+    # Only the last block should have cache_control
+    for i in range(4):
+        assert "cache_control" not in system_message["content"][i], f"Block {i} should not have cache_control"
+    
+    assert system_message["content"][4]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in system_message
     

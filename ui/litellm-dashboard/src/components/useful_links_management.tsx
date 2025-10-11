@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { message, Modal } from "antd";
+import { Modal } from "antd";
 import { PlusCircleIcon, PencilIcon, TrashIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { isAdminRole } from "../utils/roles";
 import { getPublicModelHubInfo, updateUsefulLinksCall, getProxyBaseUrl } from "./networking";

@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Select, Typography, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Select } from "antd";
 import { VectorStore } from "./types";
 import { vectorStoreListCall } from "../networking";
 interface VectorStoreSelectorProps {

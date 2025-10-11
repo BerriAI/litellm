@@ -3,28 +3,13 @@ import ReactMarkdown from "react-markdown";
 import {
   Card,
   Title,
-  Table,
-  TableHead,
-  TableRow,
-  TableCell,
-  TableBody,
-  Grid,
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Metric,
-  Col,
   Text,
-  SelectItem,
   TextInput,
   Button as TremorButton,
-  Divider,
 } from "@tremor/react";
 import { v4 as uuidv4 } from "uuid";
 
-import { message, Select, Spin, Typography, Tooltip, Input, Upload, Modal, Button } from "antd";
+import { Select, Spin, Typography, Tooltip, Input, Upload, Modal, Button } from "antd";
 import { makeOpenAIChatCompletionRequest } from "./llm_calls/chat_completion";
 import { makeOpenAIImageGenerationRequest } from "./llm_calls/image_generation";
 import { makeOpenAIImageEditsRequest } from "./llm_calls/image_edits";
@@ -33,28 +18,26 @@ import { makeAnthropicMessagesRequest } from "./llm_calls/anthropic_messages";
 import { fetchAvailableModels, ModelGroup } from "./llm_calls/fetch_models";
 import { fetchAvailableMCPTools } from "./llm_calls/fetch_mcp_tools";
 import type { MCPTool } from "./llm_calls/fetch_mcp_tools";
-import { litellmModeMapping, ModelMode, EndpointType, getEndpointType } from "./mode_endpoint_mapping";
+import { EndpointType } from "./mode_endpoint_mapping";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import EndpointSelector from "./EndpointSelector";
 import TagSelector from "../tag_management/TagSelector";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import GuardrailSelector from "../guardrails/GuardrailSelector";
-import { determineEndpointType } from "./EndpointUtils";
 import { generateCodeSnippet } from "./CodeSnippets";
 import { MessageType } from "./types";
 import ReasoningContent from "./ReasoningContent";
 import ResponseMetrics, { TokenUsage } from "./ResponseMetrics";
 import ResponsesImageUpload from "./ResponsesImageUpload";
 import ResponsesImageRenderer from "./ResponsesImageRenderer";
-import { convertImageToBase64, createMultimodalMessage, createDisplayMessage } from "./ResponsesImageUtils";
+import { createMultimodalMessage, createDisplayMessage } from "./ResponsesImageUtils";
 import ChatImageUpload from "./ChatImageUpload";
 import ChatImageRenderer from "./ChatImageRenderer";
 import { createChatMultimodalMessage, createChatDisplayMessage } from "./ChatImageUtils";
 import SessionManagement from "./SessionManagement";
 import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
 import {
-  SendOutlined,
   ApiOutlined,
   KeyOutlined,
   ClearOutlined,
@@ -66,7 +49,6 @@ import {
   DatabaseOutlined,
   InfoCircleOutlined,
   SafetyOutlined,
-  UploadOutlined,
   PictureOutlined,
   CodeOutlined,
   ToolOutlined,

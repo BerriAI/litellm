@@ -11,7 +11,6 @@ import {
   Text,
   Badge,
 } from "@tremor/react";
-import { message } from "antd";
 import { availableTeamListCall, teamMemberAddCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 

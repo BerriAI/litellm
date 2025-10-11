@@ -1,6 +1,6 @@
 "use client";
 
-import Teams from "@/components/teams";
+import TeamsView from "@/app/(dashboard)/teams/TeamsView";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useEffect, useState } from "react";
@@ -10,9 +10,6 @@ import { fetchOrganizations } from "@/components/organizations";
 const TeamsPage = () => {
   const { accessToken, userId, userRole } = useAuthorized();
   const { teams, setTeams } = useTeams();
-  const [searchParams, setSearchParams] = useState<URLSearchParams>(() =>
-    typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search),
-  );
   const [organizations, setOrganizations] = useState<Organization[]>([]);
 
   useEffect(() => {
@@ -20,9 +17,8 @@ const TeamsPage = () => {
   }, [accessToken]);
 
   return (
-    <Teams
+    <TeamsView
       teams={teams}
-      searchParams={searchParams}
       accessToken={accessToken}
       setTeams={setTeams}
       userID={userId}

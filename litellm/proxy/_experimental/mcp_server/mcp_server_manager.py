@@ -355,12 +355,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
-                        server_prefix
-                    )
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
-                        server_prefix
-                    )
+                    self.tool_name_to_mcp_server_name_mapping[
+                        base_tool_name
+                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[
+                        prefixed_tool_name
+                    ] = server_prefix
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -932,7 +932,6 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging,
         server: MCPServer,
     ):
-
         ## check if the tool is allowed or banned for the given server
         if not self.check_allowed_or_banned_tools(name, server):
             raise HTTPException(
@@ -1019,6 +1018,46 @@ class MCPServerManager:
             verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
             raise e
 
+    def _create_during_hook_task(
+        self,
+        name: str,
+        arguments: Dict[str, Any],
+        server_name_from_prefix: Optional[str],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        proxy_logging_obj: ProxyLogging,
+        start_time: datetime.datetime,
+    ):
+        """Create and return a during hook task for MCP tool calls."""
+        from litellm.types.llms.base import HiddenParams
+        from litellm.types.mcp import MCPDuringCallRequestObject
+
+        request_obj = MCPDuringCallRequestObject(
+            tool_name=name,
+            arguments=arguments,
+            server_name=server_name_from_prefix,
+            start_time=start_time.timestamp() if start_time else None,
+            hidden_params=HiddenParams(),
+        )
+
+        during_hook_kwargs = {
+            "name": name,
+            "arguments": arguments,
+            "server_name": server_name_from_prefix,
+            "user_api_key_auth": user_api_key_auth,
+        }
+
+        synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(
+            request_obj, during_hook_kwargs
+        )
+
+        return asyncio.create_task(
+            proxy_logging_obj.during_call_hook(
+                user_api_key_dict=user_api_key_auth,
+                data=synthetic_llm_data,
+                call_type="mcp_call",  # type: ignore
+            )
+        )
+
     async def call_tool(
         self,
         name: str,
@@ -1085,35 +1124,13 @@ class MCPServerManager:
         # Prepare tasks for during hooks
         tasks = []
         if proxy_logging_obj:
-            # Create synthetic LLM data for during hook processing
-            from litellm.types.llms.base import HiddenParams
-            from litellm.types.mcp import MCPDuringCallRequestObject
-
-            request_obj = MCPDuringCallRequestObject(
-                tool_name=name,
+            during_hook_task = self._create_during_hook_task(
+                name=name,
                 arguments=arguments,
-                server_name=server_name_from_prefix,
-                start_time=start_time.timestamp() if start_time else None,
-                hidden_params=HiddenParams(),
-            )
-
-            during_hook_kwargs = {
-                "name": name,
-                "arguments": arguments,
-                "server_name": server_name_from_prefix,
-                "user_api_key_auth": user_api_key_auth,
-            }
-
-            synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(
-                request_obj, during_hook_kwargs
-            )
-
-            during_hook_task = asyncio.create_task(
-                proxy_logging_obj.during_call_hook(
-                    user_api_key_dict=user_api_key_auth,
-                    data=synthetic_llm_data,
-                    call_type="mcp_call",  # type: ignore
-                )
+                server_name_from_prefix=server_name_from_prefix,
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging_obj,
+                start_time=start_time,
             )
             tasks.append(during_hook_task)
 
@@ -1158,13 +1175,18 @@ class MCPServerManager:
                 extra_headers=extra_headers,
             )
 
-            async with client:
-                # Use the original tool name (without prefix) for the actual call
-                call_tool_params = MCPCallToolRequestParams(
-                    name=original_tool_name,
-                    arguments=arguments,
-                )
-                tasks.append(asyncio.create_task(client.call_tool(call_tool_params)))
+            call_tool_params = MCPCallToolRequestParams(
+                name=original_tool_name,
+                arguments=arguments,
+            )
+
+            async def _call_tool_via_client(client, params):
+                async with client:
+                    return await client.call_tool(params)
+
+            tasks.append(
+                asyncio.create_task(_call_tool_via_client(client, call_tool_params))
+            )
 
         try:
             mcp_responses = await asyncio.gather(*tasks)

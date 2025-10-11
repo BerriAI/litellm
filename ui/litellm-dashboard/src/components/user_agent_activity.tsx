@@ -4,18 +4,9 @@ import {
   Title,
   Text,
   Grid,
-  Col,
-  Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
-  TableBody,
-  TableCell,
   BarChart,
-  DonutChart,
   Metric,
   Subtitle,
-  Button,
   Tab,
   TabGroup,
   TabList,
@@ -23,7 +14,6 @@ import {
   TabPanels,
 } from "@tremor/react";
 import { Select, Tooltip } from "antd";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
 import AdvancedDatePicker from "./shared/advanced_date_picker";
 import PerUserUsage from "./per_user_usage";

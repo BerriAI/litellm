@@ -8,17 +8,9 @@ export const formatDate = (date: Date) => {
 /**
  * Helper file for calls being made to proxy
  */
-import { all_admin_roles } from "@/utils/roles";
 import { message } from "antd";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-import {
-  TagNewRequest,
-  TagUpdateRequest,
-  TagDeleteRequest,
-  TagInfoRequest,
-  TagListResponse,
-  TagInfoResponse,
-} from "./tag_management/types";
+import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
@@ -88,8 +80,8 @@ export const DEFAULT_ORGANIZATION = "default_organization";
 
 export interface Model {
   model_name: string;
-  litellm_params: Object;
-  model_info: Object | null;
+  litellm_params: object;
+  model_info: object | null;
 }
 
 interface PromptInfo {
@@ -98,7 +90,7 @@ interface PromptInfo {
 
 export interface PromptSpec {
   prompt_id: string;
-  litellm_params: Object;
+  litellm_params: object;
   prompt_info: PromptInfo;
   created_at?: string;
   updated_at?: string;
@@ -389,7 +381,7 @@ export const modelCreateCall = async (accessToken: string, formValues: Model) =>
   }
 };
 
-export const modelSettingsCall = async (accessToken: String) => {
+export const modelSettingsCall = async (accessToken: string) => {
   /**
    * Get all configurable params for setting a model
    */
@@ -633,7 +625,7 @@ export const invitationClaimCall = async (
   }
 };
 
-export const alertingSettingsCall = async (accessToken: String) => {
+export const alertingSettingsCall = async (accessToken: string) => {
   /**
    * Get all configurable params for setting a model
    */
@@ -856,7 +848,7 @@ export const userCreateCall = async (
   }
 };
 
-export const keyDeleteCall = async (accessToken: String, user_key: String) => {
+export const keyDeleteCall = async (accessToken: string, user_key: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/key/delete` : `/key/delete`;
     console.log("in keyDeleteCall:", user_key);
@@ -923,7 +915,7 @@ export const userDeleteCall = async (accessToken: string, userIds: string[]) => 
   }
 };
 
-export const teamDeleteCall = async (accessToken: String, teamID: String) => {
+export const teamDeleteCall = async (accessToken: string, teamID: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/team/delete` : `/team/delete`;
     console.log("in teamDeleteCall:", teamID);
@@ -964,7 +956,7 @@ export type UserListResponse = {
 };
 
 export const userListCall = async (
-  accessToken: String,
+  accessToken: string,
   userIDs: string[] | null = null,
   page: number | null = null,
   page_size: number | null = null,
@@ -1052,10 +1044,10 @@ export const userListCall = async (
 };
 
 export const userInfoCall = async (
-  accessToken: String,
-  userID: String | null,
-  userRole: String,
-  viewAll: Boolean = false,
+  accessToken: string,
+  userID: string | null,
+  userRole: string,
+  viewAll: boolean = false,
   page: number | null,
   page_size: number | null,
   lookup_user_id: boolean = false,
@@ -1106,7 +1098,7 @@ export const userInfoCall = async (
   }
 };
 
-export const teamInfoCall = async (accessToken: String, teamID: String | null) => {
+export const teamInfoCall = async (accessToken: string, teamID: string | null) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/team/info` : `/team/info`;
     if (teamID) {
@@ -1147,9 +1139,9 @@ type TeamListResponse = {
 };
 
 export const v2TeamListCall = async (
-  accessToken: String,
+  accessToken: string,
   organizationID: string | null,
-  userID: String | null = null,
+  userID: string | null = null,
   teamID: string | null = null,
   team_alias: string | null = null,
   page: number = 1,
@@ -1212,9 +1204,9 @@ export const v2TeamListCall = async (
 };
 
 export const teamListCall = async (
-  accessToken: String,
+  accessToken: string,
   organizationID: string | null,
-  userID: String | null = null,
+  userID: string | null = null,
   teamID: string | null = null,
   team_alias: string | null = null,
 ) => {
@@ -1272,7 +1264,7 @@ export const teamListCall = async (
   }
 };
 
-export const availableTeamListCall = async (accessToken: String) => {
+export const availableTeamListCall = async (accessToken: string) => {
   /**
    * Get all available teams on proxy
    */
@@ -1302,7 +1294,7 @@ export const availableTeamListCall = async (accessToken: String) => {
   }
 };
 
-export const organizationListCall = async (accessToken: String) => {
+export const organizationListCall = async (accessToken: string) => {
   /**
    * Get all organizations on proxy
    */
@@ -1331,7 +1323,7 @@ export const organizationListCall = async (accessToken: String) => {
   }
 };
 
-export const organizationInfoCall = async (accessToken: String, organizationID: String) => {
+export const organizationInfoCall = async (accessToken: string, organizationID: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/organization/info` : `/organization/info`;
     if (organizationID) {
@@ -1474,7 +1466,7 @@ export const organizationDeleteCall = async (accessToken: string, organizationID
   }
 };
 
-export const transformRequestCall = async (accessToken: String, request: object) => {
+export const transformRequestCall = async (accessToken: string, request: object) => {
   /**
    * Transform request
    */
@@ -1506,7 +1498,7 @@ export const transformRequestCall = async (accessToken: String, request: object)
   }
 };
 
-export const userDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date, page: number = 1) => {
+export const userDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date, page: number = 1) => {
   /**
    * Get daily user activity on proxy
    */
@@ -1546,7 +1538,7 @@ export const userDailyActivityCall = async (accessToken: String, startTime: Date
 };
 
 export const tagDailyActivityCall = async (
-  accessToken: String,
+  accessToken: string,
   startTime: Date,
   endTime: Date,
   page: number = 1,
@@ -1594,7 +1586,7 @@ export const tagDailyActivityCall = async (
 };
 
 export const teamDailyActivityCall = async (
-  accessToken: String,
+  accessToken: string,
   startTime: Date,
   endTime: Date,
   page: number = 1,
@@ -1642,7 +1634,7 @@ export const teamDailyActivityCall = async (
   }
 };
 
-export const getTotalSpendCall = async (accessToken: String) => {
+export const getTotalSpendCall = async (accessToken: string) => {
   /**
    * Get all models on proxy
    */
@@ -1674,7 +1666,7 @@ export const getTotalSpendCall = async (accessToken: String) => {
   }
 };
 
-export const getOnboardingCredentials = async (inviteUUID: String) => {
+export const getOnboardingCredentials = async (inviteUUID: string) => {
   /**
    * Get all models on proxy
    */
@@ -1709,7 +1701,7 @@ export const claimOnboardingToken = async (
   accessToken: string,
   inviteUUID: string,
   userID: string,
-  password: String,
+  password: string,
 ) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/onboarding/claim_token` : `/onboarding/claim_token`;
   try {
@@ -1777,7 +1769,7 @@ export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: st
 let ModelListerrorShown = false;
 let errorTimer: NodeJS.Timeout | null = null;
 
-export const modelInfoCall = async (accessToken: String, userID: String, userRole: String) => {
+export const modelInfoCall = async (accessToken: string, userID: string, userRole: string) => {
   /**
    * Get all models on proxy
    */
@@ -1829,7 +1821,7 @@ export const modelInfoCall = async (accessToken: String, userID: String, userRol
   }
 };
 
-export const modelInfoV1Call = async (accessToken: String, modelId: String) => {
+export const modelInfoV1Call = async (accessToken: string, modelId: string) => {
   /**
    * Get all models on proxy
    */
@@ -1872,7 +1864,7 @@ export const modelHubPublicModelsCall = async () => {
   return response.json();
 };
 
-export const modelHubCall = async (accessToken: String) => {
+export const modelHubCall = async (accessToken: string) => {
   /**
    * Get all models on proxy
    */
@@ -1907,7 +1899,7 @@ export const modelHubCall = async (accessToken: String) => {
 };
 
 // Function to get allowed IPs
-export const getAllowedIPs = async (accessToken: String) => {
+export const getAllowedIPs = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/get/allowed_ips` : `/get/allowed_ips`;
 
@@ -1936,7 +1928,7 @@ export const getAllowedIPs = async (accessToken: String) => {
 };
 
 // Function to add an allowed IP
-export const addAllowedIP = async (accessToken: String, ip: String) => {
+export const addAllowedIP = async (accessToken: string, ip: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/add/allowed_ip` : `/add/allowed_ip`;
 
@@ -1966,7 +1958,7 @@ export const addAllowedIP = async (accessToken: String, ip: String) => {
 };
 
 // Function to delete an allowed IP
-export const deleteAllowedIP = async (accessToken: String, ip: String) => {
+export const deleteAllowedIP = async (accessToken: string, ip: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/delete/allowed_ip` : `/delete/allowed_ip`;
 
@@ -1996,14 +1988,14 @@ export const deleteAllowedIP = async (accessToken: String, ip: String) => {
 };
 
 export const modelMetricsCall = async (
-  accessToken: String,
-  userID: String,
-  userRole: String,
-  modelGroup: String | null,
-  startTime: String | undefined,
-  endTime: String | undefined,
-  apiKey: String | null,
-  customer: String | null,
+  accessToken: string,
+  userID: string,
+  userRole: string,
+  modelGroup: string | null,
+  startTime: string | undefined,
+  endTime: string | undefined,
+  apiKey: string | null,
+  customer: string | null,
 ) => {
   /**
    * Get all models on proxy
@@ -2039,10 +2031,10 @@ export const modelMetricsCall = async (
   }
 };
 export const streamingModelMetricsCall = async (
-  accessToken: String,
-  modelGroup: String | null,
-  startTime: String | undefined,
-  endTime: String | undefined,
+  accessToken: string,
+  modelGroup: string | null,
+  startTime: string | undefined,
+  endTime: string | undefined,
 ) => {
   /**
    * Get all models on proxy
@@ -2079,14 +2071,14 @@ export const streamingModelMetricsCall = async (
 };
 
 export const modelMetricsSlowResponsesCall = async (
-  accessToken: String,
-  userID: String,
-  userRole: String,
-  modelGroup: String | null,
-  startTime: String | undefined,
-  endTime: String | undefined,
-  apiKey: String | null,
-  customer: String | null,
+  accessToken: string,
+  userID: string,
+  userRole: string,
+  modelGroup: string | null,
+  startTime: string | undefined,
+  endTime: string | undefined,
+  apiKey: string | null,
+  customer: string | null,
 ) => {
   /**
    * Get all models on proxy
@@ -2124,14 +2116,14 @@ export const modelMetricsSlowResponsesCall = async (
 };
 
 export const modelExceptionsCall = async (
-  accessToken: String,
-  userID: String,
-  userRole: String,
-  modelGroup: String | null,
-  startTime: String | undefined,
-  endTime: String | undefined,
-  apiKey: String | null,
-  customer: String | null,
+  accessToken: string,
+  userID: string,
+  userRole: string,
+  modelGroup: string | null,
+  startTime: string | undefined,
+  endTime: string | undefined,
+  apiKey: string | null,
+  customer: string | null,
 ) => {
   /**
    * Get all models on proxy
@@ -2167,7 +2159,7 @@ export const modelExceptionsCall = async (
   }
 };
 
-export const updateUsefulLinksCall = async (accessToken: String, useful_links: Record<string, string>) => {
+export const updateUsefulLinksCall = async (accessToken: string, useful_links: Record<string, string>) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/model_hub/update_useful_links` : `/model_hub/update_useful_links`;
     const response = await fetch(url, {
@@ -2193,11 +2185,11 @@ export const updateUsefulLinksCall = async (accessToken: String, useful_links: R
 };
 
 export const modelAvailableCall = async (
-  accessToken: String,
-  userID: String,
-  userRole: String,
+  accessToken: string,
+  userID: string,
+  userRole: string,
   return_wildcard_routes: boolean = false,
-  teamID: String | null = null,
+  teamID: string | null = null,
   include_model_access_groups: boolean = false,
   only_model_access_groups: boolean = false,
 ) => {
@@ -2248,7 +2240,7 @@ export const modelAvailableCall = async (
   }
 };
 
-export const keySpendLogsCall = async (accessToken: String, token: String) => {
+export const keySpendLogsCall = async (accessToken: string, token: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/logs` : `/global/spend/logs`;
     console.log("in keySpendLogsCall:", url);
@@ -2275,7 +2267,7 @@ export const keySpendLogsCall = async (accessToken: String, token: String) => {
   }
 };
 
-export const teamSpendLogsCall = async (accessToken: String) => {
+export const teamSpendLogsCall = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/teams` : `/global/spend/teams`;
     console.log("in teamSpendLogsCall:", url);
@@ -2303,10 +2295,10 @@ export const teamSpendLogsCall = async (accessToken: String) => {
 };
 
 export const tagsSpendLogsCall = async (
-  accessToken: String,
-  startTime: String | undefined,
-  endTime: String | undefined,
-  tags: String[] | undefined,
+  accessToken: string,
+  startTime: string | undefined,
+  endTime: string | undefined,
+  tags: string[] | undefined,
 ) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/tags` : `/global/spend/tags`;
@@ -2344,7 +2336,7 @@ export const tagsSpendLogsCall = async (
   }
 };
 
-export const allTagNamesCall = async (accessToken: String) => {
+export const allTagNamesCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/all_tag_names` : `/global/spend/all_tag_names`;
 
@@ -2372,7 +2364,7 @@ export const allTagNamesCall = async (accessToken: String) => {
   }
 };
 
-export const allEndUsersCall = async (accessToken: String) => {
+export const allEndUsersCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/customer/list` : `/customer/list`;
 
@@ -2400,7 +2392,7 @@ export const allEndUsersCall = async (accessToken: String) => {
   }
 };
 
-export const userFilterUICall = async (accessToken: String, params: URLSearchParams) => {
+export const userFilterUICall = async (accessToken: string, params: URLSearchParams) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/user/filter/ui` : `/user/filter/ui`;
 
@@ -2433,12 +2425,12 @@ export const userFilterUICall = async (accessToken: String, params: URLSearchPar
 };
 
 export const userSpendLogsCall = async (
-  accessToken: String,
-  token: String,
-  userRole: String,
-  userID: String,
-  startTime: String,
-  endTime: String,
+  accessToken: string,
+  token: string,
+  userRole: string,
+  userID: string,
+  startTime: string,
+  endTime: string,
 ) => {
   try {
     console.log(`user role in spend logs call: ${userRole}`);
@@ -2474,7 +2466,7 @@ export const userSpendLogsCall = async (
 };
 
 export const uiSpendLogsCall = async (
-  accessToken: String,
+  accessToken: string,
   api_key?: string,
   team_id?: string,
   request_id?: string,
@@ -2536,7 +2528,7 @@ export const uiSpendLogsCall = async (
   }
 };
 
-export const adminSpendLogsCall = async (accessToken: String) => {
+export const adminSpendLogsCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/logs` : `/global/spend/logs`;
 
@@ -2565,7 +2557,7 @@ export const adminSpendLogsCall = async (accessToken: String) => {
   }
 };
 
-export const adminTopKeysCall = async (accessToken: String) => {
+export const adminTopKeysCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/keys?limit=5` : `/global/spend/keys?limit=5`;
 
@@ -2595,10 +2587,10 @@ export const adminTopKeysCall = async (accessToken: String) => {
 };
 
 export const adminTopEndUsersCall = async (
-  accessToken: String,
-  keyToken: String | null,
-  startTime: String | undefined,
-  endTime: String | undefined,
+  accessToken: string,
+  keyToken: string | null,
+  startTime: string | undefined,
+  endTime: string | undefined,
 ) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/end_users` : `/global/spend/end_users`;
@@ -2645,10 +2637,10 @@ export const adminTopEndUsersCall = async (
 };
 
 export const adminspendByProvider = async (
-  accessToken: String,
-  keyToken: String | null,
-  startTime: String | undefined,
-  endTime: String | undefined,
+  accessToken: string,
+  keyToken: string | null,
+  startTime: string | undefined,
+  endTime: string | undefined,
 ) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/provider` : `/global/spend/provider`;
@@ -2687,9 +2679,9 @@ export const adminspendByProvider = async (
 };
 
 export const adminGlobalActivity = async (
-  accessToken: String,
-  startTime: String | undefined,
-  endTime: String | undefined,
+  accessToken: string,
+  startTime: string | undefined,
+  endTime: string | undefined,
 ) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity` : `/global/activity`;
@@ -2724,9 +2716,9 @@ export const adminGlobalActivity = async (
 };
 
 export const adminGlobalCacheActivity = async (
-  accessToken: String,
-  startTime: String | undefined,
-  endTime: String | undefined,
+  accessToken: string,
+  startTime: string | undefined,
+  endTime: string | undefined,
 ) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity/cache_hits` : `/global/activity/cache_hits`;
@@ -2761,9 +2753,9 @@ export const adminGlobalCacheActivity = async (
 };
 
 export const adminGlobalActivityPerModel = async (
-  accessToken: String,
-  startTime: String | undefined,
-  endTime: String | undefined,
+  accessToken: string,
+  startTime: string | undefined,
+  endTime: string | undefined,
 ) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity/model` : `/global/activity/model`;
@@ -2798,10 +2790,10 @@ export const adminGlobalActivityPerModel = async (
 };
 
 export const adminGlobalActivityExceptions = async (
-  accessToken: String,
-  startTime: String | undefined,
-  endTime: String | undefined,
-  modelGroup: String,
+  accessToken: string,
+  startTime: string | undefined,
+  endTime: string | undefined,
+  modelGroup: string,
 ) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity/exceptions` : `/global/activity/exceptions`;
@@ -2840,10 +2832,10 @@ export const adminGlobalActivityExceptions = async (
 };
 
 export const adminGlobalActivityExceptionsPerDeployment = async (
-  accessToken: String,
-  startTime: String | undefined,
-  endTime: String | undefined,
-  modelGroup: String,
+  accessToken: string,
+  startTime: string | undefined,
+  endTime: string | undefined,
+  modelGroup: string,
 ) => {
   try {
     let url = proxyBaseUrl
@@ -2883,7 +2875,7 @@ export const adminGlobalActivityExceptionsPerDeployment = async (
   }
 };
 
-export const adminTopModelsCall = async (accessToken: String) => {
+export const adminTopModelsCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/models?limit=5` : `/global/spend/models?limit=5`;
 
@@ -2912,7 +2904,7 @@ export const adminTopModelsCall = async (accessToken: String) => {
   }
 };
 
-export const keyInfoCall = async (accessToken: String, keys: String[]) => {
+export const keyInfoCall = async (accessToken: string, keys: string[]) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/key/info` : `/v2/key/info`;
 
@@ -3037,7 +3029,7 @@ export const keyInfoV1Call = async (accessToken: string, key: string) => {
 };
 
 export const keyListCall = async (
-  accessToken: String,
+  accessToken: string,
   organizationID: string | null,
   teamID: string | null,
   selectedKeyAlias: string | null,
@@ -3125,9 +3117,7 @@ export const keyListCall = async (
   }
 };
 
-export const keyAliasesCall = async (
-  accessToken: String
-): Promise<{ aliases: string[] }> => {
+export const keyAliasesCall = async (accessToken: string): Promise<{ aliases: string[] }> => {
   /**
    * Get all key aliases from proxy
    */
@@ -3159,8 +3149,7 @@ export const keyAliasesCall = async (
   }
 };
 
-
-export const spendUsersCall = async (accessToken: String, userID: String) => {
+export const spendUsersCall = async (accessToken: string, userID: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/spend/users` : `/spend/users`;
     console.log("in spendUsersCall:", url);
@@ -3188,10 +3177,10 @@ export const spendUsersCall = async (accessToken: String, userID: String) => {
 };
 
 export const userRequestModelCall = async (
-  accessToken: String,
-  model: String,
-  UserID: String,
-  justification: String,
+  accessToken: string,
+  model: string,
+  UserID: string,
+  justification: string,
 ) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/user/request_model` : `/user/request_model`;
@@ -3226,7 +3215,7 @@ export const userRequestModelCall = async (
   }
 };
 
-export const userGetRequesedtModelsCall = async (accessToken: String) => {
+export const userGetRequesedtModelsCall = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/user/get_requests` : `/user/get_requests`;
     console.log("in userGetRequesedtModelsCall:", url);
@@ -3263,7 +3252,7 @@ export interface User {
   [key: string]: string; // Include any other potential keys in the dictionary
 }
 
-export const userDailyActivityAggregatedCall = async (accessToken: String, startTime: Date, endTime: Date) => {
+export const userDailyActivityAggregatedCall = async (accessToken: string, startTime: Date, endTime: Date) => {
   /**
    * Get aggregated daily user activity (no pagination)
    */
@@ -3307,7 +3296,7 @@ export const userDailyActivityAggregatedCall = async (accessToken: String, start
   }
 };
 
-export const userGetAllUsersCall = async (accessToken: String, role: String) => {
+export const userGetAllUsersCall = async (accessToken: string, role: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/user/get_users?role=${role}` : `/user/get_users?role=${role}`;
     console.log("in userGetAllUsersCall:", url);
@@ -3337,7 +3326,7 @@ export const userGetAllUsersCall = async (accessToken: String, role: String) => 
   }
 };
 
-export const getPossibleUserRoles = async (accessToken: String) => {
+export const getPossibleUserRoles = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/user/available_roles` : `/user/available_roles`;
     const response = await fetch(url, {
@@ -3454,7 +3443,7 @@ export const credentialCreateCall = async (
   }
 };
 
-export const credentialListCall = async (accessToken: String) => {
+export const credentialListCall = async (accessToken: string) => {
   /**
    * Get all available teams on proxy
    */
@@ -3487,7 +3476,7 @@ export const credentialListCall = async (accessToken: String) => {
   }
 };
 
-export const credentialGetCall = async (accessToken: String, credentialName: String | null, modelId: String | null) => {
+export const credentialGetCall = async (accessToken: string, credentialName: string | null, modelId: string | null) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/credentials` : `/credentials`;
 
@@ -3524,7 +3513,7 @@ export const credentialGetCall = async (accessToken: String, credentialName: Str
   }
 };
 
-export const credentialDeleteCall = async (accessToken: String, credentialName: String) => {
+export const credentialDeleteCall = async (accessToken: string, credentialName: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/credentials/${credentialName}` : `/credentials/${credentialName}`;
     console.log("in credentialDeleteCall:", credentialName);
@@ -4254,7 +4243,7 @@ export const PredictedSpendLogsCall = async (accessToken: string, requestData: a
   }
 };
 
-export const slackBudgetAlertsHealthCheck = async (accessToken: String) => {
+export const slackBudgetAlertsHealthCheck = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/health/services?service=slack_budget_alerts`
@@ -4291,7 +4280,7 @@ export const slackBudgetAlertsHealthCheck = async (accessToken: String) => {
   }
 };
 
-export const serviceHealthCheck = async (accessToken: String, service: String) => {
+export const serviceHealthCheck = async (accessToken: string, service: string) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/health/services?service=${service}`
@@ -4323,7 +4312,7 @@ export const serviceHealthCheck = async (accessToken: String, service: String) =
   }
 };
 
-export const getBudgetList = async (accessToken: String) => {
+export const getBudgetList = async (accessToken: string) => {
   /**
    * Get all configurable params for setting a budget
    */
@@ -4355,7 +4344,7 @@ export const getBudgetList = async (accessToken: String) => {
     throw error;
   }
 };
-export const getBudgetSettings = async (accessToken: String) => {
+export const getBudgetSettings = async (accessToken: string) => {
   /**
    * Get all configurable params for setting a budget
    */
@@ -4388,7 +4377,7 @@ export const getBudgetSettings = async (accessToken: String) => {
   }
 };
 
-export const getCallbacksCall = async (accessToken: String, userID: String, userRole: String) => {
+export const getCallbacksCall = async (accessToken: string, userID: string, userRole: string) => {
   /**
    * Get all the models user has access to
    */
@@ -4421,7 +4410,7 @@ export const getCallbacksCall = async (accessToken: String, userID: String, user
   }
 };
 
-export const getGeneralSettingsCall = async (accessToken: String) => {
+export const getGeneralSettingsCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/config/list?config_type=general_settings`
@@ -4453,7 +4442,7 @@ export const getGeneralSettingsCall = async (accessToken: String) => {
   }
 };
 
-export const getPassThroughEndpointsCall = async (accessToken: String) => {
+export const getPassThroughEndpointsCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/config/pass_through_endpoint` : `/config/pass_through_endpoint`;
 
@@ -4483,7 +4472,7 @@ export const getPassThroughEndpointsCall = async (accessToken: String) => {
   }
 };
 
-export const getConfigFieldSetting = async (accessToken: String, fieldName: string) => {
+export const getConfigFieldSetting = async (accessToken: string, fieldName: string) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/config/field/info?field_name=${fieldName}`
@@ -4514,7 +4503,7 @@ export const getConfigFieldSetting = async (accessToken: String, fieldName: stri
   }
 };
 
-export const updatePassThroughFieldSetting = async (accessToken: String, fieldName: string, fieldValue: any) => {
+export const updatePassThroughFieldSetting = async (accessToken: string, fieldName: string, fieldValue: any) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/config/pass_through_endpoint` : `/config/pass_through_endpoint`;
 
@@ -4550,7 +4539,7 @@ export const updatePassThroughFieldSetting = async (accessToken: String, fieldNa
   }
 };
 
-export const createPassThroughEndpoint = async (accessToken: String, formValues: Record<string, any>) => {
+export const createPassThroughEndpoint = async (accessToken: string, formValues: Record<string, any>) => {
   /**
    * Set callbacks on proxy
    */
@@ -4586,7 +4575,7 @@ export const createPassThroughEndpoint = async (accessToken: String, formValues:
   }
 };
 
-export const updateConfigFieldSetting = async (accessToken: String, fieldName: string, fieldValue: any) => {
+export const updateConfigFieldSetting = async (accessToken: string, fieldName: string, fieldValue: any) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/config/field/update` : `/config/field/update`;
 
@@ -4623,7 +4612,7 @@ export const updateConfigFieldSetting = async (accessToken: String, fieldName: s
   }
 };
 
-export const deleteConfigFieldSetting = async (accessToken: String, fieldName: String) => {
+export const deleteConfigFieldSetting = async (accessToken: string, fieldName: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/config/field/delete` : `/config/field/delete`;
 
@@ -4658,7 +4647,7 @@ export const deleteConfigFieldSetting = async (accessToken: String, fieldName: S
   }
 };
 
-export const deletePassThroughEndpointsCall = async (accessToken: String, endpointId: string) => {
+export const deletePassThroughEndpointsCall = async (accessToken: string, endpointId: string) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/config/pass_through_endpoint?endpoint_id=${endpointId}`
@@ -4690,7 +4679,7 @@ export const deletePassThroughEndpointsCall = async (accessToken: String, endpoi
   }
 };
 
-export const setCallbacksCall = async (accessToken: String, formValues: Record<string, any>) => {
+export const setCallbacksCall = async (accessToken: string, formValues: Record<string, any>) => {
   /**
    * Set callbacks on proxy
    */
@@ -4726,7 +4715,7 @@ export const setCallbacksCall = async (accessToken: String, formValues: Record<s
   }
 };
 
-export const healthCheckCall = async (accessToken: String) => {
+export const healthCheckCall = async (accessToken: string) => {
   /**
    * Get all the models user has access to
    */
@@ -4759,7 +4748,7 @@ export const healthCheckCall = async (accessToken: String) => {
   }
 };
 
-export const individualModelHealthCheckCall = async (accessToken: String, modelName: string) => {
+export const individualModelHealthCheckCall = async (accessToken: string, modelName: string) => {
   /**
    * Run health check for a specific model using model name
    */
@@ -4791,7 +4780,7 @@ export const individualModelHealthCheckCall = async (accessToken: String, modelN
   }
 };
 
-export const cachingHealthCheckCall = async (accessToken: String) => {
+export const cachingHealthCheckCall = async (accessToken: string) => {
   /**
    * Get all the models user has access to
    */
@@ -4824,7 +4813,7 @@ export const cachingHealthCheckCall = async (accessToken: String) => {
 };
 
 export const healthCheckHistoryCall = async (
-  accessToken: String,
+  accessToken: string,
   model?: string,
   statusFilter?: string,
   limit: number = 100,
@@ -4868,7 +4857,7 @@ export const healthCheckHistoryCall = async (
   }
 };
 
-export const latestHealthChecksCall = async (accessToken: String) => {
+export const latestHealthChecksCall = async (accessToken: string) => {
   /**
    * Get the latest health check status for all models
    */
@@ -4897,7 +4886,7 @@ export const latestHealthChecksCall = async (accessToken: String) => {
   }
 };
 
-export const getProxyUISettings = async (accessToken: String) => {
+export const getProxyUISettings = async (accessToken: string) => {
   /**
    * Get all the models user has access to
    */
@@ -4932,7 +4921,7 @@ export const getProxyUISettings = async (accessToken: String) => {
   }
 };
 
-export const getGuardrailsList = async (accessToken: String) => {
+export const getGuardrailsList = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v2/guardrails/list` : `/v2/guardrails/list`;
     const response = await fetch(url, {
@@ -4958,7 +4947,7 @@ export const getGuardrailsList = async (accessToken: String) => {
   }
 };
 
-export const getPromptsList = async (accessToken: String): Promise<ListPromptsResponse> => {
+export const getPromptsList = async (accessToken: string): Promise<ListPromptsResponse> => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/list` : `/prompts/list`;
     const response = await fetch(url, {
@@ -4984,7 +4973,7 @@ export const getPromptsList = async (accessToken: String): Promise<ListPromptsRe
   }
 };
 
-export const getPromptInfo = async (accessToken: String, promptId: string): Promise<PromptInfoResponse> => {
+export const getPromptInfo = async (accessToken: string, promptId: string): Promise<PromptInfoResponse> => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/info` : `/prompts/${promptId}/info`;
     const response = await fetch(url, {
@@ -5404,7 +5393,7 @@ export const updateMCPServer = async (accessToken: string, formValues: Record<st
   }
 };
 
-export const deleteMCPServer = async (accessToken: String, serverId: String) => {
+export const deleteMCPServer = async (accessToken: string, serverId: string) => {
   try {
     const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${serverId}`;
     console.log("in deleteMCPServer:", serverId);
@@ -6281,7 +6270,7 @@ export const updateSSOSettings = async (accessToken: string, settings: Record<st
 };
 
 export const uiAuditLogsCall = async (
-  accessToken: String,
+  accessToken: string,
   start_date?: string,
   end_date?: string,
   page?: number,
@@ -6435,7 +6424,7 @@ export const getPassThroughEndpointInfo = async (accessToken: string, endpointPa
   }
 };
 
-export const deleteCallback = async (accessToken: String, callbackName: string) => {
+export const deleteCallback = async (accessToken: string, callbackName: string) => {
   /**
    * Delete specific callback from proxy using the /config/callback/delete API
    */

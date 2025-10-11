@@ -2,7 +2,6 @@ import { useState, useCallback } from "react";
 import { Modal, Form, Button, Select, Tooltip } from "antd";
 import debounce from "lodash/debounce";
 import { userFilterUICall } from "@/components/networking";
-import { InfoCircleOutlined } from "@ant-design/icons";
 interface User {
   user_id: string;
   user_email: string;

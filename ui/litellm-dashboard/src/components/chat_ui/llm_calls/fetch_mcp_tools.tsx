@@ -1,6 +1,4 @@
-import NotificationManager from "@/components/molecules/notifications_manager";
 import { mcpToolsCall } from "../../networking";
-import { message } from "antd";
 
 export interface MCPTool {
   name: string;

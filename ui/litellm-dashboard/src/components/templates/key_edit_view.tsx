@@ -11,7 +11,7 @@ import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import EditLoggingSettings from "../team/EditLoggingSettings";
 import { extractLoggingSettings, formatMetadataForDisplay } from "../key_info_utils";
 import { fetchMCPAccessGroups } from "../networking";
-import { mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers";
+import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
@@ -299,9 +299,9 @@ export function KeyEditView({
         <Input type="hidden" />
       </Form.Item>
 
-      <Form.Item 
+      <Form.Item
         noStyle
-        shouldUpdate={(prevValues, currentValues) => 
+        shouldUpdate={(prevValues, currentValues) =>
           prevValues.mcp_servers_and_groups !== currentValues.mcp_servers_and_groups ||
           prevValues.mcp_tool_permissions !== currentValues.mcp_tool_permissions
         }

@@ -126,6 +126,74 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
         assert len(mock_scheduler_calls) > 0
 
 
+def test_update_config_fields_deep_merge_db_wins():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    current_config = {
+        "router_settings": {
+            "routing_mode": "cost_optimized",
+            "model_group_alias": {
+                # Existing alias with older model + different hidden flag
+                "claude-sonnet-4": {
+                    "model": "claude-sonnet-4-20240219",
+                    "hidden": True,
+                },
+                # An extra alias that should remain untouched unless DB overrides it
+                "legacy-sonnet": {
+                    "model": "claude-2.1",
+                    "hidden": True,
+                },
+            },
+        }
+    }
+
+    db_param_value = {
+        "model_group_alias": {
+            # Conflict: DB should win (both 'model' and 'hidden')
+            "claude-sonnet-4": {
+                "model": "claude-sonnet-4-20250514",
+                "hidden": False,
+            },
+            # New alias to be added by the merge
+            "claude-sonnet-latest": {
+                "model": "claude-sonnet-4-20250514",
+                "hidden": True,
+            },
+            # Demonstrate that None values from DB are skipped (preserve existing)
+            "legacy-sonnet": {
+                "hidden": None  # should not clobber current True
+            },
+        }
+    }
+
+    updated = proxy_config._update_config_fields(
+        current_config=current_config,
+        param_name="router_settings",
+        db_param_value=db_param_value,
+    )
+
+    rs = updated["router_settings"]
+    aliases = rs["model_group_alias"]
+
+    # DB wins on conflicts (deep) for existing alias
+    assert aliases["claude-sonnet-4"]["model"] == "claude-sonnet-4-20250514"
+    assert aliases["claude-sonnet-4"]["hidden"] is False
+
+    # New alias introduced by DB is present with its values
+    assert "claude-sonnet-latest" in aliases
+    assert aliases["claude-sonnet-latest"]["model"] == "claude-sonnet-4-20250514"
+    assert aliases["claude-sonnet-latest"]["hidden"] is True
+
+    # None in DB does not overwrite existing values
+    assert aliases["legacy-sonnet"]["model"] == "claude-2.1"
+    assert aliases["legacy-sonnet"]["hidden"] is True
+
+    # Unrelated router_settings keys are preserved
+    assert rs["routing_mode"] == "cost_optimized"
+
+
 # Mock Prisma
 class MockPrisma:
     def __init__(self, database_url=None, proxy_logging_obj=None, http_client=None):

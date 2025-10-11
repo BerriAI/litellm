@@ -1,8 +1,8 @@
 import React from "react";
-import { Button, Callout, TextInput } from "@tremor/react";
+import { Button, TextInput } from "@tremor/react";
 import { MCPTool, InputSchema } from "./types";
-import { Form, Tooltip, message } from "antd";
-import { InfoCircleOutlined, ClockCircleOutlined } from "@ant-design/icons";
+import { Form, Tooltip } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import NotificationsManager from "../molecules/notifications_manager";
 
 export function ToolTestPanel({

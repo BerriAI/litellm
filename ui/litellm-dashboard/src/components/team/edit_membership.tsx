@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from "react";
-import { Modal, Form, Button as AntButton, message } from "antd";
+import React, { useEffect } from "react";
+import { Modal, Form, Button as AntButton } from "antd";
 import { Select, SelectItem, TextInput } from "@tremor/react";
-import { Card, Text } from "@tremor/react";
-import NotificationsManager from "../molecules/notifications_manager";
+import { Text } from "@tremor/react";
 import NumericalInput from "../shared/numerical_input";
 
 interface BaseMember {

@@ -9,7 +9,6 @@ import {
   TableRow,
   TableCell,
   TableBody,
-  Metric,
   Subtitle,
 } from "@tremor/react";
 
@@ -22,7 +21,6 @@ import {
   Grid,
   Col,
   Text,
-  LineChart,
   TabPanel,
   TabPanels,
   TabGroup,
@@ -30,21 +28,15 @@ import {
   Tab,
   Select,
   SelectItem,
-  DateRangePicker,
   DateRangePickerValue,
   DonutChart,
   AreaChart,
-  Callout,
   Button,
   MultiSelect,
   MultiSelectItem,
 } from "@tremor/react";
 
-import { Select as Select2 } from "antd";
-
 import {
-  userSpendLogsCall,
-  keyInfoCall,
   adminSpendLogsCall,
   adminTopKeysCall,
   adminTopModelsCall,
@@ -52,14 +44,11 @@ import {
   teamSpendLogsCall,
   tagsSpendLogsCall,
   allTagNamesCall,
-  modelMetricsCall,
-  modelAvailableCall,
   adminspendByProvider,
   adminGlobalActivity,
   adminGlobalActivityPerModel,
   getProxyUISettings,
 } from "./networking";
-import { start } from "repl";
 import TopKeyView from "./top_key_view";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 console.log("process.env.NODE_ENV", process.env.NODE_ENV);

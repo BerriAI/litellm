@@ -1,11 +1,10 @@
 import React from "react";
-import { Form, Switch, Select, Input, Tooltip } from "antd";
-import { Text, Button, Accordion, AccordionHeader, AccordionBody, TextInput } from "@tremor/react";
-import { Row, Col, Typography, Card } from "antd";
+import { Form, Switch, Select, Tooltip } from "antd";
+import { Text, Accordion, AccordionHeader, AccordionBody, TextInput } from "@tremor/react";
+import { Row, Col, Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Team } from "../key_team_helpers/key_list";
-import TeamDropdown from "../common_components/team_dropdown";
 import CacheControlSettings from "./cache_control_settings";
 const { Link } = Typography;
 

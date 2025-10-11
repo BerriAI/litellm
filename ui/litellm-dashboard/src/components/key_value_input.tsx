@@ -1,8 +1,7 @@
 import React, { useState } from "react";
-import { Form, Input, Button, Space } from "antd";
+import { Button, Space } from "antd";
 import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { TextInput, Grid, Col } from "@tremor/react";
-import { TrashIcon } from "@heroicons/react/outline";
+import { TextInput } from "@tremor/react";
 
 interface KeyValueInputProps {
   value?: Record<string, string>;

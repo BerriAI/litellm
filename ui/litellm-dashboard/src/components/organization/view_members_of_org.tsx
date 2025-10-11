@@ -1,18 +1,7 @@
 import React, { FC } from "react";
 
 import { Organization, EditModalProps, OrganizationMember } from "./types";
-import {
-  TextInput,
-  Button,
-  Card,
-  Col,
-  Table,
-  TableHead,
-  TableHeaderCell,
-  TableBody,
-  TableRow,
-  TableCell,
-} from "@tremor/react";
+import { Card, Col, Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
 
 interface Member {
   user_email?: string;

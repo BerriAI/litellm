@@ -1,5 +1,4 @@
 import { LogEntry } from "./columns";
-import { message } from "antd";
 import NotificationsManager from "../molecules/notifications_manager";
 
 interface RequestResponsePanelProps {

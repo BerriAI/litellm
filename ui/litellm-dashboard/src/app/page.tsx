@@ -8,9 +8,8 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import UserDashboard from "@/components/user_dashboard";
-import ModelDashboard from "@/components/templates/model_dashboard";
+import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import ViewUserDashboard from "@/components/view_users";
-import Teams from "@/components/teams";
 import Organizations from "@/components/organizations";
 import { fetchOrganizations } from "@/components/organizations";
 import AdminPanel from "@/components/admins";
@@ -40,6 +39,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
 import useFeatureFlags from "@/hooks/useFeatureFlags";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
+import OldTeams from "@/components/OldTeams";
 
 function getCookie(name: string) {
   // Safer cookie read + decoding; handles '=' inside values
@@ -346,7 +346,7 @@ export default function CreateKeyPage() {
                     createClicked={createClicked}
                   />
                 ) : page == "models" ? (
-                  <ModelDashboard
+                  <OldModelDashboard
                     userID={userID}
                     userRole={userRole}
                     token={token}
@@ -376,15 +376,15 @@ export default function CreateKeyPage() {
                     setKeys={setKeys}
                   />
                 ) : page == "teams" ? (
-                  <Teams
+                  <OldTeams
                     teams={teams}
                     setTeams={setTeams}
-                    searchParams={searchParams}
                     accessToken={accessToken}
                     userID={userID}
                     userRole={userRole}
                     organizations={organizations}
                     premiumUser={premiumUser}
+                    searchParams={searchParams}
                   />
                 ) : page == "organizations" ? (
                   <Organizations

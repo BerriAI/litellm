@@ -1,5 +1,5 @@
 import React from "react";
-import { Card, Text, Badge } from "@tremor/react";
+import { Text, Badge } from "@tremor/react";
 import { RefreshIcon, ClockIcon } from "@heroicons/react/outline";
 
 interface AutoRotationViewProps {

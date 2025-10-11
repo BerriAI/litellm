@@ -1,6 +1,5 @@
 import openai from "openai";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { message } from "antd";
 import { TokenUsage } from "../ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 

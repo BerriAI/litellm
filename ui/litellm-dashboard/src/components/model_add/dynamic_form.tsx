@@ -1,5 +1,5 @@
 import React from "react";
-import { Form, Input } from "antd";
+import { Form } from "antd";
 import { TextInput } from "@tremor/react";
 interface Field {
   field_name: string;

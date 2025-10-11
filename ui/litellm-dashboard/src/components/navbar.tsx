@@ -2,13 +2,10 @@ import Link from "next/link";
 import React, { useState, useEffect } from "react";
 import type { MenuProps } from "antd";
 import { Dropdown, Tooltip, Switch } from "antd";
-import { getProxyBaseUrl, Organization } from "@/components/networking";
-import { defaultOrg } from "@/components/common_components/default_org";
+import { getProxyBaseUrl } from "@/components/networking";
 import {
   UserOutlined,
   LogoutOutlined,
-  LoginOutlined,
-  BgColorsOutlined,
   CrownOutlined,
   MailOutlined,
   SafetyOutlined,
@@ -44,7 +41,7 @@ const Navbar: React.FC<NavbarProps> = ({
   accessToken,
   isPublicPage = false,
   sidebarCollapsed = false,
-  onToggleSidebar
+  onToggleSidebar,
 }) => {
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");

@@ -26,13 +26,9 @@ import {
   TableHeaderCell,
   TableBody,
   TableCell,
-  Subtitle,
-  DateRangePicker,
   DateRangePickerValue,
-  Button,
 } from "@tremor/react";
 import AdvancedDatePicker from "./shared/advanced_date_picker";
-import { AreaChart } from "@tremor/react";
 
 import { userDailyActivityCall, userDailyActivityAggregatedCall, tagListCall } from "./networking";
 import { Tag } from "./tag_management/types";
@@ -40,16 +36,9 @@ import ViewUserSpend from "./view_user_spend";
 import TopKeyView from "./top_key_view";
 import { ActivityMetrics, processActivityData } from "./activity_metrics";
 import UserAgentActivity from "./user_agent_activity";
-import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from "./usage/types";
+import { DailyData, MetricWithMetadata, KeyMetricWithMetadata } from "./usage/types";
 import EntityUsage from "./entity_usage";
-import {
-  old_admin_roles,
-  v2_admin_role_names,
-  all_admin_roles,
-  rolesAllowedToSeeUsage,
-  rolesWithWriteAccess,
-  internalUserRoles,
-} from "../utils/roles";
+import { all_admin_roles } from "../utils/roles";
 import { Team } from "./key_team_helpers/key_list";
 import { EntityList } from "./entity_usage";
 import { formatNumberWithCommas } from "@/utils/dataUtils";

@@ -1,5 +1,5 @@
 import React from "react";
-import { Typography, Space, Button, Divider, message } from "antd";
+import { Typography, Space, Button, Divider } from "antd";
 import { WarningOutlined, InfoCircleOutlined, CopyOutlined } from "@ant-design/icons";
 import { testMCPConnectionRequest } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";

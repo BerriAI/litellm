@@ -1,24 +1,9 @@
 import React, { useEffect, useState } from "react";
-import {
-  Card,
-  Text,
-  Button,
-  Grid,
-  Col,
-  Tab,
-  TabList,
-  TabGroup,
-  TabPanel,
-  TabPanels,
-  Title,
-  Badge,
-  TextInput,
-  Select as TremorSelect,
-} from "@tremor/react";
+import { Card, Text, Button, Grid, Tab, TabList, TabGroup, TabPanel, TabPanels, Title, Badge } from "@tremor/react";
 import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import { keyDeleteCall, keyUpdateCall } from "../networking";
 import { KeyResponse } from "../key_team_helpers/key_list";
-import { Form, Input, InputNumber, Select, Tooltip, Button as AntdButton } from "antd";
+import { Form, Tooltip, Button as AntdButton } from "antd";
 import NotificationManager from "../molecules/notifications_manager";
 import { KeyEditView } from "./key_edit_view";
 import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
@@ -28,7 +13,7 @@ import LoggingSettingsView from "../logging_settings_view";
 import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
 import { extractLoggingSettings, formatMetadataForDisplay } from "../key_info_utils";
 import { CopyIcon, CheckIcon } from "lucide-react";
-import { callback_map, mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers";
+import { mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers";
 import { parseErrorMessage } from "../shared/errorUtils";
 import AutoRotationView from "../common_components/AutoRotationView";
 

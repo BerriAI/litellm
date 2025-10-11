@@ -1,5 +1,5 @@
 import React from "react";
-import { LineChart, Callout, Button } from "@tremor/react";
+import { LineChart } from "@tremor/react";
 interface TimeToFirstTokenProps {
   modelMetrics: any[];
   modelMetricsCategories: string[];

@@ -1,6 +1,6 @@
 import React from "react";
 import { Select, TextInput } from "@tremor/react";
-import { Form, Radio, Select as AntSelect } from "antd";
+import { Form, Select as AntSelect } from "antd";
 import TeamDropdown from "./team_dropdown";
 import { getPossibleUserRoles } from "../networking";
 import TextArea from "antd/es/input/TextArea";

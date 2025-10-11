@@ -1,18 +1,16 @@
 "use client";
-import React, { Suspense, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card, Title, Text, TextInput, Callout, Button, Grid, Col } from "@tremor/react";
-import { RiAlarmWarningLine, RiCheckboxCircleLine } from "@remixicon/react";
+import { RiCheckboxCircleLine } from "@remixicon/react";
 import {
-  invitationClaimCall,
-  userUpdateUserCall,
   getOnboardingCredentials,
   claimOnboardingToken,
   getUiConfig,
   getProxyBaseUrl,
 } from "@/components/networking";
 import { jwtDecode } from "jwt-decode";
-import { Form, Button as Button2, message } from "antd";
+import { Form, Button as Button2 } from "antd";
 import { getCookie } from "@/utils/cookieUtils";
 
 export default function Onboarding() {

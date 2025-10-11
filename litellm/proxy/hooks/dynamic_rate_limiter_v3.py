@@ -520,8 +520,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 f"Threshold={saturation_threshold:.1%}, Priority={key_priority}"
             )
             
-            data["litellm_model_saturation"] = saturation
-            
+
             # STEP 2: Check rate limits in THREE phases
             # Phase 1: Read-only check of ALL limits (no increments)
             # Phase 2: Decide which limits to enforce (based on saturation)

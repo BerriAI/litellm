@@ -1,15 +1,14 @@
 "use client";
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Button, TextInput, Grid, Col, Select as TremorSelect, SelectItem } from "@tremor/react";
-import { Card, Metric, Text, Title, Subtitle, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
+import React, { useState, useEffect, useCallback } from "react";
+import { Button, TextInput, Grid, Col } from "@tremor/react";
+import { Text, Title, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Button as Button2, Modal, Form, Input, Select, message, Radio } from "antd";
+import { Button as Button2, Modal, Form, Input, Select, Radio } from "antd";
 import NumericalInput from "../shared/numerical_input";
-import { unfurlWildcardModelsInList, getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import SchemaFormFields from "../common_components/check_openapi_schema";
 import {
   keyCreateCall,
-  slackBudgetAlertsHealthCheck,
   modelAvailableCall,
   getGuardrailsList,
   proxyBaseUrl,
@@ -30,7 +29,7 @@ import debounce from "lodash/debounce";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { callback_map, mapDisplayToInternalNames } from "../callback_info_helpers";
+import { mapDisplayToInternalNames } from "../callback_info_helpers";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import ModelAliasManager from "../common_components/ModelAliasManager";
@@ -389,7 +388,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       if (Object.keys(modelAliases).length > 0) {
         formValues.aliases = JSON.stringify(modelAliases);
       }
-
 
       let response;
       if (keyOwner === "service_account") {
@@ -1007,9 +1005,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         <Input type="hidden" />
                       </Form.Item>
 
-                      <Form.Item 
+                      <Form.Item
                         noStyle
-                        shouldUpdate={(prevValues, currentValues) => 
+                        shouldUpdate={(prevValues, currentValues) =>
                           prevValues.allowed_mcp_servers_and_groups !== currentValues.allowed_mcp_servers_and_groups ||
                           prevValues.mcp_tool_permissions !== currentValues.mcp_tool_permissions
                         }

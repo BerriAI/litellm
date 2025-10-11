@@ -1,6 +1,6 @@
 import React from "react";
 import { ColumnDef } from "@tanstack/react-table";
-import { Badge, Text } from "@tremor/react";
+import { Text } from "@tremor/react";
 import { EyeIcon, CogIcon } from "@heroicons/react/outline";
 import { Tag } from "antd";
 
