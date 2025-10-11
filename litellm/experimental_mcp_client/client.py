@@ -279,10 +279,9 @@ class MCPClient:
             await self.disconnect()
             raise
         except Exception as e:
-            verbose_logger.warning(f"MCP client list_tools failed: {str(e)}")
+            verbose_logger.debug(f"MCP client list_tools failed: {str(e)}")
             await self.disconnect()
-            # Return empty list instead of raising to allow graceful degradation
-            return []
+            raise e
 
     async def call_tool(
         self, call_tool_request_params: MCPCallToolRequestParams

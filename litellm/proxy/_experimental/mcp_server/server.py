@@ -206,10 +206,8 @@ if MCP_AVAILABLE:
             )
             return tools
         except Exception as e:
-            verbose_logger.exception(f"Error in list_tools endpoint: {str(e)}")
-            # Return empty list instead of failing completely
-            # This prevents the HTTP stream from failing and allows the client to get a response
-            return []
+            verbose_logger.debug(f"Error in list_tools endpoint: {str(e)}")
+            raise e
 
     @server.call_tool()
     async def mcp_server_tool_call(
@@ -514,10 +512,11 @@ if MCP_AVAILABLE:
                     f"Successfully fetched {len(tools)} tools from server {server.name}, {len(filtered_tools)} after filtering"
                 )
             except Exception as e:
-                verbose_logger.exception(
+                verbose_logger.debug(
                     f"Error getting tools from server {server.name}: {str(e)}"
                 )
                 # Continue with other servers instead of failing completely
+                raise e
 
         verbose_logger.info(
             f"Successfully fetched {len(all_tools)} tools total from all MCP servers"

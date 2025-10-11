@@ -218,6 +218,7 @@ class MCPServerManager:
                 disallowed_tools=server_config.get("disallowed_tools", None),
                 allowed_params=server_config.get("allowed_params", None),
                 access_groups=server_config.get("access_groups", None),
+                static_headers=server_config.get("static_headers", None),
             )
             self.config_mcp_servers[server_id] = new_server
 
@@ -632,6 +633,11 @@ class MCPServerManager:
         client = None
 
         try:
+            if server.static_headers:
+                if extra_headers is None:
+                    extra_headers = {}
+                extra_headers.update(server.static_headers)
+
             client = self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
@@ -654,10 +660,10 @@ class MCPServerManager:
             return prefixed_or_original_tools
 
         except Exception as e:
-            verbose_logger.warning(
+            verbose_logger.debug(
                 f"Failed to get tools from server {server.name}: {str(e)}"
             )
-            return []
+            raise e
         finally:
             if client:
                 try:
@@ -686,14 +692,14 @@ class MCPServerManager:
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
-            except asyncio.CancelledError:
-                verbose_logger.warning(f"Client operation cancelled for {server_name}")
-                return []
+            except asyncio.CancelledError as e:
+                verbose_logger.debug(f"Client operation cancelled for {server_name}")
+                raise e
             except Exception as e:
-                verbose_logger.warning(
+                verbose_logger.debug(
                     f"Client operation failed for {server_name}: {str(e)}"
                 )
-                return []
+                raise e
             finally:
                 try:
                     await client.disconnect()
@@ -702,22 +708,22 @@ class MCPServerManager:
 
         try:
             return await asyncio.wait_for(_list_tools_task(), timeout=30.0)
-        except asyncio.TimeoutError:
-            verbose_logger.warning(f"Timeout while listing tools from {server_name}")
-            return []
-        except asyncio.CancelledError:
-            verbose_logger.warning(
+        except asyncio.TimeoutError as e:
+            verbose_logger.debug(f"Timeout while listing tools from {server_name}")
+            raise e
+        except asyncio.CancelledError as e:
+            verbose_logger.debug(
                 f"Task cancelled while listing tools from {server_name}"
             )
-            return []
+            raise e
         except ConnectionError as e:
-            verbose_logger.warning(
+            verbose_logger.debug(
                 f"Connection error while listing tools from {server_name}: {str(e)}"
             )
-            return []
+            raise e
         except Exception as e:
-            verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
-            return []
+            verbose_logger.debug(f"Error listing tools from {server_name}: {str(e)}")
+            raise e
 
     def _create_prefixed_tools(
         self, tools: List[MCPTool], server: MCPServer, add_prefix: bool = True
@@ -1097,14 +1103,7 @@ class MCPServerManager:
             raise ValueError(f"Tool {name} not found")
 
         # Validate that the server from prefix matches the actual server (if prefix was used)
-        if server_name_from_prefix:
-            expected_prefix = get_server_prefix(mcp_server)
-            if normalize_server_name(server_name_from_prefix) != normalize_server_name(
-                expected_prefix
-            ):
-                raise ValueError(
-                    f"Tool {name} server prefix mismatch: expected {expected_prefix}, got {server_name_from_prefix}"
-                )
+        self._validate_server_prefix_match(name, server_name_from_prefix, mcp_server)
 
         #########################################################
         # Pre MCP Tool Call Hook
@@ -1121,6 +1120,39 @@ class MCPServerManager:
                 server=mcp_server,
             )
 
+        # Get server-specific auth header if available
+        server_auth_header: Optional[Union[Dict[str, str], str]] = None
+        if mcp_server_auth_headers and mcp_server.alias:
+            server_auth_header = mcp_server_auth_headers.get(mcp_server.alias)
+        elif mcp_server_auth_headers and mcp_server.server_name:
+            server_auth_header = mcp_server_auth_headers.get(mcp_server.server_name)
+
+        # Fall back to deprecated mcp_auth_header if no server-specific header found
+        if server_auth_header is None:
+            server_auth_header = mcp_auth_header
+
+        # oauth2 headers
+        extra_headers: Optional[Dict[str, str]] = None
+        if mcp_server.auth_type == MCPAuth.oauth2:
+            extra_headers = oauth2_headers
+
+        if mcp_server.extra_headers and raw_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            for header in mcp_server.extra_headers:
+                if header in raw_headers:
+                    extra_headers[header] = raw_headers[header]
+
+        if mcp_server.static_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            extra_headers.update(mcp_server.static_headers)
+
+        client = self._create_mcp_client(
+            server=mcp_server,
+            mcp_auth_header=server_auth_header,
+            extra_headers=extra_headers,
+        )
         # Prepare tasks for during hooks
         tasks = []
         if proxy_logging_obj:
@@ -1269,6 +1301,32 @@ class MCPServerManager:
                     return server
 
         return None
+
+    def _validate_server_prefix_match(
+        self,
+        tool_name: str,
+        server_name_from_prefix: Optional[str],
+        mcp_server: MCPServer,
+    ) -> None:
+        """
+        Validate that the server prefix from the tool name matches the actual server.
+
+        Args:
+            tool_name: Original tool name provided
+            server_name_from_prefix: Server name extracted from tool name prefix (if any)
+            mcp_server: The MCP server that was found for this tool
+
+        Raises:
+            ValueError: If the server prefix doesn't match the expected server
+        """
+        if server_name_from_prefix:
+            expected_prefix = get_server_prefix(mcp_server)
+            if normalize_server_name(server_name_from_prefix) != normalize_server_name(
+                expected_prefix
+            ):
+                raise ValueError(
+                    f"Tool {tool_name} server prefix mismatch: expected {expected_prefix}, got {server_name_from_prefix}"
+                )
 
     async def _add_mcp_servers_from_db_to_in_memory_registry(self):
         from litellm.proxy._experimental.mcp_server.db import get_all_mcp_servers
