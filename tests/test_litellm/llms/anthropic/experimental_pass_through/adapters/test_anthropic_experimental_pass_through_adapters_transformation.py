@@ -70,6 +70,188 @@ def test_translate_streaming_openai_chunk_to_anthropic_content_block():
     }
 
 
+def test_translate_streaming_openai_chunk_to_anthropic_thinking_content_block():
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="I need to summar",
+                thinking_blocks=[
+                    {
+                        "type": "thinking",
+                        "thinking": "I need to summar",
+                        "signature": None,
+                    }
+                ],
+                provider_specific_fields={
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": "I need to summar",
+                            "signature": None,
+                        }
+                    ]
+                },
+                content="",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        block_type,
+        content_block_start,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "thinking"
+    assert content_block_start == {
+        "type": "thinking",
+        "thinking": "I need to summar",
+        "signature": "",
+    }
+
+
+def test_translate_streaming_openai_chunk_to_anthropic_thinking_signature_block():
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="",
+                thinking_blocks=[
+                    {
+                        "type": "thinking",
+                        "thinking": None,
+                        "signature": "sigsig",
+                    }
+                ],
+                provider_specific_fields={
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": None,
+                            "signature": "sigsig",
+                        }
+                    ]
+                },
+                content="",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        block_type,
+        content_block_start,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "thinking"
+    assert content_block_start == {
+        "type": "thinking",
+        "thinking": "",
+        "signature": "sigsig",
+    }
+
+
+def test_translate_streaming_openai_chunk_to_anthropic_raises_when_thinking_and_signature_content_block():
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="",
+                thinking_blocks=[
+                    {
+                        "type": "thinking",
+                        "thinking": "I need to summar",
+                        "signature": "sigsig",
+                    }
+                ],
+                provider_specific_fields={
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": "I need to summar",
+                            "signature": "sigsig",
+                        }
+                    ]
+                },
+                content="",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    with pytest.raises(ValueError):
+        LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+            choices=choices
+        )
+
+
+def test_translate_anthropic_messages_to_openai_thinking_blocks():
+    """Test that tool result messages are placed before user messages in the conversation order."""
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "What's the weather in Boston?"}]
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "I will call the get_weather tool.",
+                    "signature": "sigsig"
+                },
+                {
+                    "type": "redacted_thinking",
+                    "data": "REDACTED",
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01234",
+                    "name": "get_weather",
+                    "input": {"location": "Boston"} 
+                }
+            ]
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert len(result) == 2
+    assert result[1]["role"] == "assistant"
+    assert "thinking_blocks" in result[1]
+    assert len(result[1]["thinking_blocks"]) == 2
+    assert result[1]["thinking_blocks"][0]["type"] == "thinking"
+    assert result[1]["thinking_blocks"][0]["thinking"] == "I will call the get_weather tool."
+    assert result[1]["thinking_blocks"][0]["signature"] == "sigsig"
+    assert result[1]["thinking_blocks"][1]["type"] == "redacted_thinking"
+    assert result[1]["thinking_blocks"][1]["data"] == "REDACTED"
+    assert "tool_calls" in result[1]
+    assert len(result[1]["tool_calls"]) == 1
+    assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
+
+
 def test_translate_anthropic_messages_to_openai_tool_message_placement():
     """Test that tool result messages are placed before user messages in the conversation order."""
 
@@ -192,3 +374,165 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():
     assert type_of_content == "input_json_delta"
     assert content_block_delta["type"] == "input_json_delta" 
     assert content_block_delta["partial_json"] == ': "San '
+
+
+
+def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content=None,
+                thinking_blocks=[
+                    {
+                        "type": "thinking",
+                        "thinking": "I need to summar",
+                        "signature": "sigsig",
+                    },
+                    {
+                        "type": "redacted_thinking",
+                        "data": "REDACTED"
+                    }
+                ]
+            )
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert len(result) == 2
+    assert result[0].type == "thinking"
+    assert result[0].thinking == "I need to summar"
+    assert result[0].signature == "sigsig"
+    assert result[1].type == "redacted_thinking"
+    assert result[1].data == "REDACTED"
+
+
+def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="I need to summar",
+                thinking_blocks=[
+                    {
+                        "type": "thinking",
+                        "thinking": "I need to summar",
+                        "signature": None,
+                    }
+                ],
+                provider_specific_fields={
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": "I need to summar",
+                            "signature": None,
+                        }
+                    ]
+                },
+                content="",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+        choices=choices
+    )
+
+    assert type_of_content == "thinking_delta"
+    assert content_block_delta["type"] == "thinking_delta" 
+    assert content_block_delta["thinking"] == "I need to summar"
+
+
+def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="",
+                thinking_blocks=[
+                    {
+                        "type": "thinking",
+                        "thinking": None,
+                        "signature": "sigsig",
+                    }
+                ],
+                provider_specific_fields={
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": None,
+                            "signature": "sigsig",
+                        }
+                    ]
+                },
+                content="",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+        choices=choices
+    )
+
+    assert type_of_content == "signature_delta"
+    assert content_block_delta["type"] == "signature_delta" 
+    assert content_block_delta["signature"] == "sigsig"
+
+
+def test_translate_streaming_openai_chunk_to_anthropic_raises_when_thinking_and_signature():
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="",
+                thinking_blocks=[
+                    {
+                        "type": "thinking",
+                        "thinking": "I need to summar",
+                        "signature": "sigsig",
+                    }
+                ],
+                provider_specific_fields={
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": "I need to summar",
+                            "signature": "sigsig",
+                        }
+                    ]
+                },
+                content="",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    with pytest.raises(ValueError):
+        LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+            choices=choices
+        )
