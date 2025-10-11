@@ -203,6 +203,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if value is not None:
                 if key == "instructions" and instructions:
                     request_data["instructions"] = instructions
+                elif key == "stream_options" and isinstance(value, dict):
+                    request_data["stream_options"] = value.get("include_obfuscation")
+                elif key == "user":  # string can't be longer than 64 characters
+                    if isinstance(value, str) and len(value) <= 64:
+                        request_data["user"] = value
                 else:
                     request_data[key] = value
 
