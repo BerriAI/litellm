@@ -5,9 +5,8 @@
 import React, { useState, useEffect } from "react";
 import { Typography } from "antd";
 import { useRouter } from "next/navigation";
-import { Button as Button2, Modal, Form, Input, Select as Select2, InputNumber, message } from "antd";
-import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Select, SelectItem, Subtitle } from "@tremor/react";
+import { Button as Button2, Modal, Form, Input } from "antd";
+import { Select, SelectItem } from "@tremor/react";
 import { Team } from "./key_team_helpers/key_list";
 import {
   Table,
@@ -17,24 +16,16 @@ import {
   TableHeaderCell,
   TableRow,
   Card,
-  Icon,
   Button,
-  Col,
-  Text,
-  Grid,
   Callout,
-  Divider,
   TabGroup,
   TabList,
   Tab,
   TabPanel,
   TabPanels,
 } from "@tremor/react";
-import { PencilAltIcon } from "@heroicons/react/outline";
-import OnboardingModal from "./onboarding_link";
 import { InvitationLink } from "./onboarding_link";
 import SSOModals from "./SSOModals";
-import { ssoProviderConfigs } from "./SSOModals";
 import SCIMConfig from "./SCIM";
 import UIAccessControlForm from "./UIAccessControlForm";
 import NotificationsManager from "./molecules/notifications_manager";

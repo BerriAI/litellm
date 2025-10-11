@@ -1,4 +1,4 @@
-import { teamListCall, DEFAULT_ORGANIZATION, Organization } from "../networking";
+import { teamListCall, Organization } from "../networking";
 
 export const fetchTeams = async (
   accessToken: string,
