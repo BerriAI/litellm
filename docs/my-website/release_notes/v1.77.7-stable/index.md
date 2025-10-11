@@ -105,21 +105,14 @@ View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache
 
 ### MCP Oauth
 
+<Image img={require('../../img/mcp_updates.jpg')} style={{ width: '800px', height: 'auto' }} />
+
+<br/>
+
 This release adds support for OAuth 2.0 Client Credentials for MCP servers. This is great for **Internal Dev Tools** use-cases, as it enables your users to call MCP servers, with their own credentials. E.g. Allowing your developers to call the Github MCP, with their own credentials.
 
-Here's how to set it up today: 
 
-```yaml title="config.yaml" showLineNumbers
-mcp_servers:
-  github_mcp:
-    url: "https://api.githubcopilot.com/mcp"
-    auth_type: oauth2
-    authorization_url: https://github.com/login/oauth/authorize
-    token_url: https://github.com/login/oauth/access_token
-    client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
-    client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
-    scopes: ["public_repo", "user:email"]
-```
+[Set it up today on Claude Code](../../docs/tutorials/claude_responses_api#connecting-mcp-servers)
 
 
 ## New Models / Updated Models
