@@ -1089,9 +1089,6 @@ SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
     os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 )
-TAG_CACHE_IN_MEMORY_TTL_SECONDS = int(
-    os.getenv("TAG_CACHE_IN_MEMORY_TTL_SECONDS", 600)
-)  # 10 minutes - Higher TTL for tags as there can be many tags
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST = [
