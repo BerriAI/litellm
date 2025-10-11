@@ -11,12 +11,12 @@ Endpoints for /organization operations
 
 #### ORGANIZATION MANAGEMENT ####
 
-from litellm._uuid import uuid
 from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import can_user_call_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -29,6 +29,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 )
 from litellm.proxy.management_helpers.utils import (
     get_new_internal_user_defaults,
+    handle_budget_for_entity,
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient
@@ -168,30 +169,17 @@ async def new_organization(
         except Exception:
             pass
 
-    if data.budget_id is None:
-        """
-        Every organization needs a budget attached.
-
-        If none provided, create one based on provided values
-        """
-        budget_params = LiteLLM_BudgetTable.model_fields.keys()
-
-        # Only include Budget Params when creating an entry in litellm_budgettable
-        _json_data = data.json(exclude_none=True)
-        _budget_data = {k: v for k, v in _json_data.items() if k in budget_params}
-        budget_row = LiteLLM_BudgetTable(**_budget_data)
-
-        new_budget = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
-
-        _budget = await prisma_client.db.litellm_budgettable.create(
-            data={
-                **new_budget,  # type: ignore
-                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }
-        )  # type: ignore
-
-        data.budget_id = _budget.budget_id
+    # Handle budget creation/assignment using common helper
+    budget_id = await handle_budget_for_entity(
+        data=data,
+        existing_budget_id=None,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+    )
+    
+    if budget_id is not None:
+        data.budget_id = budget_id
 
     ## Handle Object Permission - MCP, Vector Stores etc.
     object_permission_id = await _set_object_permission(
@@ -322,20 +310,22 @@ async def update_organization(
             existing_organization_row=existing_organization_row,
         )
 
-    # Handle budget updates if budget fields are provided
-    budget_fields = {k: v for k, v in data.model_dump().items() 
-                    if k in LiteLLM_BudgetTable.model_fields.keys() and v is not None}
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    # Handle budget updates using common helper
+    budget_id = await handle_budget_for_entity(
+        data=data,
+        existing_budget_id=existing_organization_row.budget_id,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+    )
     
-    if budget_fields and existing_organization_row.budget_id:
-        await update_budget(
-            budget_obj=BudgetNewRequest(
-                budget_id=existing_organization_row.budget_id,
-                **budget_fields
-            ),
-            user_api_key_dict=user_api_key_dict,
-        )
+    # Update budget_id if it changed
+    if budget_id != existing_organization_row.budget_id:
+        updated_organization_row["budget_id"] = budget_id
     
-    # Remove budget fields from organization update data
+    # Remove budget fields from organization update data (they're handled via budget table)
     for field in LiteLLM_BudgetTable.model_fields.keys():
         updated_organization_row.pop(field, None)
 
