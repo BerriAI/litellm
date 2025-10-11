@@ -2229,6 +2229,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
+    debug_dynamic_params: Optional[bool]
 
 class CustomPricingLiteLLMParams(BaseModel):
     ## CUSTOM PRICING ##
