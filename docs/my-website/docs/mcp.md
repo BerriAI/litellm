@@ -151,6 +151,10 @@ mcp_servers:
     description: "My custom MCP server"
     auth_type: "api_key"
     auth_value: "abc123"
+
+general_settings:
+  store_model_in_db: true
+  supported_db_objects: ["mcp"]  # Only store MCP servers in DB
 ```
 
 **Configuration Options:**
