@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_name_from_messages,
 )
+from litellm.utils import get_model_info
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.databricks import (
@@ -96,6 +97,24 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     def get_config(cls):
         return super().get_config()
 
+    def _is_foundational_model(self, model: str) -> bool:
+        """
+        Check if a model is a Databricks foundational model by looking it up in the model cost map.
+
+        Args:
+            model: The model name to check
+
+        Returns:
+            bool: True if the model is a Databricks foundational model, False otherwise
+        """
+        try:
+            # Use get_model_info to check if the model exists and has foundational_model flag
+            model_info = get_model_info(model=model, custom_llm_provider="databricks")
+            return bool(model_info.get("foundational_model", False))
+        except Exception:
+            # If there's any error accessing the model info, fall back to False
+            return False
+
     def get_required_params(self) -> List[ProviderField]:
         """For a given provider, return it's required fields with a description"""
         return [
@@ -144,8 +163,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         stream: Optional[bool] = None,
     ) -> str:
         api_base = self._get_api_base(api_base)
-        complete_url = f"{api_base}/chat/completions"
-        return complete_url
+        # Ensure /serving-endpoints is included
+        if not api_base.endswith("/serving-endpoints"):
+            api_base = f"{api_base.rstrip('/')}/serving-endpoints"
+        if self._is_foundational_model(model):
+            return f"{api_base}/{model}/invocations"
+        return f"{api_base}/chat/completions"
 
     def get_supported_openai_params(self, model: Optional[str] = None) -> list:
         return [
@@ -172,9 +195,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         # Build DatabricksFunction explicitly to avoid parameter conflicts
         function_params: DatabricksFunction = {
             "name": tool["name"],
-            "parameters": cast(dict, tool.get("input_schema") or {})
+            "parameters": cast(dict, tool.get("input_schema") or {}),
         }
-        
+
         # Only add description if it exists
         description = tool.get("description")
         if description is not None:
