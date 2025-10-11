@@ -539,7 +539,21 @@ def cleanup_router_config_variables():
 
 async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate
+    global _scheduler_instance
+    
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+    
+    # Shutdown APScheduler first (before disconnecting other resources)
+    if _scheduler_instance is not None:
+        try:
+            verbose_proxy_logger.info("Shutting down APScheduler...")
+            _scheduler_instance.shutdown(wait=False)  # Don't wait for running jobs
+            _scheduler_instance = None
+            verbose_proxy_logger.info("APScheduler shutdown complete")
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error shutting down scheduler: {e}")
+    
+    # Then disconnect database (after scheduler is stopped)
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
@@ -1048,6 +1062,9 @@ celery_fn = None  # Redis Queue for handling requests
 # Global variables for model cost map reload scheduling
 scheduler = None
 last_model_cost_map_reload = None
+
+### SCHEDULER INSTANCE ###
+_scheduler_instance = None  # Track APScheduler instance for proper shutdown
 
 ### DB WRITER ###
 db_writer_client: Optional[AsyncHTTPHandler] = None
@@ -3800,6 +3817,290 @@ def giveup(e):
     return result
 
 
+class DatabaseJobsCoordinator:
+    """
+    Tracks last execution times for all database jobs and ensures
+    they run at their specified intervals within the unified coordinator.
+    
+    This prevents concurrent database access that can cause deadlocks.
+    """
+    
+    def __init__(
+        self,
+        proxy_budget_rescheduler_min_time: int,
+        proxy_budget_rescheduler_max_time: int,
+        proxy_batch_write_at: int,
+    ):
+        self.last_run_times: Dict[str, Optional[datetime]] = {
+            "update_spend": None,
+            "reset_budget": None,
+            "add_deployment": None,
+            "get_credentials": None,
+            "spend_log_cleanup": None,
+            "check_batch_cost": None,
+        }
+        
+        # Pre-calculate randomized intervals at initialization (only once)
+        # This ensures consistent behavior matching the original implementation
+        self.task_intervals = {
+            "update_spend": random.randint(
+                proxy_batch_write_at - 3, proxy_batch_write_at + 3
+            ),
+            "reset_budget": random.randint(
+                proxy_budget_rescheduler_min_time,
+                proxy_budget_rescheduler_max_time,
+            ),
+        }
+    
+    def should_run(self, job_name: str, interval_seconds: int) -> bool:
+        """
+        Check if enough time has passed since last run
+        
+        Args:
+            job_name: Name of the job to check
+            interval_seconds: Required interval in seconds
+            
+        Returns:
+            True if job should run, False otherwise
+        """
+        last_run = self.last_run_times.get(job_name)
+        if last_run is None:
+            return True
+        
+        elapsed = (datetime.now() - last_run).total_seconds()
+        return elapsed >= interval_seconds
+    
+    def mark_run(self, job_name: str):
+        """Mark job as completed at current time"""
+        self.last_run_times[job_name] = datetime.now()
+    
+    def set_last_run_time(self, job_name: str, run_time: Optional[datetime]):
+        """
+        Set the last run time for a specific job (for testing purposes)
+        
+        Args:
+            job_name: Name of the job
+            run_time: The datetime to set as last run time, or None to reset
+            
+        Raises:
+            ValueError: If job_name is not valid
+        """
+        if job_name not in self.last_run_times:
+            raise ValueError(
+                f"Invalid job name: {job_name}. "
+                f"Valid jobs: {list(self.last_run_times.keys())}"
+            )
+        self.last_run_times[job_name] = run_time
+    
+    def get_last_run_time(self, job_name: str) -> Optional[datetime]:
+        """
+        Get the last run time for a specific job (for testing purposes)
+        
+        Args:
+            job_name: Name of the job
+            
+        Returns:
+            Last run time or None if never run
+            
+        Raises:
+            ValueError: If job_name is not valid
+        """
+        if job_name not in self.last_run_times:
+            raise ValueError(
+                f"Invalid job name: {job_name}. "
+                f"Valid jobs: {list(self.last_run_times.keys())}"
+            )
+        return self.last_run_times[job_name]
+    
+    def get_task_interval(self, job_name: str) -> Optional[int]:
+        """
+        Get the pre-calculated interval for a specific job (for testing purposes)
+        
+        Args:
+            job_name: Name of the job
+            
+        Returns:
+            Pre-calculated interval in seconds, or None if not pre-calculated
+        """
+        return self.task_intervals.get(job_name)
+
+
+async def high_frequency_database_jobs_coordinator(
+    prisma_client: PrismaClient,
+    db_writer_client: Optional[AsyncHTTPHandler],
+    proxy_logging_obj: ProxyLogging,
+    coordinator: DatabaseJobsCoordinator,
+    proxy_config: ProxyConfig,
+    llm_router: Optional[Router],
+):
+    """
+    High-frequency database jobs coordinator - handles tasks that need to run every 10 seconds.
+    
+    Runs every 10 seconds and executes:
+    - add_deployment: Refresh model configuration from database (10s interval)
+    - get_credentials: Refresh credentials from database (10s interval)
+    - update_spend: Update spend logs (60s interval)
+    - check_batch_cost: Check batch costs (60s interval)
+    
+    If one job fails, execution continues to the next job to maintain system stability.
+    
+    Args:
+        prisma_client: Database client
+        db_writer_client: Async HTTP handler for batch writes
+        proxy_logging_obj: Logging object
+        coordinator: Job coordinator tracking last run times
+        proxy_config: Proxy configuration object
+        llm_router: LLM router instance
+    """
+    global store_model_in_db
+    
+    try:
+        # Only run high-frequency tasks if store_model_in_db is enabled
+        if store_model_in_db is True:
+            # 1. Add deployment / Refresh model config (runs every 10 seconds)
+            if coordinator.should_run("add_deployment", 10):
+                try:
+                    await proxy_config.add_deployment(
+                        prisma_client=prisma_client, 
+                        proxy_logging_obj=proxy_logging_obj
+                    )
+                    coordinator.mark_run("add_deployment")
+                    verbose_proxy_logger.debug("✓ High-freq coordinator: add_deployment completed")
+                except Exception as e:
+                    verbose_proxy_logger.error(f"✗ High-freq coordinator: add_deployment failed - {e}")
+            
+            # 2. Get credentials (runs every 10 seconds)
+            if coordinator.should_run("get_credentials", 10):
+                try:
+                    await proxy_config.get_credentials(prisma_client=prisma_client)
+                    coordinator.mark_run("get_credentials")
+                    verbose_proxy_logger.debug("✓ High-freq coordinator: get_credentials completed")
+                except Exception as e:
+                    verbose_proxy_logger.error(f"✗ High-freq coordinator: get_credentials failed - {e}")
+        
+        # 3. Update spend logs (uses pre-calculated randomized interval ~60s)
+        if coordinator.should_run("update_spend", coordinator.task_intervals["update_spend"]):
+            try:
+                await update_spend(prisma_client, db_writer_client, proxy_logging_obj)
+                coordinator.mark_run("update_spend")
+                verbose_proxy_logger.debug("✓ High-freq coordinator: update_spend completed")
+            except Exception as e:
+                verbose_proxy_logger.error(f"✗ High-freq coordinator: update_spend failed - {e}")
+        
+        # 4. Check batch cost (runs every 60 seconds)
+        if llm_router is not None:
+            if coordinator.should_run("check_batch_cost", 60):
+                try:
+                    from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+                        CheckBatchCost,
+                    )
+                    check_batch_cost_job = CheckBatchCost(
+                        proxy_logging_obj=proxy_logging_obj,
+                        prisma_client=prisma_client,
+                        llm_router=llm_router,
+                    )
+                    await check_batch_cost_job.check_batch_cost()
+                    coordinator.mark_run("check_batch_cost")
+                    verbose_proxy_logger.debug("✓ High-freq coordinator: check_batch_cost completed")
+                except ImportError:
+                    # Enterprise feature not available - this is expected
+                    pass
+                except Exception as e:
+                    verbose_proxy_logger.error(f"✗ High-freq coordinator: check_batch_cost failed - {e}")
+        
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"High-frequency database jobs coordinator error: {e}\n{traceback.format_exc()}"
+        )
+
+
+async def low_frequency_database_jobs_coordinator(  # noqa: PLR0915
+    prisma_client: PrismaClient,
+    db_writer_client: Optional[AsyncHTTPHandler],
+    proxy_logging_obj: ProxyLogging,
+    coordinator: DatabaseJobsCoordinator,
+    general_settings: dict,
+    llm_router: Optional[Router],
+    proxy_budget_rescheduler_min_time: int,
+    proxy_budget_rescheduler_max_time: int,
+    proxy_batch_write_at: int,
+    proxy_batch_polling_interval: int,
+):
+    """
+    Low-frequency database jobs coordinator - handles tasks that run less frequently.
+    
+    Runs every 30 minutes and executes:
+    - reset_budget: Reset budget (uses pre-calculated interval 3600-7200s)
+    - spend_log_cleanup: Clean old logs (based on retention interval)
+    
+    If one job fails, execution continues to the next job to maintain system stability.
+    
+    Args:
+        prisma_client: Database client
+        db_writer_client: Async HTTP handler for batch writes
+        proxy_logging_obj: Logging object
+        coordinator: Job coordinator tracking last run times and pre-calculated intervals
+        general_settings: General proxy settings
+        llm_router: LLM router instance
+        proxy_budget_rescheduler_min_time: Min time for budget reset randomization (used for initialization)
+        proxy_budget_rescheduler_max_time: Max time for budget reset randomization (used for initialization)
+        proxy_batch_write_at: Base interval for batch writing (used for initialization)
+        proxy_batch_polling_interval: Interval for batch polling
+    """
+    try:
+        # 1. Reset budget (uses pre-calculated randomized interval from initialization)
+        if coordinator.should_run("reset_budget", coordinator.task_intervals["reset_budget"]):
+            try:
+                if general_settings.get("disable_reset_budget", False) is False:
+                    budget_reset_job = ResetBudgetJob(
+                        proxy_logging_obj=proxy_logging_obj,
+                        prisma_client=prisma_client,
+                    )
+                    await budget_reset_job.reset_budget()
+                    coordinator.mark_run("reset_budget")
+                    verbose_proxy_logger.debug("✓ Low-freq coordinator: reset_budget completed")
+            except Exception as e:
+                verbose_proxy_logger.error(f"✗ Low-freq coordinator: reset_budget failed - {e}")
+        
+        # 2. Spend log cleanup (runs based on configured retention interval)
+        if general_settings.get("maximum_spend_logs_retention_period") is not None:
+            retention_interval = general_settings.get(
+                "maximum_spend_logs_retention_interval", "1d"
+            )
+            
+            # Parse interval with fallback to default
+            try:
+                interval_seconds = duration_in_seconds(retention_interval)
+            except ValueError as e:
+                # Invalid configuration - use default and log warning
+                verbose_proxy_logger.warning(
+                    f"✗ Low-freq coordinator: Invalid retention interval '{retention_interval}': {e}. Using default 1 day (86400s)."
+                )
+                interval_seconds = 86400  # 1 day default
+            except Exception as e:
+                # Unexpected error - log and skip this iteration
+                verbose_proxy_logger.error(
+                    f"✗ Low-freq coordinator: Unexpected error parsing retention interval '{retention_interval}': {e}"
+                )
+                interval_seconds = None
+            
+            # Execute cleanup task if interval was successfully parsed
+            if interval_seconds is not None:
+                try:
+                    if coordinator.should_run("spend_log_cleanup", interval_seconds):
+                        spend_log_cleanup = SpendLogCleanup()
+                        await spend_log_cleanup.cleanup_old_spend_logs(prisma_client)
+                        coordinator.mark_run("spend_log_cleanup")
+                        verbose_proxy_logger.debug("✓ Low-freq coordinator: spend_log_cleanup completed")
+                except Exception as e:
+                    verbose_proxy_logger.error(f"✗ Low-freq coordinator: spend_log_cleanup failed - {e}")
+        
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Low-frequency database jobs coordinator error: {e}\n{traceback.format_exc()}"
+        )
+
+
 class ProxyStartupEvent:
     @classmethod
     def _initialize_startup_logging(
@@ -3893,63 +4194,80 @@ class ProxyStartupEvent:
         proxy_batch_write_at: int,
         proxy_logging_obj: ProxyLogging,
     ):
-        """Initializes scheduled background jobs"""
-        global store_model_in_db
+        """
+        Initializes TWO scheduled background jobs - separate coordinators for high and low frequency tasks.
+        
+        This prevents high-frequency tasks (10s) from being blocked by low-frequency tasks (60s+).
+        """
+        global store_model_in_db, llm_router, db_writer_client, proxy_config, _scheduler_instance
+        
         scheduler = AsyncIOScheduler()
-        interval = random.randint(
-            proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
-        )  # random interval, so multiple workers avoid resetting budget at the same time
-        batch_writing_interval = random.randint(
-            proxy_batch_write_at - 3, proxy_batch_write_at + 3
-        )  # random interval, so multiple workers avoid batch writing at the same time
-
-        ### RESET BUDGET ###
-        if general_settings.get("disable_reset_budget", False) is False:
-            budget_reset_job = ResetBudgetJob(
-                proxy_logging_obj=proxy_logging_obj,
-                prisma_client=prisma_client,
-            )
-
-            scheduler.add_job(
-                budget_reset_job.reset_budget,
-                "interval",
-                seconds=interval,
-            )
-
-        ### UPDATE SPEND ###
-        scheduler.add_job(
-            update_spend,
-            "interval",
-            seconds=batch_writing_interval,
-            args=[prisma_client, db_writer_client, proxy_logging_obj],
+        
+        # Assign to global variable immediately after creation for proper lifecycle management
+        _scheduler_instance = scheduler
+        
+        # Initialize the coordinator state tracker with pre-calculated intervals (shared by both coordinators)
+        coordinator = DatabaseJobsCoordinator(
+            proxy_budget_rescheduler_min_time=proxy_budget_rescheduler_min_time,
+            proxy_budget_rescheduler_max_time=proxy_budget_rescheduler_max_time,
+            proxy_batch_write_at=proxy_batch_write_at,
         )
-
-        ### ADD NEW MODELS ###
+        
+        # Load all existing models on proxy startup if store_model_in_db is enabled
         store_model_in_db = (
             get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
         )
-
+        
         if store_model_in_db is True:
-            scheduler.add_job(
-                proxy_config.add_deployment,
-                "interval",
-                seconds=10,
-                args=[prisma_client, proxy_logging_obj],
-            )
-
-            # this will load all existing models on proxy startup
+            # Load all existing models on proxy startup
             await proxy_config.add_deployment(
                 prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
             )
-
-            ### GET STORED CREDENTIALS ###
-            scheduler.add_job(
-                proxy_config.get_credentials,
-                "interval",
-                seconds=10,
-                args=[prisma_client],
-            )
             await proxy_config.get_credentials(prisma_client=prisma_client)
+        
+        # Add high-frequency coordinator job - runs every 10 seconds
+        # Handles: add_deployment, get_credentials, update_spend, check_batch_cost
+        scheduler.add_job(
+            high_frequency_database_jobs_coordinator,
+            "interval",
+            seconds=10,
+            max_instances=1,
+            coalesce=False,
+            misfire_grace_time=5,
+            args=[
+                prisma_client,
+                db_writer_client,
+                proxy_logging_obj,
+                coordinator,
+                proxy_config,
+                llm_router,
+            ],
+        )
+        
+        # Add low-frequency coordinator job - runs every 30 minutes
+        # Handles: reset_budget, spend_log_cleanup
+        scheduler.add_job(
+            low_frequency_database_jobs_coordinator,
+            "interval",
+            seconds=1800,
+            max_instances=1,
+            coalesce=False,
+            misfire_grace_time=1200,
+            args=[
+                prisma_client,
+                db_writer_client,
+                proxy_logging_obj,
+                coordinator,
+                general_settings,
+                llm_router,
+                proxy_budget_rescheduler_min_time,
+                proxy_budget_rescheduler_max_time,
+                proxy_batch_write_at,
+                proxy_batch_polling_interval,
+            ],
+        )
+        
+        # Keep other non-database jobs (alerting, etc.)
         if (
             proxy_logging_obj is not None
             and proxy_logging_obj.slack_alerting_instance.alerting is not None
@@ -3957,7 +4275,6 @@ class ProxyStartupEvent:
         ):
             print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa
             ### Schedule weekly/monthly spend reports ###
-            ### Schedule spend reports ###
             spend_report_frequency: str = (
                 general_settings.get("spend_report_frequency", "7d") or "7d"
             )
@@ -3998,49 +4315,6 @@ class ProxyStartupEvent:
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
 
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
-
-        ### SPEND LOG CLEANUP ###
-        if general_settings.get("maximum_spend_logs_retention_period") is not None:
-            spend_log_cleanup = SpendLogCleanup()
-            # Get the interval from config or default to 1 day
-            retention_interval = general_settings.get(
-                "maximum_spend_logs_retention_interval", "1d"
-            )
-            try:
-                interval_seconds = duration_in_seconds(retention_interval)
-                scheduler.add_job(
-                    spend_log_cleanup.cleanup_old_spend_logs,
-                    "interval",
-                    seconds=interval_seconds,
-                    args=[prisma_client],
-                )
-            except ValueError:
-                verbose_proxy_logger.error(
-                    "Invalid maximum_spend_logs_retention_interval value"
-                )
-        ### CHECK BATCH COST ###
-        if llm_router is not None:
-            try:
-                from litellm_enterprise.proxy.common_utils.check_batch_cost import (
-                    CheckBatchCost,
-                )
-
-                check_batch_cost_job = CheckBatchCost(
-                    proxy_logging_obj=proxy_logging_obj,
-                    prisma_client=prisma_client,
-                    llm_router=llm_router,
-                )
-                scheduler.add_job(
-                    check_batch_cost_job.check_batch_cost,
-                    "interval",
-                    seconds=proxy_batch_polling_interval,  # these can run infrequently, as batch jobs take time to complete
-                )
-
-            except Exception:
-                verbose_proxy_logger.debug(
-                    "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
-                )
-                pass
 
         scheduler.start()
 
