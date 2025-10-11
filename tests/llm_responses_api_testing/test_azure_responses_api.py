@@ -55,7 +55,7 @@ async def test_azure_responses_api_status_error():
     litellm._turn_on_debug()
 
     request_data = {
-        "model": "gpt-5-mini",
+        "model": "computer-use-preview",
         "input": [
             {"content": "tell me an interesting fact", "role": "user"},
             {
@@ -71,7 +71,7 @@ async def test_azure_responses_api_status_error():
                 "content": [
                     {
                         "annotations": [],
-                        "text": "Octopuses have three hearts: two pump blood to the gills, while the third pumps it to the rest of the body. Even more unusual, their blood is blue because it uses the copper-containing protein hemocyanin to carry oxygen, which is more efficient than hemoglobin in cold, low-oxygen environments.",
+                        "text": "very good morning",
                         "type": "output_text",
                         "logprobs": [],
                     }
@@ -89,10 +89,10 @@ async def test_azure_responses_api_status_error():
         "tools": [],
     }
     response = await litellm.aresponses(
-        model="azure/gpt-5-mini-2",
+        model="azure/computer-use-preview",
         truncation="auto",
         api_version="preview",
-        api_base=os.getenv("AZURE_GPT5_MINI_API_BASE"),
-        api_key=os.getenv("AZURE_GPT5_MINI_API_KEY"),
+        api_base=os.getenv("AZURE_RESPONSES_OPENAI_ENDPOINT"),
+        api_key=os.getenv("AZURE_RESPONSES_OPENAI_API_KEY"),
         input=request_data["input"],
     )
