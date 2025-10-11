@@ -20,7 +20,7 @@ import BudgetPanel from "@/components/budgets/budget_panel";
 import SpendLogsTable from "@/components/view_logs";
 import ModelHubTable from "@/components/model_hub_table";
 import NewUsagePage from "@/components/new_usage";
-import APIRef from "@/components/api_ref";
+import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
 import ChatUI from "@/components/chat_ui/ChatUI";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
@@ -406,7 +406,7 @@ export default function CreateKeyPage() {
                     proxySettings={proxySettings}
                   />
                 ) : page == "api_ref" ? (
-                  <APIRef proxySettings={proxySettings} />
+                  <APIReferenceView proxySettings={proxySettings} />
                 ) : page == "settings" ? (
                   <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
                 ) : page == "budgets" ? (

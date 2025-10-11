@@ -1,35 +1,32 @@
 "use client";
 import React from "react";
-import {
-  Text,
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Grid,
-} from "@tremor/react";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { Text, Tab, TabGroup, TabList, TabPanel, TabPanels, Grid } from "@tremor/react";
+import CodeBlock from "./components/CodeBlock";
+import DocLink from "@/app/(dashboard)/api-reference/components/DocLink";
 
 interface ApiRefProps {
   proxySettings: any;
 }
 
-const APIRef: React.FC<ApiRefProps> = ({ proxySettings }) => {
+const APIReferenceView: React.FC<ApiRefProps> = ({ proxySettings }) => {
   let base_url = "<your_proxy_base_url>";
 
-  if (proxySettings) {
-    if (proxySettings.PROXY_BASE_URL && proxySettings.PROXY_BASE_URL !== undefined) {
-      base_url = proxySettings.PROXY_BASE_URL;
-    }
+  if (proxySettings?.PROXY_BASE_URL !== undefined && proxySettings?.PROXY_BASE_URL) {
+    base_url = proxySettings.PROXY_BASE_URL;
   }
+
   return (
     <>
       <Grid className="gap-2 p-8 h-[80vh] w-full mt-2">
         <div className="mb-5">
-          <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
-            OpenAI Compatible Proxy: API Reference
-          </p>
+          {/* Header row with Docs link on the right */}
+          <div className="flex items-center justify-between">
+            <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
+              OpenAI Compatible Proxy: API Reference
+            </p>
+            <DocLink className="ml-3 shrink-0" href="https://docs.litellm.ai/docs/proxy/user_keys" />
+          </div>
+
           <Text className="mt-2 mb-2">
             LiteLLM is OpenAI Compatible. This means your API Key works with the OpenAI SDK. Just replace the base_url
             to point to your litellm proxy. Example Below{" "}
@@ -43,9 +40,9 @@ const APIRef: React.FC<ApiRefProps> = ({ proxySettings }) => {
             </TabList>
             <TabPanels>
               <TabPanel>
-                <SyntaxHighlighter language="python">
-                  {`
-import openai
+                <CodeBlock
+                  language="python"
+                  code={`import openai
 client = openai.OpenAI(
     api_key="your_api_key",
     base_url="${base_url}" # LiteLLM Proxy is OpenAI compatible, Read More: https://docs.litellm.ai/docs/proxy/user_keys
@@ -61,14 +58,14 @@ response = client.chat.completions.create(
     ]
 )
 
-print(response)
-            `}
-                </SyntaxHighlighter>
+print(response)`}
+                />
               </TabPanel>
+
               <TabPanel>
-                <SyntaxHighlighter language="python">
-                  {`
-import os, dotenv
+                <CodeBlock
+                  language="python"
+                  code={`import os, dotenv
 
 from llama_index.llms import AzureOpenAI
 from llama_index.embeddings import AzureOpenAIEmbedding
@@ -89,22 +86,20 @@ embed_model = AzureOpenAIEmbedding(
     api_version="2023-07-01-preview",
 )
 
-
 documents = SimpleDirectoryReader("llama_index_data").load_data()
 service_context = ServiceContext.from_defaults(llm=llm, embed_model=embed_model)
 index = VectorStoreIndex.from_documents(documents, service_context=service_context)
 
 query_engine = index.as_query_engine()
 response = query_engine.query("What did the author do growing up?")
-print(response)
-
-            `}
-                </SyntaxHighlighter>
+print(response)`}
+                />
               </TabPanel>
+
               <TabPanel>
-                <SyntaxHighlighter language="python">
-                  {`
-from langchain.chat_models import ChatOpenAI
+                <CodeBlock
+                  language="python"
+                  code={`from langchain.chat_models import ChatOpenAI
 from langchain.prompts.chat import (
     ChatPromptTemplate,
     HumanMessagePromptTemplate,
@@ -128,10 +123,8 @@ messages = [
 ]
 response = chat(messages)
 
-print(response)
-
-            `}
-                </SyntaxHighlighter>
+print(response)`}
+                />
               </TabPanel>
             </TabPanels>
           </TabGroup>
@@ -141,4 +134,4 @@ print(response)
   );
 };
 
-export default APIRef;
+export default APIReferenceView;
