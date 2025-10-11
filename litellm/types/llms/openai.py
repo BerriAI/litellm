@@ -1,4 +1,3 @@
-import uuid
 from enum import Enum
 from os import PathLike
 from typing import IO, Any, Iterable, List, Literal, Mapping, Optional, Tuple, Union
