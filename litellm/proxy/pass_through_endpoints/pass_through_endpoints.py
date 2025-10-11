@@ -1932,23 +1932,91 @@ async def _get_pass_through_endpoints_from_db(
     return returned_endpoints
 
 
+async def _filter_endpoints_by_team_allowed_routes(
+    team_id: str,
+    pass_through_endpoints: List[PassThroughGenericEndpoint],
+    prisma_client,
+) -> List[PassThroughGenericEndpoint]:
+    """
+    Filter pass-through endpoints based on team's allowed_passthrough_routes metadata.
+
+    Args:
+        team_id: The team ID to check permissions for
+        pass_through_endpoints: List of endpoints to filter
+        prisma_client: Database client
+
+    Returns:
+        Filtered list of endpoints based on team permissions
+
+    Raises:
+        HTTPException: If team is not found
+    """
+    # retrieve team from db
+    team = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": team_id},
+    )
+    if team is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "Team not found"},
+        )
+
+    # retrieve team metadata
+    team_metadata = team.metadata
+    if (
+        team_metadata is not None
+        and team_metadata.get("allowed_passthrough_routes") is not None
+    ):
+        ## FILTER pass_through_endpoints by allowed_passthrough_routes
+        pass_through_endpoints = [
+            endpoint
+            for endpoint in pass_through_endpoints
+            if endpoint.path in team_metadata.get("allowed_passthrough_routes")
+        ]
+
+    return pass_through_endpoints
+
+
 @router.get(
     "/config/pass_through_endpoint",
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=PassThroughEndpointResponse,
+)
+@router.get(
+    "/config/pass_through_endpoint/team/{team_id}",
     dependencies=[Depends(user_api_key_auth)],
     response_model=PassThroughEndpointResponse,
 )
 async def get_pass_through_endpoints(
     endpoint_id: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    team_id: Optional[str] = None,
 ):
     """
     GET configured pass through endpoint.
 
     If no endpoint_id given, return all configured endpoints.
     """  ## Get existing pass-through endpoint field value
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
     pass_through_endpoints = await _get_pass_through_endpoints_from_db(
         endpoint_id=endpoint_id, user_api_key_dict=user_api_key_dict
     )
+
+    if team_id is not None:
+        pass_through_endpoints = await _filter_endpoints_by_team_allowed_routes(
+            team_id=team_id,
+            pass_through_endpoints=pass_through_endpoints,
+            prisma_client=prisma_client,
+        )
+
     return PassThroughEndpointResponse(endpoints=pass_through_endpoints)
 
 
