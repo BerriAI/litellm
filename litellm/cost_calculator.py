@@ -1274,17 +1274,26 @@ def batch_cost_calculator(
     output_cost_per_token = model_info.get("output_cost_per_token")
     total_prompt_cost = 0.0
     total_completion_cost = 0.0
+
+    prompt_tokens = usage.prompt_tokens
+    if prompt_tokens is None or prompt_tokens == 0:
+        prompt_tokens = getattr(usage, 'input_tokens', 0)
+
+    completion_tokens = usage.completion_tokens
+    if completion_tokens is None or completion_tokens == 0:
+        completion_tokens = getattr(usage, 'output_tokens', None)
+
     if input_cost_per_token_batches:
-        total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
+        total_prompt_cost = prompt_tokens * input_cost_per_token_batches
     elif input_cost_per_token:
         total_prompt_cost = (
-            usage.prompt_tokens * (input_cost_per_token) / 2
+            prompt_tokens * (input_cost_per_token) / 2
         )  # batch cost is usually half of the regular token cost
     if output_cost_per_token_batches:
-        total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
+        total_completion_cost = completion_tokens * output_cost_per_token_batches
     elif output_cost_per_token:
         total_completion_cost = (
-            usage.completion_tokens * (output_cost_per_token) / 2
+            completion_tokens * (output_cost_per_token) / 2
         )  # batch cost is usually half of the regular token cost
 
     return total_prompt_cost, total_completion_cost

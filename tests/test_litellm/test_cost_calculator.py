@@ -16,6 +16,7 @@ import litellm
 from litellm.cost_calculator import (
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
+    batch_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
@@ -686,3 +687,161 @@ def test_gemini_25_explicit_caching_cost_direct_usage():
     print(f"Expected actual cost: {expected_actual_cost}")
 
     assert expected_actual_cost == total_cost
+
+
+# Tests for batch_cost_calculator function
+def test_batch_cost_calculator_with_input_output_tokens():
+    """Test batch_cost_calculator when usage has input_tokens and output_tokens"""
+    # Create usage object with input_tokens and output_tokens
+    usage = Usage(
+        input_tokens=120,
+        output_tokens=60,
+        total_tokens=180,
+    )
+    
+    # Mock model_info to return specific cost values
+    with patch('litellm.get_model_info') as mock_get_model_info:
+        mock_get_model_info.return_value = {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+        }
+        
+        prompt_cost, completion_cost = batch_cost_calculator(
+            usage=usage,
+            model="gpt-3.5-turbo",
+            custom_llm_provider="openai",
+        )
+        
+        # Should use input_tokens and output_tokens
+        # Batch cost is usually half of regular cost
+        expected_prompt_cost = 120 * (0.001 / 2)
+        expected_completion_cost = 60 * (0.002 / 2)
+        
+        assert prompt_cost == expected_prompt_cost
+        assert completion_cost == expected_completion_cost
+
+
+def test_batch_cost_calculator_without_input_output_tokens():
+    """Test batch_cost_calculator when usage doesn't have input_tokens and output_tokens."""
+    # Create usage object without input_tokens and output_tokens
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+    )
+    
+    # Mock model_info to return specific cost values
+    with patch('litellm.get_model_info') as mock_get_model_info:
+        mock_get_model_info.return_value = {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+        }
+        
+        prompt_cost, completion_cost = batch_cost_calculator(
+            usage=usage,
+            model="gpt-3.5-turbo",
+            custom_llm_provider="openai",
+        )
+        
+        # Should fall back to prompt_tokens and completion_tokens
+        expected_prompt_cost = 100 * (0.001 / 2)
+        expected_completion_cost = 50 * (0.002 / 2)
+        
+        assert prompt_cost == expected_prompt_cost
+        assert completion_cost == expected_completion_cost
+
+
+def test_batch_cost_calculator_with_zero_input_output_tokens():
+    """Test batch_cost_calculator when input_tokens and output_tokens are zero."""
+    # Create usage object with zero input_tokens and output_tokens
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        input_tokens=0,  # Zero value
+        output_tokens=0,  # Zero value
+    )
+    
+    # Mock model_info to return specific cost values
+    with patch('litellm.get_model_info') as mock_get_model_info:
+        mock_get_model_info.return_value = {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+        }
+        
+        prompt_cost, completion_cost = batch_cost_calculator(
+            usage=usage,
+            model="gpt-3.5-turbo",
+            custom_llm_provider="openai",
+        )
+        
+        # Should fall back to prompt_tokens and completion_tokens
+        expected_prompt_cost = 100 * (0.001 / 2)
+        expected_completion_cost = 50 * (0.002 / 2)
+        
+        assert prompt_cost == expected_prompt_cost
+        assert completion_cost == expected_completion_cost
+
+
+def test_batch_cost_calculator_with_zero_prompt_completion_tokens():
+    """Test batch_cost_calculator when input_tokens and output_tokens are zero."""
+    # Create usage object with zero input_tokens and output_tokens
+    usage = Usage(
+        prompt_tokens=0,  # Zero value
+        completion_tokens=0,  # Zero value
+        total_tokens=150,
+        input_tokens=100,
+        output_tokens=50,
+    )
+
+    # Mock model_info to return specific cost values
+    with patch('litellm.get_model_info') as mock_get_model_info:
+        mock_get_model_info.return_value = {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+        }
+
+        prompt_cost, completion_cost = batch_cost_calculator(
+            usage=usage,
+            model="gpt-3.5-turbo",
+            custom_llm_provider="openai",
+        )
+
+        # Should fall back to prompt_tokens and completion_tokens
+        expected_prompt_cost = 100 * (0.001 / 2)
+        expected_completion_cost = 50 * (0.002 / 2)
+
+        assert prompt_cost == expected_prompt_cost
+        assert completion_cost == expected_completion_cost
+
+
+def test_batch_cost_calculator_with_partial_tokens():
+    """Test batch_cost_calculator with both of input_tokens/output_tokens are None."""
+    # Create usage object
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        input_tokens=None,  # No input_tokens
+        output_tokens=None,  # No output_tokens
+    )
+    
+    # Mock model_info to return specific cost values
+    with patch('litellm.get_model_info') as mock_get_model_info:
+        mock_get_model_info.return_value = {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+        }
+        
+        prompt_cost, completion_cost = batch_cost_calculator(
+            usage=usage,
+            model="gpt-3.5-turbo",
+            custom_llm_provider="openai",
+        )
+        
+        # Should use input_tokens for prompt, completion_tokens for output
+        expected_prompt_cost = 100 * (0.001 / 2)
+        expected_completion_cost = 50 * (0.002 / 2)
+        
+        assert prompt_cost == expected_prompt_cost
+        assert completion_cost == expected_completion_cost
