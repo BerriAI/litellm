@@ -17,6 +17,8 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
+    InputTokensDetails,
+    OutputTokensDetails,
     ResponseAPIUsage,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
@@ -370,9 +372,42 @@ class ResponseAPILoggingUtils:
                 completion_tokens=0,
                 total_tokens=0,
             )
-        response_api_usage: ResponseAPIUsage = (
-            ResponseAPIUsage(**usage) if isinstance(usage, dict) else usage
-        )
+        if isinstance(usage, dict):
+            usage_clean = usage.copy()
+            # Ensure numeric fields default to zero rather than None
+            for numeric_key in ("input_tokens", "output_tokens", "total_tokens"):
+                if usage_clean.get(numeric_key) is None:
+                    usage_clean[numeric_key] = 0
+
+            # Drop detail fields when provider returns None, or clean nested None values
+            for detail_key in ("input_tokens_details", "output_tokens_details"):
+                detail_value = usage_clean.get(detail_key)
+                if detail_value is None:
+                    usage_clean.pop(detail_key, None)
+                elif isinstance(detail_value, dict):
+                    usage_clean[detail_key] = {
+                        k: v for k, v in detail_value.items() if v is not None
+                    }
+
+            response_api_usage: ResponseAPIUsage = ResponseAPIUsage(**usage_clean)
+        else:
+            response_api_usage = usage
+
+        # Normalise token detail fields so they match OpenAI format
+        input_details = response_api_usage.input_tokens_details
+        if input_details is None:
+            input_details = InputTokensDetails(cached_tokens=0)
+        elif input_details.cached_tokens is None:
+            input_details.cached_tokens = 0
+        response_api_usage.input_tokens_details = input_details
+
+        output_details = response_api_usage.output_tokens_details
+        if output_details is None:
+            output_details = OutputTokensDetails(reasoning_tokens=0)
+        elif output_details.reasoning_tokens is None:
+            output_details.reasoning_tokens = 0
+        response_api_usage.output_tokens_details = output_details
+
         prompt_tokens: int = response_api_usage.input_tokens or 0
         completion_tokens: int = response_api_usage.output_tokens or 0
         prompt_tokens_details: Optional[PromptTokensDetails] = None
