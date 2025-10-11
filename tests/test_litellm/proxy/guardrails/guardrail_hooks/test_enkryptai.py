@@ -149,11 +149,12 @@ class TestEnkryptAIGuardrailHooks:
             )
 
             assert result == mock_request_data
-            mock_post.assert_called_once()
+            # Should be called twice - once for system message, once for user message
+            assert mock_post.call_count == 2
 
-            # Verify API call details
+            # Verify last API call details (for user message)
             call_args = mock_post.call_args
-            assert call_args[1]["url"].endswith("/guardrails/detect")
+            assert call_args[1]["url"].endswith("/guardrails/policy/detect")
             assert call_args[1]["headers"]["apikey"] == "test-api-key"
             assert call_args[1]["json"]["text"] == "Hello, how are you?"
 
@@ -174,7 +175,7 @@ class TestEnkryptAIGuardrailHooks:
         with patch.object(
             enkryptai_guardrail.async_handler, "post", return_value=mock_response
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(ValueError) as exc_info:
                 await enkryptai_guardrail.async_pre_call_hook(
                     user_api_key_dict=mock_user_api_key_dict,
                     cache=MagicMock(),
@@ -182,7 +183,7 @@ class TestEnkryptAIGuardrailHooks:
                     call_type="completion",
                 )
 
-            assert exc_info.value.status_code == 400
+            assert "Guardrail failed" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_pre_call_hook_with_policy_header(
@@ -255,13 +256,13 @@ class TestEnkryptAIGuardrailHooks:
         with patch.object(
             enkryptai_guardrail.async_handler, "post", return_value=mock_api_response
         ) as mock_post:
-            result = await enkryptai_guardrail.async_post_call_success_hook(
+            # Method doesn't return anything, just verify it doesn't raise an exception
+            await enkryptai_guardrail.async_post_call_success_hook(
                 data=mock_request_data,
                 user_api_key_dict=mock_user_api_key_dict,
                 response=response,
             )
 
-            assert result == response
             mock_post.assert_called_once()
 
             # Verify API call details
@@ -347,94 +348,22 @@ class TestEnkryptAIGuardrailHooks:
 
             assert result == mock_request_data
 
-    def test_extract_user_message(self, enkryptai_guardrail):
-        """Test _extract_user_message helper method"""
-        data = {
-            "messages": [
-                {"role": "system", "content": "System prompt"},
-                {"role": "user", "content": "First user message"},
-                {"role": "assistant", "content": "Assistant response"},
-                {"role": "user", "content": "Second user message"},
-            ]
-        }
-
-        message = enkryptai_guardrail._extract_user_message(data)
-        assert message == "Second user message"
-
-        data = {"messages": [{"role": "system", "content": "System prompt"}]}
-        message = enkryptai_guardrail._extract_user_message(data)
-        assert message is None
-
-        data = {"messages": []}
-        message = enkryptai_guardrail._extract_user_message(data)
-        assert message is None
-
-        data = {}
-        message = enkryptai_guardrail._extract_user_message(data)
-        assert message is None
-
     def test_determine_guardrail_status(self, enkryptai_guardrail):
         """Test _determine_guardrail_status helper method"""
-        # Test success status
-        response_json = {"violations": [], "detected": False}
+        # Test success status (no attacks detected)
+        response_json = {"summary": {"nsfw": 0, "toxicity": []}}
         status = enkryptai_guardrail._determine_guardrail_status(response_json)
         assert status == "success"
 
-        # Test intervened status
-        response_json = {"violations": ["toxicity"], "detected": True}
+        # Test intervened status (attacks detected)
+        response_json = {"summary": {"toxicity": ["high"], "nsfw": 1}}
         status = enkryptai_guardrail._determine_guardrail_status(response_json)
         assert status == "guardrail_intervened"
 
-        # Test failed status
+        # Test failed status (invalid response)
         response_json = "invalid"
         status = enkryptai_guardrail._determine_guardrail_status(response_json)
         assert status == "guardrail_failed_to_respond"
 
 
-class TestEnkryptAIExtraction:
-    """Test content extraction methods"""
-
-    def test_extract_user_message_multipart(self):
-        """Test extracting user message with multipart content"""
-        guardrail = EnkryptAIGuardrails(api_key="test-key")
-
-        data = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Hello"},
-                        {"type": "text", "text": "world"},
-                    ],
-                }
-            ]
-        }
-
-        message = guardrail._extract_user_message(data)
-        assert message == "Hello world"
-
-    def test_extract_response_content(self):
-        """Test extracting content from ModelResponse"""
-        guardrail = EnkryptAIGuardrails(api_key="test-key")
-
-        response = ModelResponse(
-            id="test-id",
-            choices=[
-                Choices(
-                    finish_reason="stop",
-                    index=0,
-                    message=Message(content="Test response", role="assistant"),
-                )
-            ],
-            created=1234567890,
-            model="gpt-3.5-turbo",
-            object="chat.completion",
-        )
-
-        content = guardrail._extract_response_content(response)
-        assert content == "Test response"
-
-        # Test with non-ModelResponse
-        content = guardrail._extract_response_content("invalid")
-        assert content is None
 
