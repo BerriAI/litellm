@@ -67,7 +67,7 @@ pip install litellm==1.78.0.rc.1
 
 ---
 
-## MCP Gateway - Control Tool Access by Team, Key
+### MCP Gateway - Control Tool Access by Team, Key
 
 <Image 
   img={require('../../img/release_notes/tool_control.png')}
