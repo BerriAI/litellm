@@ -77,9 +77,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             kwargs["event_hook"] = GuardrailEventHooks.logging_only
         super().__init__(**kwargs)
         self.guardrail_provider = "presidio"
-        self.pii_tokens: dict = (
-            {}
-        )  # mapping of PII token to original text - only used with Presidio `replace` operation
+        # Per-request token maps keyed by litellm_call_id
+        self._pii_token_maps: Dict[str, Dict[str, str]] = {}
         self.mock_redacted_text = mock_redacted_text
         self.output_parse_pii = output_parse_pii or False
         self.pii_entities_config: Dict[Union[PiiEntityType, str], PiiAction] = (
@@ -234,14 +233,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self,
         text: str,
         analyze_results: Any,
-        output_parse_pii: bool,
-        masked_entity_count: Dict[str, int],
-    ) -> str:
+    ) -> Dict:
         """
         Send analysis results to the Presidio anonymizer endpoint to get redacted text
         """
         try:
             async with aiohttp.ClientSession() as session:
+                if self.mock_redacted_text is not None:
+                    return self.mock_redacted_text
+
                 # Make the request to /anonymize
                 anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
                 verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
@@ -255,34 +255,82 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 ) as response:
                     redacted_text = await response.json()
 
-                new_text = text
                 if redacted_text is not None:
-                    verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
-                    for item in redacted_text["items"]:
-                        start = item["start"]
-                        end = item["end"]
-                        replacement = item["text"]  # replacement token
-                        if item["operator"] == "replace" and output_parse_pii is True:
-                            # check if token in dict
-                            # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
-                            if replacement in self.pii_tokens:
-                                replacement = replacement + str(uuid.uuid4())
-
-                            self.pii_tokens[replacement] = new_text[
-                                start:end
-                            ]  # get text it'll replace
-
-                        new_text = new_text[:start] + replacement + new_text[end:]
-                        entity_type = item.get("entity_type", None)
-                        if entity_type is not None:
-                            masked_entity_count[entity_type] = (
-                                masked_entity_count.get(entity_type, 0) + 1
-                            )
-                    return redacted_text["text"]
+                    return redacted_text
                 else:
                     raise Exception(f"Invalid anonymizer response: {redacted_text}")
         except Exception as e:
             raise e
+
+    def _record_values_from_anonymizer_items(
+        self,
+        original_text: str,
+        anonymize_items_response: Any,
+        output_parse_pii: bool,
+        masked_entity_count: Dict[str, int],
+        token_map: Optional[Dict[str, str]],
+    ):
+        """
+        Extract and store items from the Presidio anonymizer output.
+        """
+        for item in anonymize_items_response:
+            start = item["start"]
+            end = item["end"]
+            replacement = item["text"]  # replacement token
+            if (
+                item["operator"] == "replace"
+                and output_parse_pii is True
+                and token_map is not None
+            ):
+                # check if token in dict
+                # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
+                if replacement in token_map:
+                    replacement = replacement + str(uuid.uuid4())
+
+                token_map[replacement] = original_text[
+                    start:end
+                ]  # get text it'll replace
+
+            original_text = original_text[:start] + replacement + original_text[end:]
+            entity_type = item.get("entity_type", None)
+            if entity_type is not None:
+                masked_entity_count[entity_type] = (
+                    masked_entity_count.get(entity_type, 0) + 1
+                )
+
+    def _get_call_id(self, request_data: dict) -> Optional[str]:
+        try:
+            call_id = request_data.get("litellm_call_id")
+            return str(call_id) if call_id else None
+        except Exception:
+            return None
+
+    def _get_pii_token_map(self, request_data: dict) -> Optional[Dict[str, str]]:
+        """
+        Get or initialize the per-request PII token map keyed by litellm_call_id.
+        Does NOT mutate request_data.
+        """
+        call_id = self._get_call_id(request_data)
+        if call_id is None:
+            return None
+        token_map = self._pii_token_maps.get(call_id)
+        if token_map is None:
+            token_map = {}
+            self._pii_token_maps[call_id] = token_map
+        return token_map
+
+    def _cleanup_pii_token_map(self, request_data: dict) -> None:
+        """
+        Clear and remove the per-request PII token map. Also clear instance map for safety.
+        """
+        try:
+            call_id = self._get_call_id(request_data)
+            if call_id is not None:
+                tokens = self._pii_token_maps.pop(call_id, None)
+                if isinstance(tokens, dict):
+                    tokens.clear()
+        except Exception:
+            pass
 
     def raise_exception_if_blocked_entities_detected(
         self, analyze_results: Union[List[PresidioAnalyzeResponseItem], Dict]
@@ -328,33 +376,37 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         masked_entity_count: Dict[str, int] = {}
         exception_str: str = ""
         try:
-            if self.mock_redacted_text is not None:
-                redacted_text = self.mock_redacted_text
-            else:
-                # First get analysis results
-                analyze_results = await self.analyze_text(
-                    text=text,
-                    presidio_config=presidio_config,
-                    request_data=request_data,
-                )
+            # First get analysis results
+            analyze_results = await self.analyze_text(
+                text=text,
+                presidio_config=presidio_config,
+                request_data=request_data,
+            )
 
-                verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
+            verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
 
-                ####################################################
-                # Blocked Entities check
-                ####################################################
-                self.raise_exception_if_blocked_entities_detected(
-                    analyze_results=analyze_results
-                )
+            ####################################################
+            # Blocked Entities check
+            ####################################################
+            self.raise_exception_if_blocked_entities_detected(
+                analyze_results=analyze_results
+            )
 
-                # Then anonymize the text using the analysis results
-                return await self.anonymize_text(
-                    text=text,
-                    analyze_results=analyze_results,
-                    output_parse_pii=output_parse_pii,
-                    masked_entity_count=masked_entity_count,
-                )
-            return redacted_text["text"]
+            anonymize_response = await self.anonymize_text(
+                text=text,
+                analyze_results=analyze_results,
+            )
+
+            token_map = self._get_pii_token_map(request_data)
+            self._record_values_from_anonymizer_items(
+                original_text=text,
+                anonymize_items_response=anonymize_response["items"],
+                output_parse_pii=self.output_parse_pii,
+                masked_entity_count=masked_entity_count,
+                token_map=token_map,
+            )
+
+            return anonymize_response["text"]
         except Exception as e:
             status = "guardrail_failed_to_respond"
             exception_str = str(e)
@@ -535,6 +587,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Output parse the response object to replace the masked tokens with user sent values
         """
+
         verbose_proxy_logger.debug(
             f"PII Masking Args: self.output_parse_pii={self.output_parse_pii}; type of response={type(response)}"
         )
@@ -546,13 +599,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             response.choices[0], StreamingChoices
         ):  # /chat/completions requests
             if isinstance(response.choices[0].message.content, str):
+                tokens: Dict[str, str] = self._get_pii_token_map(data) or {}
                 verbose_proxy_logger.debug(
-                    f"self.pii_tokens: {self.pii_tokens}; initial response: {response.choices[0].message.content}"
+                    f"pii_tokens(request): {tokens}; initial response: {response.choices[0].message.content}"
                 )
-                for key, value in self.pii_tokens.items():
+                for key, value in tokens.items():
                     response.choices[0].message.content = response.choices[
                         0
                     ].message.content.replace(key, value)
+                # Cleanup after successful unmasking
+                self._cleanup_pii_token_map(data)
         return response
 
     async def async_post_call_streaming_iterator_hook(
@@ -568,7 +624,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         and returns a reconstructed stream. Otherwise, it passes through the original stream.
         """
         # If PII unmasking not needed, just pass through the original stream
-        if not (self.output_parse_pii and self.pii_tokens):
+        tokens: Dict[str, str] = self._get_pii_token_map(request_data) or {}
+        if not (self.output_parse_pii and tokens):
             async for chunk in response:
                 yield chunk
             return
@@ -602,7 +659,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return
 
             # Apply PII unmasking to the complete content
-            for token, original_text in self.pii_tokens.items():
+            for token, original_text in tokens.items():
                 collected_content = collected_content.replace(token, original_text)
 
             # Reconstruct the response with unmasked content
@@ -629,12 +686,31 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # Return the reconstructed stream
             async for chunk in mock_response:
                 yield chunk
+            # Cleanup after streaming completes
+            self._cleanup_pii_token_map(request_data)
 
         except Exception as e:
             verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
             # Fallback to original stream on error
             async for chunk in response:
                 yield chunk
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
+    ):
+        """
+        Ensure per-request PII token maps are cleared on failures.
+        """
+        try:
+            self._cleanup_pii_token_map(request_data)
+        except Exception:
+            # Never raise from failure hook
+            pass
+        return
 
     def get_presidio_settings_from_request_data(
         self, data: dict

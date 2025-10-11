@@ -72,9 +72,27 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
         _OPTIONAL_PresidioPIIMasking,
     )
 
+    modes: Union[List[str], Mode]
+    if isinstance(litellm_params.mode, Mode):
+        modes = litellm_params.mode
+    elif isinstance(litellm_params.mode, str):
+        modes = [litellm_params.mode]
+        if (
+            litellm_params.output_parse_pii
+            and litellm_params.mode != GuardrailEventHooks.post_call.value
+        ):
+            modes.append(GuardrailEventHooks.post_call.value)
+    else:
+        modes = litellm_params.mode
+        if (
+            litellm_params.output_parse_pii
+            and GuardrailEventHooks.post_call.value not in litellm_params.mode
+        ):
+            modes.append(GuardrailEventHooks.post_call.value)
+
     _presidio_callback = _OPTIONAL_PresidioPIIMasking(
         guardrail_name=guardrail.get("guardrail_name", ""),
-        event_hook=litellm_params.mode,
+        event_hook=modes,
         output_parse_pii=litellm_params.output_parse_pii,
         presidio_ad_hoc_recognizers=litellm_params.presidio_ad_hoc_recognizers,
         mock_redacted_text=litellm_params.mock_redacted_text,
@@ -85,19 +103,6 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
         presidio_language=litellm_params.presidio_language,
     )
     litellm.logging_callback_manager.add_litellm_callback(_presidio_callback)
-
-    if litellm_params.output_parse_pii:
-        _success_callback = _OPTIONAL_PresidioPIIMasking(
-            output_parse_pii=True,
-            guardrail_name=guardrail.get("guardrail_name", ""),
-            event_hook=GuardrailEventHooks.post_call.value,
-            presidio_ad_hoc_recognizers=litellm_params.presidio_ad_hoc_recognizers,
-            default_on=litellm_params.default_on,
-            presidio_analyzer_api_base=litellm_params.presidio_analyzer_api_base,
-            presidio_anonymizer_api_base=litellm_params.presidio_anonymizer_api_base,
-            presidio_language=litellm_params.presidio_language,
-        )
-        litellm.logging_callback_manager.add_litellm_callback(_success_callback)
 
     return _presidio_callback
 
