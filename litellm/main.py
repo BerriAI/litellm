@@ -1107,7 +1107,6 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_id=prompt_id, non_default_params=non_default_params
         )
     ):
-
         (
             model,
             messages,
@@ -2079,7 +2078,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             try:
                 if use_base_llm_http_handler:
-
                     response = base_llm_http_handler.completion(
                         model=model,
                         messages=messages,
@@ -3177,9 +3175,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params["aws_region_name"] = (
-                        aws_bedrock_client.meta.region_name
-                    )
+                    optional_params[
+                        "aws_region_name"
+                    ] = aws_bedrock_client.meta.region_name
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -3527,7 +3525,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 raise e
         elif custom_llm_provider == "gradient_ai":
-
             api_base = litellm.api_base or api_base
             response = base_llm_http_handler.completion(
                 model=model,
@@ -5234,9 +5231,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
-        None
-    )
+    translated_response: Optional[
+        Union[BaseModel, AdapterCompletionStreamWrapper]
+    ] = None
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -5956,9 +5953,15 @@ async def ahealth_check(
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
-        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
-        if model in litellm.model_cost and mode is None:
-            mode = litellm.model_cost[model].get("mode")
+        # Lazily resolve provider only when required (wildcard/realtime)
+        def _resolve_provider_for_health_check() -> str:
+            existing_custom_provider = model_params.get("custom_llm_provider")
+            existing_api_base = model_params.get("api_base")
+            if existing_custom_provider and existing_api_base:
+                return existing_custom_provider
+            # Fallback to standard detection (do not mutate model_params/model)
+            _, detected_provider, _, _ = get_llm_provider(model=model)
+            return detected_provider  # type: ignore[return-value]
 
         model_params["cache"] = {
             "no-cache": True
@@ -5967,7 +5970,7 @@ async def ahealth_check(
         if "*" in model:
             return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=_resolve_provider_for_health_check(),
                 model_params=model_params,
                 litellm_logging_obj=litellm_logging_obj,
             )
@@ -6010,7 +6013,7 @@ async def ahealth_check(
             ),
             "realtime": lambda: _realtime_health_check(
                 model=model,
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=_resolve_provider_for_health_check(),
                 api_base=model_params.get("api_base", None),
                 api_key=model_params.get("api_key", None),
                 api_version=model_params.get("api_version", None),
@@ -6223,9 +6226,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = (
-                processor.get_combined_content(content_chunks)
-            )
+            response["choices"][0]["message"][
+                "content"
+            ] = processor.get_combined_content(content_chunks)
 
         thinking_blocks = [
             chunk
@@ -6236,9 +6239,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(thinking_blocks) > 0:
-            response["choices"][0]["message"]["thinking_blocks"] = (
-                processor.get_combined_thinking_content(thinking_blocks)
-            )
+            response["choices"][0]["message"][
+                "thinking_blocks"
+            ] = processor.get_combined_thinking_content(thinking_blocks)
 
         reasoning_chunks = [
             chunk
@@ -6249,9 +6252,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"]["reasoning_content"] = (
-                processor.get_combined_reasoning_content(reasoning_chunks)
-            )
+            response["choices"][0]["message"][
+                "reasoning_content"
+            ] = processor.get_combined_reasoning_content(reasoning_chunks)
 
         audio_chunks = [
             chunk
