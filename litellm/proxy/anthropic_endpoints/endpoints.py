@@ -278,10 +278,24 @@ async def count_tokens(
         
         # Create TokenCountRequest for the internal endpoint
         from litellm.proxy._types import TokenCountRequest
-        
+
+        contents = None
+        if messages:
+            try:
+                from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+                    VertexGeminiConfig,
+                )
+
+                contents = VertexGeminiConfig()._transform_messages(
+                    messages=messages
+                )
+            except Exception:
+                contents = None
+
         token_request = TokenCountRequest(
             model=model_name,
-            messages=messages
+            messages=messages,
+            contents=contents,
         )
         
         # Call the internal token counter function with direct request flag set to False
