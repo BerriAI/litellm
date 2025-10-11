@@ -94,7 +94,7 @@ const sidebars = {
 
     {
       type: "category",
-      label: "LiteLLM Proxy Server",
+      label: "LiteLLM AI Gateway",
       link: {
         type: "generated-index",
         title: "LiteLLM AI Gateway (LLM Proxy)",
