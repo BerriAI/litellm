@@ -221,7 +221,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         json_mode: Optional[bool] = None,
     ) -> "ModelResponse":
         """Transform Responses API response to chat completion response"""
-
         from openai.types.responses import (
             ResponseFunctionToolCall,
             ResponseOutputMessage,
@@ -240,19 +239,35 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         choices: List[Choices] = []
         index = 0
+
+        reasoning_content: Optional[str] = None
+
         for item in raw_response.output:
+
             if isinstance(item, ResponseReasoningItem):
-                pass  # ignore for now.
+
+                for content in item.summary:
+                    response_text = getattr(content, "text", "")
+                    reasoning_content = response_text if response_text else ""
+
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
                     response_text = getattr(content, "text", "")
                     msg = Message(
-                        role=item.role, content=response_text if response_text else ""
+                        role=item.role,
+                        content=response_text if response_text else "",
+                        reasoning_content=reasoning_content,
                     )
 
                     choices.append(
-                        Choices(message=msg, finish_reason="stop", index=index)
+                        Choices(
+                            message=msg,
+                            finish_reason="stop",
+                            index=index,
+                        )
                     )
+
+                    reasoning_content = None  # flush reasoning content
                     index += 1
             elif isinstance(item, ResponseFunctionToolCall):
                 msg = Message(
@@ -267,11 +282,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             "type": "function",
                         }
                     ],
+                    reasoning_content=reasoning_content,
                 )
 
                 choices.append(
                     Choices(message=msg, finish_reason="tool_calls", index=index)
                 )
+                reasoning_content = None  # flush reasoning content
                 index += 1
             else:
                 pass  # don't fail request if item in list is not supported
