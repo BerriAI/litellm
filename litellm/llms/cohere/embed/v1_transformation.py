@@ -6,6 +6,7 @@ from typing import Any, List, Optional, Union
 
 import httpx
 
+import litellm
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.llms.bedrock import (
@@ -14,6 +15,8 @@ from litellm.types.llms.bedrock import (
 )
 from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import is_base64_encoded
+
+from ..common_utils import CohereError
 
 
 class CohereEmbeddingConfig:
@@ -28,11 +31,26 @@ class CohereEmbeddingConfig:
         return ["encoding_format"]
 
     def map_openai_params(
-        self, non_default_params: dict, optional_params: dict
+        self, non_default_params: dict, optional_params: dict, drop_params: bool = False
     ) -> dict:
         for k, v in non_default_params.items():
             if k == "encoding_format":
-                optional_params["embedding_types"] = v
+                # Only pass encoding formats that Cohere supports (filters out OpenAI-style "base64")
+                valid_formats = {"float", "int8", "uint8", "binary", "ubinary"}
+                formats = v if isinstance(v, list) else [v]
+                
+                # Check if base64 is in the formats
+                has_base64 = "base64" in formats
+                
+                if has_base64 and not drop_params and not litellm.drop_params:
+                    raise CohereError(
+                        status_code=400,
+                        message="Cohere does not support 'base64' encoding format. Set 'drop_params=True' to automatically filter out unsupported parameters. You can also set litellm.drop_params=True globally. See https://docs.litellm.ai/docs/completion/drop_params for more information."
+                    )
+                
+                cohere_formats = [f for f in formats if f in valid_formats]
+                if cohere_formats:
+                    optional_params["embedding_types"] = cohere_formats
         return optional_params
 
     def _is_v3_model(self, model: str) -> bool:
