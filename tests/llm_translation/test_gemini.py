@@ -97,6 +97,9 @@ def test_gemini_context_caching_with_ttl():
         model="gemini-1.5-pro",
         messages=messages_with_ttl,
         cache_key="test-ttl-cache-key",
+        custom_llm_provider="gemini",
+        vertex_project=None,
+        vertex_location=None,
     )
 
     # Verify TTL is properly included in the result
@@ -123,6 +126,9 @@ def test_gemini_context_caching_with_ttl():
         model="gemini-1.5-pro",
         messages=messages_invalid_ttl,
         cache_key="test-invalid-ttl",
+        custom_llm_provider="gemini",
+        vertex_project=None,
+        vertex_location=None,
     )
 
     # Verify invalid TTL is not included
