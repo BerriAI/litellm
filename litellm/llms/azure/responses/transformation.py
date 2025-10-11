@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -88,12 +88,14 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Override parent method to also filter out 'status' field from message items.
         Azure OpenAI API does not accept 'status' field in input messages.
         """
+        from typing import cast
+
         # First call parent's validation
         validated_input = super()._validate_input_param(input)
         
         # Then filter out status from message items
         if isinstance(validated_input, list):
-            filtered_input = []
+            filtered_input: List[Any] = []
             for item in validated_input:
                 if isinstance(item, dict) and item.get("type") == "message":
                     # Filter out status field from message items
@@ -101,7 +103,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     filtered_input.append(filtered_item)
                 else:
                     filtered_input.append(item)
-            return filtered_input  # type: ignore
+            return cast(ResponseInputParam, filtered_input)
         
         return validated_input
 
