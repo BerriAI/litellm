@@ -2454,6 +2454,38 @@ async def list_team_v2(
     }
 
 
+async def _filter_teams_by_user(
+    user_id: str,
+    response: List[LiteLLM_TeamTable],
+    prisma_client: PrismaClient
+) -> List[LiteLLM_TeamTable]:
+    """Helper function to filter teams by user ID with duplicate prevention."""
+    # Use a set to track added team IDs and prevent duplicates
+    added_team_ids = set()
+    filtered_response = []
+    
+    # Check team.members_with_roles as the source of truth for team membership
+    for team in response:
+        if team.members_with_roles and team.team_id not in added_team_ids:
+            for member in team.members_with_roles:
+                # Handle both Member objects and dict representations
+                member_user_id = None
+                if isinstance(member, dict):
+                    member_user_id = member.get("user_id")
+                elif hasattr(member, "user_id"):
+                    member_user_id = member.user_id
+                
+                if (
+                    member_user_id is not None
+                    and member_user_id == user_id
+                ):
+                    filtered_response.append(team)
+                    added_team_ids.add(team.team_id)
+                    break  # No need to check other members once team is added
+    
+    return filtered_response
+
+
 @router.get(
     "/team/list", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -2504,16 +2536,11 @@ async def list_team(
 
     filtered_response = []
     if user_id:
-        # Get user object to access their teams array
-        for team in response:
-            if team.members_with_roles:
-                for member in team.members_with_roles:
-                    if (
-                        "user_id" in member
-                        and member["user_id"] is not None
-                        and member["user_id"] == user_id
-                    ):
-                        filtered_response.append(team)
+        filtered_response = await _filter_teams_by_user(
+            user_id=user_id,
+            response=response,
+            prisma_client=prisma_client
+        )
     else:
         filtered_response = response
 
