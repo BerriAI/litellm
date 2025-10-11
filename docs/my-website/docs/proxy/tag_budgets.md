@@ -102,9 +102,9 @@ Navigate to the **Tag Management** page and click **Create New Tag**. Fill in th
 
 Add tags to your API requests in the `metadata` field:
 
-:::info Tags on API Keys
+:::info Tags Budgets on API Keys
 
-Currently, tags are only supported per request. If you'd like to set tags on API keys so all requests automatically inherit them, please [create a feature request on GitHub](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeat%5D%3A).
+Currently, tag budget enforcement is only supported per request. If you'd like to set tags on API keys so all requests automatically inherit the tags budgets, please [create a feature request on GitHub](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeat%5D%3A).
 
 :::
 
