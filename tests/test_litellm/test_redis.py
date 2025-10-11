@@ -18,6 +18,10 @@ def test_get_redis_url_from_environment_host_port(monkeypatch):
     # Set the environment variables
     monkeypatch.setenv("REDIS_HOST", "redis-server")
     monkeypatch.setenv("REDIS_PORT", "6379")
+    # Ensure authentication variables are not set
+    monkeypatch.delenv("REDIS_USERNAME", raising=False)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    monkeypatch.delenv("REDIS_SSL", raising=False)
 
     # Call the function to get the Redis URL
     redis_url = get_redis_url_from_environment()
@@ -31,6 +35,9 @@ def test_get_redis_url_from_environment_with_ssl(monkeypatch):
     monkeypatch.setenv("REDIS_HOST", "redis-server")
     monkeypatch.setenv("REDIS_PORT", "6379")
     monkeypatch.setenv("REDIS_SSL", "true")
+    # Ensure authentication variables are not set
+    monkeypatch.delenv("REDIS_USERNAME", raising=False)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
 
     # Call the function to get the Redis URL
     redis_url = get_redis_url_from_environment()
@@ -58,6 +65,9 @@ def test_get_redis_url_from_environment_with_password_only(monkeypatch):
     monkeypatch.setenv("REDIS_HOST", "redis-server")
     monkeypatch.setenv("REDIS_PORT", "6379")
     monkeypatch.setenv("REDIS_PASSWORD", "password")
+    # Ensure username is not set
+    monkeypatch.delenv("REDIS_USERNAME", raising=False)
+    monkeypatch.delenv("REDIS_SSL", raising=False)
 
     # Call the function to get the Redis URL
     redis_url = get_redis_url_from_environment()

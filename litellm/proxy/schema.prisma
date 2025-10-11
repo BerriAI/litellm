@@ -25,6 +25,7 @@ model LiteLLM_BudgetTable {
   organization LiteLLM_OrganizationTable[] // multiple orgs can have the same budget
   keys LiteLLM_VerificationToken[] // multiple keys can have the same budget
   end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
+  tags LiteLLM_TagTable[] // multiple tags can have the same budget
   team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
   organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization 
 }
@@ -243,6 +244,20 @@ model LiteLLM_EndUserTable {
   budget_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   blocked Boolean @default(false)
+}
+
+// Track tags with budgets and spend
+model LiteLLM_TagTable {
+  tag_name String @id
+  description String?
+  models String[]
+  model_info Json? // maps model_id to model_name
+  spend Float @default(0.0)
+  budget_id String?
+  litellm_budget_table LiteLLM_BudgetTable? @relation(fields: [budget_id], references: [budget_id])
+  created_at DateTime @default(now()) @map("created_at")
+  created_by String?
+  updated_at DateTime @default(now()) @updatedAt @map("updated_at")
 }
 
 // store proxy config.yaml

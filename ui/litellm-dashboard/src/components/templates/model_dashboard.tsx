@@ -109,7 +109,7 @@ const retry_policy_map: Record<string, string> = {
   "InternalServerError (500)": "InternalServerErrorRetries",
 };
 
-const ModelDashboard: React.FC<ModelDashboardProps> = ({
+const OldModelDashboard: React.FC<ModelDashboardProps> = ({
   accessToken,
   token,
   userRole,
@@ -1754,4 +1754,4 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   );
 };
 
-export default ModelDashboard;
+export default OldModelDashboard;

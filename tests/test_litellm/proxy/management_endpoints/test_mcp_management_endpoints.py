@@ -483,6 +483,7 @@ class TestMCPHealthCheckEndpoints:
         mock_manager.health_check_server = AsyncMock(
             return_value={
                 "server_id": "test-server",
+                "server_name": "Test Server",
                 "status": "healthy",
                 "tools_count": 3,
                 "last_health_check": "2024-01-01T12:00:00",
@@ -519,6 +520,7 @@ class TestMCPHealthCheckEndpoints:
 
             # Verify results
             assert result["server_id"] == "test-server"
+            assert result["server_name"] == "Test Server"
             assert result["status"] == "healthy"
             assert result["tools_count"] == 3
             assert result["response_time_ms"] == 150.5
@@ -631,6 +633,7 @@ class TestMCPHealthCheckEndpoints:
             return_value={
                 "server1": {
                     "server_id": "server1",
+                    "server_name": "Test DB Server",
                     "status": "healthy",
                     "tools_count": 2,
                     "last_health_check": "2024-01-01T12:00:00",
@@ -639,6 +642,7 @@ class TestMCPHealthCheckEndpoints:
                 },
                 "server2": {
                     "server_id": "server2",
+                    "server_name": "Test DB Server",
                     "status": "unhealthy",
                     "last_health_check": "2024-01-01T12:00:00",
                     "response_time_ms": 5000.0,
@@ -684,8 +688,10 @@ class TestMCPHealthCheckEndpoints:
             # Check individual server results
             assert result["servers"]["server1"]["status"] == "healthy"
             assert result["servers"]["server1"]["tools_count"] == 2
+            assert result["servers"]["server1"]["server_name"] == "Test DB Server"
             assert result["servers"]["server2"]["status"] == "unhealthy"
             assert result["servers"]["server2"]["error"] == "Connection timeout"
+            assert result["servers"]["server2"]["server_name"] == "Test DB Server"
 
     @pytest.mark.asyncio
     async def test_fetch_all_mcp_servers_with_health_status(self):
