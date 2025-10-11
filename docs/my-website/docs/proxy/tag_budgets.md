@@ -30,9 +30,7 @@ Create a tag to represent a cost center, project, or any budget category. Set `m
 
 **Example:** Create a tag for your Engineering department with a monthly $500 budget
 
-<Tabs>
-
-<TabItem value="API" label="API">
+#### API
 
 Create a new tag and set `max_budget` and `budget_duration`
 
@@ -72,9 +70,7 @@ curl -X POST 'http://0.0.0.0:4000/tag/new' \
 }  
 ```
 
-</TabItem>
-
-<TabItem value="UI" label="Admin UI">
+#### LiteLLM Admin UI
 
 Navigate to the **Tag Management** page and click **Create New Tag**. Fill in the tag details and set your budget:
 
@@ -83,9 +79,6 @@ Navigate to the **Tag Management** page and click **Create New Tag**. Fill in th
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
-</TabItem>
-
-</Tabs>
 
 **Possible values for `budget_duration`:**
 
