@@ -62,7 +62,34 @@ These specifications provide:
 - Adequate memory for request processing and caching
 
 
-## 3. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
+## 3. Set `num_workers` to match CPU count for optimal performance
+
+For maximum performance, set the number of workers to match your CPU count. LiteLLM can achieve +400 RPS when using the correct number of CPU cores.
+
+**By default**, LiteLLM now uses `num_workers = os.cpu_count()` for optimal performance.
+
+### Override Options
+
+**Set environment variable:**
+```bash
+export NUM_WORKERS=4  # Set to your CPU count
+# or
+export DEFAULT_NUM_WORKERS_LITELLM_PROXY=4
+```
+
+**Or start LiteLLM Proxy with:**
+```bash
+litellm --num_workers 4 --config ./proxy_server_config.yaml
+```
+
+**Performance Impact:**
+- **+400 RPS** performance boost when using correct number of workers
+- Optimal resource utilization
+- Better handling of concurrent requests
+
+> **Note:** This applies to non-Kubernetes deployments. For Kubernetes deployments, see section 4 below.
+
+## 4. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
 
 Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
 
@@ -82,7 +109,7 @@ export MAX_REQUESTS_BEFORE_RESTART=10000
 ```
 
 
-## 4. Use Redis 'port','host', 'password'. NOT 'redis_url'
+## 5. Use Redis 'port','host', 'password'. NOT 'redis_url'
 
 If you decide to use Redis, DO NOT use 'redis_url'. We recommend using redis port, host, and password params. 
 
@@ -118,13 +145,13 @@ litellm_settings:
 > **WARNING**
 **Usage-based routing is not recommended for production due to performance impacts.** Use `simple-shuffle` (default) for optimal performance in high-traffic scenarios.
 
-## 5. Disable 'load_dotenv'
+## 6. Disable 'load_dotenv'
 
 Set `export LITELLM_MODE="PRODUCTION"`
 
 This disables the load_dotenv() functionality, which will automatically load your environment credentials from the local `.env`. 
 
-## 6. If running LiteLLM on VPC, gracefully handle DB unavailability
+## 7. If running LiteLLM on VPC, gracefully handle DB unavailability
 
 When running LiteLLM on a VPC (and inaccessible from the public internet), you can enable graceful degradation so that request processing continues even if the database is temporarily unavailable.
 
@@ -153,7 +180,7 @@ When `allow_requests_on_db_unavailable` is set to `true`, LiteLLM will handle er
 
 [More information about what the Database is used for here](db_info)
 
-## 7. Use Helm PreSync Hook for Database Migrations [BETA]
+## 8. Use Helm PreSync Hook for Database Migrations [BETA]
 
 To ensure only one service manages database migrations, use our [Helm PreSync hook for Database Migrations](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm-helm/templates/migrations-job.yaml). This ensures migrations are handled during `helm upgrade` or `helm install`, while LiteLLM pods explicitly disable migrations.
 
@@ -181,7 +208,7 @@ To ensure only one service manages database migrations, use our [Helm PreSync ho
    ```
 
 
-## 8. Set LiteLLM Salt Key 
+## 9. Set LiteLLM Salt Key 
 
 If you plan on using the DB, set a salt key for encrypting/decrypting variables in the DB. 
 
@@ -196,7 +223,7 @@ export LITELLM_SALT_KEY="sk-1234"
 [**See Code**](https://github.com/BerriAI/litellm/blob/036a6821d588bd36d170713dcf5a72791a694178/litellm/proxy/common_utils/encrypt_decrypt_utils.py#L15)
 
 
-## 9. Use `prisma migrate deploy`
+## 10. Use `prisma migrate deploy`
 
 Use this to handle db migrations across LiteLLM versions in production
 
@@ -245,7 +272,7 @@ To fix this, just set `LITELLM_MIGRATION_DIR="/path/to/writeable/directory"` in 
 
 LiteLLM will use this directory to write migration files.
 
-## 10. Use a Separate Health Check App
+## 11. Use a Separate Health Check App
 :::info
 The Separate Health Check App only runs when running via the the LiteLLM Docker Image and using Docker and setting the SEPARATE_HEALTH_APP env var to "1"
 :::
