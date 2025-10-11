@@ -319,6 +319,7 @@ async def new_team(  # noqa: PLR0915
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     - prompts: Optional[List[str]] - List of allowed prompts for the team. If specified, the team will only be able to use these specific prompts.
+    - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
     
 
     Returns:
@@ -809,6 +810,7 @@ async def update_team(
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
+    - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
     Example - update team TPM Limit
 
     ```
