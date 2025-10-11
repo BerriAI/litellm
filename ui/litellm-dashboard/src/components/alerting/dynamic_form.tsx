@@ -1,8 +1,7 @@
 import React from "react";
-import { Form, Input, InputNumber, Row, Col, Button as Button2 } from "antd";
+import { Form, Input, InputNumber, Button as Button2 } from "antd";
 import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
 import { Button, Badge, Icon, Text, TableRow, TableCell, Switch } from "@tremor/react";
-import Paragraph from "antd/es/typography/Paragraph";
 interface AlertingSetting {
   field_name: string;
   field_description: string;
