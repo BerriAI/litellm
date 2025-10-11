@@ -681,7 +681,11 @@ jobs:
           name: Show git commit hash
           command: |
             echo "Git commit hash: $CIRCLE_SHA1"
-
+      - run:
+          name: Install PostgreSQL
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y postgresql-14 postgresql-contrib-14
       - restore_cache:
           keys:
             - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
