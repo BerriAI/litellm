@@ -120,6 +120,7 @@ class BaseLLMHTTPHandler:
         response: Optional[httpx.Response] = None
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
+                # Make HTTP request with proper cancellation support
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -132,6 +133,10 @@ class BaseLLMHTTPHandler:
                     stream=stream,
                     logging_obj=logging_obj,
                 )
+            except asyncio.CancelledError:
+                # If the request was cancelled, ensure we propagate the cancellation
+                # This will cause the HTTP connection to be closed, which your GPU service will detect
+                raise
             except httpx.HTTPStatusError as e:
                 hit_max_retry = i + 1 == max_retry_on_unprocessable_entity_error
                 should_retry = provider_config.should_retry_llm_api_inside_llm_translation_on_http_error(
