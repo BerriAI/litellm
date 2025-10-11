@@ -404,11 +404,31 @@ jobs:
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
+        environment:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/circle_test
+      - image: postgres:14
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: circle_test
     working_directory: ~/project
 
     steps:
       - checkout
       - setup_google_dns
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+            for i in {1..30}; do
+              if pg_isready -h localhost -p 5432 -U postgres; then
+                echo "PostgreSQL is ready"
+                break
+              fi
+              echo "Waiting for PostgreSQL... ($i/30)"
+              sleep 2
+            done
       - run:
           name: Install Dependencies
           command: |
