@@ -77,7 +77,6 @@ class TestRouterIndexManagement:
         # Verify: Index map uses model_info.id
         assert router.model_id_to_deployment_index_map["model-info-id"] == 0
 
-
     def test_add_model_to_list_and_index_map_multiple_models(self, router):
         """Test _add_model_to_list_and_index_map with multiple models to verify indexing"""
         # Setup: Empty router
@@ -127,3 +126,54 @@ class TestRouterIndexManagement:
         # Test: Empty router
         empty_router = Router(model_list=[])
         assert empty_router.has_model_id("any-id") == False
+
+    def test_build_model_name_index(self, router):
+        """Test _build_model_name_index function"""
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {"id": "model-1"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "model-2"},
+            },
+            {
+                "model_name": "gpt-4",  # Duplicate model_name, different deployment
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "model-3"},
+            },
+        ]
+
+        # Test: Build index from model list
+        router._build_model_name_index(model_list)
+
+        # Verify: model_name_to_deployment_indices is correctly built
+        assert "gpt-3.5-turbo" in router.model_name_to_deployment_indices
+        assert "gpt-4" in router.model_name_to_deployment_indices
+        
+        # Verify: gpt-3.5-turbo has single deployment
+        assert router.model_name_to_deployment_indices["gpt-3.5-turbo"] == [0]
+        
+        # Verify: gpt-4 has multiple deployments
+        assert router.model_name_to_deployment_indices["gpt-4"] == [1, 2]
+        
+        # Test: Rebuild index (should clear and rebuild)
+        new_model_list = [
+            {
+                "model_name": "claude-3",
+                "litellm_params": {"model": "claude-3"},
+                "model_info": {"id": "model-4"},
+            },
+        ]
+        router._build_model_name_index(new_model_list)
+        
+        # Verify: Old entries are cleared
+        assert "gpt-3.5-turbo" not in router.model_name_to_deployment_indices
+        assert "gpt-4" not in router.model_name_to_deployment_indices
+        
+        # Verify: New entry is added
+        assert "claude-3" in router.model_name_to_deployment_indices
+        assert router.model_name_to_deployment_indices["claude-3"] == [0]
