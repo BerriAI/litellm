@@ -1,94 +1,93 @@
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect } from "react";
 
-import { Card, Text, Button } from "@tremor/react"
-import { Modal, message } from "antd"
-import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "./networking"
-import PromptTable from "./prompts/prompt_table"
-import PromptInfoView from "./prompts/prompt_info"
-import AddPromptForm from "./prompts/add_prompt_form"
-import NotificationsManager from "./molecules/notifications_manager"
-import { isAdminRole } from "@/utils/roles"
+import { Button } from "@tremor/react";
+import { Modal } from "antd";
+import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "./networking";
+import PromptTable from "./prompts/prompt_table";
+import PromptInfoView from "./prompts/prompt_info";
+import AddPromptForm from "./prompts/add_prompt_form";
+import NotificationsManager from "./molecules/notifications_manager";
+import { isAdminRole } from "@/utils/roles";
 
 interface PromptsProps {
-  accessToken: string | null
-  userRole?: string
+  accessToken: string | null;
+  userRole?: string;
 }
 
 const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
-  const [promptsList, setPromptsList] = useState<PromptSpec[]>([])
-  const [isLoading, setIsLoading] = useState(false)
-  const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null)
-  const [isAddModalVisible, setIsAddModalVisible] = useState(false)
-  const [isDeleting, setIsDeleting] = useState(false)
-  const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string } | null>(null)
+  const [promptsList, setPromptsList] = useState<PromptSpec[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
+  const [isAddModalVisible, setIsAddModalVisible] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string } | null>(null);
 
-  const isAdmin = userRole ? isAdminRole(userRole) : false
+  const isAdmin = userRole ? isAdminRole(userRole) : false;
 
   const fetchPrompts = async () => {
     if (!accessToken) {
-      return
+      return;
     }
 
-    setIsLoading(true)
+    setIsLoading(true);
     try {
-      const response: ListPromptsResponse = await getPromptsList(accessToken)
-      console.log(`prompts: ${JSON.stringify(response)}`)
-      setPromptsList(response.prompts)
+      const response: ListPromptsResponse = await getPromptsList(accessToken);
+      console.log(`prompts: ${JSON.stringify(response)}`);
+      setPromptsList(response.prompts);
     } catch (error) {
-      console.error("Error fetching prompts:", error)
+      console.error("Error fetching prompts:", error);
     } finally {
-      setIsLoading(false)
+      setIsLoading(false);
     }
-  }
+  };
 
   useEffect(() => {
-    fetchPrompts()
-  }, [accessToken])
+    fetchPrompts();
+  }, [accessToken]);
 
   const handlePromptClick = (promptId: string) => {
-    setSelectedPromptId(promptId)
-  }
+    setSelectedPromptId(promptId);
+  };
 
   const handleAddPrompt = () => {
     if (selectedPromptId) {
-      setSelectedPromptId(null)
+      setSelectedPromptId(null);
     }
-    setIsAddModalVisible(true)
-  }
+    setIsAddModalVisible(true);
+  };
 
   const handleCloseModal = () => {
-    setIsAddModalVisible(false)
-  }
+    setIsAddModalVisible(false);
+  };
 
   const handleSuccess = () => {
-    fetchPrompts()
-  }
+    fetchPrompts();
+  };
 
   const handleDeleteClick = (promptId: string, promptName: string) => {
-    setPromptToDelete({ id: promptId, name: promptName })
-  }
+    setPromptToDelete({ id: promptId, name: promptName });
+  };
 
   const handleDeleteConfirm = async () => {
-    if (!promptToDelete || !accessToken) return
+    if (!promptToDelete || !accessToken) return;
 
-    setIsDeleting(true)
+    setIsDeleting(true);
     try {
-      await deletePromptCall(accessToken, promptToDelete.id)
-      NotificationsManager.success(`Prompt "${promptToDelete.name}" deleted successfully`)
-      fetchPrompts() // Refresh the list
+      await deletePromptCall(accessToken, promptToDelete.id);
+      NotificationsManager.success(`Prompt "${promptToDelete.name}" deleted successfully`);
+      fetchPrompts(); // Refresh the list
     } catch (error) {
-      console.error("Error deleting prompt:", error)
-      NotificationsManager.fromBackend("Failed to delete prompt")
+      console.error("Error deleting prompt:", error);
+      NotificationsManager.fromBackend("Failed to delete prompt");
     } finally {
-      setIsDeleting(false)
-      setPromptToDelete(null)
+      setIsDeleting(false);
+      setPromptToDelete(null);
     }
-  }
+  };
 
   const handleDeleteCancel = () => {
-    setPromptToDelete(null)
-  }
-
+    setPromptToDelete(null);
+  };
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
@@ -141,7 +140,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
         </Modal>
       )}
     </div>
-  )
-}
+  );
+};
 
-export default PromptsPanel
+export default PromptsPanel;

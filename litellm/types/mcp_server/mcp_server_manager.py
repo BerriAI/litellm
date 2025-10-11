@@ -17,6 +17,7 @@ class MCPServer(BaseModel):
     server_name: Optional[str] = None
     url: Optional[str] = None
     transport: MCPTransportType
+    spec_path: Optional[str] = None
     auth_type: Optional[MCPAuthType] = None
     authentication_token: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
@@ -25,6 +26,9 @@ class MCPServer(BaseModel):
     )
     allowed_tools: Optional[List[str]] = None
     disallowed_tools: Optional[List[str]] = None
+    allowed_params: Optional[Dict[str, List[str]]] = (
+        None  # map of tool names to allowed parameter lists
+    )
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None

@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
 import httpx
+from openai.types.responses import ResponseReasoningItem
 
 from litellm._logging import verbose_logger
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -38,6 +39,50 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             model = model.replace("o_series/", "")
         return model
 
+    def _handle_reasoning_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle reasoning items specifically to filter out status=None using OpenAI's model.
+        Issue: https://github.com/BerriAI/litellm/issues/13484
+        OpenAI API does not accept ReasoningItem(status=None), so we need to:
+        1. Check if the item is a reasoning type
+        2. Create a ResponseReasoningItem object with the item data
+        3. Convert it back to dict with exclude_none=True to filter None values
+        """
+        if item.get("type") == "reasoning":
+            try:
+                # Ensure required fields are present for ResponseReasoningItem
+                item_data = dict(item)
+                if "id" not in item_data:
+                    item_data["id"] = f"rs_{hash(str(item_data))}"
+                if "summary" not in item_data:
+                    item_data["summary"] = (
+                        item_data.get("reasoning_content", "")[:100] + "..."
+                        if len(item_data.get("reasoning_content", "")) > 100
+                        else item_data.get("reasoning_content", "")
+                    )
+
+                # Create ResponseReasoningItem object from the item data
+                reasoning_item = ResponseReasoningItem(**item_data)
+
+                # Convert back to dict with exclude_none=True to exclude None fields
+                dict_reasoning_item = reasoning_item.model_dump(exclude_none=True)
+                dict_reasoning_item.pop("status", None)
+
+                return dict_reasoning_item
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Failed to create ResponseReasoningItem, falling back to manual filtering: {e}"
+                )
+                # Fallback: manually filter out known None fields
+                filtered_item = {
+                    k: v
+                    for k, v in item.items()
+                    if v is not None
+                    or k not in {"status", "content", "encrypted_content"}
+                }
+                return filtered_item
+        return item
+
     def transform_responses_api_request(
         self,
         model: str,
@@ -48,12 +93,13 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> Dict:
         """No transform applied since inputs are in OpenAI spec already"""
         stripped_model_name = self.get_stripped_model_name(model)
-        return dict(
-            ResponsesAPIRequestParams(
-                model=stripped_model_name,
-                input=input,
-                **response_api_optional_request_params,
-            )
+
+        return super().transform_responses_api_request(
+            model=stripped_model_name,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
         )
 
     def get_complete_url(
@@ -217,15 +263,15 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         at the correct location (before any query parameters).
         """
         from urllib.parse import urlparse, urlunparse
-        
+
         # Parse the URL to separate its components
         parsed_url = urlparse(api_base)
-        
+
         # Insert the response_id and /cancel at the end of the path component
         # Remove trailing slash if present to avoid double slashes
         path = parsed_url.path.rstrip("/")
         new_path = f"{path}/{response_id}/cancel"
-        
+
         # Reconstruct the URL with all original components but with the modified path
         cancel_url = urlunparse(
             (

@@ -1,56 +1,56 @@
-import React, { useState } from "react"
-import { LogEntry } from "./columns"
-import { DataTable } from "./table"
-import { columns } from "./columns"
-import { Card, Title, Text, Metric, AreaChart, Button as TremorButton } from "@tremor/react"
-import { RequestViewer } from "./index"
-import { formatNumberWithCommas } from "@/utils/dataUtils"
-import { ArrowLeftIcon } from "@heroicons/react/outline"
-import { Button } from "antd"
-import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils"
-import { CheckIcon, CopyIcon } from "lucide-react"
-import { Tooltip } from "antd"
+import React, { useState } from "react";
+import { LogEntry } from "./columns";
+import { DataTable } from "./table";
+import { columns } from "./columns";
+import { Card, Title, Text, Metric, Button as TremorButton } from "@tremor/react";
+import { RequestViewer } from "./index";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { ArrowLeftIcon } from "@heroicons/react/outline";
+import { Button } from "antd";
+import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import { Tooltip } from "antd";
 
 interface SessionViewProps {
-  sessionId: string
-  logs: LogEntry[]
-  onBack: () => void
+  sessionId: string;
+  logs: LogEntry[];
+  onBack: () => void;
 }
 
 export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBack }) => {
   // Track which log row is expanded
-  const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null)
+  const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
 
   // Calculate session metrics
-  const totalCost = logs.reduce((sum, log) => sum + (log.spend || 0), 0)
-  const totalTokens = logs.reduce((sum, log) => sum + (log.total_tokens || 0), 0)
-  
+  const totalCost = logs.reduce((sum, log) => sum + (log.spend || 0), 0);
+  const totalTokens = logs.reduce((sum, log) => sum + (log.total_tokens || 0), 0);
+
   // Calculate cache token totals from metadata
   const totalCacheReadTokens = logs.reduce((sum, log) => {
-    const cacheReadTokens = log.metadata?.additional_usage_values?.cache_read_input_tokens || 0
-    return sum + cacheReadTokens
-  }, 0)
-  
+    const cacheReadTokens = log.metadata?.additional_usage_values?.cache_read_input_tokens || 0;
+    return sum + cacheReadTokens;
+  }, 0);
+
   const totalCacheCreationTokens = logs.reduce((sum, log) => {
-    const cacheCreationTokens = log.metadata?.additional_usage_values?.cache_creation_input_tokens || 0
-    return sum + cacheCreationTokens
-  }, 0)
-  
+    const cacheCreationTokens = log.metadata?.additional_usage_values?.cache_creation_input_tokens || 0;
+    return sum + cacheCreationTokens;
+  }, 0);
+
   // Calculate total tokens including cache tokens
-  const totalTokensWithCache = totalTokens + totalCacheReadTokens + totalCacheCreationTokens
-  
-  const startTime = logs.length > 0 ? new Date(logs[0].startTime) : new Date()
-  const endTime = logs.length > 0 ? new Date(logs[logs.length - 1].endTime) : new Date()
-  const durationMs = endTime.getTime() - startTime.getTime()
-  const durationSec = (durationMs / 1000).toFixed(2)
+  const totalTokensWithCache = totalTokens + totalCacheReadTokens + totalCacheCreationTokens;
+
+  const startTime = logs.length > 0 ? new Date(logs[0].startTime) : new Date();
+  const endTime = logs.length > 0 ? new Date(logs[logs.length - 1].endTime) : new Date();
+  const durationMs = endTime.getTime() - startTime.getTime();
+  const durationSec = (durationMs / 1000).toFixed(2);
 
   // Prepare data for the timeline chart
   const timelineData = logs.map((log) => ({
     time: new Date(log.startTime).toISOString(),
     tokens: log.total_tokens || 0,
     cost: log.spend || 0,
-  }))
+  }));
 
   const copyToClipboard = async (text: string, key: string) => {
     const success = await utilCopyToClipboard(text);
@@ -80,9 +80,9 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
                 icon={copiedStates["session-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
                 onClick={() => copyToClipboard(sessionId, "session-id")}
                 className={`left-2 z-10 transition-all duration-200 ${
-                  copiedStates["session-id"] 
-                    ? 'text-green-600 bg-green-50 border-green-200' 
-                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                  copiedStates["session-id"]
+                    ? "text-green-600 bg-green-50 border-green-200"
+                    : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                 }`}
               />
             </div>
@@ -126,7 +126,9 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
                   <div className="space-y-2 text-sm text-gray-300">
                     <div className="flex justify-between">
                       <span>input:</span>
-                      <span className="ml-8">{formatNumberWithCommas(logs.reduce((sum, log) => sum + (log.prompt_tokens || 0), 0))}</span>
+                      <span className="ml-8">
+                        {formatNumberWithCommas(logs.reduce((sum, log) => sum + (log.prompt_tokens || 0), 0))}
+                      </span>
                     </div>
                     {totalCacheReadTokens > 0 && (
                       <div className="flex justify-between">
@@ -147,7 +149,9 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
                   <div className="space-y-2 text-sm text-gray-300">
                     <div className="flex justify-between">
                       <span>output:</span>
-                      <span className="ml-8">{formatNumberWithCommas(logs.reduce((sum, log) => sum + (log.completion_tokens || 0), 0))}</span>
+                      <span className="ml-8">
+                        {formatNumberWithCommas(logs.reduce((sum, log) => sum + (log.completion_tokens || 0), 0))}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -161,7 +165,7 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
             </div>
           }
           placement="top"
-          overlayStyle={{ minWidth: '300px' }}
+          overlayStyle={{ minWidth: "300px" }}
         >
           <Card>
             <div className="flex items-center justify-between">
@@ -185,5 +189,5 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
         />
       </div>
     </div>
-  )
-}
+  );
+};

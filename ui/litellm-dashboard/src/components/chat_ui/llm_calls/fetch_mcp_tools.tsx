@@ -1,6 +1,4 @@
-import NotificationManager from "@/components/molecules/notifications_manager";
 import { mcpToolsCall } from "../../networking";
-import { message } from "antd";
 
 export interface MCPTool {
   name: string;
@@ -20,14 +18,12 @@ interface MCPToolsResponse {
   tools: MCPTool[];
 }
 
-export async function fetchAvailableMCPTools(
-  accessToken: string,
-): Promise<MCPTool[]> {
+export async function fetchAvailableMCPTools(accessToken: string): Promise<MCPTool[]> {
   try {
-    const data = await mcpToolsCall(accessToken) as MCPToolsResponse;
+    const data = (await mcpToolsCall(accessToken)) as MCPToolsResponse;
     return data.tools || [];
   } catch (error) {
     console.error("Error fetching MCP tools:", error);
     return [];
   }
-} 
+}

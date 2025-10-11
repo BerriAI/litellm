@@ -2,21 +2,9 @@
  * UI for controlling slack alerting settings
  */
 import React, { useState, useEffect } from "react";
-import {
-  Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
-  TableCell,
-  Button,
-  Icon,
-  Badge,
-  TableBody,
-  Text,
-} from "@tremor/react";
-import { InputNumber, message } from "antd";
+
+
 import { alertingSettingsCall, updateConfigFieldSetting } from "../networking";
-import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
 import DynamicForm from "./dynamic_form";
 import NotificationsManager from "../molecules/notifications_manager";
 interface alertingSettingsItem {
@@ -34,13 +22,8 @@ interface AlertingSettingsProps {
   premiumUser: boolean;
 }
 
-const AlertingSettings: React.FC<AlertingSettingsProps> = ({
-  accessToken,
-  premiumUser,
-}) => {
-  const [alertingSettings, setAlertingSettings] = useState<
-    alertingSettingsItem[]
-  >([]);
+const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiumUser }) => {
+  const [alertingSettings, setAlertingSettings] = useState<alertingSettingsItem[]>([]);
 
   useEffect(() => {
     // get values
@@ -55,12 +38,10 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({
   const handleInputChange = (fieldName: string, newValue: any) => {
     // Update the value in the state
     const updatedSettings = alertingSettings.map((setting) =>
-      setting.field_name === fieldName
-        ? { ...setting, field_value: newValue }
-        : setting
+      setting.field_name === fieldName ? { ...setting, field_value: newValue } : setting,
     );
 
-    console.log(`updatedSettings: ${JSON.stringify(updatedSettings)}`)
+    console.log(`updatedSettings: ${JSON.stringify(updatedSettings)}`);
     setAlertingSettings(updatedSettings);
   };
 
@@ -69,7 +50,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({
       return;
     }
 
-    console.log(`formValues: ${formValues}`)
+    console.log(`formValues: ${formValues}`);
     let fieldValue = formValues;
 
     if (fieldValue == null || fieldValue == undefined) {
@@ -77,16 +58,16 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({
     }
 
     const initialFormValues: Record<string, any> = {};
-    
+
     alertingSettings.forEach((setting) => {
       initialFormValues[setting.field_name] = setting.field_value;
     });
 
     // Merge initialFormValues with actual formValues
     const mergedFormValues = { ...formValues, ...initialFormValues };
-    console.log(`mergedFormValues: ${JSON.stringify(mergedFormValues)}`)
+    console.log(`mergedFormValues: ${JSON.stringify(mergedFormValues)}`);
     const { slack_alerting, ...alertingArgs } = mergedFormValues;
-    console.log(`slack_alerting: ${slack_alerting}, alertingArgs: ${JSON.stringify(alertingArgs)}`)
+    console.log(`slack_alerting: ${slack_alerting}, alertingArgs: ${JSON.stringify(alertingArgs)}`);
     try {
       updateConfigFieldSetting(accessToken, "alerting_args", alertingArgs);
       if (typeof slack_alerting === "boolean") {
@@ -119,7 +100,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({
               stored_in_db: null,
               field_value: setting.field_default_value,
             }
-          : setting
+          : setting,
       );
       setAlertingSettings(updatedSettings);
     } catch (error) {

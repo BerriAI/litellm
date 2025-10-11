@@ -1,4 +1,4 @@
-import React from 'react';
+import React from "react";
 import {
   Table,
   TableBody,
@@ -9,7 +9,6 @@ import {
   Text,
   Badge,
   Icon,
-  Button,
   Card,
 } from "@tremor/react";
 import { Tooltip } from "antd";
@@ -23,10 +22,10 @@ interface Column {
 }
 
 interface Action<T = any> {
-    icon?: React.ComponentType<any>;
-    onClick: (item: T) => void;
-    condition?: () => boolean;
-    tooltip?: string;
+  icon?: React.ComponentType<any>;
+  onClick: (item: T) => void;
+  condition?: () => boolean;
+  tooltip?: string;
 }
 
 interface DeleteModalProps {
@@ -35,7 +34,6 @@ interface DeleteModalProps {
   onCancel: () => void;
   title: string;
   message: string;
-
 }
 
 interface DataTableProps {
@@ -53,11 +51,11 @@ const DataTable: React.FC<DataTableProps> = ({
   actions,
   emptyMessage = "No data available",
   deleteModal,
-  onItemClick
+  onItemClick,
 }) => {
   const renderCell = (column: Column, row: any) => {
     const value = row[column.accessor];
-    
+
     if (column.cellRenderer) {
       return column.cellRenderer(value, row);
     }
@@ -72,17 +70,8 @@ const DataTable: React.FC<DataTableProps> = ({
             </Badge>
           ) : (
             value.map((item: any, index: number) => (
-              <Badge
-                key={index}
-                size="xs"
-                className="mb-1"
-                color="blue"
-              >
-                <Text>
-                  {String(item).length > 30
-                    ? `${String(item).slice(0, 30)}...`
-                    : item}
-                </Text>
+              <Badge key={index} size="xs" className="mb-1" color="blue">
+                <Text>{String(item).length > 30 ? `${String(item).slice(0, 30)}...` : item}</Text>
               </Badge>
             ))
           )}
@@ -90,7 +79,7 @@ const DataTable: React.FC<DataTableProps> = ({
       );
     }
 
-    return value?.toString() || '';
+    return value?.toString() || "";
   };
 
   return (
@@ -101,9 +90,7 @@ const DataTable: React.FC<DataTableProps> = ({
             {columns.map((column, index) => (
               <TableHeaderCell key={index}>{column.header}</TableHeaderCell>
             ))}
-            {actions && actions.length > 0 && (
-              <TableHeaderCell>Actions</TableHeaderCell>
-            )}
+            {actions && actions.length > 0 && <TableHeaderCell>Actions</TableHeaderCell>}
           </TableRow>
         </TableHead>
 
@@ -118,13 +105,11 @@ const DataTable: React.FC<DataTableProps> = ({
                       maxWidth: column.width || "4px",
                       whiteSpace: "pre-wrap",
                       overflow: "hidden",
-                      ...column.style
+                      ...column.style,
                     }}
                   >
-                    {column.accessor === 'id' ? (
-                      <Tooltip title={row[column.accessor]}>
-                        {renderCell(column, row)}
-                      </Tooltip>
+                    {column.accessor === "id" ? (
+                      <Tooltip title={row[column.accessor]}>{renderCell(column, row)}</Tooltip>
                     ) : (
                       renderCell(column, row)
                     )}
@@ -132,20 +117,21 @@ const DataTable: React.FC<DataTableProps> = ({
                 ))}
                 {actions && actions.length > 0 && (
                   <TableCell>
-                    {actions.map((action, actionIndex) => (
-                      // @ts-ignore
-                      action.condition?.(row) !== false && (
-                        <Tooltip key={actionIndex} title={action.tooltip}>
-                          <Icon 
-                            // @ts-ignore
-                            icon={action.icon}
-                            size="sm"
-                            onClick={() => action.onClick(row)}
-                            className="cursor-pointer mx-1"
-                          />
-                        </Tooltip>
-                      )
-                    ))}
+                    {actions.map(
+                      (action, actionIndex) =>
+                        // @ts-ignore
+                        action.condition?.(row) !== false && (
+                          <Tooltip key={actionIndex} title={action.tooltip}>
+                            <Icon
+                              // @ts-ignore
+                              icon={action.icon}
+                              size="sm"
+                              onClick={() => action.onClick(row)}
+                              className="cursor-pointer mx-1"
+                            />
+                          </Tooltip>
+                        ),
+                    )}
                   </TableCell>
                 )}
               </TableRow>
@@ -159,7 +145,6 @@ const DataTable: React.FC<DataTableProps> = ({
           )}
         </TableBody>
       </Table>
- 
     </Card>
   );
 };

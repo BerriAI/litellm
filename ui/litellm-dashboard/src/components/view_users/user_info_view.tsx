@@ -1,6 +1,6 @@
-import React, { useState } from "react"
-import { Card, Text, Button, Grid, Col, Tab, TabList, TabGroup, TabPanel, TabPanels, Title, Badge } from "@tremor/react"
-import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline"
+import React, { useState } from "react";
+import { Card, Text, Button, Grid, Tab, TabList, TabGroup, TabPanel, TabPanels, Title, Badge } from "@tremor/react";
+import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import {
   userInfoCall,
   userDeleteCall,
@@ -8,43 +8,43 @@ import {
   modelAvailableCall,
   invitationCreateCall,
   getProxyBaseUrl,
-} from "../networking"
-import { message, Button as AntdButton } from "antd"
-import { rolesWithWriteAccess } from "../../utils/roles"
-import { UserEditView } from "../user_edit_view"
-import OnboardingModal, { InvitationLink } from "../onboarding_link"
-import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
-import { CopyIcon, CheckIcon } from "lucide-react"
-import NotificationsManager from "../molecules/notifications_manager"
-import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown"
+} from "../networking";
+import { Button as AntdButton } from "antd";
+import { rolesWithWriteAccess } from "../../utils/roles";
+import { UserEditView } from "../user_edit_view";
+import OnboardingModal, { InvitationLink } from "../onboarding_link";
+import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { CopyIcon, CheckIcon } from "lucide-react";
+import NotificationsManager from "../molecules/notifications_manager";
+import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
 
 interface UserInfoViewProps {
-  userId: string
-  onClose: () => void
-  accessToken: string | null
-  userRole: string | null
-  onDelete?: () => void
-  possibleUIRoles: Record<string, Record<string, string>> | null
-  initialTab?: number // 0 for Overview, 1 for Details
-  startInEditMode?: boolean
+  userId: string;
+  onClose: () => void;
+  accessToken: string | null;
+  userRole: string | null;
+  onDelete?: () => void;
+  possibleUIRoles: Record<string, Record<string, string>> | null;
+  initialTab?: number; // 0 for Overview, 1 for Details
+  startInEditMode?: boolean;
 }
 
 interface UserInfo {
-  user_id: string
+  user_id: string;
   user_info: {
-    user_email: string | null
-    user_role: string | null
-    teams: any[] | null
-    models: string[] | null
-    max_budget: number | null
-    budget_duration: string | null
-    spend: number | null
-    metadata: Record<string, any> | null
-    created_at: string | null
-    updated_at: string | null
-  }
-  keys: any[] | null
-  teams: any[] | null
+    user_email: string | null;
+    user_role: string | null;
+    teams: any[] | null;
+    models: string[] | null;
+    max_budget: number | null;
+    budget_duration: string | null;
+    spend: number | null;
+    metadata: Record<string, any> | null;
+    created_at: string | null;
+    updated_at: string | null;
+  };
+  keys: any[] | null;
+  teams: any[] | null;
 }
 
 export default function UserInfoView({
@@ -57,80 +57,80 @@ export default function UserInfoView({
   initialTab = 0,
   startInEditMode = false,
 }: UserInfoViewProps) {
-  const [userData, setUserData] = useState<UserInfo | null>(null)
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
-  const [isLoading, setIsLoading] = useState(true)
-  const [isEditing, setIsEditing] = useState(startInEditMode)
-  const [userModels, setUserModels] = useState<string[]>([])
-  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false)
-  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null)
-  const [baseUrl, setBaseUrl] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState(initialTab)
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
-  const [isTeamsExpanded, setIsTeamsExpanded] = useState(false)
+  const [userData, setUserData] = useState<UserInfo | null>(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isEditing, setIsEditing] = useState(startInEditMode);
+  const [userModels, setUserModels] = useState<string[]>([]);
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
+  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
+  const [baseUrl, setBaseUrl] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState(initialTab);
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+  const [isTeamsExpanded, setIsTeamsExpanded] = useState(false);
 
   React.useEffect(() => {
-    setBaseUrl(getProxyBaseUrl())
-  }, [])
+    setBaseUrl(getProxyBaseUrl());
+  }, []);
 
   React.useEffect(() => {
-    console.log(`userId: ${userId}, userRole: ${userRole}, accessToken: ${accessToken}`)
+    console.log(`userId: ${userId}, userRole: ${userRole}, accessToken: ${accessToken}`);
     const fetchData = async () => {
       try {
-        if (!accessToken) return
-        const data = await userInfoCall(accessToken, userId, userRole || "", false, null, null, true)
-        setUserData(data)
+        if (!accessToken) return;
+        const data = await userInfoCall(accessToken, userId, userRole || "", false, null, null, true);
+        setUserData(data);
 
         // Fetch available models
-        const modelDataResponse = await modelAvailableCall(accessToken, userId, userRole || "")
-        const availableModels = modelDataResponse.data.map((model: any) => model.id)
-        setUserModels(availableModels)
+        const modelDataResponse = await modelAvailableCall(accessToken, userId, userRole || "");
+        const availableModels = modelDataResponse.data.map((model: any) => model.id);
+        setUserModels(availableModels);
       } catch (error) {
-        console.error("Error fetching user data:", error)
-        NotificationsManager.fromBackend("Failed to fetch user data")
+        console.error("Error fetching user data:", error);
+        NotificationsManager.fromBackend("Failed to fetch user data");
       } finally {
-        setIsLoading(false)
+        setIsLoading(false);
       }
-    }
+    };
 
-    fetchData()
-  }, [accessToken, userId, userRole])
+    fetchData();
+  }, [accessToken, userId, userRole]);
 
   const handleResetPassword = async () => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("Access token not found")
-      return
+      NotificationsManager.fromBackend("Access token not found");
+      return;
     }
     try {
-      NotificationsManager.success("Generating password reset link...")
-      const data = await invitationCreateCall(accessToken, userId)
-      setInvitationLinkData(data)
-      setIsInvitationLinkModalVisible(true)
+      NotificationsManager.success("Generating password reset link...");
+      const data = await invitationCreateCall(accessToken, userId);
+      setInvitationLinkData(data);
+      setIsInvitationLinkModalVisible(true);
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to generate password reset link")
+      NotificationsManager.fromBackend("Failed to generate password reset link");
     }
-  }
+  };
 
   const handleDelete = async () => {
     try {
-      if (!accessToken) return
-      await userDeleteCall(accessToken, [userId])
-      NotificationsManager.success("User deleted successfully")
+      if (!accessToken) return;
+      await userDeleteCall(accessToken, [userId]);
+      NotificationsManager.success("User deleted successfully");
       if (onDelete) {
-        onDelete()
+        onDelete();
       }
-      onClose()
+      onClose();
     } catch (error) {
-      console.error("Error deleting user:", error)
-      NotificationsManager.fromBackend("Failed to delete user")
+      console.error("Error deleting user:", error);
+      NotificationsManager.fromBackend("Failed to delete user");
     }
-  }
+  };
 
   const handleUserUpdate = async (formValues: Record<string, any>) => {
     try {
-      if (!accessToken || !userData) return
+      if (!accessToken || !userData) return;
 
-      const response = await userUpdateUserCall(accessToken, formValues, null)
+      const response = await userUpdateUserCall(accessToken, formValues, null);
 
       // Update local state with new values
       setUserData({
@@ -143,15 +143,15 @@ export default function UserInfoView({
           budget_duration: formValues.budget_duration,
           metadata: formValues.metadata,
         },
-      })
+      });
 
-      NotificationsManager.success("User updated successfully")
-      setIsEditing(false)
+      NotificationsManager.success("User updated successfully");
+      setIsEditing(false);
     } catch (error) {
-      console.error("Error updating user:", error)
-      NotificationsManager.fromBackend("Failed to update user")
+      console.error("Error updating user:", error);
+      NotificationsManager.fromBackend("Failed to update user");
     }
-  }
+  };
 
   if (isLoading) {
     return (
@@ -161,7 +161,7 @@ export default function UserInfoView({
         </Button>
         <Text>Loading user data...</Text>
       </div>
-    )
+    );
   }
 
   if (!userData) {
@@ -172,18 +172,18 @@ export default function UserInfoView({
         </Button>
         <Text>User not found</Text>
       </div>
-    )
+    );
   }
 
   const copyToClipboard = async (text: string, key: string) => {
-    const success = await utilCopyToClipboard(text)
+    const success = await utilCopyToClipboard(text);
     if (success) {
-      setCopiedStates((prev) => ({ ...prev, [key]: true }))
+      setCopiedStates((prev) => ({ ...prev, [key]: true }));
       setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }))
-      }, 2000)
+        setCopiedStates((prev) => ({ ...prev, [key]: false }));
+      }, 2000);
     }
-  }
+  };
 
   return (
     <div className="p-4">
@@ -510,5 +510,5 @@ export default function UserInfoView({
         modalType="resetPassword"
       />
     </div>
-  )
+  );
 }

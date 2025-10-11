@@ -1,5 +1,4 @@
 import openai from "openai";
-import { message } from "antd";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
 
@@ -9,7 +8,7 @@ export async function makeOpenAIImageGenerationRequest(
   selectedModel: string,
   accessToken: string,
   tags?: string[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -17,22 +16,25 @@ export async function makeOpenAIImageGenerationRequest(
     console.log = function () {};
   }
   console.log("isLocal:", isLocal);
-  const proxyBaseUrl = getProxyBaseUrl()
+  const proxyBaseUrl = getProxyBaseUrl();
   const client = new openai.OpenAI({
     apiKey: accessToken,
     baseURL: proxyBaseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: tags && tags.length > 0 ? { 'x-litellm-tags': tags.join(',') } : undefined,
+    defaultHeaders: tags && tags.length > 0 ? { "x-litellm-tags": tags.join(",") } : undefined,
   });
 
   try {
-    const response = await client.images.generate({
-      model: selectedModel,
-      prompt: prompt,
-    }, { signal });
+    const response = await client.images.generate(
+      {
+        model: selectedModel,
+        prompt: prompt,
+      },
+      { signal },
+    );
 
     console.log(response.data);
-    
+
     if (response.data && response.data[0]) {
       // Handle either URL or base64 data from response
       if (response.data[0].url) {

@@ -1,6 +1,6 @@
 // Utility functions for managing MCP server authentication tokens in localStorage
 
-const MCP_AUTH_STORAGE_KEY = 'litellm_mcp_auth_tokens';
+const MCP_AUTH_STORAGE_KEY = "litellm_mcp_auth_tokens";
 
 export interface MCPAuthToken {
   serverId: string;
@@ -22,7 +22,7 @@ export const getMCPAuthTokens = (): MCPAuthStorage => {
     const stored = localStorage.getItem(MCP_AUTH_STORAGE_KEY);
     return stored ? JSON.parse(stored) : {};
   } catch (error) {
-    console.error('Error reading MCP auth tokens from localStorage:', error);
+    console.error("Error reading MCP auth tokens from localStorage:", error);
     return {};
   }
 };
@@ -34,20 +34,20 @@ export const getMCPAuthToken = (serverId: string, serverAlias?: string): string 
   try {
     const tokens = getMCPAuthTokens();
     const token = tokens[serverId];
-    
+
     // If token exists, check if serverAlias matches (both can be undefined)
     if (token && token.serverAlias === serverAlias) {
       return token.authValue;
     }
-    
+
     // If no serverAlias was provided and token exists without serverAlias, return it
     if (token && !serverAlias && !token.serverAlias) {
       return token.authValue;
     }
-    
+
     return null;
   } catch (error) {
-    console.error('Error getting MCP auth token:', error);
+    console.error("Error getting MCP auth token:", error);
     return null;
   }
 };
@@ -55,15 +55,10 @@ export const getMCPAuthToken = (serverId: string, serverAlias?: string): string 
 /**
  * Store authentication token for an MCP server
  */
-export const setMCPAuthToken = (
-  serverId: string, 
-  authValue: string, 
-  authType: string, 
-  serverAlias?: string
-): void => {
+export const setMCPAuthToken = (serverId: string, authValue: string, authType: string, serverAlias?: string): void => {
   try {
     const tokens = getMCPAuthTokens();
-    
+
     tokens[serverId] = {
       serverId,
       serverAlias,
@@ -71,10 +66,10 @@ export const setMCPAuthToken = (
       authType,
       timestamp: Date.now(),
     };
-    
+
     localStorage.setItem(MCP_AUTH_STORAGE_KEY, JSON.stringify(tokens));
   } catch (error) {
-    console.error('Error storing MCP auth token:', error);
+    console.error("Error storing MCP auth token:", error);
   }
 };
 
@@ -87,7 +82,7 @@ export const removeMCPAuthToken = (serverId: string): void => {
     delete tokens[serverId];
     localStorage.setItem(MCP_AUTH_STORAGE_KEY, JSON.stringify(tokens));
   } catch (error) {
-    console.error('Error removing MCP auth token:', error);
+    console.error("Error removing MCP auth token:", error);
   }
 };
 
@@ -98,7 +93,7 @@ export const clearMCPAuthTokens = (): void => {
   try {
     localStorage.removeItem(MCP_AUTH_STORAGE_KEY);
   } catch (error) {
-    console.error('Error clearing MCP auth tokens:', error);
+    console.error("Error clearing MCP auth tokens:", error);
   }
 };
 
@@ -108,4 +103,4 @@ export const clearMCPAuthTokens = (): void => {
 export const hasMCPAuthToken = (serverId: string, serverAlias?: string): boolean => {
   const token = getMCPAuthToken(serverId, serverAlias);
   return token !== null;
-}; 
+};

@@ -1,6 +1,6 @@
 import React from "react";
-import { Form, Switch, Select, Input, Typography } from "antd";
-import { PlusOutlined, MinusCircleOutlined } from '@ant-design/icons';
+import { Form, Switch, Select, Typography } from "antd";
+import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
 import NumericalInput from "../shared/numerical_input";
 
 const { Text } = Typography;
@@ -23,7 +23,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
   onCacheControlChange,
 }) => {
   const updateCacheControlPoints = (injectionPoints: CacheControlInjectionPoint[]) => {
-    const currentParams = form.getFieldValue('litellm_extra_params');
+    const currentParams = form.getFieldValue("litellm_extra_params");
     try {
       let paramsObj = currentParams ? JSON.parse(currentParams) : {};
       if (injectionPoints.length > 0) {
@@ -32,12 +32,12 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
         delete paramsObj.cache_control_injection_points;
       }
       if (Object.keys(paramsObj).length > 0) {
-        form.setFieldValue('litellm_extra_params', JSON.stringify(paramsObj, null, 2));
+        form.setFieldValue("litellm_extra_params", JSON.stringify(paramsObj, null, 2));
       } else {
-        form.setFieldValue('litellm_extra_params', '');
+        form.setFieldValue("litellm_extra_params", "");
       }
     } catch (error) {
-      console.error('Error updating cache control points:', error);
+      console.error("Error updating cache control points:", error);
     }
   };
 
@@ -56,14 +56,11 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
       {showCacheControl && (
         <div className="ml-6 pl-4 border-l-2 border-gray-200">
           <Text className="text-sm text-gray-500 block mb-4">
-            Providers like Anthropic, Bedrock API require users to specify where to inject cache control checkpoints, 
+            Providers like Anthropic, Bedrock API require users to specify where to inject cache control checkpoints,
             litellm can automatically add them for you as a cost saving feature.
           </Text>
-          
-          <Form.List
-            name="cache_control_injection_points"
-            initialValue={[{ location: "message" }]}
-          >
+
+          <Form.List name="cache_control_injection_points" initialValue={[{ location: "message" }]}>
             {(fields, { add, remove }) => (
               <>
                 {fields.map((field, index) => (
@@ -71,43 +68,43 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                     <Form.Item
                       {...field}
                       label="Type"
-                      name={[field.name, 'location']}
+                      name={[field.name, "location"]}
                       initialValue="message"
                       className="mb-0"
-                      style={{ width: '180px' }}
+                      style={{ width: "180px" }}
                     >
-                      <Select disabled options={[{ value: 'message', label: 'Message' }]} />
+                      <Select disabled options={[{ value: "message", label: "Message" }]} />
                     </Form.Item>
-                    
+
                     <Form.Item
                       {...field}
                       label="Role"
-                      name={[field.name, 'role']}
+                      name={[field.name, "role"]}
                       className="mb-0"
-                      style={{ width: '180px' }}
+                      style={{ width: "180px" }}
                       tooltip="LiteLLM will mark all messages of this role as cacheable"
                     >
                       <Select
                         placeholder="Select a role"
                         allowClear
                         options={[
-                          { value: 'user', label: 'User' },
-                          { value: 'system', label: 'System' },
-                          { value: 'assistant', label: 'Assistant' },
+                          { value: "user", label: "User" },
+                          { value: "system", label: "System" },
+                          { value: "assistant", label: "Assistant" },
                         ]}
                         onChange={() => {
-                          const values = form.getFieldValue('cache_control_points');
+                          const values = form.getFieldValue("cache_control_points");
                           updateCacheControlPoints(values);
                         }}
                       />
                     </Form.Item>
-                    
+
                     <Form.Item
                       {...field}
                       label="Index"
-                      name={[field.name, 'index']}
+                      name={[field.name, "index"]}
                       className="mb-0"
-                      style={{ width: '180px' }}
+                      style={{ width: "180px" }}
                       tooltip="(Optional) If set litellm will mark the message at this index as cacheable"
                     >
                       <NumericalInput
@@ -116,19 +113,19 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                         step={1}
                         min={0}
                         onChange={() => {
-                          const values = form.getFieldValue('cache_control_points');
+                          const values = form.getFieldValue("cache_control_points");
                           updateCacheControlPoints(values);
                         }}
                       />
                     </Form.Item>
-                    
+
                     {fields.length > 1 && (
-                      <MinusCircleOutlined 
+                      <MinusCircleOutlined
                         className="text-red-500 cursor-pointer text-lg ml-12"
                         onClick={() => {
                           remove(field.name);
                           setTimeout(() => {
-                            const values = form.getFieldValue('cache_control_points');
+                            const values = form.getFieldValue("cache_control_points");
                             updateCacheControlPoints(values);
                           }, 0);
                         }}
@@ -136,7 +133,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                     )}
                   </div>
                 ))}
-                
+
                 <Form.Item>
                   <button
                     type="button"
@@ -156,4 +153,4 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
   );
 };
 
-export default CacheControlSettings; 
+export default CacheControlSettings;

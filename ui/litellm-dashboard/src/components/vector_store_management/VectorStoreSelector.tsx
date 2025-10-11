@@ -1,8 +1,7 @@
-import React, { useEffect, useState } from 'react';
-import { Select, Typography, Tooltip } from 'antd';
-import { InfoCircleOutlined } from '@ant-design/icons';
-import { VectorStore } from './types';
-import { vectorStoreListCall } from '../networking';
+import React, { useEffect, useState } from "react";
+import { Select } from "antd";
+import { VectorStore } from "./types";
+import { vectorStoreListCall } from "../networking";
 interface VectorStoreSelectorProps {
   onChange: (selectedVectorStores: string[]) => void;
   value?: string[];
@@ -12,13 +11,13 @@ interface VectorStoreSelectorProps {
   disabled?: boolean;
 }
 
-const VectorStoreSelector: React.FC<VectorStoreSelectorProps> = ({ 
-  onChange, 
-  value, 
-  className, 
+const VectorStoreSelector: React.FC<VectorStoreSelectorProps> = ({
+  onChange,
+  value,
+  className,
   accessToken,
   placeholder = "Select vector stores",
-  disabled = false
+  disabled = false,
 }) => {
   const [vectorStores, setVectorStores] = useState<VectorStore[]>([]);
   const [loading, setLoading] = useState(false);
@@ -26,7 +25,7 @@ const VectorStoreSelector: React.FC<VectorStoreSelectorProps> = ({
   useEffect(() => {
     const fetchVectorStores = async () => {
       if (!accessToken) return;
-      
+
       setLoading(true);
       try {
         const response = await vectorStoreListCall(accessToken);
@@ -52,18 +51,18 @@ const VectorStoreSelector: React.FC<VectorStoreSelectorProps> = ({
         value={value}
         loading={loading}
         className={className}
-        options={vectorStores.map(store => ({
+        options={vectorStores.map((store) => ({
           label: `${store.vector_store_name || store.vector_store_id} (${store.vector_store_id})`,
           value: store.vector_store_id,
           title: store.vector_store_description || store.vector_store_id,
         }))}
         optionFilterProp="label"
         showSearch
-        style={{ width: '100%' }}
+        style={{ width: "100%" }}
         disabled={disabled}
       />
     </div>
   );
 };
 
-export default VectorStoreSelector; 
+export default VectorStoreSelector;
