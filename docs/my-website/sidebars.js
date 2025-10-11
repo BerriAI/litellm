@@ -286,8 +286,8 @@ const sidebars = {
           type: "category",
           label: "/batches",
           items: [
-            "proxy/managed_batches",
             "batches",
+            "proxy/managed_batches",
           ]
         },
         {
