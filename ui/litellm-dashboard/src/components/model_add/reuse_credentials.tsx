@@ -1,9 +1,5 @@
-import React, { useState } from "react";
-import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Input, Switch, Modal } from "antd";
-import type { UploadProps } from "antd/es/upload";
-import { Providers, providerLogoMap } from "../provider_info_helpers";
-import type { FormInstance } from "antd";
-import ProviderSpecificFields from "../add_model/provider_specific_fields";
+import React from "react";
+import { Form, Button, Tooltip, Typography, Modal } from "antd";
 import { TextInput } from "@tremor/react";
 import { CredentialItem } from "../networking";
 const { Title, Link } = Typography;

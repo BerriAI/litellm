@@ -96,6 +96,18 @@ export const guardrailLogoMap: Record<string, string> = {
   Lakera: `${asset_logos_folder}lakeraai.jpeg`,
   "Azure Content Safety Prompt Shield": `${asset_logos_folder}presidio.png`,
   "Azure Content Safety Text Moderation": `${asset_logos_folder}presidio.png`,
+  "Aporia AI": `${asset_logos_folder}aporia.png`,
+  "PANW Prisma AIRS": `${asset_logos_folder}palo_alto_networks.jpeg`,
+  "Noma Security": `${asset_logos_folder}noma_security.png`,
+  "Javelin Guardrails": `${asset_logos_folder}javelin.png`,
+  "Pillar Guardrail": `${asset_logos_folder}pillar.jpeg`,
+  "Google Cloud Model Armor": `${asset_logos_folder}google.svg`,
+  "Guardrails AI": `${asset_logos_folder}guardrails_ai.jpeg`,
+  "Lasso Guardrail": `${asset_logos_folder}lasso.png`,
+  "Pangea Guardrail": `${asset_logos_folder}pangea.png`,
+  "AIM Guardrail": `${asset_logos_folder}aim_security.jpeg`,
+  "OpenAI Moderation": `${asset_logos_folder}openai_small.svg`,
+  EnkryptAI: `${asset_logos_folder}enkrypt_ai.avif`,
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string; displayName: string } => {

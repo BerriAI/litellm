@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Card, Text, Button, Icon, TextInput } from "@tremor/react";
-import { PlusIcon } from "@heroicons/react/outline";
-import { Modal, message } from "antd";
+import { Button } from "@tremor/react";
+import { Modal } from "antd";
 import { getGuardrailsList, deleteGuardrailCall } from "./networking";
 import AddGuardrailForm from "./guardrails/add_guardrail_form";
 import GuardrailTable from "./guardrails/guardrail_table";

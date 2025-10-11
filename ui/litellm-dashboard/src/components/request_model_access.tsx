@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
-import { Modal, Form, Input, Select, InputNumber, message } from "antd";
+import React, { useState } from "react";
+import { Modal, Form, Input, Select } from "antd";
 import { Button } from "@tremor/react";
 import { userRequestModelCall } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";

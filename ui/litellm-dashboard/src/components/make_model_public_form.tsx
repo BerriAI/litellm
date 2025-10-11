@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from "react";
-import { Modal, Form, Steps, Button, message, Checkbox } from "antd";
+import { Modal, Form, Steps, Button, Checkbox } from "antd";
 import { Text, Title, Badge } from "@tremor/react";
 import { makeModelGroupPublic } from "./networking";
 import ModelFilters from "./model_filters";

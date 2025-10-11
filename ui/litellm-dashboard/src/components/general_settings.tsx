@@ -2,7 +2,6 @@ import React, { useState, useEffect } from "react";
 import {
   Card,
   Title,
-  Subtitle,
   Table,
   TableHead,
   TableRow,
@@ -10,7 +9,6 @@ import {
   TableHeaderCell,
   TableCell,
   TableBody,
-  Metric,
   Text,
   Grid,
   Button,
@@ -21,33 +19,20 @@ import {
   Accordion,
   AccordionBody,
   AccordionHeader,
-  AccordionList,
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, Icon } from "@tremor/react";
 import {
   getCallbacksCall,
   setCallbacksCall,
   getGeneralSettingsCall,
-  serviceHealthCheck,
   updateConfigFieldSetting,
   deleteConfigFieldSetting,
 } from "./networking";
-import { Modal, Form, Input, Select, Button as Button2, message, InputNumber } from "antd";
-import {
-  InformationCircleIcon,
-  PencilAltIcon,
-  PencilIcon,
-  StatusOnlineIcon,
-  TrashIcon,
-  RefreshIcon,
-  CheckCircleIcon,
-  XCircleIcon,
-  QuestionMarkCircleIcon,
-} from "@heroicons/react/outline";
+import { Form, InputNumber } from "antd";
+import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
 
 import AddFallbacks from "./add_fallbacks";
 import openai from "openai";
-import Paragraph from "antd/es/skeleton/Paragraph";
 import NotificationsManager from "./molecules/notifications_manager";
 interface GeneralSettingsPageProps {
   accessToken: string | null;
@@ -503,7 +488,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
 
               <TableBody>
                 {routerSettings["fallbacks"] &&
-                  routerSettings["fallbacks"].map((item: Object, index: number) =>
+                  routerSettings["fallbacks"].map((item: object, index: number) =>
                     Object.entries(item).map(([key, value]) => (
                       <TableRow key={index.toString() + key}>
                         <TableCell>{key}</TableCell>

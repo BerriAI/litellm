@@ -1182,10 +1182,8 @@ def test_async_http_handler(mock_async_client):
         assert call_args["transport"] == mock_transport
         assert call_args["event_hooks"] == event_hooks
         assert call_args["headers"] == headers
-        assert isinstance(call_args["limits"], httpx.Limits)
-        assert call_args["limits"].max_connections == concurrent_limit
-        assert call_args["limits"].max_keepalive_connections == concurrent_limit
         assert call_args["timeout"] == timeout
+        assert call_args["follow_redirects"] is True
 
 
 @mock.patch("httpx.AsyncClient")
@@ -1224,12 +1222,10 @@ def test_async_http_handler_force_ipv4(mock_async_client):
         # Assert other parameters match
         assert call_args["event_hooks"] == event_hooks
         assert call_args["headers"] == headers
-        assert isinstance(call_args["limits"], httpx.Limits)
-        assert call_args["limits"].max_connections == concurrent_limit
-        assert call_args["limits"].max_keepalive_connections == concurrent_limit
         assert call_args["timeout"] == timeout
         assert isinstance(call_args["verify"], ssl.SSLContext)
         assert call_args["cert"] is None
+        assert call_args["follow_redirects"] is True
 
     finally:
         # Reset force_ipv4 to default

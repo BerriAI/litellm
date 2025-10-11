@@ -1,33 +1,26 @@
 import React, { useState, useEffect } from "react";
 import {
   Card,
-  Title,
   BarChart,
   Subtitle,
   Grid,
   Col,
-  Select,
-  SelectItem,
-  DateRangePicker,
   DateRangePickerValue,
   MultiSelect,
   MultiSelectItem,
-  Button,
   TabPanel,
   TabPanels,
   TabGroup,
   TabList,
   Tab,
-  TextInput,
   Icon,
   Text,
 } from "@tremor/react";
 import UsageDatePicker from "./shared/usage_date_picker";
 import NotificationsManager from "./molecules/notifications_manager";
 
-import { Button as Button2, message } from "antd";
-import { RefreshIcon, CheckCircleIcon, XCircleIcon } from "@heroicons/react/outline";
-import { adminGlobalCacheActivity, cachingHealthCheckCall, healthCheckCall } from "./networking";
+import { RefreshIcon } from "@heroicons/react/outline";
+import { adminGlobalCacheActivity, cachingHealthCheckCall } from "./networking";
 
 // Import the new component
 import { CacheHealthTab } from "./cache_health";

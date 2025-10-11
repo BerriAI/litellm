@@ -1,7 +1,7 @@
 import asyncio
 import traceback
 from datetime import datetime
-from typing import Any, Optional, Union, cast
+from typing import Any, List, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -131,6 +131,11 @@ class _ProxyDBLogger(CustomLogger):
                 if sl_object is not None
                 else kwargs.get("response_cost", None)
             )
+            tags: Optional[List[str]] = (
+                sl_object.get("request_tags", None)
+                if sl_object is not None
+                else None
+            )
 
             if response_cost is not None:
                 user_api_key = metadata.get("user_api_key", None)
@@ -172,6 +177,7 @@ class _ProxyDBLogger(CustomLogger):
                             response_cost=response_cost,
                             team_id=team_id,
                             parent_otel_span=parent_otel_span,
+                            tags=tags,
                         )
                     )
 

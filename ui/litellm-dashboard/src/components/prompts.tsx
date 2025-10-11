@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 
-import { Card, Text, Button } from "@tremor/react";
-import { Modal, message } from "antd";
+import { Button } from "@tremor/react";
+import { Modal } from "antd";
 import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "./networking";
 import PromptTable from "./prompts/prompt_table";
 import PromptInfoView from "./prompts/prompt_info";

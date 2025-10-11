@@ -9,7 +9,6 @@ import {
   TabPanel,
   TabPanels,
   Grid,
-  Badge,
   Button as TremorButton,
   TextInput,
 } from "@tremor/react";
@@ -17,22 +16,17 @@ import NumericalInput from "./shared/numerical_input";
 import { ArrowLeftIcon, TrashIcon, KeyIcon } from "@heroicons/react/outline";
 import {
   modelDeleteCall,
-  modelUpdateCall,
   CredentialItem,
   credentialGetCall,
   credentialCreateCall,
-  modelInfoCall,
   modelInfoV1Call,
   modelPatchUpdateCall,
   getGuardrailsList,
 } from "./networking";
-import { Button, Form, Input, InputNumber, message, Select, Modal, Tooltip } from "antd";
+import { Button, Form, Input, Select, Modal, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import EditModelModal from "./edit_model/edit_model_modal";
-import { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 import { getDisplayModelName } from "./view_model/model_name_display";
-import AddCredentialsModal from "./model_add/add_credentials_tab";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
 import CacheControlSettings from "./add_model/cache_control_settings";
 import { CheckIcon, CopyIcon } from "lucide-react";

@@ -641,10 +641,10 @@ async def shared_health_check_status_endpoint(
             redis_cache=redis_usage_cache,
         )
         
-        status = await shared_health_manager.get_health_check_status()
+        health_status = await shared_health_manager.get_health_check_status()
         return {
             "shared_health_check_enabled": True,
-            "status": status
+            "status": health_status
         }
     except Exception as e:
         verbose_proxy_logger.error(f"Error getting shared health check status: {e}")

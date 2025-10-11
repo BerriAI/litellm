@@ -1,7 +1,6 @@
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { message } from "antd";
 
-export function updateExistingKeys<Source extends Object>(target: Source, source: Object): Source {
+export function updateExistingKeys<Source extends object>(target: Source, source: object): Source {
   const clonedTarget = structuredClone(target);
 
   for (const [key, value] of Object.entries(source)) {
@@ -13,14 +12,38 @@ export function updateExistingKeys<Source extends Object>(target: Source, source
   return clonedTarget;
 }
 
-export const formatNumberWithCommas = (value: number | null | undefined, decimals: number = 0): string => {
-  if (value === null || value === undefined) {
+export const formatNumberWithCommas = (
+  value: number | null | undefined,
+  decimals: number = 0,
+  abbreviate: boolean = false,
+): string => {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
     return "-";
   }
-  return value.toLocaleString("en-US", {
+
+  const opts: Intl.NumberFormatOptions = {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
-  });
+  };
+
+  if (!abbreviate) {
+    return value.toLocaleString("en-US", opts);
+  }
+
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  let scaled = abs;
+  let suffix = "";
+
+  if (abs >= 1_000_000) {
+    scaled = abs / 1_000_000;
+    suffix = "M";
+  } else if (abs >= 1_000) {
+    scaled = abs / 1_000;
+    suffix = "K";
+  }
+
+  return `${sign}${scaled.toLocaleString("en-US", opts)}${suffix}`;
 };
 
 export const copyToClipboard = async (

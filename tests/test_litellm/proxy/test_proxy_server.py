@@ -2184,3 +2184,107 @@ def test_should_load_db_object_with_supported_db_objects():
         )
         assert proxy_config._should_load_db_object(object_type="prompts") is True
         assert proxy_config._should_load_db_object(object_type="model_cost_map") is True
+
+
+@pytest.mark.asyncio
+async def test_tag_cache_update_called():
+    """
+    Test that update_cache updates tag cache when tags are provided.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    cache = DualCache()
+
+    setattr(
+        litellm.proxy.proxy_server,
+        "user_api_key_cache",
+        cache,
+    )
+
+    mock_tag_obj = {
+        "tag_name": "test-tag",
+        "spend": 10.0,
+    }
+
+    with patch.object(cache, "async_get_cache", new=AsyncMock(return_value=mock_tag_obj)) as mock_get_cache:
+        with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+            await litellm.proxy.proxy_server.update_cache(
+                token=None,
+                user_id=None,
+                end_user_id=None,
+                team_id=None,
+                response_cost=5.0,
+                parent_otel_span=None,
+                tags=["test-tag"],
+            )
+
+            await asyncio.sleep(0.1)
+
+            mock_get_cache.assert_awaited_once_with(key="tag:test-tag")
+            mock_set_cache.assert_awaited_once()
+
+            call_args = mock_set_cache.call_args
+            cache_list = call_args.kwargs["cache_list"]
+
+            assert len(cache_list) == 1
+            cache_key, cache_value = cache_list[0]
+            assert cache_key == "tag:test-tag"
+            assert cache_value["spend"] == 15.0
+
+
+@pytest.mark.asyncio
+async def test_tag_cache_update_multiple_tags():
+    """
+    Test that multiple tags are updated in cache.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    cache = DualCache()
+
+    setattr(
+        litellm.proxy.proxy_server,
+        "user_api_key_cache",
+        cache,
+    )
+
+    mock_tag1_obj = {"tag_name": "tag1", "spend": 10.0}
+    mock_tag2_obj = {"tag_name": "tag2", "spend": 20.0}
+
+    async def mock_get_cache_side_effect(key):
+        if key == "tag:tag1":
+            return mock_tag1_obj
+        elif key == "tag:tag2":
+            return mock_tag2_obj
+        return None
+
+    with patch.object(cache, "async_get_cache", new=AsyncMock(side_effect=mock_get_cache_side_effect)) as mock_get_cache:
+        with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+            await litellm.proxy.proxy_server.update_cache(
+                token=None,
+                user_id=None,
+                end_user_id=None,
+                team_id=None,
+                response_cost=5.0,
+                parent_otel_span=None,
+                tags=["tag1", "tag2"],
+            )
+
+            await asyncio.sleep(0.1)
+
+            assert mock_get_cache.call_count == 2
+            mock_set_cache.assert_awaited_once()
+
+            call_args = mock_set_cache.call_args
+            cache_list = call_args.kwargs["cache_list"]
+
+            assert len(cache_list) == 2
+
+            tag_updates = {cache_key: cache_value for cache_key, cache_value in cache_list}
+            assert "tag:tag1" in tag_updates
+            assert "tag:tag2" in tag_updates
+            assert tag_updates["tag:tag1"]["spend"] == 15.0
+            assert tag_updates["tag:tag2"]["spend"] == 25.0
+
+
