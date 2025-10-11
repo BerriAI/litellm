@@ -105,7 +105,7 @@ LITELLM_MASTER_KEY gives claude access to all proxy models, whereas a virtual ke
 Alternatively, use the Anthropic pass-through endpoint:
 
 ```bash
-export ANTHROPIC_BASE_URL="http://0.0.0.0:4000/anthropic"
+export ANTHROPIC_BASE_URL="http://0.0.0.0:4000"
 export ANTHROPIC_AUTH_TOKEN="$LITELLM_MASTER_KEY"
 ```
 
