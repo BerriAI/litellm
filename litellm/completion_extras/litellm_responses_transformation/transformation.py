@@ -57,22 +57,22 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     ) -> Tuple[Optional[Any], int]:
         """
         Handle raw dict response items from Responses API (e.g., GPT-5 Codex format).
-        
+
         Args:
             item: Raw dict response item with 'type' field
             index: Current choice index
-            
+
         Returns:
             Tuple of (Choice object or None, updated index)
         """
         from litellm.types.utils import Choices, Message
 
         item_type = item.get("type")
-        
+
         # Ignore reasoning items for now
         if item_type == "reasoning":
             return None, index
-            
+
         # Handle message items with output_text content
         if item_type == "message":
             content_list = item.get("content", [])
@@ -83,13 +83,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         response_text = content_item.get("text", "")
                         msg = Message(
                             role=item.get("role", "assistant"),
-                            content=response_text if response_text else ""
+                            content=response_text if response_text else "",
                         )
-                        choice = Choices(
-                            message=msg, finish_reason="stop", index=index
-                        )
+                        choice = Choices(message=msg, finish_reason="stop", index=index)
                         return choice, index + 1
-        
+
         # Unknown or unsupported type
         return None, index
 
@@ -294,8 +292,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
             if isinstance(item, ResponseReasoningItem):
 
-                for content in item.summary:
-                    response_text = getattr(content, "text", "")
+                for summary_item in item.summary:
+                    response_text = getattr(summary_item, "text", "")
                     reasoning_content = response_text if response_text else ""
 
             elif isinstance(item, ResponseOutputMessage):
@@ -340,7 +338,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 index += 1
             elif isinstance(item, dict):
                 # Handle raw dict responses (e.g., from GPT-5 Codex)
-                choice, index = self._handle_raw_dict_response_item(item=item, index=index)
+                choice, index = self._handle_raw_dict_response_item(
+                    item=item, index=index
+                )
                 if choice is not None:
                     choices.append(choice)
             else:
