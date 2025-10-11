@@ -1,7 +1,13 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# /batches
+# Batches (Legacy)
+
+:::warning Deprecated
+
+This `/batches` route is deprecated and no longer maintained. For batch requests go to **[Managed Batches](/docs/proxy/managed_batches)**
+
+:::
 
 Covers Batches, Files
 
