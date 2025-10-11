@@ -8,6 +8,7 @@ from fastapi import Request, UploadFile, status
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException
 from litellm.types.router import Deployment
+from litellm.utils import get_litellm_metadata_from_kwargs
 
 
 async def _read_request_body(request: Optional[Request]) -> Dict:
@@ -246,3 +247,22 @@ async def get_request_body(request: Request) -> Dict[str, Any]:
                 f"Unsupported content type: {request.headers.get('content-type')}"
             )
     return {}
+
+
+def get_tags_from_request_body(request_body: dict) -> List[str]:
+    """
+    Extract tags from request body metadata.
+    
+    Args:
+        request_body: The request body dictionary
+        
+    Returns:
+        List of tag names (strings), empty list if no valid tags found
+    """
+    metadata = get_litellm_metadata_from_kwargs(request_body)
+    tags_in_metadata: List[str] = metadata.get("tags", [])
+    tags_in_request_body: List[str] = request_body.get("tags", [])
+    combined_tags: List[str] = tags_in_metadata + tags_in_request_body
+    # Filter out non-string values
+    return [tag for tag in combined_tags if isinstance(tag, str)]
+
