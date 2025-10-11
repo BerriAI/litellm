@@ -1051,6 +1051,19 @@ The router automatically cools down deployments based on the following condition
 
 During cooldown, the specific deployment is temporarily removed from the available pool, while other healthy deployments continue serving requests.
 
+#### Deployment State Lifecycle
+
+```
+🟢 Healthy (0) → 🟡 Partial Outage (1) → 🔴 Complete Outage (2) → 🟢 Healthy (0)
+```
+
+| From State | To State | Concrete Triggers |
+|------------|----------|-------------------|
+| **Healthy (0)** | **Partial Outage (1)** | • Any single API call fails<br/>• Network timeout<br/>• Authentication error (401)<br/>• Rate limit hit (429)<br/>• Server error (5xx) |
+| **Partial Outage (1)** | **Complete Outage (2)** | • >50% failure rate in current minute<br/>• 429 rate limit errors<br/>• Non-retryable errors (401, 404, 408)<br/>• Exceeds allowed fails limit (default: 3) |
+| **Partial Outage (1)** | **Healthy (0)** | • Next successful API call |
+| **Complete Outage (2)** | **Healthy (0)** | • Cooldown TTL expires (default: 5 seconds)<br/>• Successful request after cooldown period |
+
 #### Cooldown Recovery
 
 Deployments automatically recover from cooldown after the cooldown period expires. The router will:
