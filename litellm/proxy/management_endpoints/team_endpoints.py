@@ -627,6 +627,54 @@ async def _update_model_table(
     return _model_id
 
 
+async def fetch_and_validate_organization(
+    organization_id: str,
+    existing_team_row: Any,
+    llm_router: Optional[Router],
+    prisma_client: Any,
+) -> Any:
+    """
+    Fetch and validate an organization for team update operations.
+
+    Args:
+        organization_id: The organization ID to fetch
+        existing_team_row: The existing team row being updated
+        llm_router: The LLM router instance
+        prisma_client: The Prisma database client
+
+    Returns:
+        The organization row from the database
+
+    Raises:
+        HTTPException: If llm_router is None, organization not found, or validation fails
+    """
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
+        )
+
+    organization_row = await prisma_client.db.litellm_organizationtable.find_unique(
+        where={"organization_id": organization_id},
+        include={"litellm_budget_table": True, "users": True},
+    )
+
+    if organization_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"Organization not found, passed organization_id={organization_id}"
+            },
+        )
+
+    validate_team_org_change(
+        team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
+        organization=LiteLLM_OrganizationTable(**organization_row.model_dump()),
+        llm_router=llm_router,
+    )
+
+    return organization_row
+
+
 def validate_team_org_change(
     team: LiteLLM_TeamTable, organization: LiteLLM_OrganizationTable, llm_router: Router
 ) -> bool:
@@ -817,25 +865,11 @@ async def update_team(
     if (
         data.organization_id is not None and len(data.organization_id) > 0
     ):  # allow unsetting the organization_id
-        if llm_router is None:
-            raise HTTPException(
-                status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
-            )
-        organization_row = await prisma_client.db.litellm_organizationtable.find_unique(
-            where={"organization_id": data.organization_id},
-            include={"litellm_budget_table": True, "users": True},
-        )
-        if organization_row is None:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": f"Organization not found, passed organization_id={data.organization_id}"
-                },
-            )
-        validate_team_org_change(
-            team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
-            organization=LiteLLM_OrganizationTable(**organization_row.model_dump()),
+        await fetch_and_validate_organization(
+            organization_id=data.organization_id,
+            existing_team_row=existing_team_row,
             llm_router=llm_router,
+            prisma_client=prisma_client,
         )
     elif data.organization_id is not None and len(data.organization_id) == 0:
         # unsetting the organization_id
