@@ -44,6 +44,8 @@ class SupportedGuardrailIntegrations(Enum):
     TOOL_PERMISSION = "tool_permission"
     JAVELIN = "javelin"
     ENKRYPTAI = "enkryptai"
+    POINTGUARDAI = "pointguard_ai"
+
 
 class Role(Enum):
     SYSTEM = "system"
@@ -412,8 +414,34 @@ class JavelinGuardrailConfigModel(BaseModel):
     )
     config: Optional[Dict] = Field(
         default=None, description="Additional configuration for the guardrail"
-    )
+    ) 
 
+
+class PointGuardAIGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the PointGuardAI guardrail"""
+
+    org_code: Optional[str] = Field(
+        default=None, description="Organization ID for PointGuardAI"
+    )
+    api_base: Optional[str] = Field(
+        default=None, description="Base API for the PointGuardAI service"
+    )
+    api_email: Optional[str] = Field(
+        default=None, description="API email for the PointGuardAI service"
+    )
+    api_key: Optional[str] = Field(
+        default=None, description="API KEY for the PointGuardAI service"
+    )
+    policy_config_name: Optional[str] = Field(
+        default=None, description="Policy configuration name for PointGuardAI"
+    )
+    model_provider_name: Optional[str] = Field(
+        default=None, description="Model provider identifier"
+    )
+    model_name: Optional[str] = Field(
+        default=None, description="Model name"
+    )
+      
 
 class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
@@ -505,6 +533,7 @@ class LitellmParams(
     NomaGuardrailConfigModel,
     ToolPermissionGuardrailConfigModel,
     JavelinGuardrailConfigModel,
+    PointGuardAIGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
 ):
