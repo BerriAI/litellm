@@ -79,6 +79,8 @@ Navigate to the **Tag Management** page and click **Create New Tag**. Fill in th
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
+<br />
+
 
 **Possible values for `budget_duration`:**
 
