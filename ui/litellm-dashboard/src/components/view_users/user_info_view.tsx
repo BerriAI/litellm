@@ -1,18 +1,5 @@
 import React, { useState } from "react";
-import {
-  Card,
-  Text,
-  Button,
-  Grid,
-  Col,
-  Tab,
-  TabList,
-  TabGroup,
-  TabPanel,
-  TabPanels,
-  Title,
-  Badge,
-} from "@tremor/react";
+import { Card, Text, Button, Grid, Tab, TabList, TabGroup, TabPanel, TabPanels, Title, Badge } from "@tremor/react";
 import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import {
   userInfoCall,
@@ -22,7 +9,7 @@ import {
   invitationCreateCall,
   getProxyBaseUrl,
 } from "../networking";
-import { message, Button as AntdButton } from "antd";
+import { Button as AntdButton } from "antd";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "../onboarding_link";

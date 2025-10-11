@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from "react";
 import {
-  Card,
   Title,
   Subtitle,
   Table,
@@ -19,7 +18,6 @@ import {
   TabPanels,
 } from "@tremor/react";
 import { perUserAnalyticsCall } from "./networking";
-import { DateRangePickerValue } from "@tremor/react";
 
 interface PerUserMetrics {
   user_id: string;

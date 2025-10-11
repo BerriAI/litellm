@@ -5,7 +5,6 @@ import {
   NumberOutlined,
   ImportOutlined,
   ExportOutlined,
-  ThunderboltOutlined,
   BulbOutlined,
   ToolOutlined,
 } from "@ant-design/icons";

@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Typography, Badge } from "antd";
 import { PiiConfigurationProps } from "./types";
-import { CategoryFilter, QuickActions, PiiEntityList, formatEntityName, getActionIcon } from "./pii_components";
+import { CategoryFilter, QuickActions, PiiEntityList } from "./pii_components";
 
 const { Title, Text } = Typography;
 

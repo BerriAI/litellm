@@ -25,7 +25,7 @@ function withBase(path: string): string {
 export default function Layout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { accessToken, userRole } = useAuthorized();
+  const { accessToken, userRole, userId, userEmail, premiumUser } = useAuthorized();
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   const [page, setPage] = useState(() => {
     return searchParams.get("page") || "api-keys";
@@ -51,15 +51,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           isPublicPage={false}
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={toggleSidebar}
-          userID={null}
-          userEmail={null}
-          userRole={null}
-          premiumUser={false}
+          userID={userId}
+          userEmail={userEmail}
+          userRole={userRole}
+          premiumUser={premiumUser}
           proxySettings={undefined}
-          setProxySettings={function (value: any): void {
-            throw new Error("Function not implemented.");
-          }}
-          accessToken={null}
+          setProxySettings={() => {}}
+          accessToken={accessToken}
         />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-2">

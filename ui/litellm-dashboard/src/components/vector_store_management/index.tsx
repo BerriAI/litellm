@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Card, Icon, Button as TremorButton, Col, Text, Grid } from "@tremor/react";
-import { InformationCircleIcon, RefreshIcon } from "@heroicons/react/outline";
-import { message } from "antd";
+import { Icon, Button as TremorButton, Col, Text, Grid } from "@tremor/react";
+import { RefreshIcon } from "@heroicons/react/outline";
 import { vectorStoreListCall, vectorStoreDeleteCall, credentialListCall, CredentialItem } from "../networking";
 import { VectorStore } from "./types";
 import VectorStoreTable from "./VectorStoreTable";
