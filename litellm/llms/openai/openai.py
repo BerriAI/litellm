@@ -432,6 +432,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         start_time = time.time()
         try:
+            data.pop("extra_body", None)
+            data.pop("litellm_params", None)
             raw_response = (
                 await openai_aclient.chat.completions.with_raw_response.create(
                     **data, timeout=timeout
