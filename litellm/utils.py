@@ -7211,6 +7211,9 @@ class ProviderConfigManager:
             return VolcEngineEmbeddingConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudEmbeddingConfig()
+        elif litellm.LlmProviders.SAGEMAKER == provider:
+            from litellm.llms.sagemaker.completion.transformation import SagemakerEmbeddingConfig
+            return SagemakerEmbeddingConfig.get_model_config(model)
         return None
 
     @staticmethod
