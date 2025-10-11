@@ -1776,12 +1776,16 @@ async def _tag_max_budget_check(
         BudgetExceededError if any tag is over its max budget.
         Triggers a budget alert if any tag is over its max budget.
     """
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        get_tags_from_request_body,
+    )
+
     if prisma_client is None:
         return
 
     # Get tags from request metadata
-    tags = request_body.get("metadata", {}).get("tags", [])
-    if not tags or not isinstance(tags, list):
+    tags = get_tags_from_request_body(request_body=request_body)
+    if not tags:
         return
 
     # Batch fetch all tags in one go
