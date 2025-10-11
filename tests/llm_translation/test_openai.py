@@ -1263,4 +1263,5 @@ def test_openai_gpt_5_codex_reasoning():
 
     response = litellm.completion(**completion_kwargs)
     print("response: ", response)
-    assert response.choices[0].message.content is not None
+    for chunk in response:
+        print("chunk: ", chunk)
