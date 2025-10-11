@@ -214,6 +214,47 @@ class TestProxyInitializationHelpers:
             assert "connection_limit=10" in modified_url
             assert "pool_timeout=60" in modified_url
 
+    def test_append_query_params_with_bracket_in_password(self):
+        """Test append_query_params handles passwords with bracket characters that can cause IPv6 URL errors"""
+        from litellm.proxy.proxy_cli import append_query_params
+
+        # Test case from issue #12406 - password with ] character
+        test_cases = [
+            {
+                "url": "postgresql://user:123]456@postgres:5432/db",
+                "description": "Password with ] character (issue #12406)",
+            },
+            {
+                "url": "postgresql://user:pass[word@localhost:5432/mydb",
+                "description": "Password with [ character",
+            },
+            {
+                "url": "postgresql://user:p@ss:w0rd]#@localhost:5432/mydb",
+                "description": "Password with multiple special chars including colon",
+            },
+            {
+                "url": "postgresql://user:normal@localhost:5432/mydb",
+                "description": "Normal password without special chars",
+            },
+        ]
+
+        params = {"connection_limit": 10, "pool_timeout": 60}
+
+        for test_case in test_cases:
+            url = test_case["url"]
+            description = test_case["description"]
+
+            # This should not raise ValueError: Invalid IPv6 URL
+            try:
+                modified_url = append_query_params(url, params)
+                # Verify params were added
+                assert "connection_limit=10" in modified_url, f"Failed for: {description}"
+                assert "pool_timeout=60" in modified_url, f"Failed for: {description}"
+                # Verify it's still a valid postgresql URL
+                assert modified_url.startswith("postgresql://"), f"Failed for: {description}"
+            except ValueError as e:
+                pytest.fail(f"Failed for {description}: {str(e)}")
+
     @patch("uvicorn.run")
     @patch("builtins.print")
     def test_skip_server_startup(self, mock_print, mock_uvicorn_run):
