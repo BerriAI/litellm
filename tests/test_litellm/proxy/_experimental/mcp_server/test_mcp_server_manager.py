@@ -453,7 +453,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="allowed_tool",
             arguments={"param": "value"},
-            server_name_from_prefix="test-server",
+            server_name="test-server",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -482,7 +482,7 @@ class TestMCPServerManager:
             await manager.pre_call_tool_check(
                 name="blocked_tool",
                 arguments={"param": "value"},
-                server_name_from_prefix="test-server",
+                server_name="test-server",
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=server,
@@ -529,7 +529,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="allowed_tool",
             arguments={"param": "value"},
-            server_name_from_prefix="test-server",
+            server_name="test-server",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -558,7 +558,7 @@ class TestMCPServerManager:
             await manager.pre_call_tool_check(
                 name="banned_tool",
                 arguments={"param": "value"},
-                server_name_from_prefix="test-server",
+                server_name="test-server",
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=server,
@@ -605,7 +605,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="any_tool",
             arguments={"param": "value"},
-            server_name_from_prefix="test-server",
+            server_name="test-server",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -644,7 +644,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="tool2",
             arguments={"param": "value"},
-            server_name_from_prefix="test-server",
+            server_name="test-server",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -655,7 +655,7 @@ class TestMCPServerManager:
             await manager.pre_call_tool_check(
                 name="tool3",
                 arguments={"param": "value"},
-                server_name_from_prefix="test-server",
+                server_name="test-server",
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=server,
@@ -992,9 +992,9 @@ class TestMCPServerManager:
 
         # Should succeed
         await manager.pre_call_tool_check(
+            server_name="Test Server",
             name="read_wiki_structure",
             arguments={"repoName": "facebook/react"},
-            server_name_from_prefix="test",
             user_api_key_auth=user_auth,
             proxy_logging_obj=proxy_logging,
             server=server,
@@ -1038,9 +1038,9 @@ class TestMCPServerManager:
         # Should fail with 403
         with pytest.raises(HTTPException) as exc_info:
             await manager.pre_call_tool_check(
+                server_name="Test Server",
                 name="ask_question",
                 arguments={"question": "test"},
-                server_name_from_prefix="test",
                 user_api_key_auth=user_auth,
                 proxy_logging_obj=proxy_logging,
                 server=server,
@@ -1186,7 +1186,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="getpetbyid",
             arguments={"petId": "1"},
-            server_name_from_prefix="my_api_mcp",
+            server_name="my_api_mcp",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -1196,7 +1196,7 @@ class TestMCPServerManager:
         await manager.pre_call_tool_check(
             name="findpetsbystatus",
             arguments={"status": "available"},
-            server_name_from_prefix="my_api_mcp",
+            server_name="my_api_mcp",
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
             server=server,
@@ -1207,7 +1207,7 @@ class TestMCPServerManager:
             await manager.pre_call_tool_check(
                 name="deletepet",
                 arguments={"petId": "1"},
-                server_name_from_prefix="my_api_mcp",
+                server_name="my_api_mcp",
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 server=server,

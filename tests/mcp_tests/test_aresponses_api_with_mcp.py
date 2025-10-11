@@ -286,6 +286,8 @@ async def test_mcp_allowed_tools_filtering():
             'inputSchema': {'type': 'object', 'properties': {}}
         })()
     ]
+
+    allowed_mcp_servers = ["gitmcp"]
     
     # Test Case 1: MCP tool config with allowed_tools specified
     mcp_tool_config_with_allowed_tools = [
@@ -381,8 +383,8 @@ async def test_mcp_allowed_tools_filtering():
     )
     
     # Then deduplicate the filtered tools
-    filtered_tools_deduplicated = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
-        filtered_tools_with_duplicates
+    filtered_tools_deduplicated, _ = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
+        filtered_tools_with_duplicates, []
     )
     
     # Should only return 1 tool (the duplicate should be removed)
@@ -395,7 +397,7 @@ async def test_mcp_allowed_tools_filtering():
     print("✓ Test Case 3: duplicate tools are properly deduplicated")
     
     # Test Case 3b: Test standalone deduplication method
-    standalone_deduplicated = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(mock_mcp_tools_with_duplicates)
+    standalone_deduplicated, _ = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(mock_mcp_tools_with_duplicates, allowed_mcp_servers)
     
     # Should return 2 unique tools (GitMCP-fetch_litellm_documentation and GitMCP-search_litellm_documentation)
     assert len(standalone_deduplicated) == 2, f"Expected 2 unique tools after standalone deduplication, got {len(standalone_deduplicated)}"
