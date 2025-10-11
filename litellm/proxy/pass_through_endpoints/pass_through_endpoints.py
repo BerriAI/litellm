@@ -42,6 +42,7 @@ from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._types import (
     ConfigFieldInfo,
     ConfigFieldUpdate,
+    LiteLLMRoutes,
     PassThroughEndpointResponse,
     PassThroughGenericEndpoint,
     ProxyException,
@@ -979,7 +980,7 @@ def create_pass_through_route(
                 InitPassThroughEndpointHelpers,
             )
 
-            if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            if not not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
                 route=endpoint
             ):
                 raise HTTPException(
@@ -1745,6 +1746,12 @@ class InitPassThroughEndpointHelpers:
         Returns:
             bool: True if route is a registered pass-through endpoint, False otherwise
         """
+
+        ## CHECK IF MAPPED PASS THROUGH ENDPOINT
+        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+            if route.startswith(mapped_route):
+                return True
+
         # Fast path: check if any registered route key contains this path
         # Keys are in format: "{endpoint_id}:exact:{path}" or "{endpoint_id}:subpath:{path}"
         # Extract unique paths from keys for quick checking
