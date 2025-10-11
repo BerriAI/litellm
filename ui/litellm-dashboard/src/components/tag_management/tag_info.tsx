@@ -9,6 +9,9 @@ import { Tag } from "./types";
 import NotificationsManager from "../molecules/notifications_manager";
 import NumericalInput from "../shared/numerical_input";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import { Button as AntdButton } from "antd";
 
 interface TagInfoViewProps {
   tagId: string;
@@ -23,6 +26,17 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
   const [tagDetails, setTagDetails] = useState<Tag | null>(null);
   const [isEditing, setIsEditing] = useState<boolean>(editTag);
   const [userModels, setUserModels] = useState<string[]>([]);
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+
+  const copyToClipboard = async (text: string | null | undefined, key: string) => {
+    const success = await utilCopyToClipboard(text);
+    if (success) {
+      setCopiedStates((prev) => ({ ...prev, [key]: true }));
+      setTimeout(() => {
+        setCopiedStates((prev) => ({ ...prev, [key]: false }));
+      }, 2000);
+    }
+  };
 
   const fetchTagDetails = async () => {
     if (!accessToken) return;
@@ -91,7 +105,23 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
           <Button onClick={onClose} className="mb-4">
             ← Back to Tags
           </Button>
-          <Title>Tag Name: {tagDetails.name}</Title>
+          <div className="flex items-center gap-2">
+            <Text className="font-medium">Tag Name:</Text>
+            <span className="font-mono px-2 py-1 bg-gray-100 rounded text-sm border border-gray-200">
+              {tagDetails.name}
+            </span>
+            <AntdButton
+              type="text"
+              size="small"
+              icon={copiedStates["tag-name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              onClick={() => copyToClipboard(tagDetails.name, "tag-name")}
+              className={`transition-all duration-200 ${
+                copiedStates["tag-name"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
+            />
+          </div>
           <Text className="text-gray-500">{tagDetails.description || "No description"}</Text>
         </div>
         {is_admin && !isEditing && <Button onClick={() => setIsEditing(true)}>Edit Tag</Button>}
