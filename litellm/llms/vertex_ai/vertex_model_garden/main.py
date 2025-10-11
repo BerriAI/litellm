@@ -123,6 +123,10 @@ class VertexAIModelGardenModels(VertexBase):
                 stream=stream,
                 auth_header=None,
                 url=default_api_base,
+                model=model,
+                vertex_project=vertex_project or project_id,
+                vertex_location=vertex_location or "us-central1",
+                vertex_api_version="v1beta1",
             )
             model = ""
             return openai_like_chat_completions.completion(
