@@ -129,6 +129,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             endpoint_type="chat_completions",
             custom_endpoint=False,
             headers=headers,
+            optional_params=optional_params,
         )
         # Ensure Content-Type header is set
         headers["Content-Type"] = "application/json"

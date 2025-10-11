@@ -1,3 +1,4 @@
+import os
 from typing import Literal, Optional, Tuple
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -8,6 +9,48 @@ class DatabricksException(BaseLLMException):
 
 
 class DatabricksBase:
+    def _configure_databricks_user_agent(
+        self,
+        optional_params: Optional[dict] = None,
+    ) -> None:
+        """
+        Configure Databricks SDK User-Agent for partner attribution.
+
+        Follows ISV integration best practices by setting User-Agent metadata.
+        Reference: https://github.com/databricks/databricks-sdk-py#user-agent-request-attribution
+
+        Priority order:
+        1. optional_params (handles both per-request and model-level config)
+        2. Environment variables (pre-set env vars are preserved, handled by SDK)
+
+        Args:
+            optional_params: Optional parameters that may contain databricks-specific config
+        """
+        partner = None
+        product = None
+        version = None
+
+        # Priority 1: Check optional_params (handles both per-request and model-level)
+        if optional_params:
+            partner = optional_params.get("databricks_partner")
+            product = optional_params.get("databricks_product")
+            version = optional_params.get("databricks_product_version")
+
+        # Priority 2: Environment variables (only set if not already set)
+        # Pre-existing env vars are preserved (not overridden)
+        if partner and not os.getenv("DATABRICKS_SDK_UPSTREAM"):
+            os.environ["DATABRICKS_SDK_UPSTREAM"] = partner
+
+        if product and version:
+            # Combine product name and version for DATABRICKS_SDK_UPSTREAM_VERSION
+            # Format: product/version (e.g., "agentic-gis/1.0.0")
+            upstream_version = f"{product}/{version}"
+            if not os.getenv("DATABRICKS_SDK_UPSTREAM_VERSION"):
+                os.environ["DATABRICKS_SDK_UPSTREAM_VERSION"] = upstream_version
+        elif version and not os.getenv("DATABRICKS_SDK_UPSTREAM_VERSION"):
+            # If only version is provided, use it directly
+            os.environ["DATABRICKS_SDK_UPSTREAM_VERSION"] = version
+
     def _get_api_base(self, api_base: Optional[str]) -> str:
         if api_base is None:
             try:
@@ -31,10 +74,17 @@ class DatabricksBase:
         return api_base
 
     def _get_databricks_credentials(
-        self, api_key: Optional[str], api_base: Optional[str], headers: Optional[dict]
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        headers: Optional[dict],
+        optional_params: Optional[dict] = None,
     ) -> Tuple[str, dict]:
         headers = headers or {"Content-Type": "application/json"}
         try:
+            # Configure User-Agent for partner attribution before initializing SDK
+            self._configure_databricks_user_agent(optional_params=optional_params)
+
             from databricks.sdk import WorkspaceClient
 
             databricks_client = WorkspaceClient()
@@ -66,6 +116,7 @@ class DatabricksBase:
         endpoint_type: Literal["chat_completions", "embeddings"],
         custom_endpoint: Optional[bool],
         headers: Optional[dict],
+        optional_params: Optional[dict] = None,
     ) -> Tuple[str, dict]:
         if api_key is None and not headers:  # handle empty headers
             if custom_endpoint is True:
@@ -75,7 +126,10 @@ class DatabricksBase:
                 )
             else:
                 api_base, headers = self._get_databricks_credentials(
-                    api_base=api_base, api_key=api_key, headers=headers
+                    api_base=api_base,
+                    api_key=api_key,
+                    headers=headers,
+                    optional_params=optional_params,
                 )
 
         if api_base is None:
@@ -86,7 +140,10 @@ class DatabricksBase:
                 )
             else:
                 api_base, headers = self._get_databricks_credentials(
-                    api_base=api_base, api_key=api_key, headers=headers
+                    api_base=api_base,
+                    api_key=api_key,
+                    headers=headers,
+                    optional_params=optional_params,
                 )
 
         if headers is None:
