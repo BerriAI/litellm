@@ -69,7 +69,8 @@ run_grype_scans() {
     # Allowlist of CVEs to be ignored in failure threshold/reporting
     # - CVE-2025-8869: Not applicable on Python >=3.13 (PEP 706 implemented); pip fallback unused; no OS-level fix
     ALLOWED_CVES=(
-        "CVE-2025-8869"
+        "CVE-2025-8869",
+        "CVE-2025-8291" # no fix available as of Oct 11, 2025
     )
 
     # Build JSON array of allowlisted CVE IDs for jq
