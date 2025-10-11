@@ -18,13 +18,15 @@ from typing import (
     cast,
 )
 
+from openai.types.responses.tool_param import FunctionToolParam
+
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
-from litellm.types.llms.openai import Reasoning
+from litellm.types.llms.openai import ChatCompletionToolParamFunctionChunk, Reasoning
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam
@@ -242,6 +244,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if value is not None:
                 if key == "instructions" and instructions:
                     request_data["instructions"] = instructions
+                elif key == "stream_options" and isinstance(value, dict):
+                    request_data["stream_options"] = value.get("include_obfuscation")
+                elif key == "user":  # string can't be longer than 64 characters
+                    if isinstance(value, str) and len(value) <= 64:
+                        request_data["user"] = value
                 else:
                     request_data[key] = value
 
@@ -262,7 +269,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         json_mode: Optional[bool] = None,
     ) -> "ModelResponse":
         """Transform Responses API response to chat completion response"""
-
         from openai.types.responses import (
             ResponseFunctionToolCall,
             ResponseOutputMessage,
@@ -281,19 +287,35 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         choices: List[Choices] = []
         index = 0
+
+        reasoning_content: Optional[str] = None
+
         for item in raw_response.output:
+
             if isinstance(item, ResponseReasoningItem):
-                pass  # ignore for now.
+
+                for content in item.summary:
+                    response_text = getattr(content, "text", "")
+                    reasoning_content = response_text if response_text else ""
+
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
                     response_text = getattr(content, "text", "")
                     msg = Message(
-                        role=item.role, content=response_text if response_text else ""
+                        role=item.role,
+                        content=response_text if response_text else "",
+                        reasoning_content=reasoning_content,
                     )
 
                     choices.append(
-                        Choices(message=msg, finish_reason="stop", index=index)
+                        Choices(
+                            message=msg,
+                            finish_reason="stop",
+                            index=index,
+                        )
                     )
+
+                    reasoning_content = None  # flush reasoning content
                     index += 1
             elif isinstance(item, ResponseFunctionToolCall):
                 msg = Message(
@@ -308,11 +330,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             "type": "function",
                         }
                     ],
+                    reasoning_content=reasoning_content,
                 )
 
                 choices.append(
                     Choices(message=msg, finish_reason="tool_calls", index=index)
                 )
+                reasoning_content = None  # flush reasoning content
                 index += 1
             elif isinstance(item, dict):
                 # Handle raw dict responses (e.g., from GPT-5 Codex)
@@ -493,9 +517,25 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         self, tools: List[Dict[str, Any]]
     ) -> List["ALL_RESPONSES_API_TOOL_PARAMS"]:
         """Convert chat completion tools to responses API tools format"""
-        responses_tools = []
+        responses_tools: List["ALL_RESPONSES_API_TOOL_PARAMS"] = []
         for tool in tools:
-            responses_tools.append(tool)
+            # convert function tool from chat completion to responses API format
+            if tool.get("type") == "function":
+                function_tool = cast(
+                    ChatCompletionToolParamFunctionChunk, tool.get("function")
+                )
+                responses_tools.append(
+                    FunctionToolParam(
+                        name=function_tool["name"],
+                        parameters=function_tool.get("parameters"),
+                        strict=function_tool.get("strict"),
+                        type="function",
+                        description=function_tool.get("description"),
+                    )
+                )
+            else:
+                responses_tools.append(tool)  # type: ignore
+
         return cast(List["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
 
     def _map_reasoning_effort(self, reasoning_effort: str) -> Optional[Reasoning]:
