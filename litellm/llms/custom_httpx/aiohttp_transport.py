@@ -156,6 +156,16 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 self.client = self._client_factory()
             else:
                 self.client = ClientSession()
+            # Don't return yet - check if the newly created session is valid
+
+        # Check if the session itself is closed
+        if self.client.closed:
+            verbose_logger.debug("Session is closed, creating new session")
+            # Create a new session
+            if hasattr(self, "_client_factory") and callable(self._client_factory):
+                self.client = self._client_factory()
+            else:
+                self.client = ClientSession()
             return self.client
 
         # Check if the existing session is still valid for the current event loop
@@ -193,13 +203,58 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
         return self.client
     
+    async def _make_aiohttp_request(
+        self,
+        client_session: ClientSession,
+        request: httpx.Request,
+        timeout: dict,
+        proxy: Optional[str],
+        sni_hostname: Optional[str],
+    ) -> ClientResponse:
+        """
+        Helper function to make an aiohttp request with the given parameters.
+        
+        Args:
+            client_session: The aiohttp ClientSession to use
+            request: The httpx Request to send
+            timeout: Timeout settings dict with 'connect', 'read', 'pool' keys
+            proxy: Optional proxy URL
+            sni_hostname: Optional SNI hostname for SSL
+            
+        Returns:
+            ClientResponse from aiohttp
+        """
+        from aiohttp import ClientTimeout
+        from yarl import URL as YarlURL
+        
+        try:
+            data = request.content
+        except httpx.RequestNotRead:
+            data = request.stream  # type: ignore
+            request.headers.pop("transfer-encoding", None)  # handled by aiohttp
+
+        response = await client_session.request(
+            method=request.method,
+            url=YarlURL(str(request.url), encoded=True),
+            headers=request.headers,
+            data=data,
+            allow_redirects=False,
+            auto_decompress=False,
+            timeout=ClientTimeout(
+                sock_connect=timeout.get("connect"),
+                sock_read=timeout.get("read"),
+                connect=timeout.get("pool"),
+            ),
+            proxy=proxy,
+            server_hostname=sni_hostname,
+        ).__aenter__()
+        
+        return response
+    
     async def handle_async_request(
         self,
         request: httpx.Request,
     ) -> httpx.Response:
-        from aiohttp import ClientTimeout
-        from yarl import URL as YarlURL
-
         timeout = request.extensions.get("timeout", {})
         sni_hostname = request.extensions.get("sni_hostname")
 
@@ -209,28 +264,38 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Resolve proxy settings from environment variables
         proxy = await self._get_proxy_settings(request)
 
-        with map_aiohttp_exceptions():
-            try:
-                data = request.content
-            except httpx.RequestNotRead:
-                data = request.stream  # type: ignore
-                request.headers.pop("transfer-encoding", None)  # handled by aiohttp
-
-            response = await client_session.request(
-                method=request.method,
-                url=YarlURL(str(request.url), encoded=True),
-                headers=request.headers,
-                data=data,
-                allow_redirects=False,
-                auto_decompress=False,
-                timeout=ClientTimeout(
-                    sock_connect=timeout.get("connect"),
-                    sock_read=timeout.get("read"),
-                    connect=timeout.get("pool"),
-                ),
-                proxy=proxy,
-                server_hostname=sni_hostname,
-            ).__aenter__()
+        try:
+            with map_aiohttp_exceptions():
+                response = await self._make_aiohttp_request(
+                    client_session=client_session,
+                    request=request,
+                    timeout=timeout,
+                    proxy=proxy,
+                    sni_hostname=sni_hostname,
+                )
+        except RuntimeError as e:
+            # Handle the case where session was closed between our check and actual use
+            if "Session is closed" in str(e):
+                verbose_logger.debug(f"Session closed during request, retrying with new session: {e}")
+                # Force creation of a new session
+                if hasattr(self, "_client_factory") and callable(self._client_factory):
+                    self.client = self._client_factory()
+                else:
+                    self.client = ClientSession()
+                client_session = self.client
+                
+                # Retry the request with the new session
+                with map_aiohttp_exceptions():
+                    response = await self._make_aiohttp_request(
+                        client_session=client_session,
+                        request=request,
+                        timeout=timeout,
+                        proxy=proxy,
+                        sni_hostname=sni_hostname,
+                    )
+            else:
+                # Re-raise if it's a different RuntimeError
+                raise
 
         return httpx.Response(
             status_code=response.status,
