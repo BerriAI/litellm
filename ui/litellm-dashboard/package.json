@@ -38,7 +38,7 @@
     "react-copy-to-clipboard": "^5.1.0",
     "react-dom": "^18",
     "react-markdown": "^9.0.1",
-    "react-syntax-highlighter": "^15.6.1",
+    "react-syntax-highlighter": "^15.6.6",
     "tailwind-merge": "^3.2.0",
     "uuid": "^11.1.0"
   },
