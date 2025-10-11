@@ -980,7 +980,7 @@ def create_pass_through_route(
                 InitPassThroughEndpointHelpers,
             )
 
-            if not not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
                 route=endpoint
             ):
                 raise HTTPException(
@@ -1760,7 +1760,6 @@ class InitPassThroughEndpointHelpers:
             if len(parts) == 3:
                 route_type = parts[1]
                 registered_path = parts[2]
-
                 if route_type == "exact" and route == registered_path:
                     return True
                 elif route_type == "subpath":
@@ -1827,6 +1826,7 @@ async def initialize_pass_through_endpoints(
 
     ## get combined pass-through endpoints from db + config
     combined_pass_through_endpoints: List[Union[Dict, PassThroughGenericEndpoint]]
+
     if config_passthrough_endpoints is not None:
         combined_pass_through_endpoints = _get_combined_pass_through_endpoints(  # type: ignore
             pass_through_endpoints, config_passthrough_endpoints
