@@ -115,7 +115,7 @@ class Scheduler:
 
     async def get_queue(self, model_name: str) -> list:
         """
-        Return a queue for that specific model group
+        Return a queue for that specific model group with validated data types
         """
         if self.cache is not None:
             _cache_key = "{}:{}".format(SchedulerCacheKeys.queue.value, model_name)
@@ -123,7 +123,26 @@ class Scheduler:
             if response is None or not isinstance(response, list):
                 return []
             elif isinstance(response, list):
-                return response
+                # Validate and fix queue items to ensure correct types
+                validated_queue = []
+                for item in response:
+                    if isinstance(item, (tuple, list)) and len(item) == 2:
+                        try:
+                            # Ensure (int, str) format for scheduler heap operations
+                            priority = int(item[0]) if item[0] is not None else 0
+                            request_id = str(item[1]) if item[1] is not None else ""
+                            # Ensure priority is within valid range (0-255)
+                            priority = max(0, min(255, priority))
+                            validated_queue.append((priority, request_id))
+                        except (ValueError, TypeError):
+                            # Skip items that can't be converted to proper format
+                            print_verbose(f"Skipping invalid queue item in scheduler: {item}")
+                            continue
+                    else:
+                        # Skip items with wrong structure
+                        print_verbose(f"Skipping malformed queue item in scheduler: {item}")
+                        continue
+                return validated_queue
         return self.queue
 
     async def save_queue(self, queue: list, model_name: str) -> None:

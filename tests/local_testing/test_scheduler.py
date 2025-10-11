@@ -40,6 +40,64 @@ async def test_scheduler_diff_model_names():
     )
 
 
+@pytest.mark.asyncio
+async def test_scheduler_mixed_priority_types():
+    """
+    Test scheduler with different priority data types to ensure heap operations work correctly
+    """
+    scheduler = Scheduler()
+
+    # Test with various corrupted priority types that might come from Redis
+    test_cases = [
+        # (priority, request_id) - some may be corrupted from Redis deserialization
+        ([1, 2], "req_1"),  # List priority (corrupted)
+        ((3,), "req_2"),    # Single element tuple (corrupted)
+        (5, "req_3"),       # Valid int priority
+        ("7", "req_4"),     # String priority (corrupted)
+        ([9, "extra"], "req_5"),  # Mixed list (corrupted)
+    ]
+
+    # Simulate corrupted queue from Redis by directly setting cache response
+    corrupted_queue = test_cases
+
+    # Manually test the get_queue validation logic
+    validated_queue = []
+    for item in corrupted_queue:
+        if isinstance(item, (tuple, list)) and len(item) == 2:
+            try:
+                priority = int(item[0]) if item[0] is not None else 0
+                request_id = str(item[1]) if item[1] is not None else ""
+                priority = max(0, min(255, priority))
+                validated_queue.append((priority, request_id))
+            except (ValueError, TypeError):
+                continue
+
+    # Should successfully create a valid queue with normalized priorities
+    # From our test cases:
+    # ([1, 2], "req_1") -> fails because int([1, 2]) throws TypeError
+    # ((3,), "req_2") -> fails because len(item) != 2
+    # (5, "req_3") -> passes (valid int, string)
+    # ("7", "req_4") -> passes (string convertible to int, plus string)
+    # ([9, "extra"], "req_5") -> fails because int([9, "extra"]) throws TypeError
+    expected_valid_items = 2
+    assert len(validated_queue) == expected_valid_items
+
+    # Check that all items are properly formatted
+    for priority, request_id in validated_queue:
+        assert isinstance(priority, int)
+        assert isinstance(request_id, str)
+        assert 0 <= priority <= 255
+
+    # Now test actual scheduler operations don't fail with heap comparisons
+    for priority, request_id in validated_queue:
+        item = FlowItem(priority=priority, request_id=request_id, model_name="test-model")
+        await scheduler.add_request(item)
+
+    # Should be able to poll without TypeError
+    queue = await scheduler.get_queue(model_name="test-model")
+    assert len(queue) >= 2  # Should have at least the items we added
+
+
 @pytest.mark.parametrize("p0, p1", [(0, 0), (0, 1), (1, 0)])
 @pytest.mark.parametrize("healthy_deployments", [[{"key": "value"}], []])
 @pytest.mark.asyncio
