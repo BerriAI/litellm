@@ -732,7 +732,12 @@ def test_gpt_5_reasoning():
     litellm._turn_on_debug()
     response = litellm.completion(
         model="openai/responses/gpt-5-mini",
-        messages=[{"role": "user", "content": "Think of a poem, and then write it."}],
+        messages=[
+            {
+                "role": "user",
+                "content": "Think of the capital of France, and then write it.",
+            }
+        ],
         reasoning_effort="low",
     )
     print("response: ", response)
