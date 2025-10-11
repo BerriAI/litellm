@@ -10,6 +10,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
+    PART_UNION_TYPES,
     BaseLiteLLMOpenAIResponseObject,
     ContentPartAddedEvent,
     ContentPartDoneEvent,
@@ -203,6 +204,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         text = getattr(litellm_complete_object.choices[0].message, "content", "") or ""  # type: ignore
         reasoning_content = getattr(litellm_complete_object.choices[0].message, "reasoning_content", "") or ""  # type: ignore
 
+        part: Optional[PART_UNION_TYPES] = None
         if reasoning_content:
             part = ContentPartDonePartReasoningText(
                 type="reasoning_text",
