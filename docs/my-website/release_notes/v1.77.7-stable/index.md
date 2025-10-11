@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.77.7-stable - Claude Sonnet 4.5"
+title: "v1.77.7-stable - 2.9x Lower Median Latency"
 slug: "v1-77-7"
 date: 2025-10-04T10:00:00
 authors:
