@@ -1446,6 +1446,43 @@ async def update_cache(  # noqa: PLR0915
     )
 
 
+def validate_and_normalize_model_group(
+    llm_router: Optional[Router], model_group: Optional[str]
+) -> Optional[str]:
+    """
+    Validate model_group exists using router's O(1) indexes and normalize model_id to model_group name.
+    
+    Args:
+        llm_router: Router instance with model configurations
+        model_group: Model group name or model_id to validate
+        
+    Returns:
+        Normalized model_group name, or original value if router not available
+        
+    Raises:
+        ProxyException: If model_group is not found in router configuration
+    """
+    if llm_router is None or not model_group:
+        return model_group
+    
+    # Check if it's a model_id instead of model_group
+    if llm_router.has_model_id(model_group):
+        # Get the deployment to find the actual model_group
+        deployment = llm_router.get_deployment(model_group)
+        if deployment is not None:
+            return deployment.model_name
+    # Validate model_group exists
+    elif model_group not in llm_router.model_names:
+        raise ProxyException(
+            message=f"Model group '{model_group}' not found in router configuration",
+            type="invalid_request_error",
+            param="_selected_model_group",
+            code=status.HTTP_404_NOT_FOUND,
+        )
+    
+    return model_group
+
+
 def run_ollama_serve():
     try:
         command = ["ollama", "serve"]
@@ -6743,6 +6780,12 @@ async def model_streaming_metrics(
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+    
+    # Validate model_group exists using router's O(1) indexes before querying DB
+    # Also converts model_id to model_group name if needed
+    validated_model_group = validate_and_normalize_model_group(
+        llm_router, _selected_model_group
+    )
 
     startTime = startTime or datetime.now() - timedelta(days=7)  # show over past week
     endTime = endTime or datetime.now()
@@ -6798,7 +6841,7 @@ async def model_streaming_metrics(
 
     _all_api_bases = set()
     db_response = await prisma_client.db.query_raw(
-        sql_query, _selected_model_group, startTime, endTime
+        sql_query, validated_model_group, startTime, endTime
     )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
     if db_response is not None:
@@ -6877,6 +6920,13 @@ async def model_metrics(
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+    
+    # Validate model_group exists using router's O(1) indexes before querying DB
+    # Also converts model_id to model_group name if needed
+    validated_model_group = validate_and_normalize_model_group(
+        llm_router, _selected_model_group
+    )
+    
     startTime = startTime or datetime.now() - timedelta(days=DAYS_IN_A_MONTH)
     endTime = endTime or datetime.now()
 
@@ -6922,7 +6972,7 @@ async def model_metrics(
     """
     _all_api_bases = set()
     db_response = await prisma_client.db.query_raw(
-        sql_query, _selected_model_group, startTime, endTime, api_key, customer
+        sql_query, validated_model_group, startTime, endTime, api_key, customer
     )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
 
@@ -6992,6 +7042,13 @@ async def model_metrics_slow_responses(
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+    
+    # Validate model_group exists using router's O(1) indexes before querying DB
+    # Also converts model_id to model_group name if needed
+    validated_model_group = validate_and_normalize_model_group(
+        llm_router, _selected_model_group
+    )
+    
     if api_key is None or api_key == "undefined":
         api_key = "null"
 
@@ -7043,7 +7100,7 @@ ORDER BY
     db_response = await prisma_client.db.query_raw(
         sql_query,
         alerting_threshold,
-        _selected_model_group,
+        validated_model_group,
         startTime,
         endTime,
         api_key,
@@ -7082,15 +7139,18 @@ async def model_metrics_exceptions(
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+    
+    # Validate model_group exists using router's O(1) indexes before querying DB
+    # Also converts model_id to model_group name if needed
+    validated_model_group = validate_and_normalize_model_group(
+        llm_router, _selected_model_group
+    )
 
     startTime = startTime or datetime.now() - timedelta(days=DAYS_IN_A_MONTH)
     endTime = endTime or datetime.now()
 
     if api_key is None or api_key == "undefined":
         api_key = "null"
-
-    """
-    """
     sql_query = """
         WITH cte AS (
             SELECT
@@ -7114,7 +7174,7 @@ async def model_metrics_exceptions(
         LIMIT 200;
     """
     db_response = await prisma_client.db.query_raw(
-        sql_query, startTime, endTime, _selected_model_group, api_key
+        sql_query, startTime, endTime, validated_model_group, api_key
     )
     response: List[dict] = []
     exception_types = set()
