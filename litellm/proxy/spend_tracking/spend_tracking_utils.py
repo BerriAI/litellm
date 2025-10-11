@@ -14,7 +14,6 @@ from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, REDACTED_BY_LITELM
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
-from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
@@ -214,10 +213,11 @@ def get_logging_payload(  # noqa: PLR0915
         )
     else:
         api_key = ""
-    
-    tags_list = get_tags_from_request_body(request_body=kwargs)
-    request_tags = json.dumps(tags_list)
-    
+    request_tags = (
+        json.dumps(metadata.get("tags", []))
+        if isinstance(metadata.get("tags", []), list)
+        else "[]"
+    )
     if (
         standard_logging_payload is not None
         and standard_logging_payload.get("request_tags") is not None
