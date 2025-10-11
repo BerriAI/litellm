@@ -1,3 +1,4 @@
+import uuid
 from enum import Enum
 from os import PathLike
 from typing import IO, Any, Iterable, List, Literal, Mapping, Optional, Tuple, Union
@@ -44,7 +45,7 @@ from openai.types.responses.response import (
 # Handle OpenAI SDK version compatibility for Text type
 try:
     # fmt: off
-    from openai.types.responses.response_create_params import ( # type: ignore[attr-defined]
+    from openai.types.responses.response_create_params import (
         Text as ResponseText,  # type: ignore[attr-defined]
     )
 
@@ -992,7 +993,9 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     prompt_cache_key: Optional[str]
     stream_options: Optional[dict]
     top_logprobs: Optional[int]
-    partial_images: Optional[int]  # Number of partial images to generate (1-3) for streaming image generation
+    partial_images: Optional[
+        int
+    ]  # Number of partial images to generate (1-3) for streaming image generation
 
 
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
@@ -1180,13 +1183,27 @@ class ReasoningSummaryTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
 class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     output_index: int
-    item: Optional[dict]
+    item: Optional[BaseLiteLLMOpenAIResponseObject]
 
 
 class OutputItemDoneEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
     output_index: int
-    item: dict
+    sequence_number: int = 1
+    item: BaseLiteLLMOpenAIResponseObject
+
+
+class OpenAIChatCompletionLogprobsContentTopLogprobs(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+
+
+class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+    top_logprobs: List[OpenAIChatCompletionLogprobsContentTopLogprobs]
 
 
 class ContentPartAddedEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1194,7 +1211,24 @@ class ContentPartAddedEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     content_index: int
-    part: dict
+    part: BaseLiteLLMOpenAIResponseObject
+
+
+class ContentPartDonePartOutputText(BaseLiteLLMOpenAIResponseObject):
+    type: Literal["output_text"]
+    text: str
+    annotations: List[BaseLiteLLMOpenAIResponseObject]
+    logprobs: Optional[List[OpenAIChatCompletionLogprobsContent]]
+
+
+class ContentPartDonePartRefusal(BaseLiteLLMOpenAIResponseObject):
+    type: Literal["refusal"]
+    refusal: str
+
+
+class ContentPartDonePartReasoningText(BaseLiteLLMOpenAIResponseObject):
+    type: Literal["reasoning_text"]
+    reasoning: str
 
 
 class ContentPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1202,7 +1236,11 @@ class ContentPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     content_index: int
-    part: dict
+    part: Union[
+        ContentPartDonePartOutputText,
+        ContentPartDonePartRefusal,
+        ContentPartDonePartReasoningText,
+    ]
 
 
 class OutputTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1413,6 +1451,7 @@ ResponsesAPIStreamingResponse = Annotated[
         ImageGenerationPartialImageEvent,
         ErrorEvent,
         GenericEvent,
+        BaseLiteLLMOpenAIResponseObject,
     ],
     Discriminator("type"),
 ]
@@ -1729,19 +1768,6 @@ class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
-
-
-class OpenAIChatCompletionLogprobsContentTopLogprobs(TypedDict, total=False):
-    bytes: List
-    logprob: Required[float]
-    token: Required[str]
-
-
-class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
-    bytes: List
-    logprob: Required[float]
-    token: Required[str]
-    top_logprobs: List[OpenAIChatCompletionLogprobsContentTopLogprobs]
 
 
 class OpenAIChatCompletionLogprobs(TypedDict, total=False):
