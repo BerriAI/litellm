@@ -1,10 +1,7 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Tab, TabGroup, TabList, TabPanels, TabPanel, Select, SelectItem } from "@tremor/react";
-
-import { message } from "antd";
+import React, { useState, useEffect } from "react";
+import { Tab, TabGroup, TabList, TabPanels, TabPanel } from "@tremor/react";
 
 import {
-  userInfoCall,
   userUpdateUserCall,
   getPossibleUserRoles,
   userListCall,
@@ -24,14 +21,11 @@ import { columns } from "./view_users/columns";
 import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
 import SSOSettings from "./SSOSettings";
-import debounce from "lodash/debounce";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { updateExistingKeys } from "@/utils/dataUtils";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { isAdminRole } from "@/utils/roles";
 import NotificationsManager from "./molecules/notifications_manager";
-import { Setter } from "@/types";
-import { KeyResponse } from "@/components/key_team_helpers/key_list";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -40,7 +34,7 @@ interface ViewUserDashboardProps {
   userRole: string | null;
   userID: string | null;
   teams: any[] | null;
-  setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setKeys: React.Dispatch<React.SetStateAction<object[] | null>>;
 }
 
 interface FilterState {

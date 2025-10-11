@@ -4,7 +4,7 @@ import { ProxySettings, UserInfo } from "./user_dashboard";
 import { getProxyUISettings } from "./networking";
 
 interface DashboardTeamProps {
-  teams: Object[] | null;
+  teams: object[] | null;
   setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
   userRole: string | null;
   proxySettings: ProxySettings | null;
@@ -17,7 +17,7 @@ interface DashboardTeamProps {
 type TeamInterface = {
   models: any[];
   team_id: null;
-  team_alias: String;
+  team_alias: string;
   max_budget: number | null;
 };
 

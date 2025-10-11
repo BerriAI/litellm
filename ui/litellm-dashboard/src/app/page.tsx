@@ -8,9 +8,8 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import UserDashboard from "@/components/user_dashboard";
-import ModelDashboard from "@/components/templates/model_dashboard";
+import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import ViewUserDashboard from "@/components/view_users";
-import TeamsView from "@/app/(dashboard)/teams/TeamsView";
 import Organizations from "@/components/organizations";
 import { fetchOrganizations } from "@/components/organizations";
 import AdminPanel from "@/components/admins";
@@ -21,7 +20,7 @@ import BudgetPanel from "@/components/budgets/budget_panel";
 import SpendLogsTable from "@/components/view_logs";
 import ModelHubTable from "@/components/model_hub_table";
 import NewUsagePage from "@/components/new_usage";
-import APIRef from "@/components/api_ref";
+import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
 import ChatUI from "@/components/chat_ui/ChatUI";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
@@ -40,6 +39,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
 import useFeatureFlags from "@/hooks/useFeatureFlags";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
+import OldTeams from "@/components/OldTeams";
 
 function getCookie(name: string) {
   // Safer cookie read + decoding; handles '=' inside values
@@ -346,7 +346,7 @@ export default function CreateKeyPage() {
                     createClicked={createClicked}
                   />
                 ) : page == "models" ? (
-                  <ModelDashboard
+                  <OldModelDashboard
                     userID={userID}
                     userRole={userRole}
                     token={token}
@@ -376,7 +376,7 @@ export default function CreateKeyPage() {
                     setKeys={setKeys}
                   />
                 ) : page == "teams" ? (
-                  <TeamsView
+                  <OldTeams
                     teams={teams}
                     setTeams={setTeams}
                     accessToken={accessToken}
@@ -384,6 +384,7 @@ export default function CreateKeyPage() {
                     userRole={userRole}
                     organizations={organizations}
                     premiumUser={premiumUser}
+                    searchParams={searchParams}
                   />
                 ) : page == "organizations" ? (
                   <Organizations
@@ -405,7 +406,7 @@ export default function CreateKeyPage() {
                     proxySettings={proxySettings}
                   />
                 ) : page == "api_ref" ? (
-                  <APIRef proxySettings={proxySettings} />
+                  <APIReferenceView proxySettings={proxySettings} />
                 ) : page == "settings" ? (
                   <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
                 ) : page == "budgets" ? (
