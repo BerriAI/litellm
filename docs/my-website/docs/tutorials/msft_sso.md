@@ -140,6 +140,54 @@ litellm_settings:
 <Image img={require('../../img/msft_default_settings.png')}  style={{ width: '900px', height: 'auto' }} />
 
 
+## 4. Using Entra ID App Roles for User Permissions
+
+You can assign user roles directly from Entra ID using App Roles. LiteLLM will automatically read the app roles from the JWT token during SSO sign-in and assign the corresponding role to the user.
+
+### 4.1 Supported Roles
+
+LiteLLM supports the following app roles (case-insensitive):
+
+- `proxy_admin` - Admin over the entire LiteLLM platform
+- `proxy_admin_viewer` - Read-only admin access (can view all keys and spend)
+- `org_admin` - Admin over a specific organization (can create teams and users within their org)
+- `internal_user` - Standard user (can create/view/delete their own keys and view their own spend)
+
+### 4.2 Create App Roles in Entra ID
+
+1. Navigate to your App Registration on https://portal.azure.com/
+2. Go to **App roles** > **Create app role**
+
+3. Configure the app role:
+   - **Display name**: Proxy Admin (or your preferred display name)
+   - **Value**: `proxy_admin` (use one of the supported role values above)
+   - **Description**: Administrator access to LiteLLM proxy
+   - **Allowed member types**: Users/Groups
+
+
+4. Click **Apply** to save the role
+
+### 4.3 Assign Users to App Roles
+
+1. Navigate to **Enterprise Applications** on https://portal.azure.com/
+2. Select your LiteLLM application
+3. Go to **Users and groups** > **Add user/group**
+4. Select the user and assign them to one of the app roles you created
+
+
+### 4.4 Test the Role Assignment
+
+1. Sign in to LiteLLM UI via SSO as a user with an assigned app role
+2. LiteLLM will automatically extract the app role from the JWT token
+3. The user will be assigned the corresponding LiteLLM role in the database
+4. The user's permissions will reflect their assigned role
+
+**How it works:**
+- When a user signs in via Microsoft SSO, LiteLLM extracts the `roles` claim from the JWT `id_token`
+- If any of the roles match a valid LiteLLM role (case-insensitive), that role is assigned to the user
+- If multiple roles are present, LiteLLM uses the first valid role it finds
+- This role assignment persists in the LiteLLM database and determines the user's access level
+
 ## Video Walkthrough
 
 This walks through setting up sso auto-add for **Microsoft Entra ID**

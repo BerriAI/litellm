@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Form, Button as Button2, Select, message } from "antd";
+import { Form, Button as Button2, Select } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
 import NotificationManager from "./molecules/notifications_manager";
@@ -24,14 +24,14 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
             // Handle nested ui_access_mode structure
             const uiAccessMode = ssoData.values.ui_access_mode;
             let formValues = {};
-            
-            if (uiAccessMode && typeof uiAccessMode === 'object') {
+
+            if (uiAccessMode && typeof uiAccessMode === "object") {
               formValues = {
                 ui_access_mode_type: uiAccessMode.type,
                 restricted_sso_group: uiAccessMode.restricted_sso_group,
                 sso_group_jwt_field: uiAccessMode.sso_group_jwt_field,
               };
-            } else if (typeof uiAccessMode === 'string') {
+            } else if (typeof uiAccessMode === "string") {
               // Handle legacy flat structure
               formValues = {
                 ui_access_mode_type: uiAccessMode,
@@ -39,7 +39,7 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
                 sso_group_jwt_field: ssoData.values.team_ids_jwt_field || ssoData.values.sso_group_jwt_field,
               };
             }
-            
+
             form.setFieldsValue(formValues);
           }
         } catch (error) {
@@ -61,11 +61,11 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
     try {
       // Transform form data to match API expected structure
       let apiPayload;
-      
-      if (formValues.ui_access_mode_type === 'all_authenticated_users') {
+
+      if (formValues.ui_access_mode_type === "all_authenticated_users") {
         // Set ui_access_mode to none when all_authenticated_users is selected
         apiPayload = {
-          ui_access_mode: "none"
+          ui_access_mode: "none",
         };
       } else {
         apiPayload = {
@@ -73,7 +73,7 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
             type: formValues.ui_access_mode_type,
             restricted_sso_group: formValues.restricted_sso_group,
             sso_group_jwt_field: formValues.sso_group_jwt_field,
-          }
+          },
         };
       }
 
@@ -88,23 +88,15 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
   };
 
   return (
-    <div style={{ padding: '16px' }}>
-      <div style={{ marginBottom: '16px' }}>
-        <Text style={{ fontSize: '14px', color: '#6b7280' }}>
+    <div style={{ padding: "16px" }}>
+      <div style={{ marginBottom: "16px" }}>
+        <Text style={{ fontSize: "14px", color: "#6b7280" }}>
           Configure who can access the UI interface and how group information is extracted from JWT tokens.
         </Text>
       </div>
-      
-      <Form
-        form={form}
-        onFinish={handleUIAccessSubmit}
-        layout="vertical"
-      >
-        <Form.Item
-          label="UI Access Mode"
-          name="ui_access_mode_type"
-          tooltip="Controls who can access the UI interface"
-        >
+
+      <Form form={form} onFinish={handleUIAccessSubmit} layout="vertical">
+        <Form.Item label="UI Access Mode" name="ui_access_mode_type" tooltip="Controls who can access the UI interface">
           <Select placeholder="Select access mode">
             <Select.Option value="all_authenticated_users">All Authenticated Users</Select.Option>
             <Select.Option value="restricted_sso_group">Restricted SSO Group</Select.Option>
@@ -113,11 +105,13 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
 
         <Form.Item
           noStyle
-          shouldUpdate={(prevValues, currentValues) => prevValues.ui_access_mode_type !== currentValues.ui_access_mode_type}
+          shouldUpdate={(prevValues, currentValues) =>
+            prevValues.ui_access_mode_type !== currentValues.ui_access_mode_type
+          }
         >
           {({ getFieldValue }) => {
-            const uiAccessModeType = getFieldValue('ui_access_mode_type');
-            return uiAccessModeType === 'restricted_sso_group' ? (
+            const uiAccessModeType = getFieldValue("ui_access_mode_type");
+            return uiAccessModeType === "restricted_sso_group" ? (
               <Form.Item
                 label="Restricted SSO Group"
                 name="restricted_sso_group"
@@ -138,13 +132,13 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
         </Form.Item>
 
         <div style={{ textAlign: "right", marginTop: "16px" }}>
-          <Button2 
-            type="primary" 
-            htmlType="submit" 
+          <Button2
+            type="primary"
+            htmlType="submit"
             loading={loading}
-            style={{ 
-              backgroundColor: '#6366f1', 
-              borderColor: '#6366f1' 
+            style={{
+              backgroundColor: "#6366f1",
+              borderColor: "#6366f1",
             }}
           >
             Update UI Access Control
@@ -155,4 +149,4 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
   );
 };
 
-export default UIAccessControlForm; 
+export default UIAccessControlForm;

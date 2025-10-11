@@ -3,9 +3,7 @@ import { Button, Badge, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import { ModelData } from "../../model_dashboard/types";
-import { TrashIcon, PencilIcon, PencilAltIcon, KeyIcon } from "@heroicons/react/outline";
-import DeleteModelButton from "../../delete_model_button";
-import { useState } from "react";
+import { TrashIcon, KeyIcon } from "@heroicons/react/outline";
 
 export const columns = (
   userRole: string,
@@ -27,7 +25,7 @@ export const columns = (
       const model = row.original;
       return (
         <Tooltip title={model.model_info.id}>
-          <div 
+          <div
             className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
             onClick={() => setSelectedModelId(model.model_info.id)}
           >
@@ -46,12 +44,18 @@ export const columns = (
       const displayName = getDisplayModelName(row.original) || "-";
       const tooltipContent = (
         <div>
-          <div><strong>Provider:</strong> {model.provider || "-"}</div>
-          <div><strong>Public Model Name:</strong> {displayName}</div>
-          <div><strong>LiteLLM Model Name:</strong> {model.litellm_model_name || "-"}</div>
+          <div>
+            <strong>Provider:</strong> {model.provider || "-"}
+          </div>
+          <div>
+            <strong>Public Model Name:</strong> {displayName}
+          </div>
+          <div>
+            <strong>LiteLLM Model Name:</strong> {model.litellm_model_name || "-"}
+          </div>
         </div>
       );
-      
+
       return (
         <Tooltip title={tooltipContent}>
           <div className="flex items-start space-x-2 min-w-0 w-full max-w-[250px]">
@@ -66,26 +70,23 @@ export const columns = (
                     const target = e.target as HTMLImageElement;
                     const parent = target.parentElement;
                     if (parent) {
-                      const fallbackDiv = document.createElement('div');
-                      fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                      fallbackDiv.textContent = model.provider?.charAt(0) || '-';
+                      const fallbackDiv = document.createElement("div");
+                      fallbackDiv.className =
+                        "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
+                      fallbackDiv.textContent = model.provider?.charAt(0) || "-";
                       parent.replaceChild(fallbackDiv, target);
                     }
                   }}
                 />
               ) : (
-                <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs">
-                  -
-                </div>
+                <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs">-</div>
               )}
             </div>
-            
+
             {/* Model Names Container */}
             <div className="flex flex-col min-w-0 flex-1">
               {/* Public Model Name */}
-              <div className="text-xs font-medium text-gray-900 truncate max-w-[210px]">
-                {displayName}
-              </div>
+              <div className="text-xs font-medium text-gray-900 truncate max-w-[210px]">{displayName}</div>
               {/* LiteLLM Model Name */}
               <div className="text-xs text-gray-500 truncate mt-0.5 max-w-[210px]">
                 {model.litellm_model_name || "-"}
@@ -103,7 +104,7 @@ export const columns = (
     cell: ({ row }) => {
       const model = row.original;
       const credentialName = model.litellm_params?.litellm_credential_name;
-      
+
       return credentialName ? (
         <Tooltip title={`Credential: ${credentialName}`}>
           <div className="flex items-center space-x-2 max-w-[180px]">
@@ -129,10 +130,8 @@ export const columns = (
     cell: ({ row }) => {
       const model = row.original;
       const createdBy = model.model_info.created_by;
-      const createdAt = model.model_info.created_at 
-        ? new Date(model.model_info.created_at).toLocaleDateString() 
-        : null;
-      
+      const createdAt = model.model_info.created_at ? new Date(model.model_info.created_at).toLocaleDateString() : null;
+
       return (
         <div className="flex flex-col min-w-0 max-w-[160px]">
           {/* Created By - Primary */}
@@ -168,7 +167,7 @@ export const columns = (
       const model = row.original;
       const inputCost = model.input_cost;
       const outputCost = model.output_cost;
-      
+
       // If both costs are missing or undefined, show "-"
       if (!inputCost && !outputCost) {
         return (
@@ -177,22 +176,14 @@ export const columns = (
           </div>
         );
       }
-      
+
       return (
         <Tooltip title="Cost per 1M tokens">
           <div className="flex flex-col min-w-0 max-w-[120px]">
             {/* Input Cost - Primary */}
-            {inputCost && (
-              <div className="text-xs font-medium text-gray-900 truncate">
-                In: ${inputCost}
-              </div>
-            )}
+            {inputCost && <div className="text-xs font-medium text-gray-900 truncate">In: ${inputCost}</div>}
             {/* Output Cost - Secondary */}
-            {outputCost && (
-              <div className="text-xs text-gray-500 truncate mt-0.5">
-                Out: ${outputCost}
-              </div>
-            )}
+            {outputCost && <div className="text-xs text-gray-500 truncate mt-0.5">Out: ${outputCost}</div>}
           </div>
         </Tooltip>
       );
@@ -228,15 +219,15 @@ export const columns = (
     cell: ({ row }) => {
       const model = row.original;
       const accessGroups = model.model_info.access_groups;
-      
+
       if (!accessGroups || accessGroups.length === 0) {
         return "-";
       }
-      
+
       const modelId = model.model_info.id;
       const isExpanded = expandedRows.has(modelId);
       const shouldShowExpandButton = accessGroups.length > 1;
-      
+
       const toggleExpanded = () => {
         const newExpanded = new Set(expandedRows);
         if (isExpanded) {
@@ -246,18 +237,14 @@ export const columns = (
         }
         setExpandedRows(newExpanded);
       };
-      
+
       return (
         <div className="flex items-center gap-1 overflow-hidden">
-          <Badge
-            size="xs"
-            color="blue"
-            className="text-xs px-1.5 py-0.5 h-5 leading-tight flex-shrink-0"
-          >
+          <Badge size="xs" color="blue" className="text-xs px-1.5 py-0.5 h-5 leading-tight flex-shrink-0">
             {accessGroups[0]}
           </Badge>
-          
-          {(isExpanded || (!shouldShowExpandButton && accessGroups.length === 2)) && 
+
+          {(isExpanded || (!shouldShowExpandButton && accessGroups.length === 2)) &&
             accessGroups.slice(1).map((group: string, index: number) => (
               <Badge
                 key={index + 1}
@@ -267,9 +254,8 @@ export const columns = (
               >
                 {group}
               </Badge>
-            ))
-          }
-          
+            ))}
+
           {shouldShowExpandButton && (
             <button
               onClick={(e) => {
@@ -278,7 +264,7 @@ export const columns = (
               }}
               className="text-xs text-blue-600 hover:text-blue-800 px-1 py-0.5 rounded hover:bg-blue-50 h-5 leading-tight flex-shrink-0 whitespace-nowrap"
             >
-              {isExpanded ? '−' : `+${accessGroups.length - 1}`}
+              {isExpanded ? "−" : `+${accessGroups.length - 1}`}
             </button>
           )}
         </div>
@@ -291,12 +277,12 @@ export const columns = (
     cell: ({ row }) => {
       const model = row.original;
       return (
-        <div className={`
+        <div
+          className={`
           inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
-          ${model.model_info.db_model 
-            ? 'bg-blue-50 text-blue-600' 
-            : 'bg-gray-100 text-gray-600'}
-        `}>
+          ${model.model_info.db_model ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-600"}
+        `}
+        >
           {model.model_info.db_model ? "DB Model" : "Config Model"}
         </div>
       );
