@@ -469,11 +469,54 @@ The proxy provides:
 
 Go here for a complete tutorial with keys + rate limits - [**here**](./proxy/docker_quick_start.md)
 
-### Quick Start Proxy - CLI
+### Quick Start Proxy
 
-```shell
-pip install 'litellm[proxy]'
+
+### Step 1. CREATE config.yaml 
+
+Example `litellm-config.yaml` 
+
+```yaml
+model_list:
+  - model_name: claude-sonnet-4-20250514
+    litellm_params:
+      model: "anthropic/claude-sonnet-4-20250514"
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: o3-mini
+    litellm_params:
+      model: openai/o3-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gpt-5-mini # with custom pricing
+    litellm_params:
+      model: azure/gpt-5-mini
+      api_key: os.environ/AZURE_API_KEY
+      api_base: 'your-api-base'
+      api_version: '2024-12-01-preview'
+    model_info:
+      input_cost_per_token: 0.000421 # 👈 ONLY to track cost per token
+      output_cost_per_token: 0.000520
+      base_model: gpt-5-nano
+
+general_settings:
+  master_key: sk-1234
+  database_url: <your-postgres-db-url>
+
 ```
+
+#### Step 2: add these to .env
+
+```
+DATABASE_URL=""
+LITELLM_MASTER_KEY="sk-1234" # can be anything
+LITELLM_SALT_KEY="sk-12435243" # use a hashed key
+
+OPENAI_API_KEY=""
+ANTHROPIC_API_KEY=""
+```
+
+before you start, sync .env with your prisma schema by doing ```prisma generate```
 
 #### Step 1: Start litellm proxy
 
@@ -482,7 +525,7 @@ pip install 'litellm[proxy]'
 <TabItem label="pip package" value="pip">
 
 ```shell
-$ litellm --model huggingface/bigcode/starcoder
+$ litellm --config litellm-config.yaml
 
 #INFO: Proxy running on http://0.0.0.0:4000
 ```
@@ -492,21 +535,7 @@ $ litellm --model huggingface/bigcode/starcoder
 <TabItem label="Docker container" value="docker">
 
 
-### Step 1. CREATE config.yaml 
-
-Example `litellm_config.yaml` 
-
-```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/<your-azure-model-deployment>
-      api_base: os.environ/AZURE_API_BASE # runs os.getenv("AZURE_API_BASE")
-      api_key: os.environ/AZURE_API_KEY # runs os.getenv("AZURE_API_KEY")
-      api_version: "2023-07-01-preview"
-```
-
-### Step 2. RUN Docker Image
+### RUN Docker Image
 
 ```shell
 docker run \
@@ -520,6 +549,29 @@ docker run \
 
 </TabItem>
 
+<TabItem label="Docker Compose" value="docker compose">
+
+### Use DOCKER COMPOSE
+
+Get the `docker-compose.yml` file from our GitHub repository:
+
+```bash
+# Download the docker-compose.yml file
+curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/docker-compose.yml
+
+# uncomment these lines in your file
+volumes:
+    - ./litellm-config.yaml:/app/config.yaml
+    command:
+    - "--config=/app/config.yaml"
+  
+# Then start the services
+docker compose up
+```
+
+</TabItem>
+
+
 </Tabs>
 
 #### Step 2: Make ChatCompletions Request to Proxy
@@ -527,7 +579,7 @@ docker run \
 ```python
 import openai # openai v1.0.0+
 client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:4000") # set proxy to base_url
-# request sent to model set on litellm proxy, `litellm --model`
+# request sent to model set on litellm proxy
 response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
     {
         "role": "user",
@@ -538,8 +590,71 @@ response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
 print(response)
 ```
 
-## More details
+### Logging
 
-- [exception mapping](../../docs/exception_mapping)
+#### Step 1: add env variables
+
+```bash
+LANGFUSE_PUBLIC_KEY="pk-lf-..."
+LANGFUSE_SECRET_KEY="sk-lf-..."
+LANGFUSE_HOST="https://xxx.langfuse.com"
+
+# if using langfuse otel
+LANGFUSE_OTEL_HOST="https://us.cloud.langfuse.com"  # Default US region
+#LANGFUSE_OTEL_HOST="https://otel.my-langfuse.company.com"  # custom OTEL endpoint
+```
+
+#### Step 2: add models in your config.yml
+
+```yaml
+litellm_settings:
+  callbacks: ["datadog", "langfuse", "langfuse_otel"]
+
+model_list:
+  - model_name: claude-sonnet-4
+    litellm_params:
+      model: "anthropic/claude-sonnet-4-20250514"
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: gpt-5-codex
+    litellm_params:
+      model: openai/gpt-5-codex
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  master_key: os.envrion/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+```
+
+#### Step 3: Test it!
+
+```
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="gpt-5-codex",
+    messages = [
+        {
+            "role": "user",
+            "content": "explain hall effect to me"
+        }
+    ],
+)
+
+print(response)
+```
+
+#### Expected Response
+
+![Litellm Langfuse](../../img/getting_started_logging.png)
+
+
+## Next Steps
+
 - [E2E Tutorial for LiteLLM Proxy Server](../../docs/proxy/docker_quick_start)
 - [proxy virtual keys & spend management](../../docs/proxy/virtual_keys)
+- [exception mapping](../../docs/exception_mapping)

@@ -69,15 +69,35 @@ Setup your config.yaml with your azure model.
 
 Note: When using the proxy with a database, you can also **just add models via UI** (UI is available on `/ui` route).
 
+### 1.1 Set up a Database
+
+**Requirements**
+- Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
+
 ```yaml
 model_list:
-  - model_name: gpt-4o
+  - model_name: gpt-5-mini
     litellm_params:
-      model: azure/my_azure_deployment
+      model: azure/gpt-5-mini
       api_base: os.environ/AZURE_API_BASE
       api_key: "os.environ/AZURE_API_KEY"
       api_version: "2025-01-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
+
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+
+general_settings: 
+  master_key: sk-1234 
+  database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # 👈 KEY CHANGE
 ```
+
+Save config.yaml as `litellm_config.yaml` (used in 3.2).
+
+
+
 ---
 
 ### Model List Specification
@@ -244,64 +264,9 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 Track Spend, and control model access via virtual keys for the proxy
 
-### 3.1 Set up a Database 
-
-**Requirements**
-- Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
-
-
-```yaml
-model_list:
-  - model_name: gpt-4o
-    litellm_params:
-      model: azure/my_azure_deployment
-      api_base: os.environ/AZURE_API_BASE
-      api_key: "os.environ/AZURE_API_KEY"
-      api_version: "2025-01-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
-
-general_settings: 
-  master_key: sk-1234 
-  database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # 👈 KEY CHANGE
-```
-
-Save config.yaml as `litellm_config.yaml` (used in 3.2).
+![virtual_keys_demo](../../img/virtualkey.gif)
 
 ---
-
-**What is `general_settings`?**
-
-These are settings for the LiteLLM Proxy Server. 
-
-See All General Settings [here](http://localhost:3000/docs/proxy/configs#all-settings).
-
-1. **`master_key`** (`str`)
-   - **Description**: 
-     - Set a `master key`, this is your Proxy Admin key - you can use this to create other keys (🚨 must start with `sk-`).
-   - **Usage**: 
-     - **Set on config.yaml** set your master key under `general_settings:master_key`, example - 
-        `master_key: sk-1234`
-     - **Set env variable** set `LITELLM_MASTER_KEY`
-
-2. **`database_url`** (str)
-   - **Description**: 
-     - Set a `database_url`, this is the connection to your Postgres DB, which is used by litellm for generating keys, users, teams.
-   - **Usage**: 
-     - **Set on config.yaml** set your `database_url` under `general_settings:database_url`, example - 
-        `database_url: "postgresql://..."`
-     - Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
-
-### 3.2 Start Proxy 
-
-```bash
-docker run \
-    -v $(pwd)/litellm_config.yaml:/app/config.yaml \
-    -e AZURE_API_KEY=d6*********** \
-    -e AZURE_API_BASE=https://openai-***********/ \
-    -p 4000:4000 \
-    ghcr.io/berriai/litellm:main-latest \
-    --config /app/config.yaml --detailed_debug
-```
-
 
 ### 3.3 Create Key w/ RPM Limit
 
@@ -498,6 +463,29 @@ GRANT ALL PRIVILEGES ON DATABASE litellm TO your_username;
 LiteLLM Proxy uses the [LiteLLM Python SDK](https://docs.litellm.ai/docs/routing) for handling LLM API calls. 
 
 `litellm_settings` are module-level params for the LiteLLM Python SDK (equivalent to doing `litellm.<some_param>` on the SDK). You can see all params [here](https://github.com/BerriAI/litellm/blob/208fe6cb90937f73e0def5c97ccb2359bf8a467b/litellm/__init__.py#L114)
+
+**What is `general_settings`?**
+
+These are settings for the LiteLLM Proxy Server. 
+
+See All General Settings [here](http://localhost:3000/docs/proxy/configs#all-settings).
+
+1. **`master_key`** (`str`)
+   - **Description**: 
+     - Set a `master key`, this is your Proxy Admin key - you can use this to create other keys (🚨 must start with `sk-`).
+   - **Usage**: 
+     - **Set on config.yaml** set your master key under `general_settings:master_key`, example - 
+        `master_key: sk-1234`
+     - **Set env variable** set `LITELLM_MASTER_KEY`
+
+2. **`database_url`** (str)
+   - **Description**: 
+     - Set a `database_url`, this is the connection to your Postgres DB, which is used by litellm for generating keys, users, teams.
+   - **Usage**: 
+     - **Set on config.yaml** set your `database_url` under `general_settings:database_url`, example - 
+        `database_url: "postgresql://..."`
+     - Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
+
 
 ## Support & Talk with founders
 
