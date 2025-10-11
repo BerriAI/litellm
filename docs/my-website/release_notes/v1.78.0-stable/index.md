@@ -1,5 +1,5 @@
 ---
-title: "v1.78.0-stable - MCP Gateway, GPT-5 Pro & UI Performance"
+title: "v1.78.0-stable - MCP Gateway - Control Tool Access by Team/Key"
 slug: "v1-78-0"
 date: 2025-10-11T10:00:00
 authors:
@@ -107,13 +107,11 @@ pip install litellm==1.78.0.rc.1
     - Add function calling support for Snowflake Cortex REST API - [PR #15221](https://github.com/BerriAI/litellm/pull/15221)
 
 - **[Gemini](../../docs/providers/gemini)**
-    - Fix passing headers for gemini - [PR #15231](https://github.com/BerriAI/litellm/pull/15231)
-    - Fix gemini cli by actually streaming the response - [PR #15264](https://github.com/BerriAI/litellm/pull/15264)
+    - Fix header forwarding for Gemini/Vertex AI providers in proxy mode - [PR #15231](https://github.com/BerriAI/litellm/pull/15231)
 
 - **[Azure](../../docs/providers/azure)**
     - Removed stop param from unsupported azure models - [PR #15229](https://github.com/BerriAI/litellm/pull/15229)
     - Fix(azure/responses): remove invalid status param from azure call - [PR #15253](https://github.com/BerriAI/litellm/pull/15253)
-    - Azure - passthrough support with router models - [PR #15240](https://github.com/BerriAI/litellm/pull/15240)
     - Add new Azure AI models with pricing details - [PR #15387](https://github.com/BerriAI/litellm/pull/15387)
     - AzureAD Default credentials - select credential type based on environment - [PR #14470](https://github.com/BerriAI/litellm/pull/14470)
 
@@ -122,9 +120,10 @@ pip install litellm==1.78.0.rc.1
     - Add Cohere Embed v4 support for AWS Bedrock - [PR #15298](https://github.com/BerriAI/litellm/pull/15298)
     - Fix(bedrock): include cacheWriteInputTokens in prompt_tokens calculation - [PR #15292](https://github.com/BerriAI/litellm/pull/15292)
     - Add Bedrock AU Cross-Region Inference for Claude Sonnet 4.5 - [PR #15402](https://github.com/BerriAI/litellm/pull/15402)
+    - Converse → /v1/messages streaming doesn't handle parallel tool calls with Claude models - [PR #15315](https://github.com/BerriAI/litellm/pull/15315)
 
 - **[Vertex AI](../../docs/providers/vertex)**
-    - Chore/vertex ai context caching - [PR #15226](https://github.com/BerriAI/litellm/pull/15226)
+    - Implement Context Caching for Vertex AI provider - [PR #15226](https://github.com/BerriAI/litellm/pull/15226)
     - Support for Vertex AI Gemma Models on Custom Endpoints - [PR #15397](https://github.com/BerriAI/litellm/pull/15397)
     - VertexAI - gemma model family support (custom endpoints) - [PR #15419](https://github.com/BerriAI/litellm/pull/15419)
     - VertexAI Gemma model family streaming support + Added MedGemma - [PR #15427](https://github.com/BerriAI/litellm/pull/15427)
@@ -142,9 +141,6 @@ pip install litellm==1.78.0.rc.1
 
 - **[Together AI](../../docs/providers/togetherai)**
     - Add new together models - [PR #15383](https://github.com/BerriAI/litellm/pull/15383)
-
-- **[Anthropic](../../docs/providers/anthropic)**
-    - Fix parallel tool calls in the Anthropic passthrough adapter - [PR #15315](https://github.com/BerriAI/litellm/pull/15315)
 
 ### Bug Fixes
 
@@ -169,6 +165,12 @@ pip install litellm==1.78.0.rc.1
 - **[Files API](../../docs/files_api)**
     - Feat(files): add @client decorator to file operations - [PR #15339](https://github.com/BerriAI/litellm/pull/15339)
 
+- **[/generateContent](../../docs/providers/gemini)**
+    - Fix gemini cli by actually streaming the response - [PR #15264](https://github.com/BerriAI/litellm/pull/15264)
+
+- **[Azure Passthrough](../../docs/pass_through/azure)**
+    - Azure - passthrough support with router models - [PR #15240](https://github.com/BerriAI/litellm/pull/15240)
+
 #### Bugs
 
 - **General**
@@ -183,10 +185,8 @@ pip install litellm==1.78.0.rc.1
 - **Proxy CLI Auth**
     - Proxy CLI - dont store existing key in the URL, store it in the state param - [PR #15290](https://github.com/BerriAI/litellm/pull/15290)
 
-- **Virtual Keys**
-    - Make PATCH `/model/{model_id}/update` handle `team_id` consistently with POST `/model/new` - [PR #15297](https://github.com/BerriAI/litellm/pull/15297)
-
 - **Models + Endpoints**
+    - Make PATCH `/model/{model_id}/update` handle `team_id` consistently with POST `/model/new` - [PR #15297](https://github.com/BerriAI/litellm/pull/15297)
     - Feature: adds Infinity as a provider in the UI - [PR #15285](https://github.com/BerriAI/litellm/pull/15285)
     - Fix: model + endpoints page crash when config file contains router_settings.model_group_alias - [PR #15308](https://github.com/BerriAI/litellm/pull/15308)
     - Models & Endpoints Initial Refactor - [PR #15435](https://github.com/BerriAI/litellm/pull/15435)
@@ -226,11 +226,6 @@ pip install litellm==1.78.0.rc.1
 
 - **[EnkryptAI](../../docs/proxy/guardrails)**
     - Add EnkryptAI Guardrails on LiteLLM - [PR #15390](https://github.com/BerriAI/litellm/pull/15390)
-
-#### Security
-
-- **General**
-    - Fix: redact AWS credentials when redact_user_api_key_info enabled - [PR #15321](https://github.com/BerriAI/litellm/pull/15321)
 
 ---
 
@@ -291,6 +286,16 @@ pip install litellm==1.78.0.rc.1
 
 - **Data Masking**
     - Fix - SensitiveDataMasker converts lists to string - [PR #15420](https://github.com/BerriAI/litellm/pull/15420)
+
+---
+
+
+## General AI Gateway Improvements
+
+#### Security
+
+- **General**
+    - Fix: redact AWS credentials when redact_user_api_key_info enabled - [PR #15321](https://github.com/BerriAI/litellm/pull/15321)
 
 ---
 
