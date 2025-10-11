@@ -13,13 +13,13 @@ from typing import (
     cast,
 )
 
-from litellm._logging import verbose_logger
 import httpx  # type: ignore
 
 import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -239,7 +239,7 @@ class BaseLLMHTTPHandler:
         json_mode: bool = False,
         signed_json_body: Optional[bytes] = None,
         shared_session: Optional["ClientSession"] = None,
-    ):  
+    ):
         if client is None:
             verbose_logger.debug(
                 f"Creating HTTP client with shared_session: {id(shared_session) if shared_session else None}"
@@ -1533,6 +1533,7 @@ class BaseLLMHTTPHandler:
                         data=data,
                         fake_stream=fake_stream,
                     )
+
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
