@@ -1204,7 +1204,7 @@ mcp_servers:
     scopes: ["public_repo", "user:email"]
 ```
 
-[**See Claude Code Tutorial**](./tutorials/claude_responses_api)
+[**See Claude Code Tutorial**](./tutorials/claude_responses_api#connecting-mcp-servers)
 
 ## Using your MCP with client side credentials
 
