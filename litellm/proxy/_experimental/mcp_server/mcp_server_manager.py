@@ -1188,6 +1188,28 @@ class MCPServerManager:
                 asyncio.create_task(_call_tool_via_client(client, call_tool_params))
             )
 
+                # IMPORTANT: Must await tasks INSIDE the context manager to keep connection alive
+                try:
+                    mcp_responses = await asyncio.gather(*tasks)
+                except (
+                    BlockedPiiEntityError,
+                    GuardrailRaisedException,
+                    HTTPException,
+                ) as e:
+                    # Re-raise guardrail exceptions to properly fail the MCP call
+                    verbose_logger.error(
+                        f"Guardrail blocked MCP tool call during result check: {str(e)}"
+                    )
+                    raise e
+
+                # If proxy_logging_obj is None, the tool call result is at index 0
+                # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
+                result_index = 1 if proxy_logging_obj else 0
+                result = mcp_responses[result_index]
+
+                return cast(CallToolResult, result)
+
+        # For OpenAPI tools, await outside the client context
         try:
             mcp_responses = await asyncio.gather(*tasks)
 

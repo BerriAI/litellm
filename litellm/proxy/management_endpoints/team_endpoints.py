@@ -27,6 +27,7 @@ from litellm.proxy._types import (
     CommonProxyErrors,
     DeleteTeamRequest,
     LiteLLM_AuditLogs,
+    LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_ModelTable,
     LiteLLM_OrganizationTable,
@@ -56,9 +57,6 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.management_helpers.object_permission_utils import (
-    _set_object_permission,
-)
 from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
     can_org_access_model,
@@ -76,6 +74,7 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
+    _set_object_permission,
     handle_update_object_permission_common,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
@@ -321,6 +320,7 @@ async def new_team(  # noqa: PLR0915
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     - prompts: Optional[List[str]] - List of allowed prompts for the team. If specified, the team will only be able to use these specific prompts.
     
+
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
 
@@ -478,7 +478,7 @@ async def new_team(  # noqa: PLR0915
 
         ## Create Team Member Budget Table
         data_json = data.json()
-        
+
         ## Handle Object Permission - MCP, Vector Stores etc.
         data_json = await _set_object_permission(
             data_json=data_json,
@@ -507,6 +507,14 @@ async def new_team(  # noqa: PLR0915
 
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+            if getattr(data, field, None) is not None:
+                _set_object_metadata_field(
+                    object_data=complete_team_data,
+                    field_name=field,
+                    value=getattr(data, field),
+                )
+
+        for field in LiteLLM_ManagementEndpoint_MetadataFields:
             if getattr(data, field, None) is not None:
                 _set_object_metadata_field(
                     object_data=complete_team_data,
@@ -617,7 +625,6 @@ async def _update_model_table(
         _model_id = model_dict.id
 
     return _model_id
-
 
 
 def validate_team_org_change(
@@ -871,6 +878,13 @@ async def update_team(
     # update team metadata fields
     _team_metadata_fields = LiteLLM_ManagementEndpoint_MetadataFields_Premium
     for field in _team_metadata_fields:
+        if field in updated_kv and updated_kv[field] is not None:
+            _update_team_metadata_field(
+                updated_kv=updated_kv,
+                field_name=field,
+            )
+
+    for field in LiteLLM_ManagementEndpoint_MetadataFields:
         if field in updated_kv and updated_kv[field] is not None:
             _update_team_metadata_field(
                 updated_kv=updated_kv,

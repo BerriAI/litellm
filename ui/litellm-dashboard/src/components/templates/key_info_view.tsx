@@ -628,6 +628,19 @@ export default function KeyInfoView({
                   </div>
 
                   <div>
+                    <Text className="font-medium">Allowed Pass Through Routes</Text>
+                    <Text>
+                      {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) && currentKeyData.metadata.allowed_passthrough_routes.length > 0
+                        ? currentKeyData.metadata.allowed_passthrough_routes.map((route, index) => (
+                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                              {route}
+                            </span>
+                          ))
+                        : "No pass through routes specified"}
+                    </Text>
+                  </div>
+
+                  <div>
                     <Text className="font-medium">Models</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {currentKeyData.models && currentKeyData.models.length > 0 ? (
