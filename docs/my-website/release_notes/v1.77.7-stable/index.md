@@ -15,7 +15,7 @@ authors:
     title: Backend Performance Engineer
     url: https://www.linkedin.com/in/alexsander-baptista/
     image_url: https://media.licdn.com/dms/image/v2/D5603AQGXnziu4kqNCQ/profile-displayphoto-crop_800_800/B56ZkxEcuOKEAI-/0/1757464874550?e=1762387200&v=beta&t=9SNXLsWhx8OnYPAMQ9fqAr02oevDYEAL2vMYg2f9ieg
-  - name: Achintya Srivastava
+  - name: Achintya Rajan
     title: Fullstack Engineer
     url: https://www.linkedin.com/in/achintya-rajan/
     image_url: https://media.licdn.com/dms/image/v2/D5603AQGdkEeyJTdljw/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1716271140869?e=1762387200&v=beta&t=9gOoLPeqR2E5z3KSX61EUj3HVZXmgo87vhVuSHeffjc
