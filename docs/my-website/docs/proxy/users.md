@@ -36,7 +36,7 @@ litellm /path/to/config.yaml
 
 ```bash
 curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Autherization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "gpt-3.5-turbo",
@@ -45,7 +45,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
         "role": "user",
         "content": "what llm are you"
         }
-    ],
+    ]
 }'
 ```
 
