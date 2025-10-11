@@ -281,8 +281,11 @@ class InMemoryCache(BaseCache):
 
     async def async_get_oldest_n_keys(self, n: int) -> List[str]:
         """
-        Get the oldest n keys in the cache
+        Get the oldest n keys in the cache, filtering out expired keys
         """
-        # sorted ttl dict by ttl
-        sorted_ttl_dict = sorted(self.ttl_dict.items(), key=lambda x: x[1])
+        import time
+        current_time = time.time()
+        # Filter out expired keys and sort by ttl
+        valid_items = [(key, ttl) for key, ttl in self.ttl_dict.items() if ttl > current_time]
+        sorted_ttl_dict = sorted(valid_items, key=lambda x: x[1])
         return [key for key, _ in sorted_ttl_dict[:n]]
