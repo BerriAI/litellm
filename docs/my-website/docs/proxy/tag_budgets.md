@@ -20,7 +20,7 @@ Tags are labels you can attach to your LLM requests to track and limit spending 
 - **Customer Attribution**: Track spend per customer or client (e.g., "customer-acme", "customer-techcorp")
 - **Feature Monitoring**: Monitor costs for specific features (e.g., "feature-chat", "feature-summarization")
 
-Tags can be set on API keys, so all requests made with that key are automatically tracked under the specified cost center or budget category.
+Tags are added to each request in the `metadata` field to track and enforce budget limits.
 
 ## Setting Tag Budgets
 
@@ -100,28 +100,13 @@ Navigate to the **Tag Management** page and click **Create New Tag**. Fill in th
 
 ### 2. Use the tag in your requests
 
-There are two ways to use tags:
+Add tags to your API requests in the `metadata` field:
 
-**Option A: Set tags on API keys** (Recommended for cost center tracking)
+:::info Tags on API Keys
 
-When you create or update a key, add tags to it. All requests made with that key will automatically be tracked under those tags:
+Currently, tags are only supported per request. If you'd like to set tags on API keys so all requests automatically inherit them, please [create a feature request on GitHub](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeat%5D%3A).
 
-```shell
-curl -X POST 'http://0.0.0.0:4000/key/generate' \
-     -H 'Authorization: Bearer sk-1234' \
-     -H 'Content-Type: application/json' \
-     -d '{
-           "metadata": {
-               "tags": ["engineering"]
-           }
-         }'
-```
-
-Now any request made with this key will be tracked under the "engineering" tag and count against its budget.
-
-**Option B: Add tags per request**
-
-Alternatively, add the tag to individual API requests in the `metadata` field:
+:::
 
 <Tabs>
 
@@ -165,24 +150,6 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 </TabItem>
 
-<TabItem value="litellm" label="LiteLLM SDK">
-
-```python
-import litellm
-
-response = litellm.completion(
-    model="gpt-4",
-    messages=[{"role": "user", "content": "Hello"}],
-    api_key="sk-1234",
-    api_base="http://0.0.0.0:4000",
-    metadata={
-        "tags": ["engineering"]
-    }
-)
-```
-
-</TabItem>
-
 </Tabs>
 
 ### 3. Test It
@@ -218,10 +185,6 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 ## Managing Tags
 
 ### View Tag Information
-
-<Tabs>
-
-<TabItem value="API" label="API">
 
 Get information about specific tags:
 
@@ -261,21 +224,7 @@ curl -X POST 'http://0.0.0.0:4000/tag/info' \
 }
 ```
 
-</TabItem>
-
-<TabItem value="UI" label="Admin UI">
-
-Click on any tag name in the Tag Management page to view detailed information, including current spend and budget status.
-
-</TabItem>
-
-</Tabs>
-
 ### Update Tag Budget
-
-<Tabs>
-
-<TabItem value="API" label="API">
 
 Update an existing tag's budget:
 
@@ -290,21 +239,7 @@ curl -X POST 'http://0.0.0.0:4000/tag/update' \
          }'
 ```
 
-</TabItem>
-
-<TabItem value="UI" label="Admin UI">
-
-Click the edit icon next to any tag to modify its budget settings.
-
-</TabItem>
-
-</Tabs>
-
 ### Delete Tag
-
-<Tabs>
-
-<TabItem value="API" label="API">
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/tag/delete' \
@@ -315,34 +250,9 @@ curl -X POST 'http://0.0.0.0:4000/tag/delete' \
          }'
 ```
 
-</TabItem>
+## Multiple Tags per Request
 
-<TabItem value="UI" label="Admin UI">
-
-Click the delete icon next to any tag to remove it.
-
-</TabItem>
-
-</Tabs>
-
-## Multiple Tags
-
-You can apply multiple tags to track costs across different dimensions simultaneously. For example, track both the cost center and the specific project:
-
-**Set multiple tags on a key:**
-
-```shell
-curl -X POST 'http://0.0.0.0:4000/key/generate' \
-     -H 'Authorization: Bearer sk-1234' \
-     -H 'Content-Type: application/json' \
-     -d '{
-           "metadata": {
-               "tags": ["engineering", "project-alpha", "customer-acme"]
-           }
-         }'
-```
-
-**Or add multiple tags per request:**
+You can apply multiple tags to a single request to track costs across different dimensions simultaneously. For example, track both the cost center and the specific project:
 
 ```python
 response = client.chat.completions.create(
@@ -354,6 +264,19 @@ response = client.chat.completions.create(
         }
     }
 )
+```
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+     -H 'Authorization: Bearer sk-1234' \
+     -H 'Content-Type: application/json' \
+     -d '{
+           "model": "gpt-4",
+           "messages": [{"role": "user", "content": "Hello"}],
+           "metadata": {
+               "tags": ["engineering", "project-alpha", "customer-acme"]
+           }
+         }'
 ```
 
 **Budget Enforcement:** If any tag exceeds its budget, the request will be rejected.
