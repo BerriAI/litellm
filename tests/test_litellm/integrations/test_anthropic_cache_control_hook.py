@@ -89,10 +89,25 @@ async def test_anthropic_cache_control_hook_system_message():
             mock_post.assert_called_once()
             request_body = json.loads(mock_post.call_args.kwargs["data"])
 
+            # Expected request system content
+            # [
+            #     {
+            #         "text": "You are an AI assistant tasked with analyzing legal documents."
+            #     },
+            #     {
+            #         "text": "Here is the full text of a complex legal agreement"
+            #     },
+            #     {
+            #         "cachePoint": {
+            #             "type": "default"
+            #         }
+            #     }
+            # ]
+
             print("request_body: ", json.dumps(request_body, indent=4))
 
             # Verify the request body
-            assert request_body["system"][1]["cachePoint"] == {"type": "default"}
+            assert request_body["system"][2]["cachePoint"] == {"type": "default"}
 
 
 @pytest.mark.asyncio
@@ -515,25 +530,125 @@ async def test_anthropic_cache_control_hook_multiple_user_messages():
                 json.dumps(request_body, indent=4),
             )
 
-            # Bedrock API combines consecutive user messages into a single message
-            assert len(request_body["messages"]) == 1
+            # Expected request content
+            # [
+            #     {
+            #         "text": "First user message."
+            #     },
+            #     {
+            #         "text": "Second user message."
+            #     },
+            #     {
+            #         "cachePoint": {
+            #             "type": "default"
+            #         }
+            #     },
+            #     {
+            #         "text": "Third user message that should be cached."
+            #     },
+            #     {
+            #         "cachePoint": {
+            #             "type": "default"
+            #         }
+            #     }
+            # ]
 
-            # The combined message should have multiple content blocks with cache control
-            combined_message_content = request_body["messages"][0]["content"]
-            assert isinstance(combined_message_content, list)
+            assert "cachePoint" not in request_body["messages"][0]["content"][0]
+            assert "cachePoint" not in request_body["messages"][0]["content"][1]
+            assert request_body["messages"][0]["content"][2]["cachePoint"] == {"type": "default"}
+            assert "cachePoint" not in request_body["messages"][0]["content"][3]
+            assert request_body["messages"][0]["content"][4]["cachePoint"] == {"type": "default"}
 
-            # Count cache control points - should have 2 since both injection points were applied
-            cache_control_count = sum(
-                1
-                for item in combined_message_content
-                if isinstance(item, dict) and "cachePoint" in item
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_multiple_user_messages_anthropic_provider():
+    """
+    Test cache control injection on multiple user messages with Anthropic provider.
+    """
+
+    with patch.dict(
+        os.environ,
+        {
+            "ANTHROPIC_API_KEY": "fake_anthropic_api_key",
+        },
+    ):
+        anthropic_cache_control_hook = AnthropicCacheControlHook()
+        litellm.callbacks = [anthropic_cache_control_hook]
+
+        # Mock response data
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Hello!"}],
+            "model": "claude-3-5-sonnet-20240620",
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 6},
+        }
+        mock_response.status_code = 200
+
+        client = AsyncHTTPHandler()
+        with patch.object(client, "post", return_value=mock_response) as mock_post:
+            # Test with multiple user messages and negative indices
+            response = await litellm.acompletion(
+                model="anthropic/claude-3-5-sonnet-20240620",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "First user message.",
+                    },
+                    {
+                        "role": "user",
+                        "content": "Second user message.",
+                    },
+                    {
+                        "role": "user",
+                        "content": "Third user message that should be cached.",
+                    },
+                ],
+                cache_control_injection_points=[
+                    {
+                        "location": "message",
+                        "index": -1,  # Should target the last message (index 2)
+                    },
+                    {
+                        "location": "message",
+                        "index": -2,  # Should target the second-to-last message (index 1)
+                    },
+                ],
+                client=client,
             )
-            assert cache_control_count == 2
+
+            mock_post.assert_called_once()
+            request_body = mock_post.call_args.kwargs["json"]
 
             print(
-                f"Found {cache_control_count} cache control points in the combined message"
+                "Multiple user messages request_body: ",
+                json.dumps(request_body, indent=4),
             )
 
+            # Expected request content
+            # [
+            #     {
+            #         "type": "text",
+            #         "text": "First user message."
+            #     },
+            #     {
+            #         "type": "text",
+            #         "text": "Second user message.",
+            #         "cache_control": {"type": "ephemeral"}
+            #     },
+            #     {
+            #         "type": "text",
+            #         "text": "Third user message that should be cached.",
+            #         "cache_control": {"type": "ephemeral"}
+            #     }
+            # ]
+
+            assert "cache_control" not in request_body["messages"][0]["content"][0]
+            assert request_body["messages"][0]["content"][1]["cache_control"] == {"type": "ephemeral"}
+            assert request_body["messages"][0]["content"][2]["cache_control"] == {"type": "ephemeral"}
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bad_index", [10, -10])
