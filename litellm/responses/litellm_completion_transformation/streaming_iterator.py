@@ -119,8 +119,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             response_created_event_data["truncation"] = self.responses_api_request[
                 "truncation"
             ]
-        if "usage" in self.responses_api_request:
-            response_created_event_data["usage"] = self.responses_api_request["usage"]
         if "user" in self.responses_api_request:
             response_created_event_data["user"] = self.responses_api_request["user"]
         if "metadata" in self.responses_api_request:
