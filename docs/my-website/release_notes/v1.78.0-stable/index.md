@@ -63,6 +63,50 @@ pip install litellm==1.78.0
 
 ---
 
+## Performance
+
+We've made significant enhancements to routing performance and session management in this release.
+
+**Reliable Sessions**
+
+`shared_session` is now consistently used across all calls, resolving JSON errors, enabling connection pooling, and actively managing session lifecycles—detecting stale connections, retrying expired sessions, and preventing 'Session is closed' errors.
+
+**Faster Routing**
+
+A new `model_name_to_deployment_indices` hash map replaces O(n) list scans in `_get_all_deployments()` with O(1) hash lookups, boosting routing performance and scalability.
+
+As a result, performance improved across all latency percentiles:
+
+- **Median latency:** 110 ms → **100 ms** (−9.1%)
+- **p95 latency:** 440 ms → **150 ms** (−65.9%)
+- **p99 latency:** 810 ms → **240 ms** (−70.4%)
+- **Average latency:** 310 ms → **111.73 ms** (−64.0%)
+
+### **Test Setup**
+
+**Locust**
+
+- **Concurrent users:** 1,000
+- **Ramp-up:** 500
+
+**System Specs**
+
+- **Database was used**
+- **CPU:** 4 vCPUs
+- **Memory:** 8 GB RAM
+- **LiteLLM Workers:** 4
+- **Instances**: 4
+
+**Configuration (config.yaml)**
+
+View the complete configuration: [gist.github.com/AlexsanderHamir/config.yaml](https://gist.github.com/AlexsanderHamir/53f7d554a5d2afcf2c4edb5b6be68ff4)
+
+**Load Script (no_cache_hits.py)**
+
+View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache_hits.py](https://gist.github.com/AlexsanderHamir/42c33d7a4dc7a57f56a78b560dee3a42)
+
+---
+
 ## New Models / Updated Models
 
 #### New Model Support
