@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# /batches
+# Batches (Legacy)
 
 :::warning Deprecated
 
