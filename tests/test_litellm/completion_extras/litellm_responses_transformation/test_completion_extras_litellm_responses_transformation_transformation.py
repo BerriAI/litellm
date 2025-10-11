@@ -259,3 +259,17 @@ and I learn to carry this small calm home."""
     assert choice.message.reasoning_content == reasoning_summary.text
 
     print("✓ transform_response correctly handled reasoning items and output messages")
+
+
+def test_convert_tools_to_responses_format():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    tools = [{"type": "function", "function": {"name": "test", "arguments": "test"}}]
+
+    result = handler._convert_tools_to_responses_format(tools)
+
+    assert result[0]["name"] == "test"

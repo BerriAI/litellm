@@ -18,13 +18,15 @@ from typing import (
     cast,
 )
 
+from openai.types.responses.tool_param import FunctionToolParam
+
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
-from litellm.types.llms.openai import Reasoning
+from litellm.types.llms.openai import ChatCompletionToolParamFunctionChunk, Reasoning
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam
@@ -464,9 +466,25 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         self, tools: List[Dict[str, Any]]
     ) -> List["ALL_RESPONSES_API_TOOL_PARAMS"]:
         """Convert chat completion tools to responses API tools format"""
-        responses_tools = []
+        responses_tools: List["ALL_RESPONSES_API_TOOL_PARAMS"] = []
         for tool in tools:
-            responses_tools.append(tool)
+            # convert function tool from chat completion to responses API format
+            if tool.get("type") == "function":
+                function_tool = cast(
+                    ChatCompletionToolParamFunctionChunk, tool.get("function")
+                )
+                responses_tools.append(
+                    FunctionToolParam(
+                        name=function_tool["name"],
+                        parameters=function_tool.get("parameters"),
+                        strict=function_tool.get("strict"),
+                        type="function",
+                        description=function_tool.get("description"),
+                    )
+                )
+            else:
+                responses_tools.append(tool)  # type: ignore
+
         return cast(List["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
 
     def _map_reasoning_effort(self, reasoning_effort: str) -> Optional[Reasoning]:
