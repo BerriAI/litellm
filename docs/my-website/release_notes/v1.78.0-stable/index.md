@@ -58,7 +58,7 @@ pip install litellm==1.78.0.rc.1
 
 ## Key Highlights
 
-- **MCP Gateway Enhancements** - Fine-grained tool control at team/key level, OpenAPI to MCP server conversion, and per-tool parameter allowlists
+- **MCP Gateway - Control Tool Access by Team/Key** - Control MCP tool access by team/key. 
 - **GPT-5 Pro & GPT-Image-1-Mini** - Day 0 support for OpenAI's GPT-5 Pro (400K context) and gpt-image-1-mini image generation
 - **UI Performance Boost** - Replaces bloated key list calls with lean key aliases endpoint, Turbopack for faster development, and major UI refactors
 - **EnkryptAI Guardrails** - New guardrail integration for content moderation
@@ -66,6 +66,12 @@ pip install litellm==1.78.0.rc.1
 - **Azure AD & SSO** - Enhanced Azure AD default credentials selection and EntraID app roles support
 
 ---
+
+## MCP Gateway - Control Tool Access by Team/Key
+
+From this release Proxy Admins can control MCP tool access by team/key. This is great for Proxy Admins
+
+
 
 ## New Models / Updated Models
 
