@@ -1204,6 +1204,8 @@ mcp_servers:
     scopes: ["public_repo", "user:email"]
 ```
 
+[**See Claude Code Tutorial**](./tutorials/claude_responses_api#connecting-mcp-servers)
+
 ## Using your MCP with client side credentials
 
 Use this if you want to pass a client side authentication token to LiteLLM to then pass to your MCP to auth to your MCP.
