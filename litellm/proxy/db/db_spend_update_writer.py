@@ -59,7 +59,7 @@ class DBSpendUpdateWriter:
     ):
         self.redis_cache = redis_cache
         self.redis_update_buffer = RedisUpdateBuffer(redis_cache=self.redis_cache)
-        self.pod_lock_manager = PodLockManager()
+        self.pod_lock_manager = PodLockManager(redis_cache=self.redis_cache)
         self.spend_update_queue = SpendUpdateQueue()
         self.daily_spend_update_queue = DailySpendUpdateQueue()
         self.daily_team_spend_update_queue = DailySpendUpdateQueue()
@@ -964,6 +964,7 @@ class DBSpendUpdateWriter:
         Generic function to update daily spend for any entity type (user, team, tag)
         """
         from litellm.proxy.utils import _raise_failed_update_spend_exception
+        from litellm.proxy.db.exception_handler import is_deadlock_error
 
         verbose_proxy_logger.debug(
             f"Daily {entity_type.capitalize()} Spend transactions: {len(daily_spend_transactions)}"
@@ -974,9 +975,9 @@ class DBSpendUpdateWriter:
         try:
             for i in range(n_retry_times + 1):
                 try:
-                    transactions_to_process = dict(
-                        list(daily_spend_transactions.items())[:BATCH_SIZE]
-                    )
+                    # Deterministic order to reduce lock-order inversions across workers
+                    ordered_items = sorted(daily_spend_transactions.items(), key=lambda kv: kv[0])
+                    transactions_to_process = dict(ordered_items[:BATCH_SIZE])
 
                     if len(transactions_to_process) == 0:
                         verbose_proxy_logger.debug(
@@ -1102,6 +1103,19 @@ class DBSpendUpdateWriter:
                             proxy_logging_obj=proxy_logging_obj,
                         )
                     await asyncio.sleep(2**i)
+                except Exception as e:
+                    # Retry on Postgres deadlock (40P01)
+                    if is_deadlock_error(e):
+                        if i >= n_retry_times:
+                            _raise_failed_update_spend_exception(
+                                e=e,
+                                start_time=start_time,
+                                proxy_logging_obj=proxy_logging_obj,
+                            )
+                        # small jitter to desynchronize conflicting workers
+                        await asyncio.sleep((2**i) + (0.001 * (i + 1)))
+                        continue
+                    raise
 
         except Exception as e:
             if "transactions_to_process" in locals():
