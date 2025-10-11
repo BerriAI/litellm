@@ -1874,15 +1874,15 @@ async def test_generate_key_with_object_permission():
 
     # Patch the prisma_client and other dependencies
     with patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints.prisma_client",
+        "litellm.proxy.proxy_server.prisma_client",
         mock_prisma_client,
     ), patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints.llm_router", None
+        "litellm.proxy.proxy_server.llm_router", None
     ), patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints.premium_user",
+        "litellm.proxy.proxy_server.premium_user",
         False,
     ), patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints.litellm_proxy_admin_name",
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name",
         "admin",
     ):
         # Execute
