@@ -726,3 +726,13 @@ def test_openai_safety_identifier_parameter_sync():
         assert "safety_identifier" in request_body
         # Verify safety_identifier is correctly sent to the API
         assert request_body["safety_identifier"] == "user_code_123456"
+
+
+def test_gpt_5_reasoning():
+    litellm._turn_on_debug()
+    response = litellm.completion(
+        model="openai/responses/gpt-5-mini",
+        messages=[{"role": "user", "content": "Think of a poem, and then write it."}],
+        reasoning_effort="low",
+    )
+    print("response: ", response)
