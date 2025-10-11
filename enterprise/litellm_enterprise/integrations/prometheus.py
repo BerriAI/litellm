@@ -2211,7 +2211,13 @@ class PrometheusLogger(CustomLogger):
             )
 
         # Create metrics ASGI app
-        metrics_app = make_asgi_app()
+        if 'PROMETHEUS_MULTIPROC_DIR' in os.environ:
+            from prometheus_client import CollectorRegistry, multiprocess
+            registry = CollectorRegistry()
+            multiprocess.MultiProcessCollector(registry)
+            metrics_app = make_asgi_app(registry)
+        else:
+            metrics_app = make_asgi_app()
 
         # Mount the metrics app to the app
         app.mount("/metrics", metrics_app)
