@@ -1349,10 +1349,14 @@ def encoded_images():
 def mock_convert_url_to_base64():
     with patch(
         "litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64",
-    ) as mock:
-        # Setup the mock to return a valid image object
-        mock.return_value = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
-        yield mock
+    ) as mock_factory, patch(
+        "litellm.litellm_core_utils.prompt_templates.image_handling.convert_url_to_base64",
+    ) as mock_image_handling:
+        # Setup both mocks to return a valid image object
+        expected_data = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
+        mock_factory.return_value = expected_data
+        mock_image_handling.return_value = expected_data
+        yield mock_factory
 
 
 @pytest.fixture
