@@ -96,11 +96,11 @@ def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
     if request is None:
         return None
     if (
-        hasattr(request, "scope")
-        and "parsed_body" in request.scope
-        and isinstance(request.scope["parsed_body"], tuple)
+        (scope := getattr(request, "scope", None))
+        and (raw_parsed_body := scope.get("parsed_body"))
+        and isinstance(raw_parsed_body, tuple)
     ):
-        accepted_keys, parsed_body = request.scope["parsed_body"]
+        accepted_keys, parsed_body = raw_parsed_body
         return {key: parsed_body[key] for key in accepted_keys}
     return None
 
