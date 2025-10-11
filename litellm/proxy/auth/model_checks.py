@@ -35,10 +35,18 @@ def get_provider_models(
         return get_valid_models(litellm_params=litellm_params)
 
     if provider in litellm.models_by_provider:
-        provider_models = get_valid_models(
-            custom_llm_provider=provider, litellm_params=litellm_params
-        )
-        return provider_models
+        try:
+            provider_models = get_valid_models(
+                custom_llm_provider=provider, litellm_params=litellm_params
+            )
+            # If get_valid_models returns empty list due to API errors, fall back to static list
+            if not provider_models:
+                verbose_proxy_logger.warning(f"get_valid_models returned empty for provider '{provider}', falling back to static model list")
+                provider_models = list(litellm.models_by_provider.get(provider, []))
+            return provider_models
+        except Exception as e:
+            verbose_proxy_logger.warning(f"Error getting models for provider '{provider}': {e}, falling back to static model list")
+            return list(litellm.models_by_provider.get(provider, []))
     return None
 
 
@@ -223,12 +231,14 @@ def get_known_models_from_wildcard(
     except ValueError:  # safely fail
         return []
 
-    if litellm_params is None:  # need litellm params to extract litellm model name
-        return []
-
-    try:
-        provider = litellm_params.model.split("/", 1)[0]
-    except ValueError:
+    # Extract provider from litellm_params if available, otherwise use wildcard prefix
+    if litellm_params is not None:
+        try:
+            provider = litellm_params.model.split("/", 1)[0]
+        except ValueError:
+            provider = wildcard_provider_prefix
+    else:
+        # When litellm_params is None, use the provider from the wildcard string
         provider = wildcard_provider_prefix
 
     # get all known provider models
@@ -280,6 +290,7 @@ def _get_wildcard_models(
                 all_wildcard_models.append(model)
 
             ## get litellm params from model
+            expanded_via_router = False
             if llm_router is not None:
                 model_list = llm_router.get_model_list(model_name=model)
                 if model_list is not None:
@@ -291,7 +302,11 @@ def _get_wildcard_models(
                             ),
                         )
                         all_wildcard_models.extend(wildcard_models)
-            else:
+                    expanded_via_router = True
+                    models_to_remove.add(model)
+            
+            # If router expansion failed or no router, use direct expansion
+            if not expanded_via_router:
                 # get all known provider models
                 wildcard_models = get_known_models_from_wildcard(wildcard_model=model)
 
