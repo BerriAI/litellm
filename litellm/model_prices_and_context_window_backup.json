@@ -19710,6 +19710,22 @@
         "mode": "embedding",
         "output_cost_per_token": 0.0
     },
+    "together_ai/baai/bge-base-en-v1.5": {
+        "input_cost_per_token": 8e-09,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 512,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 768
+    },
+    "together_ai/BAAI/bge-base-en-v1.5": {
+        "input_cost_per_token": 8e-09,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 512,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 768
+    },
     "together-ai-up-to-4b": {
         "input_cost_per_token": 1e-07,
         "litellm_provider": "together_ai",
