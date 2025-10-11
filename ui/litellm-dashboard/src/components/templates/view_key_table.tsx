@@ -1,64 +1,12 @@
 "use client";
-import React, { useEffect, useState, useMemo } from "react";
-import { keyDeleteCall, modelAvailableCall, getGuardrailsList, Organization } from "../networking";
+import React, { useEffect, useState } from "react";
+import { keyDeleteCall, Organization } from "../networking";
 import { add } from "date-fns";
-import {
-  InformationCircleIcon,
-  StatusOnlineIcon,
-  TrashIcon,
-  PencilAltIcon,
-  RefreshIcon,
-} from "@heroicons/react/outline";
-import {
-  keySpendLogsCall,
-  PredictedSpendLogsCall,
-  keyUpdateCall,
-  modelInfoCall,
-  regenerateKeyCall,
-} from "../networking";
-import {
-  Badge,
-  Card,
-  Table,
-  Grid,
-  Col,
-  Button,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Dialog,
-  DialogPanel,
-  Text,
-  Title,
-  Subtitle,
-  Icon,
-  BarChart,
-  TextInput,
-  Textarea,
-  Select,
-  SelectItem,
-} from "@tremor/react";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import {
-  fetchAvailableModelsForTeamOrKey,
-  getModelDisplayName,
-} from "../key_team_helpers/fetch_available_models_team_key";
-import { MultiSelect, MultiSelectItem } from "@tremor/react";
-import {
-  Button as Button2,
-  Modal,
-  Form,
-  Input,
-  Select as Select2,
-  InputNumber,
-  message,
-  Tooltip,
-  DatePicker,
-} from "antd";
+import { regenerateKeyCall } from "../networking";
+import { Grid, Col, Button, Text, Title, TextInput } from "@tremor/react";
+import { fetchAvailableModelsForTeamOrKey } from "../key_team_helpers/fetch_available_models_team_key";
+import { Modal, Form, InputNumber } from "antd";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import TextArea from "antd/es/input/TextArea";
 import useKeyList from "../key_team_helpers/key_list";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { AllKeysTable } from "../all_keys_table";

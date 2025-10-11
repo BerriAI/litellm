@@ -44,6 +44,7 @@ def cost_router(
         or "mistral" in model
         or "jamba" in model
         or "codestral" in model
+        or "gemma" in model
     ):
         return "cost_per_token"
     elif custom_llm_provider == "vertex_ai" and (

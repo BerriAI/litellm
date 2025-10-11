@@ -3,11 +3,11 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
 import { MCPTool, MCPToolsViewerProps, CallMCPToolResponse, mcpServerHasAuth } from "./types";
 import { listMCPTools, callMCPTool } from "../networking";
-import { getMCPAuthToken, setMCPAuthToken, removeMCPAuthToken, hasMCPAuthToken } from "./mcp_auth_storage";
+import { getMCPAuthToken, setMCPAuthToken, removeMCPAuthToken } from "./mcp_auth_storage";
 
-import { Modal, Input, Form, message } from "antd";
+import { Modal, Input, Form } from "antd";
 import { Button, Card, Title, Text } from "@tremor/react";
-import { RobotOutlined, ApiOutlined, KeyOutlined, SafetyOutlined, ToolOutlined } from "@ant-design/icons";
+import { RobotOutlined, SafetyOutlined, ToolOutlined } from "@ant-design/icons";
 
 import { AUTH_TYPE } from "./types";
 import NotificationsManager from "../molecules/notifications_manager";

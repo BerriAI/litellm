@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Modal, message, Select, Tooltip } from "antd";
+import { Modal, Select, Tooltip } from "antd";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, Button } from "@tremor/react";
 import { Grid, Col, Title, Text } from "@tremor/react";
 import { DataTable } from "../view_logs/table";

@@ -108,12 +108,12 @@ def test_openai_embedding_3():
     "model, api_base, api_key",
     [
         # ("azure/text-embedding-ada-002", None, None),
-        ("together_ai/togethercomputer/m2-bert-80M-8k-retrieval", None, None),
+        ("together_ai/BAAI/bge-base-en-v1.5", None, None),  # Updated to current Together AI embedding model
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_openai_azure_embedding_simple(model, api_base, api_key, sync_mode):
+async def test_together_ai_embedding(model, api_base, api_key, sync_mode):
     try:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
