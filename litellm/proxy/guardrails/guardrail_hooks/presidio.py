@@ -68,7 +68,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         output_parse_pii: Optional[bool] = False,
         presidio_ad_hoc_recognizers: Optional[str] = None,
         logging_only: Optional[bool] = None,
-        pii_entities_config: Optional[Dict[Union[PiiEntityType, str], PiiAction]] = None,
+        pii_entities_config: Optional[
+            Dict[Union[PiiEntityType, str], PiiAction]
+        ] = None,
         presidio_language: Optional[str] = None,
         **kwargs,
     ):
@@ -245,9 +247,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 # Make the request to /anonymize
                 anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
                 verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
+
+                # Build anonymize payload
                 anonymize_payload = {
                     "text": text,
                     "analyzer_results": analyze_results,
+                    "anonymizers": {
+                        "DEFAULT": {"type": "replace", "new_value": "{REDACTED}"}
+                    },
                 }
 
                 async with session.post(
@@ -412,11 +419,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             ):
                 messages = data["messages"]
                 tasks = []
+                content_types = []  # Track whether each content is string or structured
+
                 for m in messages:
                     content = m.get("content", None)
                     if content is None:
+                        content_types.append(None)
                         continue
+
+                    # Handle string content (OpenAI format)
                     if isinstance(content, str):
+                        content_types.append("string")
                         tasks.append(
                             self.check_pii(
                                 text=content,
@@ -425,15 +438,54 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                                 request_data=data,
                             )
                         )
+                    # Handle structured content (Anthropic format with list of content blocks)
+                    elif isinstance(content, list):
+                        content_types.append("list")
+                        # Process each text block in the content array
+                        for content_block in content:
+                            if (
+                                isinstance(content_block, dict)
+                                and content_block.get("type") == "text"
+                            ):
+                                text = content_block.get("text", "")
+                                if text:
+                                    tasks.append(
+                                        self.check_pii(
+                                            text=text,
+                                            output_parse_pii=self.output_parse_pii,
+                                            presidio_config=presidio_config,
+                                            request_data=data,
+                                        )
+                                    )
+                    else:
+                        content_types.append(None)
+
                 responses = await asyncio.gather(*tasks)
-                for index, r in enumerate(responses):
-                    content = messages[index].get("content", None)
+
+                # Apply redacted text back to messages
+                response_index = 0
+                for msg_index, content_type in enumerate(content_types):
+                    if content_type is None:
+                        continue
+
+                    content = messages[msg_index].get("content", None)
                     if content is None:
                         continue
-                    if isinstance(content, str):
-                        messages[index][
-                            "content"
-                        ] = r  # replace content with redacted string
+
+                    # Handle string content
+                    if content_type == "string":
+                        messages[msg_index]["content"] = responses[response_index]
+                        response_index += 1
+                    # Handle structured content
+                    elif content_type == "list":
+                        for content_block in content:
+                            if (
+                                isinstance(content_block, dict)
+                                and content_block.get("type") == "text"
+                            ):
+                                if content_block.get("text"):
+                                    content_block["text"] = responses[response_index]
+                                    response_index += 1
                 verbose_proxy_logger.debug(
                     f"Presidio PII Masking: Redacted pii message: {data['messages']}"
                 )
@@ -530,10 +582,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Union[ModelResponse, EmbeddingResponse, ImageResponse],
+        response: Union[ModelResponse, EmbeddingResponse, ImageResponse, dict],
     ):
         """
-        Output parse the response object to replace the masked tokens with user sent values
+        Output parse the response object to:
+        1. Replace the masked tokens from input with user sent values (unmask input tokens)
+        2. Mask any NEW PII found in the LLM's response (mask output PII)
         """
         verbose_proxy_logger.debug(
             f"PII Masking Args: self.output_parse_pii={self.output_parse_pii}; type of response={type(response)}"
@@ -542,17 +596,57 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if self.output_parse_pii is False and litellm.output_parse_pii is False:
             return response
 
+        presidio_config = self.get_presidio_settings_from_request_data(data)
+
+        # Handle OpenAI/ModelResponse format
         if isinstance(response, ModelResponse) and not isinstance(
             response.choices[0], StreamingChoices
         ):  # /chat/completions requests
             if isinstance(response.choices[0].message.content, str):
+                original_content = response.choices[0].message.content
                 verbose_proxy_logger.debug(
-                    f"self.pii_tokens: {self.pii_tokens}; initial response: {response.choices[0].message.content}"
+                    f"self.pii_tokens: {self.pii_tokens}; initial response: {original_content}"
                 )
+
+                # Step 1: Unmask input tokens (original behavior)
                 for key, value in self.pii_tokens.items():
                     response.choices[0].message.content = response.choices[
                         0
                     ].message.content.replace(key, value)
+
+                # Step 2: Mask NEW PII found in the output
+                masked_output = await self.check_pii(
+                    text=response.choices[0].message.content,
+                    output_parse_pii=False,  # Don't track tokens for unmasking
+                    presidio_config=presidio_config,
+                    request_data=data,
+                )
+                response.choices[0].message.content = masked_output
+
+        # Handle Anthropic format (dict response from /v1/messages)
+        elif isinstance(response, dict):
+            content = response.get("content", [])
+            if isinstance(content, list):
+                for content_block in content:
+                    if (
+                        isinstance(content_block, dict)
+                        and content_block.get("type") == "text"
+                    ):
+                        text = content_block.get("text", "")
+                        if text:
+                            # Step 1: Unmask input tokens
+                            for key, value in self.pii_tokens.items():
+                                text = text.replace(key, value)
+
+                            # Step 2: Mask NEW PII found in the output
+                            masked_text = await self.check_pii(
+                                text=text,
+                                output_parse_pii=False,
+                                presidio_config=presidio_config,
+                                request_data=data,
+                            )
+                            content_block["text"] = masked_text
+
         return response
 
     async def async_post_call_streaming_iterator_hook(
