@@ -610,6 +610,8 @@ On the LiteLLM UI, Navigate to the Keys page and click on `Generate Key` > `Key 
 
 #### Update existing key to enable rotation
 
+**API**
+
 ```bash
 curl 'http://0.0.0.0:4000/key/update' \
   -H 'Authorization: Bearer <your-master-key>' \
@@ -620,6 +622,15 @@ curl 'http://0.0.0.0:4000/key/update' \
         "rotation_interval": "90d"
       }'
 ```
+
+**LiteLLM UI**
+
+On the LiteLLM UI, Navigate to the Keys page. Select the key you want to update and click on `Edit Settings` > `Auto-Rotation Settings`
+
+<Image 
+  img={require('../../img/key_u.png')}
+  style={{width: '30%', display: 'block', margin: '0'}}
+/>
 
 #### Environment variables
 
