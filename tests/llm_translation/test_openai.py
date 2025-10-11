@@ -736,3 +736,28 @@ def test_gpt_5_reasoning():
         reasoning_effort="low",
     )
     print("response: ", response)
+    assert response.choices[0].message.reasoning_content is not None
+
+
+def test_gpt_5_reasoning_streaming():
+    litellm._turn_on_debug()
+    response = litellm.completion(
+        model="openai/responses/gpt-5-mini",
+        messages=[{"role": "user", "content": "Think of a poem, and then write it."}],
+        reasoning_effort="low",
+        stream=True,
+    )
+
+    has_reasoning_content = False
+    for chunk in response:
+        print("chunk: ", chunk)
+        if (
+            hasattr(chunk.choices[0].delta, "reasoning_content")
+            and chunk.choices[0].delta.reasoning_content is not None
+        ):
+            print("reasoning_content: ", chunk.choices[0].delta.reasoning_content)
+            has_reasoning_content = True
+
+    assert has_reasoning_content
+
+    print("✓ gpt_5_reasoning_streaming correctly handled reasoning content")
