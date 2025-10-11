@@ -78,7 +78,9 @@ pip install litellm==1.78.0.rc.1
 
 Proxy admins can now control MCP tool access by team or key. This makes it easy to grant different teams selective access to tools from the same MCP server.
 
-For example, give your Engineering team access to `list_repositories`, `create_issue`, and `search_code` tools, while Sales only gets `search_code` and `close_issue` tools.
+For example, you can now give your Engineering team access to `list_repositories`, `create_issue`, and `search_code` tools, while Sales only gets `search_code` and `close_issue` tools. 
+
+This makes it easier for Proxy Admins to govern MCP Tool Access.
 
 [Get Started](../../docs/mcp_control#set-allowed-tools-for-a-key-team-or-organization)
 
