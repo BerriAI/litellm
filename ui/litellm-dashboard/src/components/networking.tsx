@@ -4442,7 +4442,7 @@ export const getGeneralSettingsCall = async (accessToken: string) => {
   }
 };
 
-export const getPassThroughEndpointsCall = async (accessToken: String, teamId?: string | null) => {
+export const getPassThroughEndpointsCall = async (accessToken: string, teamId?: string | null) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/config/pass_through_endpoint` : `/config/pass_through_endpoint`;
 
