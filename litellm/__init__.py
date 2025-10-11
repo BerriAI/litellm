@@ -525,6 +525,7 @@ volcengine_models: Set = set()
 wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
+io_intelligence_models: Set = set()
 lemonade_models: Set = set()
 
 
@@ -748,6 +749,8 @@ def add_known_models():
             ovhcloud_models.add(key)
         elif value.get("litellm_provider") == "ovhcloud-embedding-models":
             ovhcloud_embedding_models.add(key)
+        elif value.get("litellm_provider") == "io_intelligence":
+            io_intelligence_models.add(key)
         elif value.get("litellm_provider") == "lemonade":
             lemonade_models.add(key)
 
@@ -847,6 +850,7 @@ model_list = list(
     | volcengine_models
     | wandb_models
     | ovhcloud_models
+    | io_intelligence_models
     | lemonade_models
 )
 
@@ -1287,6 +1291,9 @@ from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
 from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
 from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
 from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
+from .llms.io_intelligence.chat.transformation import IOIntelligenceChatConfig
+from .llms.io_intelligence.embedding.handler import IOIntelligenceEmbeddingHandler
+from .llms.io_intelligence.embedding.transformation import IOIntelligenceEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .main import *  # type: ignore
 from .integrations import *
