@@ -103,7 +103,7 @@ View the complete configuration: [gist.github.com/AlexsanderHamir/config.yaml](h
 
 View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache_hits.py](https://gist.github.com/AlexsanderHamir/42c33d7a4dc7a57f56a78b560dee3a42)
 
-### MCP Oauth
+### MCP OAuth 2.0 Support
 
 <Image img={require('../../img/mcp_updates.jpg')} style={{ width: '800px', height: 'auto' }} />
 
@@ -111,8 +111,21 @@ View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache
 
 This release adds support for OAuth 2.0 Client Credentials for MCP servers. This is great for **Internal Dev Tools** use-cases, as it enables your users to call MCP servers, with their own credentials. E.g. Allowing your developers to call the Github MCP, with their own credentials.
 
-
 [Set it up today on Claude Code](../../docs/tutorials/claude_responses_api#connecting-mcp-servers)
+
+### Scheduled Key Rotations
+
+<Image img={require('../../img/release_notes/schedule_key_rotations.png')}  style={{ width: '800px', height: 'auto' }} />
+
+<br/>
+
+This release brings support for scheduling virtual key rotations on LiteLLM AI Gateway. 
+ 
+From this release you can enforce Virtual Keys to rotate on a schedule of your choice e.g every 15 days/30 days/60 days etc.
+ 
+This is great for Proxy Admins who need to enforce security policies for production workloads. 
+
+[Get Started](../../docs/proxy/virtual_keys#scheduled-key-rotations)
 
 
 ## New Models / Updated Models

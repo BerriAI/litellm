@@ -57,19 +57,6 @@ pip install litellm==1.77.5
 
 ---
 
-### Scheduled Key Rotations
-
-<Image img={require('../../img/release_notes/schedule_key_rotations.png')}  style={{ width: '800px', height: 'auto' }} />
-
-<br/>
-
-This release brings support for scheduling virtual key rotations on LiteLLM AI Gateway.
-
-This is great for Proxy Admins looking to enforce Enterprise Grade security for use cases going through LiteLLM AI Gateway.
-
-From this release you can enforce Virtual Keys to rotate on a schedule of your choice e.g every 15 days/30 days/60 days etc.
-
----
 ### Performance Improvements - 54% RPS Improvement
 
 <Image img={require('../../img/release_notes/perf_77_5.png')}  style={{ width: '800px', height: 'auto' }} />
