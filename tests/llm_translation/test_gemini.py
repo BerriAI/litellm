@@ -151,7 +151,12 @@ def test_gemini_context_caching_with_ttl():
     ]
 
     result_no_ttl = transform_openai_messages_to_gemini_context_caching(
-        model="gemini-1.5-pro", messages=messages_no_ttl, cache_key="test-no-ttl"
+        model="gemini-1.5-pro",
+        messages=messages_no_ttl,
+        cache_key="test-no-ttl",
+        custom_llm_provider="gemini",
+        vertex_project=None,
+        vertex_location=None,
     )
 
     # Verify no TTL field is present when not specified
@@ -201,7 +206,12 @@ def test_gemini_context_caching_with_ttl():
 
     # Test transformation with mixed messages
     result_mixed = transform_openai_messages_to_gemini_context_caching(
-        model="gemini-1.5-pro", messages=messages_mixed, cache_key="test-mixed-ttl"
+        model="gemini-1.5-pro",
+        messages=messages_mixed,
+        cache_key="test-mixed-ttl",
+        custom_llm_provider="gemini",
+        vertex_project=None,
+        vertex_location=None,
     )
 
     # Should pick up the first valid TTL
