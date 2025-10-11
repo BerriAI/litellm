@@ -1819,14 +1819,17 @@ async def initialize_pass_through_endpoints(
 
     verbose_proxy_logger.debug("initializing pass through endpoints")
     from litellm.proxy._types import CommonProxyErrors, LiteLLMRoutes
-    from litellm.proxy.proxy_server import app, general_settings, premium_user
+    from litellm.proxy.proxy_server import (
+        app,
+        config_passthrough_endpoints,
+        premium_user,
+    )
 
     ## get combined pass-through endpoints from db + config
-    config_pass_through_endpoints = general_settings.get("pass_through_endpoints")
     combined_pass_through_endpoints: List[Union[Dict, PassThroughGenericEndpoint]]
-    if config_pass_through_endpoints is not None:
+    if config_passthrough_endpoints is not None:
         combined_pass_through_endpoints = _get_combined_pass_through_endpoints(  # type: ignore
-            pass_through_endpoints, config_pass_through_endpoints
+            pass_through_endpoints, config_passthrough_endpoints
         )
     else:
         combined_pass_through_endpoints = pass_through_endpoints  # type: ignore
