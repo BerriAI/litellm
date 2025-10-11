@@ -1162,34 +1162,6 @@ class MCPServerManager:
         else:
             # For regular MCP servers, use the MCP client
             # Get server-specific auth header if available
-            server_auth_header: Optional[Union[Dict[str, str], str]] = None
-            if mcp_server_auth_headers and mcp_server.alias:
-                server_auth_header = mcp_server_auth_headers.get(mcp_server.alias)
-            elif mcp_server_auth_headers and mcp_server.server_name:
-                server_auth_header = mcp_server_auth_headers.get(mcp_server.server_name)
-
-            # Fall back to deprecated mcp_auth_header if no server-specific header found
-            if server_auth_header is None:
-                server_auth_header = mcp_auth_header
-
-            # oauth2 headers
-            extra_headers: Optional[Dict[str, str]] = None
-            if mcp_server.auth_type == MCPAuth.oauth2:
-                extra_headers = oauth2_headers
-
-            if mcp_server.extra_headers and raw_headers:
-                if extra_headers is None:
-                    extra_headers = {}
-                for header in mcp_server.extra_headers:
-                    if header in raw_headers:
-                        extra_headers[header] = raw_headers[header]
-
-            client = self._create_mcp_client(
-                server=mcp_server,
-                mcp_auth_header=server_auth_header,
-                extra_headers=extra_headers,
-            )
-
             async with client:
                 # Use the original tool name (without prefix) for the actual call
                 call_tool_params = MCPCallToolRequestParams(
