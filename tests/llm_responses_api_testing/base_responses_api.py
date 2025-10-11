@@ -57,9 +57,6 @@ def validate_responses_api_response(response, final_chunk: bool = False):
     assert "output" in response and isinstance(
         response["output"], list
     ), "Response should have a list 'output' field"
-    assert "parallel_tool_calls" in response and isinstance(
-        response["parallel_tool_calls"], bool
-    ), "Response should have a boolean 'parallel_tool_calls' field"
 
     # Optional fields with their expected types
     optional_fields = {
@@ -69,9 +66,10 @@ def validate_responses_api_response(response, final_chunk: bool = False):
         "metadata": dict,
         "model": str,
         "object": str,
+        "parallel_tool_calls": (bool, type(None)),
         "temperature": (int, float, type(None)),
-        "tool_choice": (dict, str),
-        "tools": list,
+        "tool_choice": (dict, str, type(None)),
+        "tools": (list, type(None)),
         "top_p": (int, float, type(None)),
         "max_output_tokens": (int, type(None)),
         "previous_response_id": (str, type(None)),

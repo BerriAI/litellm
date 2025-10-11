@@ -1,5 +1,5 @@
 import React from "react";
-import { Modal, Form, InputNumber, message } from "antd";
+import { Modal, Form, InputNumber } from "antd";
 import { TextInput } from "@tremor/react";
 import { Button as Button2 } from "antd";
 import { modelUpdateCall } from "../networking";
@@ -11,7 +11,12 @@ interface EditModelModalProps {
   onSubmit: (data: FormData) => void;
 }
 
-export const handleEditModelSubmit = async (formValues: Record<string, any>, accessToken: string | null, setEditModalVisible: (visible: boolean) => void, setSelectedModel: (model: any) => void) => {
+export const handleEditModelSubmit = async (
+  formValues: Record<string, any>,
+  accessToken: string | null,
+  setEditModalVisible: (visible: boolean) => void,
+  setSelectedModel: (model: any) => void,
+) => {
   // Call API to update team with teamId and values
 
   console.log("handleEditSubmit:", formValues);
@@ -31,7 +36,6 @@ export const handleEditModelSubmit = async (formValues: Record<string, any>, acc
     formValues.output_cost_per_token = Number(formValues.output_cost_per_token) / 1_000_000;
   }
 
-
   for (const [key, value] of Object.entries(formValues)) {
     if (key !== "model_id") {
       // Empty string means user wants to null the value
@@ -40,24 +44,25 @@ export const handleEditModelSubmit = async (formValues: Record<string, any>, acc
       model_info_model_id = value === "" ? null : value;
     }
   }
-  
+
   let payload: {
     litellm_params: Record<string, any> | undefined;
     model_info: { id: any } | undefined;
   } = {
     litellm_params: Object.keys(newLiteLLMParams).length > 0 ? newLiteLLMParams : undefined,
-    model_info: model_info_model_id !== undefined ? {
-      id: model_info_model_id,
-    } : undefined,
+    model_info:
+      model_info_model_id !== undefined
+        ? {
+            id: model_info_model_id,
+          }
+        : undefined,
   };
 
   console.log("handleEditSubmit payload:", payload);
 
   try {
     let newModelValue = await modelUpdateCall(accessToken, payload);
-    NotificationsManager.success(
-      "Model updated successfully, restart server to see updates"
-    );
+    NotificationsManager.success("Model updated successfully, restart server to see updates");
 
     setEditModalVisible(false);
     setSelectedModel(null);
@@ -66,12 +71,7 @@ export const handleEditModelSubmit = async (formValues: Record<string, any>, acc
   }
 };
 
-const EditModelModal: React.FC<EditModelModalProps> = ({
-  visible,
-  onCancel,
-  model,
-  onSubmit,
-}) => {
+const EditModelModal: React.FC<EditModelModalProps> = ({ visible, onCancel, model, onSubmit }) => {
   const [form] = Form.useForm();
   let litellm_params_to_edit: Record<string, any> = {};
   let model_name = "";
@@ -79,8 +79,12 @@ const EditModelModal: React.FC<EditModelModalProps> = ({
   if (model) {
     litellm_params_to_edit = {
       ...model.litellm_params,
-      input_cost_per_token: model.litellm_params?.input_cost_per_token ? (model.litellm_params.input_cost_per_token * 1_000_000) : undefined,
-      output_cost_per_token: model.litellm_params?.output_cost_per_token ? (model.litellm_params.output_cost_per_token * 1_000_000) : undefined,
+      input_cost_per_token: model.litellm_params?.input_cost_per_token
+        ? model.litellm_params.input_cost_per_token * 1_000_000
+        : undefined,
+      output_cost_per_token: model.litellm_params?.output_cost_per_token
+        ? model.litellm_params.output_cost_per_token * 1_000_000
+        : undefined,
     };
     model_name = model.model_name;
     let model_info = model.model_info;
@@ -97,8 +101,12 @@ const EditModelModal: React.FC<EditModelModalProps> = ({
       .then((values) => {
         const submissionValues = {
           ...values,
-          input_cost_per_token: values.input_cost_per_token ? Number(values.input_cost_per_token) / 1_000_000 : undefined,
-          output_cost_per_token: values.output_cost_per_token ? Number(values.output_cost_per_token) / 1_000_000 : undefined,
+          input_cost_per_token: values.input_cost_per_token
+            ? Number(values.input_cost_per_token) / 1_000_000
+            : undefined,
+          output_cost_per_token: values.output_cost_per_token
+            ? Number(values.output_cost_per_token) / 1_000_000
+            : undefined,
         };
         onSubmit(submissionValues);
         form.resetFields();
@@ -153,11 +161,7 @@ const EditModelModal: React.FC<EditModelModalProps> = ({
           <Form.Item className="mt-8" label="model" name="model">
             <TextInput />
           </Form.Item>
-          <Form.Item
-            label="organization"
-            name="organization"
-            tooltip="OpenAI Organization ID"
-          >
+          <Form.Item label="organization" name="organization" tooltip="OpenAI Organization ID">
             <TextInput />
           </Form.Item>
 
@@ -196,7 +200,6 @@ const EditModelModal: React.FC<EditModelModalProps> = ({
           >
             <InputNumber min={0} step={1} />
           </Form.Item>
-
 
           <Form.Item label="model_id" name="model_id" hidden={true}></Form.Item>
         </>

@@ -1,4 +1,3 @@
-import { message } from "antd";
 import Anthropic from "@anthropic-ai/sdk";
 import { MessageType } from "../types";
 import { TokenUsage } from "../ResponseMetrics";
@@ -18,7 +17,7 @@ export async function makeAnthropicMessagesRequest(
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
-  selectedMCPTools?: string[]
+  selectedMCPTools?: string[],
 ) {
   if (!accessToken) {
     throw new Error("API key is required");
@@ -34,7 +33,7 @@ export async function makeAnthropicMessagesRequest(
   // Prepare headers with tags and trace ID
   const headers: Record<string, string> = {};
   if (tags && tags.length > 0) {
-    headers['x-litellm-tags'] = tags.join(',');
+    headers["x-litellm-tags"] = tags.join(",");
   }
 
   const client = new Anthropic({
@@ -49,16 +48,21 @@ export async function makeAnthropicMessagesRequest(
     let firstTokenReceived = false;
 
     // Format MCP tools if selected
-    const tools = selectedMCPTools && selectedMCPTools.length > 0 ? [{
-      type: "mcp",
-      server_label: "litellm",
-      server_url: `${proxyBaseUrl}/mcp`,
-      require_approval: "never",
-      allowed_tools: selectedMCPTools,
-      headers: {
-        "x-litellm-api-key": `Bearer ${accessToken}`
-      }
-    }] : undefined;
+    const tools =
+      selectedMCPTools && selectedMCPTools.length > 0
+        ? [
+            {
+              type: "mcp",
+              server_label: "litellm",
+              server_url: `${proxyBaseUrl}/mcp`,
+              require_approval: "never",
+              allowed_tools: selectedMCPTools,
+              headers: {
+                "x-litellm-api-key": `Bearer ${accessToken}`,
+              },
+            },
+          ]
+        : undefined;
 
     const requestBody: any = {
       model: selectedModel,
@@ -68,7 +72,7 @@ export async function makeAnthropicMessagesRequest(
       // @ts-ignore - litellm specific parameter
       litellm_trace_id: traceId,
     };
-    
+
     if (vector_store_ids) requestBody.vector_store_ids = vector_store_ids;
     if (guardrails) requestBody.guardrails = guardrails;
     if (tools) {
@@ -82,11 +86,11 @@ export async function makeAnthropicMessagesRequest(
 
     for await (const messageStreamEvent of stream) {
       console.log("Stream event:", messageStreamEvent);
-      
+
       // Process content block deltas
-      if (messageStreamEvent.type === 'content_block_delta') {
+      if (messageStreamEvent.type === "content_block_delta") {
         const delta = messageStreamEvent.delta;
-        
+
         // Measure time to first token
         if (!firstTokenReceived) {
           firstTokenReceived = true;
@@ -96,20 +100,20 @@ export async function makeAnthropicMessagesRequest(
             onTimingData(timeToFirstToken);
           }
         }
-        
+
         // Handle different types of deltas
-        if (delta.type === 'text_delta') {
+        if (delta.type === "text_delta") {
           updateTextUI("assistant", delta.text, selectedModel);
         }
         // @ts-ignore - reasoning_content might not be in the official types yet
-        else if (delta.type === 'reasoning_delta' && onReasoningContent) {
+        else if (delta.type === "reasoning_delta" && onReasoningContent) {
           // @ts-ignore
           onReasoningContent(delta.text);
         }
       }
 
       // Process usage data from message_delta events
-      if (messageStreamEvent.type === 'message_delta' && (messageStreamEvent as any).usage && onUsageData) {
+      if (messageStreamEvent.type === "message_delta" && (messageStreamEvent as any).usage && onUsageData) {
         const usage = (messageStreamEvent as any).usage;
         console.log("Usage data found:", usage);
         const usageData: TokenUsage = {
@@ -125,7 +129,7 @@ export async function makeAnthropicMessagesRequest(
       console.log("Anthropic messages request was cancelled");
     } else {
       NotificationManager.fromBackend(
-        `Error occurred while generating model response. Please try again. Error: ${error}`
+        `Error occurred while generating model response. Please try again. Error: ${error}`,
       );
     }
     throw error;

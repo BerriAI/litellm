@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## **Batch APIs**
+# Vertex Batch APIs
 
 Just add the following Vertex env vars to your environment. 
 

@@ -65,7 +65,7 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIResponse,
 )
-from litellm.types.rerank import OptionalRerankParams, RerankResponse
+from litellm.types.rerank import RerankResponse
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
@@ -426,6 +426,7 @@ class BaseLLMHTTPHandler:
                     ),
                     json_mode=json_mode,
                     signed_json_body=signed_json_body,
+                    shared_session=shared_session,
                 )
 
         if stream is True:
@@ -893,7 +894,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         provider_config: BaseRerankConfig,
-        optional_rerank_params: OptionalRerankParams,
+        optional_rerank_params: Dict,
         timeout: Optional[Union[float, httpx.Timeout]],
         model_response: RerankResponse,
         _is_async: bool = False,
@@ -1532,6 +1533,7 @@ class BaseLLMHTTPHandler:
                         data=data,
                         fake_stream=fake_stream,
                     )
+
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,

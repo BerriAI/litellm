@@ -36,6 +36,7 @@ const sidebars = {
           "proxy/guardrails/aporia_api",
           "proxy/guardrails/azure_content_guardrail",
           "proxy/guardrails/bedrock",
+          "proxy/guardrails/enkryptai",
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
@@ -188,12 +189,13 @@ const sidebars = {
           type: "category",
           label: "Budgets + Rate Limits",
           items: [
+            "proxy/users",
+            "proxy/team_budgets",
+            "proxy/tag_budgets",
             "proxy/customers",
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
-            "proxy/team_budgets",
             "proxy/temporary_budget_increase",
-            "proxy/users"
           ],
         },
         "proxy/caching",
@@ -333,7 +335,17 @@ const sidebars = {
             "image_variations",
           ]
         },
-        "mcp",
+        {
+          type: "category",
+          label: "/mcp - Model Context Protocol",
+          items: [
+            "mcp",
+            "mcp_usage",
+            "mcp_control",
+            "mcp_cost",
+            "mcp_guardrail",
+          ]
+        },
         "moderation",
         {
           type: "category",
@@ -412,6 +424,7 @@ const sidebars = {
           items: [
             "providers/vertex",
             "providers/vertex_partner",
+            "providers/vertex_self_deployed",
             "providers/vertex_image",
             "providers/vertex_batch",
           ]
@@ -458,7 +471,14 @@ const sidebars = {
         "providers/deepgram",
         "providers/watsonx",
         "providers/predibase",
-        "providers/nvidia_nim",
+        {
+          type: "category",
+          label: "Nvidia NIM",
+          items: [
+            "providers/nvidia_nim",
+            "providers/nvidia_nim_rerank",
+          ]
+        },
         { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
         "providers/xai",
         "providers/moonshot",
@@ -515,22 +535,17 @@ const sidebars = {
         "providers/oci",
         "providers/datarobot",
         "providers/ovhcloud",  
+        "providers/wandb_inference",
       ],
     },
     {
       type: "category",
       label: "Guides",
       items: [
-        {
-          type: "category",
-          label: "Tools",
-          items: [
-            "completion/computer_use",
-            "completion/web_search",
-            "completion/web_fetch",
-            "completion/function_call",
-          ]
-        },
+        "completion/computer_use",
+        "completion/web_search",
+        "completion/web_fetch",
+        "completion/function_call",
         "completion/audio",
         "completion/document_understanding",
         "completion/drop_params",
@@ -667,6 +682,7 @@ const sidebars = {
       items: [
         "data_security",
         "data_retention",
+        "proxy/security_encryption_faq",
         "migration_policy",
         {
           type: "category",
@@ -699,7 +715,8 @@ const sidebars = {
             "projects/llm_cord",
             "projects/pgai",
             "projects/GPTLocalhost",
-            "projects/HolmesGPT"
+            "projects/HolmesGPT",
+            "projects/Railtracks",
           ],
         },
         "extras/code_quality",
