@@ -175,6 +175,21 @@ async def common_checks(
                 max_budget=end_user_budget,
                 message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
             )
+    # 5.1 Fallback to global default end-user budget if no per-customer budget exists
+    elif (
+        end_user_object is not None
+        and end_user_object.litellm_budget_table is None
+        and litellm.max_end_user_budget is not None
+    ):
+        if (
+            end_user_object.spend is not None
+            and end_user_object.spend > litellm.max_end_user_budget
+        ):
+            raise litellm.BudgetExceededError(
+                current_cost=end_user_object.spend,
+                max_budget=litellm.max_end_user_budget,
+                message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={litellm.max_end_user_budget}",
+            )
 
     # 6. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
     if (
@@ -470,6 +485,16 @@ async def get_end_user_object(
         if route in LiteLLMRoutes.info_routes.value:  # allow calling info routes
             return
         if end_user_obj.litellm_budget_table is None:
+            # Fallback to global default if configured
+            if litellm.max_end_user_budget is not None:
+                if (
+                    end_user_obj.spend is not None
+                    and end_user_obj.spend > litellm.max_end_user_budget
+                ):
+                    raise litellm.BudgetExceededError(
+                        current_cost=end_user_obj.spend,
+                        max_budget=litellm.max_end_user_budget,
+                    )
             return
         end_user_budget = end_user_obj.litellm_budget_table.max_budget
         if end_user_budget is not None and end_user_obj.spend > end_user_budget:
