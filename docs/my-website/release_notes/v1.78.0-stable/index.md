@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.78.0-stable - MCP Gateway: Control Tool Access by Team/Key"
+title: "[Preview] v1.78.0-stable - MCP Gateway: Control Tool Access by Team, Key"
 slug: "v1-78-0"
 date: 2025-10-11T10:00:00
 authors:
@@ -37,6 +37,10 @@ import TabItem from '@theme/TabItem';
 <TabItem value="docker" label="Docker">
 
 ``` showLineNumbers title="docker run litellm"
+docker run \
+-e STORE_MODEL_IN_DB=True \
+-p 4000:4000 \
+ghcr.io/berriai/litellm:v1.78.0.rc.1
 ```
 
 </TabItem>
@@ -44,7 +48,7 @@ import TabItem from '@theme/TabItem';
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.78.0
+pip install litellm==1.78.0.rc.1
 ```
 
 </TabItem>
@@ -54,7 +58,7 @@ pip install litellm==1.78.0
 
 ## Key Highlights
 
-- **MCP Gateway Enhancements** - Fine-grained tool control at team/key level, OpenAPI to MCP server conversion, and per-tool parameter allowlists
+- **MCP Gateway - Control Tool Access by Team, Key** - Control MCP tool access by team/key. 
 - **GPT-5 Pro & GPT-Image-1-Mini** - Day 0 support for OpenAI's GPT-5 Pro (400K context) and gpt-image-1-mini image generation
 - **UI Performance Boost** - Replaces bloated key list calls with lean key aliases endpoint, Turbopack for faster development, and major UI refactors
 - **EnkryptAI Guardrails** - New guardrail integration for content moderation
@@ -108,6 +112,23 @@ View the complete configuration: [gist.github.com/AlexsanderHamir/config.yaml](
 View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache_hits.py](https://gist.github.com/AlexsanderHamir/42c33d7a4dc7a57f56a78b560dee3a42)
 
 ---
+### MCP Gateway - Control Tool Access by Team, Key
+
+<Image 
+  img={require('../../img/release_notes/tool_control.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br/>
+
+Proxy admins can now control MCP tool access by team or key. This makes it easy to grant different teams selective access to tools from the same MCP server.
+
+For example, you can now give your Engineering team access to `list_repositories`, `create_issue`, and `search_code` tools, while Sales only gets `search_code` and `close_issue` tools. 
+
+This makes it easier for Proxy Admins to govern MCP Tool Access.
+
+[Get Started](../../docs/mcp_control#set-allowed-tools-for-a-key-team-or-organization)
+
 
 ## New Models / Updated Models
 

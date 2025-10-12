@@ -355,12 +355,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[
-                        base_tool_name
-                    ] = server_prefix
-                    self.tool_name_to_mcp_server_name_mapping[
-                        prefixed_tool_name
-                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
+                        server_prefix
+                    )
+                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
+                        server_prefix
+                    )
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -1276,7 +1276,7 @@ class MCPServerManager:
             get_prisma_client_or_throw,
         )
 
-        verbose_logger.info("Loading MCP servers from database into registry...")
+        verbose_logger.debug("Loading MCP servers from database into registry...")
 
         # perform authz check to filter the mcp servers user has access to
         prisma_client = get_prisma_client_or_throw(
@@ -1292,7 +1292,9 @@ class MCPServerManager:
             )
             self.add_update_server(server)
 
-        verbose_logger.info(f"Registry now contains {len(self.get_registry())} servers")
+        verbose_logger.debug(
+            f"Registry now contains {len(self.get_registry())} servers"
+        )
 
     def get_mcp_server_by_id(self, server_id: str) -> Optional[MCPServer]:
         """
