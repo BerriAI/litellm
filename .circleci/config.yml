@@ -676,18 +676,16 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
-      - run:
-          name: Install PostgreSQL
-          command: |
-            sudo apt-get update
-            sudo apt-get install postgresql postgresql-contrib
-            echo 'export PATH=/usr/lib/postgresql/*/bin:$PATH' >> $BASH_ENV
       - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
             echo "Git commit hash: $CIRCLE_SHA1"
-
+      - run:
+          name: Install PostgreSQL
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y postgresql-14 postgresql-contrib-14
       - restore_cache:
           keys:
             - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
@@ -2376,6 +2374,25 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "assemblyai==0.37.0"
       - run:
+          name: Install dockerize
+          command: |
+            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=circle_test \
+              -p 5432:5432 \
+              postgres:14
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
       - run:
@@ -2385,10 +2402,11 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=$CLEAN_STORE_MODEL_IN_DB_DATABASE_URL \
+              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e STORE_MODEL_IN_DB="True" \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/store_model_db_config.yaml:/app/config.yaml \
               my-app:latest \
@@ -2418,7 +2436,16 @@ jobs:
             python -m pytest -vv tests/store_model_in_db_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout:
             120m
-            # Clean up first container
+      - run:
+          name: Stop and remove containers
+          command: |
+            docker stop my-app || true
+            docker rm my-app || true
+            docker stop postgres-db || true
+            docker rm postgres-db || true
+          when: always
+      - store_test_results:
+          path: test-results
       
   proxy_build_from_pip_tests:
     # Change from docker to machine executor
