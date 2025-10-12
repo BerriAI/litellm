@@ -1,11 +1,17 @@
 import json
-from typing import Any, Callable, Dict, List, Optional
-
-from mcp.types import Tool as MCPToolSDKTool
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.types.mcp_server.tool_registry import MCPTool
+
+if TYPE_CHECKING:
+    from mcp.types import Tool as MCPToolSDKTool
+else:
+    try:
+        from mcp.types import Tool as MCPToolSDKTool
+    except ImportError:
+        MCPToolSDKTool = None  # type: ignore
 
 
 class MCPToolRegistry:
@@ -55,7 +61,11 @@ class MCPToolRegistry:
 
     def convert_tools_to_mcp_sdk_tool_type(
         self, tools: List[MCPTool]
-    ) -> List[MCPToolSDKTool]:
+    ) -> List["MCPToolSDKTool"]:
+        if MCPToolSDKTool is None:
+            raise ImportError(
+                "MCP SDK is not installed. Please install it with: pip install 'litellm[proxy]'"
+            )
         return [
             MCPToolSDKTool(
                 name=tool.name,
