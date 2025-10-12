@@ -975,13 +975,14 @@ def create_pass_through_route(
             ] = None,  # if pass-through endpoint is a streaming request
             subpath: str = "",  # captures sub-paths when include_subpath=True
         ):
-
             from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                 InitPassThroughEndpointHelpers,
             )
 
+            path = request.url.path
+
             if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
-                route=endpoint
+                route=path
             ):
                 raise HTTPException(
                     status_code=404,
@@ -990,7 +991,7 @@ def create_pass_through_route(
 
             passthrough_params = (
                 InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-                    route=endpoint
+                    route=path
                 )
             )
             target_params = {
