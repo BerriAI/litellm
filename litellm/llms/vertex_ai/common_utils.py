@@ -1,4 +1,5 @@
 import re
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, get_type_hints
 
 import httpx
@@ -22,6 +23,68 @@ class VertexAIError(BaseLLMException):
         headers: Optional[Union[Dict, httpx.Headers]] = None,
     ):
         super().__init__(message=message, status_code=status_code, headers=headers)
+
+
+class VertexAIModelRoute(str, Enum):
+    """Enum for Vertex AI model routing"""
+    PARTNER_MODELS = "partner_models"
+    GEMINI = "gemini"
+    GEMMA = "gemma"
+    MODEL_GARDEN = "model_garden"
+    NON_GEMINI = "non_gemini"
+
+
+def get_vertex_ai_model_route(model: str, litellm_params: Optional[dict] = None) -> VertexAIModelRoute:
+    """
+    Determine which handler to use for a Vertex AI model based on the model name.
+    
+    Args:
+        model: The model name (e.g., "llama3-405b", "gemini-pro", "gemma/gemma-3-12b-it", "openai/gpt-oss-120b")
+        litellm_params: Optional litellm parameters dict that may contain base_model for routing
+        
+    Returns:
+        VertexAIModelRoute: The route enum indicating which handler should be used
+        
+    Examples:
+        >>> get_vertex_ai_model_route("llama3-405b")
+        VertexAIModelRoute.PARTNER_MODELS
+        
+        >>> get_vertex_ai_model_route("gemini-pro")
+        VertexAIModelRoute.GEMINI
+        
+        >>> get_vertex_ai_model_route("gemma/gemma-3-12b-it")
+        VertexAIModelRoute.GEMMA
+        
+        >>> get_vertex_ai_model_route("openai/gpt-oss-120b")
+        VertexAIModelRoute.MODEL_GARDEN
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    # Check base_model in litellm_params for gemini override
+    if litellm_params and litellm_params.get("base_model") is not None:
+        if "gemini" in litellm_params["base_model"]:
+            return VertexAIModelRoute.GEMINI
+    
+    # Check for partner models (llama, mistral, claude, etc.)
+    if VertexAIPartnerModels.is_vertex_partner_model(model=model):
+        return VertexAIModelRoute.PARTNER_MODELS
+    
+    # Check for gemma models
+    if "gemma/" in model:
+        return VertexAIModelRoute.GEMMA
+    
+    # Check for model garden openai models
+    if "openai" in model:
+        return VertexAIModelRoute.MODEL_GARDEN
+    
+    # Check for gemini models
+    if "gemini" in model:
+        return VertexAIModelRoute.GEMINI
+    
+    # Default to non-gemini (legacy vertex models like chat-bison, text-bison, etc.)
+    return VertexAIModelRoute.NON_GEMINI
 
 
 def get_supports_system_message(

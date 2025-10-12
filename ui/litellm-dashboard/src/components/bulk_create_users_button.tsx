@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Button as TremorButton, Text } from "@tremor/react";
-import { Modal, Table, Upload, message, Alert, Typography } from "antd";
+import { Modal, Table, Upload, Typography } from "antd";
 import {
   UploadOutlined,
   DownloadOutlined,
@@ -13,7 +13,6 @@ import { userCreateCall, invitationCreateCall, getProxyUISettings } from "./netw
 import Papa from "papaparse";
 import { CheckCircleIcon, XCircleIcon, ExclamationIcon } from "@heroicons/react/outline";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { InvitationLink } from "./onboarding_link";
 import NotificationsManager from "./molecules/notifications_manager";
 
 interface BulkCreateUsersProps {

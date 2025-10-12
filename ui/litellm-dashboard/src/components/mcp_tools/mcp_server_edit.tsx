@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Button as AntdButton, message, Input, Space, Tooltip } from "antd";
+import { Form, Select, Button as AntdButton } from "antd";
 import { Button, TextInput, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { MCPServer, MCPServerCostInfo } from "./types";
 import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
-import { MinusCircleOutlined, PlusOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 

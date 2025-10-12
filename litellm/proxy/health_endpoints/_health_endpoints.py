@@ -608,6 +608,52 @@ async def latest_health_checks_endpoint(
         )
 
 
+@router.get(
+    "/health/shared-status", tags=["health"], dependencies=[Depends(user_api_key_auth)]
+)
+async def shared_health_check_status_endpoint(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get the status of shared health check coordination across pods.
+    
+    Returns information about Redis connectivity, lock status, and cache status.
+    """
+    from litellm.proxy.proxy_server import use_shared_health_check, redis_usage_cache
+    
+    if not use_shared_health_check:
+        return {
+            "shared_health_check_enabled": False,
+            "message": "Shared health check is not enabled"
+        }
+    
+    if redis_usage_cache is None:
+        return {
+            "shared_health_check_enabled": True,
+            "redis_available": False,
+            "message": "Redis is not configured"
+        }
+    
+    try:
+        from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
+        
+        shared_health_manager = SharedHealthCheckManager(
+            redis_cache=redis_usage_cache,
+        )
+        
+        health_status = await shared_health_manager.get_health_check_status()
+        return {
+            "shared_health_check_enabled": True,
+            "status": health_status
+        }
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error getting shared health check status: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": f"Failed to retrieve shared health check status: {str(e)}"},
+        )
+
+
 db_health_cache = {"status": "unknown", "last_updated": datetime.now()}
 
 

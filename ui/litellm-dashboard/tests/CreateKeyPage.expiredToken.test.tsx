@@ -18,10 +18,53 @@ const { stub, jwtDecodeMock } = vi.hoisted(() => {
  * Mocks
  * --------------------------- */
 
-// next/navigation: just return empty URLSearchParams (no invitation/page)
-vi.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams(""),
-}));
+vi.mock("@/hooks/useFeatureFlags", () => {
+  const React = require("react");
+
+  // minimal context so useFeatureFlags() returns something stable
+  const FeatureFlagsCtx = React.createContext({ get: () => false, flags: {} });
+
+  // Defensive provider: handle undefined props and allow optional value override
+  const FeatureFlagsProvider = (props: any) => {
+    const p = props || {};
+    const value = p.value ?? { get: () => false, flags: {} };
+    return React.createElement(FeatureFlagsCtx.Provider, { value }, p.children);
+  };
+
+  const useFeatureFlags = () => React.useContext(FeatureFlagsCtx);
+
+  return {
+    __esModule: true,
+    default: FeatureFlagsProvider, // supports default import
+    FeatureFlagsProvider, // supports named import
+    useFeatureFlags, // supports named import
+  };
+});
+
+// next/navigation mock: search params + router + pathname
+vi.mock("next/navigation", () => {
+  const router = {
+    push: vi.fn(),
+    replace: vi.fn(),
+    prefetch: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+  };
+
+  return {
+    __esModule: true,
+    // what your tests already relied on
+    useSearchParams: () => new URLSearchParams(""),
+    // added: satisfies useAuthorized / SidebarProvider
+    useRouter: () => router,
+    // optional helpers some components often read
+    usePathname: () => "/",
+    // optional: noop versions if code calls them
+    redirect: vi.fn(), // App Router server action usually; safe noop here
+    notFound: vi.fn(),
+  };
+});
 
 // Networking layer
 vi.mock("@/components/networking", () => {
