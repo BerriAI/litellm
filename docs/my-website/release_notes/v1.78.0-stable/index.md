@@ -65,7 +65,9 @@ pip install litellm==1.78.0
 
 ## Performance
 
-We've made significant enhancements to routing performance and session management in this release.
+This release delivers 60%+ latency improvements across p95, p99, and average metrics on LiteLLM AI Gateway. This is even better for low-latency use cases running through LiteLLM.
+
+These gains come from two key enhancements:
 
 **Reliable Sessions**
 
