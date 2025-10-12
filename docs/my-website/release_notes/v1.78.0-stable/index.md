@@ -65,7 +65,7 @@ pip install litellm==1.78.0
 
 ## Performance
 
-This release delivers 60%+ latency improvements across p95, p99, and average metrics on LiteLLM AI Gateway. This is even better for low-latency use cases running through LiteLLM.
+This release cuts p99 latency by 70% on LiteLLM AI Gateway, making it even better for low-latency use cases.
 
 These gains come from two key enhancements:
 
