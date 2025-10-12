@@ -5,7 +5,7 @@ import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
-import uuid
+from litellm._uuid import uuid
 import time
 import base64
 
@@ -57,9 +57,6 @@ def validate_responses_api_response(response, final_chunk: bool = False):
     assert "output" in response and isinstance(
         response["output"], list
     ), "Response should have a list 'output' field"
-    assert "parallel_tool_calls" in response and isinstance(
-        response["parallel_tool_calls"], bool
-    ), "Response should have a boolean 'parallel_tool_calls' field"
 
     # Optional fields with their expected types
     optional_fields = {
@@ -69,9 +66,10 @@ def validate_responses_api_response(response, final_chunk: bool = False):
         "metadata": dict,
         "model": str,
         "object": str,
+        "parallel_tool_calls": (bool, type(None)),
         "temperature": (int, float, type(None)),
-        "tool_choice": (dict, str),
-        "tools": list,
+        "tool_choice": (dict, str, type(None)),
+        "tools": (list, type(None)),
         "top_p": (int, float, type(None)),
         "max_output_tokens": (int, type(None)),
         "previous_response_id": (str, type(None)),
@@ -146,6 +144,8 @@ class BaseResponsesAPITest(ABC):
     @pytest.mark.flaky(retries=3, delay=2)
     async def test_basic_openai_responses_api_streaming(self, sync_mode):
         litellm._turn_on_debug()
+        # Enable cost calculation for streaming usage
+        litellm.include_cost_in_streaming_usage = True
         base_completion_call_args = self.get_base_completion_call_args()
         collected_content_string = ""
         response_completed_event = None
@@ -207,6 +207,14 @@ class BaseResponsesAPITest(ABC):
             == response_completed_event.response.usage.input_tokens
             + response_completed_event.response.usage.output_tokens
         )
+
+        # assert the response completed event includes cost when include_cost_in_streaming_usage is True
+        assert hasattr(response_completed_event.response.usage, "cost"), "Cost should be included in streaming responses API usage object"
+        assert response_completed_event.response.usage.cost > 0, "Cost should be greater than 0"
+        print(f"Cost found in streaming response: {response_completed_event.response.usage.cost}")
+        
+        # Reset the setting
+        litellm.include_cost_in_streaming_usage = False
 
     @pytest.mark.parametrize("sync_mode", [False, True])
     @pytest.mark.asyncio

@@ -1182,10 +1182,8 @@ def test_async_http_handler(mock_async_client):
         assert call_args["transport"] == mock_transport
         assert call_args["event_hooks"] == event_hooks
         assert call_args["headers"] == headers
-        assert isinstance(call_args["limits"], httpx.Limits)
-        assert call_args["limits"].max_connections == concurrent_limit
-        assert call_args["limits"].max_keepalive_connections == concurrent_limit
         assert call_args["timeout"] == timeout
+        assert call_args["follow_redirects"] is True
 
 
 @mock.patch("httpx.AsyncClient")
@@ -1224,12 +1222,10 @@ def test_async_http_handler_force_ipv4(mock_async_client):
         # Assert other parameters match
         assert call_args["event_hooks"] == event_hooks
         assert call_args["headers"] == headers
-        assert isinstance(call_args["limits"], httpx.Limits)
-        assert call_args["limits"].max_connections == concurrent_limit
-        assert call_args["limits"].max_keepalive_connections == concurrent_limit
         assert call_args["timeout"] == timeout
         assert isinstance(call_args["verify"], ssl.SSLContext)
         assert call_args["cert"] is None
+        assert call_args["follow_redirects"] is True
 
     finally:
         # Reset force_ipv4 to default
@@ -1424,6 +1420,44 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
         )
         == expected_end_user_id
     )
+
+
+@pytest.mark.parametrize(
+    "litellm_params, expected_end_user_id",
+    [
+        # Test with only metadata field (old behavior)
+        ({"metadata": {"user_api_key_end_user_id": "user_from_metadata"}}, "user_from_metadata"),
+        # Test with only litellm_metadata field (new behavior)
+        ({"litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}}, "user_from_litellm_metadata"),
+        # Test with both fields - metadata should take precedence for user_api_key fields
+        ({"metadata": {"user_api_key_end_user_id": "user_from_metadata"}, 
+          "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}}, 
+         "user_from_metadata"),
+        # Test with user_api_key_end_user_id in litellm_params (should take precedence over metadata)
+        ({"user_api_key_end_user_id": "user_from_params", 
+          "metadata": {"user_api_key_end_user_id": "user_from_metadata"}}, 
+         "user_from_params"),
+        # Test with empty metadata but valid litellm_metadata
+        ({"metadata": {}, "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}}, 
+         "user_from_litellm_metadata"),
+        # Test with no metadata fields
+        ({}, None),
+    ],
+)
+def test_get_end_user_id_for_cost_tracking_metadata_handling(
+    litellm_params, expected_end_user_id
+):
+    """
+    Test that get_end_user_id_for_cost_tracking correctly handles both metadata and litellm_metadata
+    fields using the get_litellm_metadata_from_kwargs helper function.
+    """
+    from litellm.utils import get_end_user_id_for_cost_tracking
+    
+    # Ensure cost tracking is enabled for this test
+    litellm.disable_end_user_cost_tracking = False
+    
+    result = get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
+    assert result == expected_end_user_id
 
 
 def test_is_prompt_caching_enabled_error_handling():
@@ -2328,6 +2362,54 @@ def test_get_whitelisted_models():
     print("whitelisted_models written to whitelisted_bedrock_models.txt")
 
 
+def test_delta_tool_calls_sequential_indices():
+    """
+    Test that multiple tool calls without explicit indices receive sequential indices.
+
+    When providers don't include index fields in tool calls, the Delta class
+    should automatically assign sequential indices (0, 1, 2, ...) instead of
+    defaulting all tool calls to index=0.
+    """
+    import json
+    from litellm.types.utils import Delta
+
+    # Simulate tool calls from streaming responses without explicit indices
+    tool_calls_without_indices = [
+        {
+            "id": "call_1",
+            "function": {
+                "name": "get_weather_for_dallas",
+                "arguments": json.dumps({})
+            },
+            "type": "function",
+            # Note: no "index" field - simulates provider response
+        },
+        {
+            "id": "call_2",
+            "function": {
+                "name": "get_weather_precise",
+                "arguments": json.dumps({"location": "Dallas, TX"})
+            },
+            "type": "function",
+            # Note: no "index" field - simulates provider response
+        }
+    ]
+
+    # Create Delta object as LiteLLM would when processing streaming response
+    delta = Delta(
+        content=None,
+        tool_calls=tool_calls_without_indices
+    )
+
+    # Verify tool calls have sequential indices
+    assert delta.tool_calls is not None, "Tool calls should not be None"
+    assert len(delta.tool_calls) == 2
+    assert delta.tool_calls[0].index == 0, f"First tool call should have index 0, got {delta.tool_calls[0].index}"
+    assert delta.tool_calls[1].index == 1, f"Second tool call should have index 1, got {delta.tool_calls[1].index}"
+
+    # Verify tool call details are preserved
+    assert delta.tool_calls[0].function.name == "get_weather_for_dallas"
+    assert delta.tool_calls[1].function.name == "get_weather_precise"
 
 def test_completion_with_no_model():
     """

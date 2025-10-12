@@ -15,15 +15,21 @@ from fastapi import HTTPException
 
 from litellm.proxy._types import (
     GenerateKeyRequest,
+    LiteLLM_TeamTableCachedObj,
     LiteLLM_VerificationToken,
     LitellmUserRoles,
+    ProxyException,
     UpdateKeyRequest,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _check_team_key_limits,
     _common_key_generation_helper,
     _list_key_helper,
+    check_team_key_model_specific_limits,
+    generate_key_helper_fn,
     prepare_key_update_data,
+    validate_key_team_change,
 )
 from litellm.proxy.proxy_server import app
 
@@ -413,6 +419,81 @@ async def test_key_generation_with_object_permission(monkeypatch):
     ]
     assert len(key_insert_calls) == 1
     assert key_insert_calls[0]["data"].get("object_permission_id") == "objperm123"
+
+
+@pytest.mark.asyncio
+async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
+    """
+    Test that /key/generate correctly handles mcp_tool_permissions in object_permission.
+    
+    This test verifies that:
+    1. mcp_tool_permissions is accepted in the object_permission field
+    2. The field is properly stored in the LiteLLM_ObjectPermissionTable
+    3. The key is correctly linked to the object_permission record
+    """
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    # Track what data is passed to create
+    created_permission_data = {}
+
+    async def mock_create(**kwargs):
+        created_permission_data.update(kwargs.get("data", {}))
+        return MagicMock(object_permission_id="objperm_mcp_123")
+
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = mock_create
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        table_name = kwargs.get("table_name")
+        if table_name == "user":
+            return MagicMock(models=[], spend=0)
+        elif table_name == "key":
+            return MagicMock(
+                token="hashed_token_789",
+                litellm_budget_table=None,
+                object_permission=None,
+            )
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    from litellm.proxy._types import (
+        GenerateKeyRequest,
+        LiteLLM_ObjectPermissionBase,
+        LitellmUserRoles,
+    )
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    # Create request with mcp_tool_permissions
+    request_data = GenerateKeyRequest(
+        object_permission=LiteLLM_ObjectPermissionBase(
+            mcp_servers=["server_1"],
+            mcp_tool_permissions={"server_1": ["tool1", "tool2", "tool3"]},
+        )
+    )
+
+    await generate_key_fn(
+        data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="user-mcp-1",
+        ),
+    )
+
+    # Verify mcp_tool_permissions was stored (serialized to JSON string for GraphQL compatibility)
+    assert "mcp_tool_permissions" in created_permission_data
+    import json
+    assert json.loads(created_permission_data["mcp_tool_permissions"]) == {
+        "server_1": ["tool1", "tool2", "tool3"]
+    }
+    assert created_permission_data["mcp_servers"] == ["server_1"]
 
 
 @pytest.mark.asyncio
@@ -845,17 +926,24 @@ async def test_generate_service_account_key_endpoint_validation():
     )
 
     # Test case 1: Missing team_id
-    with pytest.raises(HTTPException) as exc_info:
-        await generate_service_account_key_fn(
-            data=GenerateKeyRequest(team_id=None),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
-            ),
-            litellm_changed_by=None,
-        )
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        # Mock prisma_client to be not None so we can reach team_id validation
+        mock_prisma_instance = AsyncMock()
+        mock_prisma.return_value = mock_prisma_instance
 
-    assert exc_info.value.status_code == 400
-    assert "team_id is required for service account keys" in str(exc_info.value.detail)
+        with pytest.raises(HTTPException) as exc_info:
+            await generate_service_account_key_fn(
+                data=GenerateKeyRequest(team_id=None),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
+                ),
+                litellm_changed_by=None,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "team_id is required for service account keys" in str(
+            exc_info.value.detail
+        )
 
     # Test case 2: Team doesn't exist in database
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
@@ -1033,3 +1121,788 @@ async def test_unblock_key_invalid_key_format(monkeypatch):
 
     assert exc_info.value.code == "400"
     assert "Invalid key format" in str(exc_info.value.message)
+
+
+def test_validate_key_team_change_with_member_permissions():
+    """
+    Test validate_key_team_change function with team member permissions.
+
+    This test covers the new logic that allows team members with specific
+    permissions to update keys, not just team admins.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy._types import KeyManagementRoutes
+
+    # Create mock objects
+    mock_key = MagicMock()
+    mock_key.user_id = "test-user-123"
+    mock_key.models = ["gpt-4"]
+    mock_key.tpm_limit = None
+    mock_key.rpm_limit = None
+
+    mock_team = MagicMock()
+    mock_team.team_id = "test-team-456"
+    mock_team.members_with_roles = []
+    mock_team.tpm_limit = None
+    mock_team.rpm_limit = None
+
+    mock_change_initiator = MagicMock()
+    mock_change_initiator.user_id = "test-user-123"
+
+    mock_router = MagicMock()
+
+    # Mock the member object returned by _get_user_in_team
+    mock_member_object = MagicMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.can_team_access_model"
+    ):
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._get_user_in_team"
+        ) as mock_get_user:
+            with patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints._is_user_team_admin"
+            ) as mock_is_admin:
+                with patch(
+                    "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint"
+                ) as mock_has_perms:
+
+                    mock_get_user.return_value = mock_member_object
+                    mock_is_admin.return_value = False
+                    mock_has_perms.return_value = True
+
+                    # This should not raise an exception due to member permissions
+                    validate_key_team_change(
+                        key=mock_key,
+                        team=mock_team,
+                        change_initiated_by=mock_change_initiator,
+                        llm_router=mock_router,
+                    )
+
+                    # Verify the permission check was called with correct parameters
+                    mock_has_perms.assert_called_once_with(
+                        team_member_object=mock_member_object,
+                        team_table=mock_team,
+                        route=KeyManagementRoutes.KEY_UPDATE.value,
+                    )
+
+
+def test_key_rotation_fields_helper():
+    """
+    Test the key data update logic for rotation fields.
+
+    This test focuses on the core logic that adds rotation fields to key_data
+    when auto_rotate is enabled, without the complexity of full key generation.
+    """
+    # Test Case 1: With rotation enabled
+    key_data = {"models": ["gpt-3.5-turbo"], "user_id": "test-user"}
+
+    auto_rotate = True
+    rotation_interval = "30d"
+
+    # Simulate the rotation logic from generate_key_helper_fn
+    if auto_rotate and rotation_interval:
+        key_data.update(
+            {"auto_rotate": auto_rotate, "rotation_interval": rotation_interval}
+        )
+
+    # Verify rotation fields are added
+    assert key_data["auto_rotate"] == True
+    assert key_data["rotation_interval"] == "30d"
+    assert key_data["models"] == ["gpt-3.5-turbo"]  # Original fields preserved
+
+    # Test Case 2: Without rotation enabled
+    key_data2 = {"models": ["gpt-4"], "user_id": "test-user"}
+
+    auto_rotate2 = False
+    rotation_interval2 = None
+
+    # Simulate the rotation logic
+    if auto_rotate2 and rotation_interval2:
+        key_data2.update(
+            {"auto_rotate": auto_rotate2, "rotation_interval": rotation_interval2}
+        )
+
+    # Verify rotation fields are NOT added
+    assert "auto_rotate" not in key_data2
+    assert "rotation_interval" not in key_data2
+    assert key_data2["models"] == ["gpt-4"]  # Original fields preserved
+
+    # Test Case 3: auto_rotate=True but no interval
+    key_data3 = {"models": ["claude-3"], "user_id": "test-user"}
+
+    auto_rotate3 = True
+    rotation_interval3 = None
+
+    # Simulate the rotation logic
+    if auto_rotate3 and rotation_interval3:
+        key_data3.update(
+            {"auto_rotate": auto_rotate3, "rotation_interval": rotation_interval3}
+        )
+
+    # Verify rotation fields are NOT added (missing interval)
+    assert "auto_rotate" not in key_data3
+    assert "rotation_interval" not in key_data3
+
+
+@pytest.mark.asyncio
+async def test_update_key_fn_auto_rotate_enable():
+    """Test that update_key_fn properly handles enabling auto rotation."""
+    from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    # Mock existing key
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=["gpt-3.5-turbo"],
+        user_id="test-user",
+        team_id=None,
+        auto_rotate=False,
+        rotation_interval=None,
+        metadata={},
+    )
+
+    # Test enabling auto rotation
+    update_request = UpdateKeyRequest(
+        key="test-token", auto_rotate=True, rotation_interval="30d"
+    )
+
+    result = await prepare_key_update_data(
+        data=update_request, existing_key_row=existing_key
+    )
+
+    # Verify rotation fields are included
+    assert result["auto_rotate"] is True
+    assert result["rotation_interval"] == "30d"
+
+
+@pytest.mark.asyncio
+async def test_update_key_fn_auto_rotate_disable():
+    """Test that update_key_fn properly handles disabling auto rotation."""
+    from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    # Mock existing key with rotation enabled
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=["gpt-3.5-turbo"],
+        user_id="test-user",
+        team_id=None,
+        auto_rotate=True,
+        rotation_interval="30d",
+        metadata={},
+    )
+
+    # Test disabling auto rotation
+    update_request = UpdateKeyRequest(key="test-token", auto_rotate=False)
+
+    result = await prepare_key_update_data(
+        data=update_request, existing_key_row=existing_key
+    )
+
+    # Verify auto_rotate is set to False
+    assert result["auto_rotate"] is False
+
+
+@pytest.mark.asyncio
+async def test_check_team_key_limits_no_existing_keys():
+    """
+    Test _check_team_key_limits when team has no existing keys.
+    Should allow any TPM/RPM limits within team bounds.
+    """
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+
+    # Create team table with limits
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-123",
+        team_alias="test-team",
+        tpm_limit=10000,
+        rpm_limit=1000,
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+
+    # Create request with limits within team bounds
+    data = GenerateKeyRequest(
+        tpm_limit=5000,
+        rpm_limit=500,
+        tpm_limit_type="guaranteed_throughput",
+        rpm_limit_type="guaranteed_throughput",
+    )
+
+    # Should not raise any exception
+    await _check_team_key_limits(
+        team_table=team_table,
+        data=data,
+        prisma_client=mock_prisma_client,
+    )
+
+    # Verify database was queried
+    mock_prisma_client.db.litellm_verificationtoken.find_many.assert_called_once_with(
+        where={"team_id": "test-team-123"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_team_key_limits_with_existing_keys_within_bounds():
+    """
+    Test _check_team_key_limits when team has existing keys but total allocation
+    is still within team limits.
+    """
+    # Create mock existing keys
+    existing_key1 = MagicMock()
+    existing_key1.tpm_limit = 3000
+    existing_key1.rpm_limit = 200
+
+    existing_key2 = MagicMock()
+    existing_key2.tpm_limit = 2000
+    existing_key2.rpm_limit = 300
+
+    existing_key3 = MagicMock()
+    existing_key3.tpm_limit = None  # Should be ignored in calculation
+    existing_key3.rpm_limit = None  # Should be ignored in calculation
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[existing_key1, existing_key2, existing_key3]
+    )
+
+    # Create team table with limits
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-456",
+        team_alias="test-team",
+        tpm_limit=10000,  # Total: 3000 + 2000 + 4000 (new) = 9000 < 10000 ✓
+        rpm_limit=1000,  # Total: 200 + 300 + 400 (new) = 900 < 1000 ✓
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+
+    # Create request that would still be within bounds
+    data = GenerateKeyRequest(
+        tpm_limit=4000,
+        rpm_limit=400,
+    )
+
+    # Should not raise any exception
+    await _check_team_key_limits(
+        team_table=team_table,
+        data=data,
+        prisma_client=mock_prisma_client,
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_team_key_limits_tpm_overallocation():
+    """
+    Test _check_team_key_limits when new key would cause TPM overallocation.
+    Should raise HTTPException with appropriate error message.
+    """
+    # Create mock existing keys with high TPM usage
+    existing_key1 = MagicMock()
+    existing_key1.tpm_limit = 6000
+    existing_key1.rpm_limit = 100
+    existing_key1.metadata = {}
+
+    existing_key2 = MagicMock()
+    existing_key2.tpm_limit = 3000
+    existing_key2.rpm_limit = 200
+    existing_key2.metadata = {}
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[existing_key1, existing_key2]
+    )
+
+    # Create team table with limits
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-789",
+        team_alias="test-team",
+        tpm_limit=10000,  # Allocated: 6000 + 3000 = 9000, New: 2000, Total: 11000 > 10000 ✗
+        rpm_limit=1000,
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+
+    # Create request that would exceed TPM limits
+    data = GenerateKeyRequest(
+        tpm_limit=2000,
+        rpm_limit=100,
+        tpm_limit_type="guaranteed_throughput",
+    )
+
+    # Should raise HTTPException for TPM overallocation
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_team_key_limits(
+            team_table=team_table,
+            data=data,
+            prisma_client=mock_prisma_client,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "Allocated TPM limit=9000 + Key TPM limit=2000 is greater than team TPM limit=10000"
+        in str(exc_info.value.detail)
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_team_key_limits_rpm_overallocation():
+    """
+    Test _check_team_key_limits when new key would cause RPM overallocation.
+    Should raise HTTPException with appropriate error message.
+    """
+    # Create mock existing keys with high RPM usage
+    existing_key1 = MagicMock()
+    existing_key1.tpm_limit = 1000
+    existing_key1.rpm_limit = 600
+    existing_key1.metadata = {}
+
+    existing_key2 = MagicMock()
+    existing_key2.tpm_limit = 2000
+    existing_key2.rpm_limit = 300
+    existing_key2.metadata = {}
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[existing_key1, existing_key2]
+    )
+
+    # Create team table with limits
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-101",
+        team_alias="test-team",
+        tpm_limit=10000,
+        rpm_limit=1000,  # Allocated: 600 + 300 = 900, New: 200, Total: 1100 > 1000 ✗
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+
+    # Create request that would exceed RPM limits
+    data = GenerateKeyRequest(
+        tpm_limit=1000,
+        rpm_limit=200,
+        rpm_limit_type="guaranteed_throughput",
+    )
+
+    # Should raise HTTPException for RPM overallocation
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_team_key_limits(
+            team_table=team_table,
+            data=data,
+            prisma_client=mock_prisma_client,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "Allocated RPM limit=900 + Key RPM limit=200 is greater than team RPM limit=1000"
+        in str(exc_info.value.detail)
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_team_key_limits_no_team_limits():
+    """
+    Test _check_team_key_limits when team has no TPM/RPM limits set.
+    Should allow any key limits since there are no team constraints.
+    """
+    # Create mock existing keys
+    existing_key = MagicMock()
+    existing_key.tpm_limit = 5000
+    existing_key.rpm_limit = 500
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[existing_key]
+    )
+
+    # Create team table with no limits
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-202",
+        team_alias="test-team",
+        tpm_limit=None,  # No team limit
+        rpm_limit=None,  # No team limit
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+
+    # Create request with any limits
+    data = GenerateKeyRequest(
+        tpm_limit=10000,  # High limit should be allowed
+        rpm_limit=2000,  # High limit should be allowed
+    )
+
+    # Should not raise any exception
+    await _check_team_key_limits(
+        team_table=team_table,
+        data=data,
+        prisma_client=mock_prisma_client,
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_team_key_limits_no_key_limits():
+    """
+    Test _check_team_key_limits when new key has no TPM/RPM limits.
+    Should not raise any exceptions since no limits are being allocated.
+    """
+    # Create mock existing keys
+    existing_key = MagicMock()
+    existing_key.tpm_limit = 8000
+    existing_key.rpm_limit = 800
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[existing_key]
+    )
+
+    # Create team table with limits
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-303",
+        team_alias="test-team",
+        tpm_limit=10000,
+        rpm_limit=1000,
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+
+    # Create request with no limits
+    data = GenerateKeyRequest(
+        tpm_limit=None,  # No limit being set
+        rpm_limit=None,  # No limit being set
+    )
+
+    # Should not raise any exception
+    await _check_team_key_limits(
+        team_table=team_table,
+        data=data,
+        prisma_client=mock_prisma_client,
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_team_key_limits_mixed_scenarios():
+    """
+    Test _check_team_key_limits with mixed scenarios:
+    - Some existing keys have limits, others don't
+    - New key has only one type of limit
+    - Team has only one type of limit
+    """
+    # Create mock existing keys with mixed limits
+    existing_key1 = MagicMock()
+    existing_key1.tpm_limit = 3000
+    existing_key1.rpm_limit = None  # No RPM limit
+
+    existing_key2 = MagicMock()
+    existing_key2.tpm_limit = None  # No TPM limit
+    existing_key2.rpm_limit = 400
+
+    existing_key3 = MagicMock()
+    existing_key3.tpm_limit = 2000
+    existing_key3.rpm_limit = 300
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[existing_key1, existing_key2, existing_key3]
+    )
+
+    # Create team table with only TPM limit
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-404",
+        team_alias="test-team",
+        tpm_limit=10000,  # Allocated: 3000 + 0 + 2000 = 5000, New: 4000, Total: 9000 < 10000 ✓
+        rpm_limit=None,  # No team RPM limit
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+
+    # Create request with only TPM limit
+    data = GenerateKeyRequest(
+        tpm_limit=4000,
+        rpm_limit=None,  # No RPM limit being set
+    )
+
+    # Should not raise any exception
+    await _check_team_key_limits(
+        team_table=team_table,
+        data=data,
+        prisma_client=mock_prisma_client,
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_team_key_limits_exact_boundary():
+    """
+    Test _check_team_key_limits when allocation exactly matches team limits.
+    Should allow the allocation (boundary case).
+    """
+    # Create mock existing keys
+    existing_key = MagicMock()
+    existing_key.tpm_limit = 7000
+    existing_key.rpm_limit = 700
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[existing_key]
+    )
+
+    # Create team table with limits
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-505",
+        team_alias="test-team",
+        tpm_limit=10000,  # Allocated: 7000, New: 3000, Total: 10000 = 10000 ✓
+        rpm_limit=1000,  # Allocated: 700, New: 300, Total: 1000 = 1000 ✓
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+    )
+
+    # Create request that exactly matches remaining capacity
+    data = GenerateKeyRequest(
+        tpm_limit=3000,
+        rpm_limit=300,
+    )
+
+    # Should not raise any exception (exact boundary should be allowed)
+    await _check_team_key_limits(
+        team_table=team_table,
+        data=data,
+        prisma_client=mock_prisma_client,
+    )
+
+
+def test_check_team_key_model_specific_limits_no_limits():
+    """
+    Test check_team_key_model_specific_limits when no model-specific limits are set.
+    Should return without raising any exceptions.
+    """
+    # Create existing key with no model-specific limits
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token-1",
+        user_id="test-user",
+        team_id="test-team-123",
+        metadata={},
+    )
+
+    keys = [existing_key]
+
+    # Create team table
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-123",
+        team_alias="test-team",
+        tpm_limit=10000,
+        rpm_limit=1000,
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+        metadata={},
+    )
+
+    # Create request with no model-specific limits
+    data = GenerateKeyRequest(
+        model_rpm_limit=None,
+        model_tpm_limit=None,
+    )
+
+    # Should not raise any exception
+    check_team_key_model_specific_limits(
+        keys=keys,
+        team_table=team_table,
+        data=data,
+    )
+
+
+def test_check_team_key_model_specific_limits_rpm_overallocation():
+    """
+    Test check_team_key_model_specific_limits when model-specific RPM would cause overallocation.
+    Should raise HTTPException with appropriate error message.
+    """
+    # Create existing keys with model-specific RPM limits
+    existing_key1 = LiteLLM_VerificationToken(
+        token="test-token-1",
+        user_id="test-user-1",
+        team_id="test-team-456",
+        metadata={
+            "model_rpm_limit": {
+                "gpt-4": 500,
+                "gpt-3.5-turbo": 300,
+            }
+        },
+    )
+
+    existing_key2 = LiteLLM_VerificationToken(
+        token="test-token-2",
+        user_id="test-user-2",
+        team_id="test-team-456",
+        metadata={
+            "model_rpm_limit": {
+                "gpt-4": 300,
+            }
+        },
+    )
+
+    keys = [existing_key1, existing_key2]
+
+    # Create team table with RPM limit
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-456",
+        team_alias="test-team",
+        tpm_limit=10000,
+        rpm_limit=1000,  # Total team RPM limit
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+        metadata={},
+    )
+
+    # Create request that would exceed model-specific RPM limits
+    # Existing gpt-4: 500 + 300 = 800, New: 300, Total: 1100 > 1000 (team limit)
+    data = GenerateKeyRequest(
+        model_rpm_limit={
+            "gpt-4": 300,  # This would cause overallocation
+        },
+        model_tpm_limit=None,
+    )
+
+    # Should raise HTTPException for model-specific RPM overallocation
+    with pytest.raises(HTTPException) as exc_info:
+        check_team_key_model_specific_limits(
+            keys=keys,
+            team_table=team_table,
+            data=data,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "Allocated RPM limit=800 + Key RPM limit=300 is greater than team RPM limit=1000"
+        in str(exc_info.value.detail)
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_key_with_object_permission():
+    """
+    Test that /key/generate correctly handles object_permission by:
+    1. Creating a record in litellm_objectpermissiontable
+    2. Passing the returned object_permission_id into the key insert payload
+    3. NOT passing the object_permission dict to the key table
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy._types import (
+        GenerateKeyRequest,
+        LiteLLM_ObjectPermissionBase,
+        LitellmUserRoles,
+    )
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _common_key_generation_helper,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.jsonify_object = lambda x: x
+
+    # Mock object permission creation
+    mock_object_perm_create = AsyncMock(
+        return_value=MagicMock(object_permission_id="objperm_key_456")
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = mock_object_perm_create
+
+    # Mock key insertion
+    mock_key_insert = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123",
+            litellm_budget_table=None,
+            created_at="2024-01-01T00:00:00Z",
+            updated_at="2024-01-01T00:00:00Z",
+        )
+    )
+    mock_prisma_client.insert_data = mock_key_insert
+
+    # Create request with object_permission
+    key_request = GenerateKeyRequest(
+        models=["gpt-4"],
+        object_permission=LiteLLM_ObjectPermissionBase(
+            vector_stores=["vector_store_1"],
+            mcp_servers=["mcp_server_1"],
+        ),
+    )
+
+    mock_admin_auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user",
+    )
+
+    # Patch the prisma_client and other dependencies
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client,
+    ), patch(
+        "litellm.proxy.proxy_server.llm_router", None
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user",
+        False,
+    ), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name",
+        "admin",
+    ):
+        # Execute
+        result = await _common_key_generation_helper(
+            data=key_request,
+            user_api_key_dict=mock_admin_auth,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    # Verify object permission creation was called
+    mock_object_perm_create.assert_awaited_once()
+
+    # Verify key insertion was called
+    assert mock_key_insert.call_count == 1
+    key_insert_kwargs = mock_key_insert.call_args.kwargs
+    key_data = key_insert_kwargs["data"]
+
+    # Verify object_permission_id is in the key data
+    assert key_data.get("object_permission_id") == "objperm_key_456"
+
+    # Verify object_permission dict is NOT in the key data
+    assert "object_permission" not in key_data

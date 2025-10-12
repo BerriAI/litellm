@@ -1,5 +1,5 @@
 import os
-import uuid
+from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.api import Api, Endpoints, HttpMethods
 from litellm.integrations.deepeval.types import (

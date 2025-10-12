@@ -1,11 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal, Upload, message } from "antd";
+import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
 import type { FormInstance } from "antd";
-import type { UploadProps } from "antd/es/upload";
-import { UploadOutlined } from "@ant-design/icons";
 import { Text, TextInput } from "@tremor/react";
-import { Row, Col } from "antd";
-import { CredentialItem, modelAvailableCall } from "../networking";
+import { modelAvailableCall } from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
 import { all_admin_roles } from "@/utils/roles";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
@@ -22,18 +19,11 @@ interface AddAutoRouterTabProps {
 
 const { Title, Link } = Typography;
 
-const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
-  form,
-  handleOk,
-  accessToken,
-  userRole,
-}) => {
+const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, accessToken, userRole }) => {
   // State for connection testing
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
   const [connectionTestId, setConnectionTestId] = useState<string>("");
-
-
 
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
@@ -77,13 +67,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     console.log("Router config:", routerConfig);
     const currentFormValues = form.getFieldsValue();
     console.log("Form values:", currentFormValues);
-    
+
     // Check basic required fields first
     if (!currentFormValues.auto_router_name) {
       NotificationManager.fromBackend("Please enter an Auto Router Name");
       return;
     }
-    
+
     if (!currentFormValues.auto_router_default_model) {
       NotificationManager.fromBackend("Please select a Default Model");
       return;
@@ -91,12 +81,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
     // Set auto router specific form values that are required by the regular model form
     form.setFieldsValue({
-      custom_llm_provider: 'auto_router',
+      custom_llm_provider: "auto_router",
       model: currentFormValues.auto_router_name,
       // api_key is not needed for auto router, but form expects it
-      api_key: 'not_required_for_auto_router'
+      api_key: "not_required_for_auto_router",
     });
-    
+
     // Custom validation for router config
     if (!routerConfig || !routerConfig.routes || routerConfig.routes.length === 0) {
       NotificationManager.fromBackend("Please configure at least one route for the auto router");
@@ -104,12 +94,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     }
 
     // Check if all routes have required fields
-    const invalidRoutes = routerConfig.routes.filter((route: any) => 
-      !route.name || !route.description || route.utterances.length === 0
+    const invalidRoutes = routerConfig.routes.filter(
+      (route: any) => !route.name || !route.description || route.utterances.length === 0,
     );
-    
+
     if (invalidRoutes.length > 0) {
-      NotificationManager.fromBackend("Please ensure all routes have a target model, description, and at least one utterance");
+      NotificationManager.fromBackend(
+        "Please ensure all routes have a target model, description, and at least one utterance",
+      );
       return;
     }
 
@@ -127,20 +119,20 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       })
       .catch((error) => {
         console.error("Validation failed:", error);
-        
+
         // Extract specific field errors
         const fieldErrors = error.errorFields || [];
         if (fieldErrors.length > 0) {
           const missingFields = fieldErrors.map((field: any) => {
             const fieldName = field.name[0];
             const friendlyNames: { [key: string]: string } = {
-              'auto_router_name': 'Auto Router Name',
-              'auto_router_default_model': 'Default Model',
-              'auto_router_embedding_model': 'Embedding Model'
+              auto_router_name: "Auto Router Name",
+              auto_router_default_model: "Default Model",
+              auto_router_embedding_model: "Embedding Model",
             };
             return friendlyNames[fieldName] || fieldName;
           });
-          NotificationManager.fromBackend(`Please fill in the following required fields: ${missingFields.join(', ')}`);
+          NotificationManager.fromBackend(`Please fill in the following required fields: ${missingFields.join(", ")}`);
         } else {
           NotificationManager.fromBackend("Please fill in all required fields");
         }
@@ -151,9 +143,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     <>
       <Title level={2}>Add Auto Router</Title>
       <Text className="text-gray-600 mb-6">
-        Create an auto router with intelligent routing logic that automatically selects the best model based on user input patterns and semantic matching.
+        Create an auto router with intelligent routing logic that automatically selects the best model based on user
+        input patterns and semantic matching.
       </Text>
-      
+
       <Card>
         <Form
           form={form}
@@ -181,7 +174,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               value={routerConfig}
               onChange={(config) => {
                 setRouterConfig(config);
-                form.setFieldValue('auto_router_config', config);
+                form.setFieldValue("auto_router_config", config);
               }}
             />
           </div>
@@ -198,15 +191,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             <AntdSelect
               placeholder="Select a default model"
               onChange={(value) => {
-                setShowCustomDefaultModel(value === 'custom');
+                setShowCustomDefaultModel(value === "custom");
               }}
               options={[
-                ...Array.from(new Set(modelInfo.map(option => option.model_group)))
-                  .map((model_group) => ({
-                    value: model_group,
-                    label: model_group,
-                  })),
-                { value: 'custom', label: 'Enter custom model name' }
+                ...Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group) => ({
+                  value: model_group,
+                  label: model_group,
+                })),
+                { value: "custom", label: "Enter custom model name" },
               ]}
               style={{ width: "100%" }}
               showSearch={true}
@@ -222,19 +214,18 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             labelAlign="left"
           >
             <AntdSelect
-              value={form.getFieldValue('auto_router_embedding_model')}
+              value={form.getFieldValue("auto_router_embedding_model")}
               placeholder="Select an embedding model (optional)"
               onChange={(value) => {
-                setShowCustomEmbeddingModel(value === 'custom');
-                form.setFieldValue('auto_router_embedding_model', value);
+                setShowCustomEmbeddingModel(value === "custom");
+                form.setFieldValue("auto_router_embedding_model", value);
               }}
               options={[
-                ...Array.from(new Set(modelInfo.map(option => option.model_group)))
-                  .map((model_group) => ({
-                    value: model_group,
-                    label: model_group,
-                  })),
-                { value: 'custom', label: 'Enter custom model name' }
+                ...Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group) => ({
+                  value: model_group,
+                  label: model_group,
+                })),
+                { value: "custom", label: "Enter custom model name" },
               ]}
               style={{ width: "100%" }}
               showSearch={true}
@@ -246,8 +237,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             <span className="px-4 text-gray-500 text-sm">Additional Settings</span>
             <div className="flex-grow border-t border-gray-200"></div>
           </div>
-
-
 
           {/* Model Access Groups - Admin only */}
           {isAdmin && (
@@ -262,10 +251,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 showSearch
                 placeholder="Select existing groups or type to create new ones"
                 optionFilterProp="children"
-                tokenSeparators={[',']}
+                tokenSeparators={[","]}
                 options={modelAccessGroups.map((group) => ({
                   value: group,
-                  label: group
+                  label: group,
                 }))}
                 maxTagCount="responsive"
                 allowClear
@@ -275,13 +264,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
           <div className="flex justify-between items-center mb-4">
             <Tooltip title="Get help on our github">
-              <Typography.Link href="https://github.com/BerriAI/litellm/issues">
-                Need Help?
-              </Typography.Link>
+              <Typography.Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Typography.Link>
             </Tooltip>
             <div className="space-x-2">
-              <Button onClick={handleTestConnection} loading={isTestingConnection}>Test Connect</Button>
-              <Button 
+              <Button onClick={handleTestConnection} loading={isTestingConnection}>
+                Test Connect
+              </Button>
+              <Button
                 onClick={() => {
                   console.log("Add Auto Router button clicked!");
                   console.log("Current router config:", routerConfig);
@@ -295,7 +284,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           </div>
         </Form>
       </Card>
-      
+
       {/* Test Connection Results Modal */}
       <Modal
         title="Connection Test Results"
@@ -305,23 +294,26 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           setIsTestingConnection(false);
         }}
         footer={[
-          <Button key="close" onClick={() => {
-            setIsResultModalVisible(false);
-            setIsTestingConnection(false);
-          }}>
+          <Button
+            key="close"
+            onClick={() => {
+              setIsResultModalVisible(false);
+              setIsTestingConnection(false);
+            }}
+          >
             Close
-          </Button>
+          </Button>,
         ]}
         width={700}
       >
         {/* Only render the ConnectionErrorDisplay when modal is visible and we have a test ID */}
         {isResultModalVisible && (
-          <ConnectionErrorDisplay 
+          <ConnectionErrorDisplay
             key={connectionTestId}
             formValues={form.getFieldsValue()}
             accessToken={accessToken}
             testMode="chat"
-            modelName={form.getFieldValue('auto_router_name')}
+            modelName={form.getFieldValue("auto_router_name")}
             onClose={() => {
               setIsResultModalVisible(false);
               setIsTestingConnection(false);
@@ -334,4 +326,4 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   );
 };
 
-export default AddAutoRouterTab; 
+export default AddAutoRouterTab;
