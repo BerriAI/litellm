@@ -5,7 +5,7 @@ from typing import Callable, Dict, Optional, List, Tuple, Iterable
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
-from litellm.integrations.gitlab import GitLabPromptCache
+from litellm.integrations.gitlab import GitLabPromptCache, GitLabPromptManager
 from collections import OrderedDict
 from litellm.types.prompts.init_prompts import (
     PromptInfo,
@@ -107,6 +107,10 @@ class InMemoryPromptRegistry:
         Guardrail id to CustomGuardrail object mapping
         """
 
+    def load_all(self):
+        verbose_proxy_logger.debug("Loading all prompts from InMemoryPromptRegistry")
+        return self.IN_MEMORY_PROMPTS
+
     def initialize_prompt(
         self,
         prompt: PromptSpec,
@@ -204,6 +208,7 @@ class GitlabPromptRegistry:
         """
 
     def load_all(self):
+        verbose_proxy_logger.debug("Loading all prompts from UnifiedPromptRegistry")
         if not self.gitlab_prompt_cache:
             import litellm
             self.gitlab_prompt_cache:GitLabPromptCache = GitLabPromptCache(
@@ -238,6 +243,10 @@ class GitlabPromptRegistry:
                 )
                 self.IN_MEMORY_PROMPTS[prompt_id] = prompt_spec
                 self.initialize_prompt(prompt_spec)
+                verbose_proxy_logger.debug(
+                    f"Loaded prompt {prompt_id} from GitLab into IN_MEMORY_PROMPTS. "
+                    f"found prompt --> {self.prompt_id_to_custom_prompt.get(prompt_id, None)}"
+                )
 
         verbose_proxy_logger.debug(
             f"found the gitlab prompts with these ids {list(set(self.IN_MEMORY_PROMPTS.keys()))}"
@@ -257,11 +266,12 @@ class GitlabPromptRegistry:
 
         Returns a Guardrail object if the guardrail is initialized successfully
         """
+        verbose_proxy_logger.debug("Initializing prompt in GitlabPromptRegistry")
         import litellm
 
         prompt_id = prompt.prompt_id
-        if prompt_id in self.IN_MEMORY_PROMPTS:
-            verbose_proxy_logger.debug("prompt_id already exists in IN_MEMORY_PROMPTS")
+        if prompt_id in self.IN_MEMORY_PROMPTS and prompt_id in self.prompt_id_to_custom_prompt:
+            verbose_proxy_logger.debug(f"{prompt_id} already exists in IN_MEMORY_PROMPTS")
             return self.IN_MEMORY_PROMPTS[prompt_id]
 
         custom_prompt_callback: Optional[CustomPromptManagement] = None
@@ -276,10 +286,11 @@ class GitlabPromptRegistry:
         prompt_integration = litellm_params.prompt_integration
         if prompt_integration is None:
             raise ValueError("prompt_integration is required")
-        initializer = self.gitlab_prompt_cache.prompt_manager
+        initializer = GitLabPromptManager
 
+        verbose_proxy_logger.debug(f"Using gitlab initializer for prompt_integration: {prompt_integration}-->{initializer}")
         if initializer:
-            custom_prompt_callback = initializer(litellm_params, prompt)
+            custom_prompt_callback = self.gitlab_prompt_cache.prompt_manager
             if not isinstance(custom_prompt_callback, CustomPromptManagement):
                 raise ValueError(
                     f"CustomPromptManagement is required, got {type(custom_prompt_callback)}"
@@ -314,7 +325,14 @@ class GitlabPromptRegistry:
         """
         Get a prompt callback by its ID from memory
         """
-        return self.prompt_id_to_custom_prompt.get(prompt_id)
+        prompt_cb = self.prompt_id_to_custom_prompt.get(prompt_id, None)
+        if prompt_cb is None and self.gitlab_prompt_cache:
+            prompt_spec = self.IN_MEMORY_PROMPTS.get(prompt_id, None)
+            if prompt_spec:
+                self.initialize_prompt(prompt_spec)
+                prompt_cb = self.prompt_id_to_custom_prompt.get(prompt_id, None)
+        verbose_proxy_logger.debug(f"Found gitlab prompt_cb for {prompt_id} --> {prompt_cb}")
+        return prompt_cb
 
 
 GITLAB_PROMPT_REGISTRY = GitlabPromptRegistry()
@@ -341,6 +359,8 @@ class UnifiedPromptRegistry:
         self._integration_to_registry: Dict[str, str] = {}
         # Aggregated, precedence-aware cache
         self.IN_MEMORY_PROMPTS: Dict[str, PromptSpec] = {}
+        self.prompt_id_to_registry: "OrderedDict[str, object]" = OrderedDict()
+        self.prompt_id_to_registry_name: "OrderedDict[str, object]" = OrderedDict()
 
     # -----------------------------
     # Wiring & setup
@@ -419,6 +439,14 @@ class UnifiedPromptRegistry:
 
     def get_prompt_callback_by_id(self, prompt_id: str) -> Optional[CustomPromptManagement]:
         """Lookup callback by searching registries in precedence order."""
+        registry = self.get_registry_from_prompt_id(prompt_id)
+        registry_name = self.prompt_id_to_registry_name.get(prompt_id, "<unknown>")
+        verbose_proxy_logger.debug(f"Found registry '{registry_name}' for prompt_id '{prompt_id}'")
+        if registry and hasattr(registry, "get_prompt_callback_by_id"):
+
+            cb = registry.get_prompt_callback_by_id(prompt_id)  # type: ignore[attr-defined]
+            return cb
+
         for _, reg in self._registries.items():
             if hasattr(reg, "get_prompt_callback_by_id"):
                 cb = reg.get_prompt_callback_by_id(prompt_id)  # type: ignore[attr-defined]
@@ -500,9 +528,11 @@ class UnifiedPromptRegistry:
     def _rebuild_cache(self) -> None:
         """Rebuild aggregated IN_MEMORY_PROMPTS respecting registry precedence."""
         agg: Dict[str, PromptSpec] = {}
+        prompt_id_to_registry = OrderedDict()
+        prompt_id_to_registry_name = OrderedDict()
         seen: set[str] = set()
 
-        for _, reg in self._registries.items():
+        for reg_name, reg in self._registries.items():
             # Prefer direct dict for speed
             im = getattr(reg, "IN_MEMORY_PROMPTS", None)
             if isinstance(im, dict):
@@ -528,8 +558,17 @@ class UnifiedPromptRegistry:
                 if spec is not None:
                     agg[pid] = spec
                     seen.add(pid)
+                    prompt_id_to_registry[pid] = reg
+                    prompt_id_to_registry_name[pid] = reg_name
+                    self.pr = reg.get_prompt_callback_by_id(pid)  # type: ignore[attr-defined]
+
 
         self.IN_MEMORY_PROMPTS = agg
+        self.prompt_id_to_registry = prompt_id_to_registry
+        self.prompt_id_to_registry_name = prompt_id_to_registry_name
+
+    def get_registry_from_prompt_id(self, prompt_id):
+        return self.prompt_id_to_registry.get(prompt_id, None)
 
     def _cache_if_absent(self, prompt_id: str, spec: PromptSpec) -> None:
         """Add to aggregate cache if not present (without breaking precedence)."""

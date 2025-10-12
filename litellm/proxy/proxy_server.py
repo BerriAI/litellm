@@ -3222,7 +3222,7 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="prompts"):
             await self._init_unified_prompts()
-            # await self._init_prompts_in_db(prisma_client=prisma_client)
+            await self._init_prompts_in_db(prisma_client=prisma_client)
 
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)

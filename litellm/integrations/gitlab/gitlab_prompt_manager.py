@@ -12,8 +12,23 @@ from litellm.integrations.prompt_management_base import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
-
+from litellm._logging import verbose_proxy_logger
 from litellm.integrations.gitlab.gitlab_client import GitLabClient
+
+
+GITLAB_PREFIX = "gitlab::"
+
+def encode_prompt_id(raw_id: str) -> str:
+    """Convert GitLab path IDs like 'invoice/extract' → 'gitlab::invoice::extract'"""
+    if raw_id.startswith(GITLAB_PREFIX):
+        return raw_id  # already encoded
+    return f"{GITLAB_PREFIX}{raw_id.replace('/', '::')}"
+
+def decode_prompt_id(encoded_id: str) -> str:
+    """Convert 'gitlab::invoice::extract' → 'invoice/extract'"""
+    if not encoded_id.startswith(GITLAB_PREFIX):
+        return encoded_id
+    return encoded_id[len(GITLAB_PREFIX):].replace("::", "/")
 
 
 class GitLabPromptTemplate:
@@ -87,6 +102,7 @@ class GitLabTemplateManager:
 
     def _id_to_repo_path(self, prompt_id: str) -> str:
         """Map a prompt_id to a repo path (respects prompts_path and adds .prompt)."""
+        prompt_id = decode_prompt_id(prompt_id)
         if self.prompts_path:
             return f"{self.prompts_path}/{prompt_id}.prompt"
         return f"{prompt_id}.prompt"
@@ -101,26 +117,27 @@ class GitLabTemplateManager:
             path = path[len(self.prompts_path.strip("/")) + 1 :]
         if path.endswith(".prompt"):
             path = path[: -len(".prompt")]
-        return path
+        return encode_prompt_id(path)
 
     # ---------- loading ----------
 
     def _load_prompt_from_gitlab(self, prompt_id: str, *, ref: Optional[str] = None) -> None:
         """Load a specific .prompt file from GitLab (scoped under prompts_path if set)."""
         try:
+            # prompt_id = decode_prompt_id(prompt_id)
             file_path = self._id_to_repo_path(prompt_id)
             prompt_content = self.gitlab_client.get_file_content(file_path, ref=ref)
             if prompt_content:
                 template = self._parse_prompt_file(prompt_content, prompt_id)
                 self.prompts[prompt_id] = template
         except Exception as e:
-            raise Exception(f"Failed to load prompt '{prompt_id}' from GitLab: {e}")
+            raise Exception(f"Failed to load prompt '{encode_prompt_id(prompt_id)}' from GitLab: {e}")
 
     def load_all_prompts(self, *, recursive: bool = True) -> List[str]:
         """
         Eagerly load all .prompt files from prompts_path. Returns loaded IDs.
         """
-        files = self.list_templates(recursive=recursive)  # reuse logic
+        files = self.list_templates(recursive=recursive)
         loaded: List[str] = []
         for pid in files:
             if pid not in self.prompts:
@@ -195,9 +212,6 @@ class GitLabTemplateManager:
         return self.prompts.get(template_id)
 
     def list_templates(self, *, recursive: bool = True) -> List[str]:
-        """
-        List available prompt IDs discovered under prompts_path (no extension, relative to prompts_path).
-        """
         """
         List available prompt IDs under prompts_path (no extension).
         Compatible with both list_files signatures:
@@ -438,13 +452,20 @@ class GitLabPromptManager(CustomPromptManagement):
             prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
         try:
-            if prompt_id not in self.prompt_manager.prompts:
+            verbose_proxy_logger.debug(f"GitLabPromptManager._compile_prompt_helper called with "
+                                       f"prompt_id={prompt_id}, prompt_variables={prompt_variables}, ")
+            decoded_id = decode_prompt_id(prompt_id)
+            verbose_proxy_logger.debug(f"Decoded prompt_id: {decoded_id}")
+            if decoded_id not in self.prompt_manager.prompts:
                 git_ref = getattr(dynamic_callback_params, "extra", {}).get("git_ref") if hasattr(dynamic_callback_params, "extra") else None
-                self.prompt_manager._load_prompt_from_gitlab(prompt_id, ref=git_ref)
+                self.prompt_manager._load_prompt_from_gitlab(decoded_id, ref=git_ref)
+
 
             rendered_prompt, prompt_metadata = self.get_prompt_template(
                 prompt_id, prompt_variables
             )
+            verbose_proxy_logger.debug(f"Rendered prompt: {rendered_prompt}")
+            verbose_proxy_logger.debug(f"Prompt metadata: {prompt_metadata}")
 
             messages = self._parse_prompt_to_messages(rendered_prompt)
             template_model = prompt_metadata.get("model")
@@ -475,6 +496,11 @@ class GitLabPromptManager(CustomPromptManagement):
             prompt_label: Optional[str] = None,
             prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
+        verbose_proxy_logger.debug(f"GitLabPromptManager.get_chat_completion_prompt "
+                                   f"called with prompt_id={prompt_id},"
+                                   f" prompt_variables={prompt_variables}, "
+                                   f"dynamic_callback_params={dynamic_callback_params},"
+                                   f" prompt_label={prompt_label}, prompt_version={prompt_version}")
         return PromptManagementBase.get_chat_completion_prompt(
             self,
             model,
@@ -568,7 +594,10 @@ class GitLabPromptCache:
             entry = self._template_to_json(pid, tmpl)
 
             self._by_file[file_path] = entry
-            self._by_id[pid] = entry
+            # prefixed_id = pid if pid.startswith("gitlab::") else f"gitlab::{pid}"
+            encoded_id = encode_prompt_id(pid)
+            self._by_id[encoded_id] = entry
+            # self._by_id[pid] = entry
 
         return self._by_id
 
@@ -592,7 +621,14 @@ class GitLabPromptCache:
 
     def get_by_id(self, prompt_id: str) -> Optional[Dict[str, Any]]:
         """Get a cached prompt JSON by prompt ID (relative to prompts_path)."""
-        return self._by_id.get(prompt_id)
+        if prompt_id in self._by_id:
+            return self._by_id[prompt_id]
+
+        # Try normalized forms
+        decoded = decode_prompt_id(prompt_id)
+        encoded = encode_prompt_id(decoded)
+
+        return self._by_id.get(encoded) or self._by_id.get(decoded)
 
     # -------------------------
     # Internals
