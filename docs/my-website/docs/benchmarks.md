@@ -44,8 +44,8 @@ In these tests the baseline latency characteristics are measured against a fake-
 |  | Aggregated | 77 | 130 | 180 | 57.53 | 2340 |
 
 #### Key Findings
-- Doubling from 2 to 4 LiteLLM instances cuts median latency from 200 ms to 100 ms.
-- High-percentile latencies drop significantly: P95 from 430 ms to 130 ms, P99 from 930 ms to 180 ms.
+- Doubling from 2 to 4 LiteLLM instances halves median latency: 200 ms → 100 ms.
+- High-percentile latencies drop significantly: P95 630 ms → 150 ms, P99 1,200 ms → 240 ms.
 - Setting workers equal to CPU count gives optimal performance.
 
 ## Machine Spec used for testing
