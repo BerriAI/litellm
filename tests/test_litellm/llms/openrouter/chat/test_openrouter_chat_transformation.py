@@ -1,12 +1,14 @@
 import os
 import sys
 
+import httpx
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openrouter.chat.transformation import (
     OpenRouterChatCompletionStreamingHandler,
     OpenrouterConfig,
@@ -364,4 +366,126 @@ def test_openrouter_transform_request_multiple_cache_controls():
     
     assert system_message["content"][4]["cache_control"] == {"type": "ephemeral"}
     assert "cache_control" not in system_message
-    
+
+
+def test_openrouter_cost_tracking_non_streaming():
+    """
+    Test OpenRouter cost tracking for non-streaming completions.
+
+    Verifies:
+    1. Request includes usage.include=true to get cost data
+    2. Response extracts cost from usage.cost and stores in _hidden_params
+    """
+    from unittest.mock import Mock, patch
+    from litellm.types.utils import ModelResponse, Choices, Message, Usage
+
+    config = OpenrouterConfig()
+
+    # Test request adds usage parameter
+    transformed_request = config.transform_request(
+        model="openrouter/anthropic/claude-sonnet-4.5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert "usage" in transformed_request
+    assert transformed_request["usage"] == {"include": True}
+
+    # Test response extracts cost
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "id": "gen-123",
+        "model": "openrouter/anthropic/claude-sonnet-4.5",
+        "choices": [{"message": {"role": "assistant", "content": "Hello!"}, "finish_reason": "stop", "index": 0}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": 0.00015}
+    }
+    mock_response.headers = {}
+
+    model_response = ModelResponse(
+        id="gen-123",
+        choices=[Choices(finish_reason="stop", index=0, message=Message(content="Hello!", role="assistant"))],
+        created=1234567890,
+        model="openrouter/anthropic/claude-sonnet-4.5",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+    )
+
+    with patch.object(OpenAIGPTConfig, 'transform_response', return_value=model_response):
+        result = config.transform_response(
+            model="openrouter/anthropic/claude-sonnet-4.5",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=Mock(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+    assert hasattr(result, "_hidden_params")
+    assert "llm_provider-x-litellm-response-cost" in result._hidden_params["additional_headers"]
+    assert result._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.00015
+
+
+def test_openrouter_cost_tracking_streaming():
+    """
+    Test OpenRouter cost tracking for streaming completions.
+
+    Verifies:
+    1. Request includes usage.include=true (same as non-streaming)
+    2. Streaming chunks preserve usage/cost data in the final chunk
+    3. Cost field is accessible in the usage object
+    """
+    config = OpenrouterConfig()
+
+    # Test request adds usage parameter for streaming
+    transformed_request = config.transform_request(
+        model="openrouter/anthropic/claude-sonnet-4.5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert "usage" in transformed_request
+    assert transformed_request["usage"] == {"include": True}
+
+    # Test streaming chunks preserve cost data
+    handler = OpenRouterChatCompletionStreamingHandler(
+        streaming_response=None, sync_stream=True
+    )
+
+    # First chunk - content only
+    chunk1 = {
+        "id": "gen-stream-456",
+        "created": 1234567890,
+        "model": "openrouter/anthropic/claude-sonnet-4.5",
+        "choices": [{"delta": {"content": "Hello", "reasoning": None}, "index": 0}],
+    }
+
+    # Final chunk - usage and cost
+    chunk2 = {
+        "id": "gen-stream-456",
+        "created": 1234567890,
+        "model": "openrouter/anthropic/claude-sonnet-4.5",
+        "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15, "cost": 0.0001},
+        "choices": [{"delta": {"content": "", "reasoning": None}, "finish_reason": "stop", "index": 0}],
+    }
+
+    result1 = handler.chunk_parser(chunk1)
+    result2 = handler.chunk_parser(chunk2)
+
+    # First chunk has content, no usage
+    assert result1.choices[0]["delta"]["content"] == "Hello"
+    assert result1.usage is None
+
+    # Final chunk has usage with cost preserved
+    assert result2.choices[0]["finish_reason"] == "stop"
+    assert result2.usage is not None
+    assert result2.usage.prompt_tokens == 5
+    assert result2.usage.completion_tokens == 10
+    assert result2.usage.total_tokens == 15
+    # Verify cost field is preserved in the Usage object - this is the key data for cost tracking
+    # The chunk_parser converts the dict to a Usage Pydantic model which includes the cost field
+    assert result2.usage.cost == 0.0001
