@@ -287,3 +287,5 @@ e. Once completed, you should see this success message:
 
 <Image img={require('../../img/oauth_2_success.png')} style={{ width: '500px', height: 'auto' }} />
 
+
+[**E2E Tutorial Video**](https://drive.google.com/file/d/1pD5i_ULxHgh4rYl0dGiqvcHR4Tsjmzo6/view?usp=sharing)
