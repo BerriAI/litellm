@@ -59,15 +59,37 @@ pip install litellm==1.78.0.rc.1
 ## Key Highlights
 
 - **MCP Gateway - Control Tool Access by Team, Key** - Control MCP tool access by team/key. 
+- **Performance Improvements** - 70% Lower p99 Latency
 - **GPT-5 Pro & GPT-Image-1-Mini** - Day 0 support for OpenAI's GPT-5 Pro (400K context) and gpt-image-1-mini image generation
-- **UI Performance Boost** - Replaces bloated key list calls with lean key aliases endpoint, Turbopack for faster development, and major UI refactors
 - **EnkryptAI Guardrails** - New guardrail integration for content moderation
 - **Tag-Based Budgets** - Support for setting budgets based on request tags
-- **Azure AD & SSO** - Enhanced Azure AD default credentials selection and EntraID app roles support
 
 ---
 
-## Performance
+### MCP Gateway - Control Tool Access by Team, Key
+
+<Image 
+  img={require('../../img/release_notes/tool_control.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br/>
+
+Proxy admins can now control MCP tool access by team or key. This makes it easy to grant different teams selective access to tools from the same MCP server.
+
+For example, you can now give your Engineering team access to `list_repositories`, `create_issue`, and `search_code` tools, while Sales only gets `search_code` and `close_issue` tools. 
+
+This makes it easier for Proxy Admins to govern MCP Tool Access.
+
+[Get Started](../../docs/mcp_control#set-allowed-tools-for-a-key-team-or-organization)
+
+---
+
+## Performance - 70% Lower p99 Latency
+
+<Image img={require('../../img/release_notes/1_78_0_perf.png')}  style={{ width: '800px', height: 'auto' }} />
+
+<br/>
 
 This release cuts p99 latency by 70% on LiteLLM AI Gateway, making it even better for low-latency use cases.
 
@@ -75,7 +97,7 @@ These gains come from two key enhancements:
 
 **Reliable Sessions**
 
-`shared_session` is now consistently used across all calls, resolving JSON errors, enabling connection pooling, and actively managing session lifecycles—detecting stale connections, retrying expired sessions, and preventing 'Session is closed' errors.
+Added support for shared sessions with aiohttp. The shared_session parameter is now consistently used across all calls, enabling connection pooling.
 
 **Faster Routing**
 
@@ -112,23 +134,6 @@ View the complete configuration: [gist.github.com/AlexsanderHamir/config.yaml](
 View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache_hits.py](https://gist.github.com/AlexsanderHamir/42c33d7a4dc7a57f56a78b560dee3a42)
 
 ---
-### MCP Gateway - Control Tool Access by Team, Key
-
-<Image 
-  img={require('../../img/release_notes/tool_control.png')}
-  style={{width: '100%', display: 'block', margin: '2rem auto'}}
-/>
-
-<br/>
-
-Proxy admins can now control MCP tool access by team or key. This makes it easy to grant different teams selective access to tools from the same MCP server.
-
-For example, you can now give your Engineering team access to `list_repositories`, `create_issue`, and `search_code` tools, while Sales only gets `search_code` and `close_issue` tools. 
-
-This makes it easier for Proxy Admins to govern MCP Tool Access.
-
-[Get Started](../../docs/mcp_control#set-allowed-tools-for-a-key-team-or-organization)
-
 
 ## New Models / Updated Models
 
