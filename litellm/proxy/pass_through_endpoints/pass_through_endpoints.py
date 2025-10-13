@@ -5,7 +5,7 @@ import json
 import traceback
 from base64 import b64encode
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -42,6 +42,7 @@ from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._types import (
     ConfigFieldInfo,
     ConfigFieldUpdate,
+    LiteLLMRoutes,
     PassThroughEndpointResponse,
     PassThroughGenericEndpoint,
     ProxyException,
@@ -66,7 +67,7 @@ router = APIRouter()
 pass_through_endpoint_logging = PassThroughEndpointLogging()
 
 # Global registry to track registered pass-through routes and prevent memory leaks
-_registered_pass_through_routes: Dict[str, Dict[str, str]] = {}
+_registered_pass_through_routes: Dict[str, Dict[str, Union[str, Dict[str, Any]]]] = {}
 
 
 def get_response_body(response: httpx.Response) -> Optional[dict]:
@@ -974,24 +975,74 @@ def create_pass_through_route(
             ] = None,  # if pass-through endpoint is a streaming request
             subpath: str = "",  # captures sub-paths when include_subpath=True
         ):
+            from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+                InitPassThroughEndpointHelpers,
+            )
+
+            path = request.url.path
+
+            if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                route=path
+            ):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Pass-through endpoint {endpoint} not found. This could have been deleted or not yet added to the proxy.",
+                )
+
+            passthrough_params = (
+                InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+                    route=path
+                )
+            )
+            target_params = {
+                "target": target,
+                "custom_headers": custom_headers,
+                "forward_headers": _forward_headers,
+                "merge_query_params": _merge_query_params,
+                "cost_per_request": cost_per_request,
+            }
+
+            if passthrough_params is not None:
+                target_params.update(passthrough_params.get("passthrough_params", {}))
+
+            # Extract and cast parameters with proper types
+            param_target = target_params.get("target") or target
+            param_custom_headers = target_params.get("custom_headers", custom_headers)
+            param_forward_headers = target_params.get(
+                "forward_headers", _forward_headers
+            )
+            param_merge_query_params = target_params.get(
+                "merge_query_params", _merge_query_params
+            )
+            param_cost_per_request = target_params.get(
+                "cost_per_request", cost_per_request
+            )
+
             # Construct the full target URL with subpath if needed
             full_target = (
                 HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
-                    base_target=target, subpath=subpath, include_subpath=include_subpath
+                    base_target=cast(str, param_target),
+                    subpath=subpath,
+                    include_subpath=include_subpath,
                 )
+            )
+
+            # Ensure custom_headers is a dict
+            headers_dict = (
+                param_custom_headers if isinstance(param_custom_headers, dict) else {}
             )
 
             return await pass_through_request(  # type: ignore
                 request=request,
                 target=full_target,
-                custom_headers=custom_headers or {},
+                custom_headers=headers_dict,
                 user_api_key_dict=user_api_key_dict,
-                forward_headers=_forward_headers,
-                merge_query_params=_merge_query_params,
+                forward_headers=cast(Optional[bool], param_forward_headers),
+                merge_query_params=cast(Optional[bool], param_merge_query_params),
                 query_params=query_params,
                 stream=stream,
                 custom_body=custom_body,
-                cost_per_request=cost_per_request,
+                cost_per_request=cast(Optional[float], param_cost_per_request),
                 custom_llm_provider=custom_llm_provider,
             )
 
@@ -1592,6 +1643,14 @@ class InitPassThroughEndpointHelpers:
             "endpoint_id": endpoint_id,
             "path": path,
             "type": "exact",
+            "passthrough_params": {
+                "target": target,
+                "custom_headers": custom_headers,
+                "forward_headers": forward_headers,
+                "merge_query_params": merge_query_params,
+                "dependencies": dependencies,
+                "cost_per_request": cost_per_request,
+            },
         }
 
     @staticmethod
@@ -1645,6 +1704,14 @@ class InitPassThroughEndpointHelpers:
             "endpoint_id": endpoint_id,
             "path": path,
             "type": "subpath",
+            "passthrough_params": {
+                "target": target,
+                "custom_headers": custom_headers,
+                "forward_headers": forward_headers,
+                "merge_query_params": merge_query_params,
+                "dependencies": dependencies,
+                "cost_per_request": cost_per_request,
+            },
         }
 
     @staticmethod
@@ -1662,6 +1729,11 @@ class InitPassThroughEndpointHelpers:
             )
 
     @staticmethod
+    def clear_all_pass_through_routes():
+        """Clear all pass-through routes from the registry"""
+        _registered_pass_through_routes.clear()
+
+    @staticmethod
     def is_registered_pass_through_route(route: str) -> bool:
         """
         Check if route is a registered pass-through endpoint from DB
@@ -1675,6 +1747,12 @@ class InitPassThroughEndpointHelpers:
         Returns:
             bool: True if route is a registered pass-through endpoint, False otherwise
         """
+
+        ## CHECK IF MAPPED PASS THROUGH ENDPOINT
+        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+            if route.startswith(mapped_route):
+                return True
+
         # Fast path: check if any registered route key contains this path
         # Keys are in format: "{endpoint_id}:exact:{path}" or "{endpoint_id}:subpath:{path}"
         # Extract unique paths from keys for quick checking
@@ -1683,7 +1761,6 @@ class InitPassThroughEndpointHelpers:
             if len(parts) == 3:
                 route_type = parts[1]
                 registered_path = parts[2]
-
                 if route_type == "exact" and route == registered_path:
                     return True
                 elif route_type == "subpath":
@@ -1694,11 +1771,42 @@ class InitPassThroughEndpointHelpers:
 
         return False
 
+    @staticmethod
+    def get_registered_pass_through_route(route: str) -> Optional[Dict[str, Any]]:
+        """Get passthrough params for a given route"""
+        for key in _registered_pass_through_routes.keys():
+            parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
+            if len(parts) == 3:
+                route_type = parts[1]
+                registered_path = parts[2]
+
+                if route_type == "exact" and route == registered_path:
+                    return _registered_pass_through_routes[key]
+                elif route_type == "subpath":
+                    if route == registered_path or route.startswith(
+                        registered_path + "/"
+                    ):
+                        return _registered_pass_through_routes[key]
+
+        return None
+
+
+def _get_combined_pass_through_endpoints(
+    pass_through_endpoints: Union[List[Dict], List[PassThroughGenericEndpoint]],
+    config_pass_through_endpoints: List[Dict],
+):
+    """Get combined pass-through endpoints from db + config"""
+    return pass_through_endpoints + config_pass_through_endpoints
+
 
 async def initialize_pass_through_endpoints(
     pass_through_endpoints: Union[List[Dict], List[PassThroughGenericEndpoint]],
 ):
     """
+    1. Create a global list of pass-through endpoints (db + config)
+    2. Clear all existing pass-through endpoints from the FastAPI app routes
+    3. Add new endpoints to the in-memory registry
+
     Initialize a list of pass-through endpoints by adding them to the FastAPI app routes
 
     Args:
@@ -1711,9 +1819,26 @@ async def initialize_pass_through_endpoints(
 
     verbose_proxy_logger.debug("initializing pass through endpoints")
     from litellm.proxy._types import CommonProxyErrors, LiteLLMRoutes
-    from litellm.proxy.proxy_server import app, premium_user
+    from litellm.proxy.proxy_server import (
+        app,
+        config_passthrough_endpoints,
+        premium_user,
+    )
 
-    for endpoint in pass_through_endpoints:
+    ## get combined pass-through endpoints from db + config
+    combined_pass_through_endpoints: List[Union[Dict, PassThroughGenericEndpoint]]
+
+    if config_passthrough_endpoints is not None:
+        combined_pass_through_endpoints = _get_combined_pass_through_endpoints(  # type: ignore
+            pass_through_endpoints, config_passthrough_endpoints
+        )
+    else:
+        combined_pass_through_endpoints = pass_through_endpoints  # type: ignore
+
+    ## clear all existing pass-through endpoints from the FastAPI app routes
+    InitPassThroughEndpointHelpers.clear_all_pass_through_routes()
+
+    for endpoint in combined_pass_through_endpoints:
         if isinstance(endpoint, PassThroughGenericEndpoint):
             endpoint = endpoint.model_dump()
 
@@ -1818,23 +1943,91 @@ async def _get_pass_through_endpoints_from_db(
     return returned_endpoints
 
 
+async def _filter_endpoints_by_team_allowed_routes(
+    team_id: str,
+    pass_through_endpoints: List[PassThroughGenericEndpoint],
+    prisma_client,
+) -> List[PassThroughGenericEndpoint]:
+    """
+    Filter pass-through endpoints based on team's allowed_passthrough_routes metadata.
+
+    Args:
+        team_id: The team ID to check permissions for
+        pass_through_endpoints: List of endpoints to filter
+        prisma_client: Database client
+
+    Returns:
+        Filtered list of endpoints based on team permissions
+
+    Raises:
+        HTTPException: If team is not found
+    """
+    # retrieve team from db
+    team = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": team_id},
+    )
+    if team is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "Team not found"},
+        )
+
+    # retrieve team metadata
+    team_metadata = team.metadata
+    if (
+        team_metadata is not None
+        and team_metadata.get("allowed_passthrough_routes") is not None
+    ):
+        ## FILTER pass_through_endpoints by allowed_passthrough_routes
+        pass_through_endpoints = [
+            endpoint
+            for endpoint in pass_through_endpoints
+            if endpoint.path in team_metadata.get("allowed_passthrough_routes")
+        ]
+
+    return pass_through_endpoints
+
+
 @router.get(
     "/config/pass_through_endpoint",
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=PassThroughEndpointResponse,
+)
+@router.get(
+    "/config/pass_through_endpoint/team/{team_id}",
     dependencies=[Depends(user_api_key_auth)],
     response_model=PassThroughEndpointResponse,
 )
 async def get_pass_through_endpoints(
     endpoint_id: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    team_id: Optional[str] = None,
 ):
     """
     GET configured pass through endpoint.
 
     If no endpoint_id given, return all configured endpoints.
     """  ## Get existing pass-through endpoint field value
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
     pass_through_endpoints = await _get_pass_through_endpoints_from_db(
         endpoint_id=endpoint_id, user_api_key_dict=user_api_key_dict
     )
+
+    if team_id is not None:
+        pass_through_endpoints = await _filter_endpoints_by_team_allowed_routes(
+            team_id=team_id,
+            pass_through_endpoints=pass_through_endpoints,
+            prisma_client=prisma_client,
+        )
+
     return PassThroughEndpointResponse(endpoints=pass_through_endpoints)
 
 
@@ -1930,6 +2123,7 @@ async def update_pass_through_endpoints(
         field_value=pass_through_endpoint_data,
         config_type="general_settings",
     )
+
     await update_config_general_settings(
         data=updated_data, user_api_key_dict=user_api_key_dict
     )
