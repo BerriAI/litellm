@@ -1,5 +1,4 @@
 import { ColumnDef } from "@tanstack/react-table";
-import { Button, Badge } from "@tremor/react";
 import { Tooltip, Checkbox } from "antd";
 import { Text } from "@tremor/react";
 import { InformationCircleIcon, PlayIcon, RefreshIcon } from "@heroicons/react/outline";

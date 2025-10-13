@@ -339,6 +339,72 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 | fine tuned `gpt-3.5-turbo-1106` | `response = completion(model="ft:gpt-3.5-turbo-1106", messages=messages)` |
 | fine tuned `gpt-3.5-turbo-0613` | `response = completion(model="ft:gpt-3.5-turbo-0613", messages=messages)` |
 
+## Getting Reasoning Content in `/chat/completions`
+
+GPT-5 models return reasoning content when called via the Responses API. You can call these models via the `/chat/completions` endpoint by using the `openai/responses/` prefix.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+```python
+response = litellm.completion(
+    model="openai/responses/gpt-5-mini", # tells litellm to call the model via the Responses API
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort="low",
+)
+```
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{ 
+    "model": "openai/responses/gpt-5-mini",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "reasoning_effort": "low"
+}'
+```
+</TabItem>
+</Tabs>
+
+Expected Response:
+```json
+{
+  "id": "chatcmpl-6382a222-43c9-40c4-856b-22e105d88075",
+  "created": 1760146746,
+  "model": "gpt-5-mini",
+  "object": "chat.completion",
+  "system_fingerprint": null,
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Paris",
+        "role": "assistant",
+        "tool_calls": null,
+        "function_call": null,
+        "reasoning_content": "**Identifying the capital**\n\nThe user wants me to think of the capital of France and write it down. That's pretty straightforward: it's Paris. There aren't any safety issues to consider here. I think it would be best to keep it concise, so maybe just \"Paris\" would suffice. I feel confident that I should just stick to that without adding anything else. So, let's write it down!",
+        "provider_specific_fields": null
+      }
+    }
+  ],
+  "usage": {
+    "completion_tokens": 7,
+    "prompt_tokens": 18,
+    "total_tokens": 25,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cached_tokens": 0,
+      "text_tokens": null,
+      "image_tokens": null
+    }
+  }
+}
+
+```
 
 ## OpenAI Chat Completion to Responses API Bridge
 

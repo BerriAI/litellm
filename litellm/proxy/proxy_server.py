@@ -28,8 +28,13 @@ from typing import (
 
 from litellm._uuid import uuid
 from litellm.constants import (
+    AIOHTTP_CONNECTOR_LIMIT,
+    AIOHTTP_KEEPALIVE_TIMEOUT,
+    AIOHTTP_TTL_DNS_CACHE,
     BASE_MCP_ROUTE,
     DEFAULT_MAX_RECURSE_DEPTH,
+    DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
+    DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
@@ -44,6 +49,7 @@ from litellm.types.utils import (
 from litellm.utils import load_credentials_from_list
 
 if TYPE_CHECKING:
+    from aiohttp import ClientSession
     from opentelemetry.trace import Span as _Span
 
     from litellm.integrations.opentelemetry import OpenTelemetry
@@ -510,7 +516,7 @@ _description = (
 
 
 def cleanup_router_config_variables():
-    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, health_check_interval, prisma_client
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, prisma_client
 
     # Set all variables to None
     master_key = None
@@ -522,6 +528,7 @@ def cleanup_router_config_variables():
     user_custom_sso = None
     user_custom_ui_sso_sign_in_handler = None
     use_background_health_checks = None
+    use_shared_health_check = None
     health_check_interval = None
     prisma_client = None
 
@@ -557,9 +564,34 @@ async def proxy_shutdown_event():
     cleanup_router_config_variables()
 
 
+async def _initialize_shared_aiohttp_session():
+    """Initialize shared aiohttp session for connection reuse."""
+    try:
+        from aiohttp import ClientSession, TCPConnector
+
+        # Create connector with connection pooling settings optimized for long-lived connections
+        connector = TCPConnector(
+            limit=AIOHTTP_CONNECTOR_LIMIT,
+            keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
+            ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
+            enable_cleanup_closed=True,
+        )
+
+        session = ClientSession(connector=connector)
+        verbose_proxy_logger.info(
+            f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(session)})"
+        )
+        return session
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"Failed to create shared aiohttp session: {e}. Continuing without session reuse."
+        )
+        return None
+
+
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval, shared_aiohttp_session
     import json
 
     init_verbose_loggers()
@@ -674,10 +706,20 @@ async def proxy_startup_event(app: FastAPI):
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
+    ## Initialize shared aiohttp session for connection reuse
+    shared_aiohttp_session = await _initialize_shared_aiohttp_session()
+
     # End of startup event
     yield
 
-    # Shutdown event
+    # Shutdown event - close shared aiohttp session
+    if shared_aiohttp_session is not None:
+        try:
+            await shared_aiohttp_session.close()
+            verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error closing shared aiohttp session: {e}")
+
     await proxy_shutdown_event()
 
 
@@ -949,12 +991,16 @@ experimental = False
 llm_router: Optional[Router] = None
 llm_model_list: Optional[list] = None
 general_settings: dict = {}
+config_passthrough_endpoints: Optional[List[Dict[str, Any]]] = None
 callback_settings: dict = {}
 log_file = "api_log.json"
 worker_config = None
 master_key: Optional[str] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
+shared_aiohttp_session: Optional["ClientSession"] = (
+    None  # Global shared session for connection reuse
+)
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -970,6 +1016,7 @@ user_custom_key_generate = None
 user_custom_sso = None
 user_custom_ui_sso_sign_in_handler = None
 use_background_health_checks = None
+use_shared_health_check = None
 use_queue = False
 health_check_interval = None
 health_check_details = None
@@ -1109,6 +1156,7 @@ async def update_cache(  # noqa: PLR0915
     team_id: Optional[str],
     response_cost: Optional[float],
     parent_otel_span: Optional[Span],  # type: ignore
+    tags: Optional[List[str]] = None,
 ):
     """
     Use this to update the cache with new user spend.
@@ -1329,6 +1377,52 @@ async def update_cache(  # noqa: PLR0915
                 f"An error occurred updating end user cache: {str(e)}"
             )
 
+    ### UPDATE TAG SPEND ###
+    async def _update_tag_cache():
+        """
+        Update the tag cache with the new spend.
+        """
+        if tags is None or response_cost is None:
+            return
+
+        try:
+            for tag_name in tags:
+                if not tag_name or not isinstance(tag_name, str):
+                    continue
+
+                cache_key = f"tag:{tag_name}"
+                # Fetch the existing tag object from cache
+                existing_tag_obj = await user_api_key_cache.async_get_cache(
+                    key=cache_key
+                )
+                if existing_tag_obj is None:
+                    # do nothing if tag not in api key cache
+                    continue
+
+                verbose_proxy_logger.debug(
+                    f"_update_tag_cache: existing spend for tag={tag_name}: {existing_tag_obj}; response_cost: {response_cost}"
+                )
+
+                if isinstance(existing_tag_obj, dict):
+                    existing_spend = existing_tag_obj.get("spend", 0) or 0
+                else:
+                    existing_spend = getattr(existing_tag_obj, "spend", 0) or 0
+
+                # Calculate the new cost by adding the existing cost and response_cost
+                new_spend = existing_spend + response_cost
+
+                # Update the spend column for the given tag
+                if isinstance(existing_tag_obj, dict):
+                    existing_tag_obj["spend"] = new_spend
+                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
+                else:
+                    existing_tag_obj.spend = new_spend
+                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"An error occurred updating tag cache: {str(e)}"
+            )
+
     if token is not None and response_cost is not None:
         await _update_key_cache(token=token, response_cost=response_cost)
 
@@ -1340,6 +1434,9 @@ async def update_cache(  # noqa: PLR0915
 
     if team_id is not None:
         await _update_team_cache()
+
+    if tags is not None:
+        await _update_tag_cache()
 
     asyncio.create_task(
         user_api_key_cache.async_set_cache_pipeline(
@@ -1369,8 +1466,9 @@ async def _run_background_health_check():
     Periodically run health checks in the background on the endpoints.
 
     Update health_check_results, based on this.
+    Uses shared health check state when Redis is available to coordinate across pods.
     """
-    global health_check_results, llm_model_list, health_check_interval, health_check_details
+    global health_check_results, llm_model_list, health_check_interval, health_check_details, use_shared_health_check, redis_usage_cache
 
     if (
         health_check_interval is None
@@ -1378,6 +1476,20 @@ async def _run_background_health_check():
         or health_check_interval <= 0
     ):
         return
+
+    # Initialize shared health check manager if Redis is available and feature is enabled
+    shared_health_manager = None
+    if use_shared_health_check and redis_usage_cache is not None:
+        from litellm.proxy.health_check_utils.shared_health_check_manager import (
+            SharedHealthCheckManager,
+        )
+
+        shared_health_manager = SharedHealthCheckManager(
+            redis_cache=redis_usage_cache,
+            health_check_ttl=DEFAULT_SHARED_HEALTH_CHECK_TTL,
+            lock_ttl=DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
+        )
+        verbose_proxy_logger.info("Initialized shared health check manager")
 
     while True:
         # make 1 deep copy of llm_model_list on every health check iteration
@@ -1390,9 +1502,31 @@ async def _run_background_health_check():
             if not m.get("model_info", {}).get("disable_background_health_check", False)
         ]
 
-        healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-            model_list=_llm_model_list, details=health_check_details
+        # Use shared health check if available, otherwise fall back to direct health check
+        # Convert health_check_details to bool for perform_shared_health_check (defaults to True if None)
+        details_bool = (
+            health_check_details if health_check_details is not None else True
         )
+
+        if shared_health_manager is not None:
+            try:
+                healthy_endpoints, unhealthy_endpoints = (
+                    await shared_health_manager.perform_shared_health_check(
+                        model_list=_llm_model_list, details=details_bool
+                    )
+                )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    "Error in shared health check, falling back to direct health check: %s",
+                    str(e),
+                )
+                healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+                    model_list=_llm_model_list, details=health_check_details
+                )
+        else:
+            healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+                model_list=_llm_model_list, details=health_check_details
+            )
 
         # Update the global variable with the health check results
         health_check_results["healthy_endpoints"] = healthy_endpoints
@@ -1752,7 +1886,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings, proxy_batch_polling_interval
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings, proxy_batch_polling_interval, config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -1883,7 +2017,9 @@ class ProxyConfig:
                 elif key == "priority_reservation_settings":
                     from litellm.types.utils import PriorityReservationSettings
 
-                    litellm.priority_reservation_settings = PriorityReservationSettings(**value)
+                    litellm.priority_reservation_settings = PriorityReservationSettings(
+                        **value
+                    )
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
                         value=value,
@@ -2105,9 +2241,13 @@ class ProxyConfig:
 
             ## pass through endpoints
             if general_settings.get("pass_through_endpoints", None) is not None:
+                config_passthrough_endpoints = general_settings[
+                    "pass_through_endpoints"
+                ]
                 await initialize_pass_through_endpoints(
                     pass_through_endpoints=general_settings["pass_through_endpoints"]
                 )
+
             ## ADMIN UI ACCESS ##
             ui_access_mode = general_settings.get(
                 "ui_access_mode", "all"
@@ -2141,6 +2281,10 @@ class ProxyConfig:
             # Enable background health checks
             use_background_health_checks = general_settings.get(
                 "background_health_checks", False
+            )
+            # Enable shared health check state across pods (requires Redis)
+            use_shared_health_check = general_settings.get(
+                "use_shared_health_check", False
             )
             health_check_interval = general_settings.get(
                 "health_check_interval", DEFAULT_HEALTH_CHECK_INTERVAL
@@ -2885,6 +3029,23 @@ class ProxyConfig:
             dict: Updated configuration dictionary
         """
 
+        def _deep_merge_dicts(dst: dict, src: dict) -> None:
+            """
+            Deep-merge src into dst, skipping None values from src.
+            On conflicts, src (DB) wins.
+            """
+            stack = [(dst, src)]
+            while stack:
+                d, s = stack.pop()
+                for k, v in s.items():
+                    if v is None:
+                        # Preserve existing config when DB value is None (matches prior behavior)
+                        continue
+                    if isinstance(v, dict) and isinstance(d.get(k), dict):
+                        stack.append((d[k], v))
+                    else:
+                        d[k] = v
+
         if param_name == "environment_variables":
             decrypted_env_vars = self._decrypt_and_set_db_env_variables(db_param_value)
             current_config.setdefault("environment_variables", {}).update(
@@ -2905,13 +3066,12 @@ class ProxyConfig:
             return current_config
 
         # For dictionary values, update only non-none values
-        if isinstance(current_config[param_name], dict):
-            # Only keep non None values from db_param_value
-            non_none_values = {k: v for k, v in db_param_value.items() if v is not None}
-
-            # Update the config with non-none values
-            current_config[param_name].update(non_none_values)
+        if isinstance(current_config[param_name], dict) and isinstance(
+            db_param_value, dict
+        ):
+            _deep_merge_dicts(current_config[param_name], db_param_value)
         else:
+            # Non-dict or mismatched types: DB value replaces config (unchanged behavior)
             current_config[param_name] = db_param_value
 
         return current_config
@@ -2966,32 +3126,32 @@ class ProxyConfig:
     ) -> bool:
         """
         Check if an object type should be loaded from the database based on general_settings.supported_db_objects.
-        
+
         Args:
             object_type: Type of object to check (e.g., SupportedDBObjectType.MODELS, "models", etc.)
-        
+
         Returns:
             True if the object should be loaded, False otherwise
         """
         global general_settings
-        
+
         # Get the supported_db_objects configuration
         supported_db_objects = general_settings.get("supported_db_objects", None)
-        
+
         # If supported_db_objects is not set, load all objects (default behavior)
         if supported_db_objects is None:
             return True
-        
+
         # If supported_db_objects is set, only load specified objects
         if not isinstance(supported_db_objects, list):
             verbose_proxy_logger.warning(
                 f"supported_db_objects is not a list, got {type(supported_db_objects)}. Loading all objects."
             )
             return True
-        
+
         # Convert object_type to string for comparison (handles both str and enum)
         object_type_str = str(object_type)
-        
+
         # Check if the object type is in the list (supports both str and enum values)
         return any(str(obj) == object_type_str for obj in supported_db_objects)
 
@@ -3063,19 +3223,19 @@ class ProxyConfig:
         """
         if self._should_load_db_object(object_type="guardrails"):
             await self._init_guardrails_in_db(prisma_client=prisma_client)
-        
+
         if self._should_load_db_object(object_type="vector_stores"):
             await self._init_vector_stores_in_db(prisma_client=prisma_client)
-        
+
         if self._should_load_db_object(object_type="mcp"):
             await self._init_mcp_servers_in_db()
-        
+
         if self._should_load_db_object(object_type="pass_through_endpoints"):
             await self._init_pass_through_endpoints_in_db()
-        
+
         if self._should_load_db_object(object_type="prompts"):
             await self._init_prompts_in_db(prisma_client=prisma_client)
-        
+
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
 
@@ -9708,6 +9868,8 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
             media_type=headers_dict.get("content-type", "application/json"),
         )
 
+    except HTTPException as e:
+        raise e
     except Exception as e:
         verbose_proxy_logger.error(
             f"Error handling dynamic MCP route for {mcp_server_name}: {str(e)}"

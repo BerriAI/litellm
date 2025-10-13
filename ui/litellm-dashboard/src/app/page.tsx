@@ -8,9 +8,8 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import UserDashboard from "@/components/user_dashboard";
-import ModelDashboard from "@/components/templates/model_dashboard";
+import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import ViewUserDashboard from "@/components/view_users";
-import Teams from "@/components/teams";
 import Organizations from "@/components/organizations";
 import { fetchOrganizations } from "@/components/organizations";
 import AdminPanel from "@/components/admins";
@@ -21,9 +20,8 @@ import BudgetPanel from "@/components/budgets/budget_panel";
 import SpendLogsTable from "@/components/view_logs";
 import ModelHubTable from "@/components/model_hub_table";
 import NewUsagePage from "@/components/new_usage";
-import APIRef from "@/components/api_ref";
+import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
 import ChatUI from "@/components/chat_ui/ChatUI";
-import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
 import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
@@ -39,10 +37,38 @@ import VectorStoreManagement from "@/components/vector_store_management";
 import UIThemeSettings from "@/components/ui_theme_settings";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
+import useFeatureFlags from "@/hooks/useFeatureFlags";
+import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
+import OldTeams from "@/components/OldTeams";
 
 function getCookie(name: string) {
-  const cookieValue = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
-  return cookieValue ? cookieValue.split("=")[1] : null;
+  // Safer cookie read + decoding; handles '=' inside values
+  const match = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
+  if (!match) return null;
+  const value = match.slice(name.length + 1);
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function deleteCookie(name: string, path = "/") {
+  // Best-effort client-side clear (works for non-HttpOnly cookies without Domain)
+  document.cookie = `${name}=; Max-Age=0; Path=${path}`;
+}
+
+function isJwtExpired(token: string): boolean {
+  try {
+    const decoded: any = jwtDecode(token);
+    if (decoded && typeof decoded.exp === "number") {
+      return decoded.exp * 1000 <= Date.now();
+    }
+    return false;
+  } catch {
+    // If we can't decode, treat as invalid/expired
+    return true;
+  }
 }
 
 function formatUserRole(userRole: string) {
@@ -115,6 +141,7 @@ export default function CreateKeyPage() {
   const [createClicked, setCreateClicked] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [userID, setUserID] = useState<string | null>(null);
+  const { refactoredUIFlag } = useFeatureFlags();
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -149,17 +176,42 @@ export default function CreateKeyPage() {
   const redirectToLogin = authLoading === false && token === null && invitation_id === null;
 
   useEffect(() => {
-    const token = getCookie("token");
-    getUiConfig().then((data) => {
-      // get the information for constructing the proxy base url, and then set the token and auth loading
-      setToken(token);
-      setAuthLoading(false);
-    });
+    let cancelled = false;
+
+    (async () => {
+      try {
+        await getUiConfig(); // ensures proxyBaseUrl etc. are ready
+      } catch {
+        // proceed regardless; we still need to decide auth state
+      }
+
+      if (cancelled) return;
+
+      const raw = getCookie("token");
+      const valid = raw && !isJwtExpired(raw) ? raw : null;
+
+      // If token exists but is invalid/expired, clear it so downstream code
+      // doesn't keep trying to use it and cause redirect spasms.
+      if (raw && !valid) {
+        deleteCookie("token", "/");
+      }
+
+      if (!cancelled) {
+        setToken(valid);
+        setAuthLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
     if (redirectToLogin) {
-      window.location.href = (proxyBaseUrl || "") + "/sso/key/generate";
+      // Replace instead of assigning to avoid back-button loops
+      const dest = (proxyBaseUrl || "") + "/sso/key/generate";
+      window.location.replace(dest);
     }
   }, [redirectToLogin]);
 
@@ -168,7 +220,23 @@ export default function CreateKeyPage() {
       return;
     }
 
-    const decoded = jwtDecode(token) as { [key: string]: any };
+    // Defensive: re-check expiry in case cookie changed after mount
+    if (isJwtExpired(token)) {
+      deleteCookie("token", "/");
+      setToken(null);
+      return;
+    }
+
+    let decoded: any = null;
+    try {
+      decoded = jwtDecode(token);
+    } catch {
+      // Malformed token → treat as unauthenticated
+      deleteCookie("token", "/");
+      setToken(null);
+      return;
+    }
+
     if (decoded) {
       // set accessToken
       setAccessToken(decoded.key);
@@ -258,13 +326,7 @@ export default function CreateKeyPage() {
               />
               <div className="flex flex-1 overflow-auto">
                 <div className="mt-2">
-                  <Sidebar
-                    accessToken={accessToken}
-                    setPage={updatePage}
-                    userRole={userRole}
-                    defaultSelectedKey={page}
-                    collapsed={sidebarCollapsed}
-                  />
+                  <SidebarProvider setPage={updatePage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
                 </div>
 
                 {page == "api-keys" ? (
@@ -284,7 +346,7 @@ export default function CreateKeyPage() {
                     createClicked={createClicked}
                   />
                 ) : page == "models" ? (
-                  <ModelDashboard
+                  <OldModelDashboard
                     userID={userID}
                     userRole={userRole}
                     token={token}
@@ -314,15 +376,15 @@ export default function CreateKeyPage() {
                     setKeys={setKeys}
                   />
                 ) : page == "teams" ? (
-                  <Teams
+                  <OldTeams
                     teams={teams}
                     setTeams={setTeams}
-                    searchParams={searchParams}
                     accessToken={accessToken}
                     userID={userID}
                     userRole={userRole}
                     organizations={organizations}
                     premiumUser={premiumUser}
+                    searchParams={searchParams}
                   />
                 ) : page == "organizations" ? (
                   <Organizations
@@ -344,7 +406,7 @@ export default function CreateKeyPage() {
                     proxySettings={proxySettings}
                   />
                 ) : page == "api_ref" ? (
-                  <APIRef proxySettings={proxySettings} />
+                  <APIReferenceView proxySettings={proxySettings} />
                 ) : page == "settings" ? (
                   <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
                 ) : page == "budgets" ? (

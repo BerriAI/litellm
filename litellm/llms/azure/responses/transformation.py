@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -41,12 +41,10 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def _handle_reasoning_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Handle reasoning items specifically to filter out status=None using OpenAI's model.
+        Handle reasoning items to filter out the status field.
         Issue: https://github.com/BerriAI/litellm/issues/13484
-        OpenAI API does not accept ReasoningItem(status=None), so we need to:
-        1. Check if the item is a reasoning type
-        2. Create a ResponseReasoningItem object with the item data
-        3. Convert it back to dict with exclude_none=True to filter None values
+        
+        Azure OpenAI API does not accept 'status' field in reasoning input items.
         """
         if item.get("type") == "reasoning":
             try:
@@ -82,6 +80,32 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 }
                 return filtered_item
         return item
+    
+    def _validate_input_param(
+        self, input: Union[str, ResponseInputParam]
+    ) -> Union[str, ResponseInputParam]:
+        """
+        Override parent method to also filter out 'status' field from message items.
+        Azure OpenAI API does not accept 'status' field in input messages.
+        """
+        from typing import cast
+
+        # First call parent's validation
+        validated_input = super()._validate_input_param(input)
+        
+        # Then filter out status from message items
+        if isinstance(validated_input, list):
+            filtered_input: List[Any] = []
+            for item in validated_input:
+                if isinstance(item, dict) and item.get("type") == "message":
+                    # Filter out status field from message items
+                    filtered_item = {k: v for k, v in item.items() if k != "status"}
+                    filtered_input.append(filtered_item)
+                else:
+                    filtered_input.append(item)
+            return cast(ResponseInputParam, filtered_input)
+        
+        return validated_input
 
     def transform_responses_api_request(
         self,
