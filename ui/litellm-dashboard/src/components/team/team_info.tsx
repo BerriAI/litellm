@@ -12,13 +12,6 @@ import {
   Grid,
   Badge,
   Button as TremorButton,
-  TableRow,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableBody,
-  Table,
-  Icon,
   TextInput,
 } from "@tremor/react";
 import TeamMembersComponent from "./team_member_view";
@@ -34,12 +27,10 @@ import {
 } from "@/components/networking";
 import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Select as Select2 } from "antd";
-import { ArrowLeftIcon, PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon } from "@heroicons/react/outline";
 import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import { isAdminRole } from "@/utils/roles";
 import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -51,6 +42,7 @@ import { fetchMCPAccessGroups } from "../networking";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import NotificationsManager from "../molecules/notifications_manager";
+import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 
 export interface TeamMembership {
   user_id: string;
@@ -351,8 +343,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         accessGroups: [],
       };
       const mcpToolPermissions = values.mcp_tool_permissions || {};
-      
-      if ((servers && servers.length > 0) || (accessGroups && accessGroups.length > 0) || Object.keys(mcpToolPermissions).length > 0) {
+
+      if (
+        (servers && servers.length > 0) ||
+        (accessGroups && accessGroups.length > 0) ||
+        Object.keys(mcpToolPermissions).length > 0
+      ) {
         updateData.object_permission = {};
         if (servers && servers.length > 0) {
           updateData.object_permission.mcp_servers = servers;
@@ -672,6 +668,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     />
                   </Form.Item>
 
+                  <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
+                    <PassThroughRoutesSelector
+                      onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+                      value={form.getFieldValue("allowed_passthrough_routes")}
+                      accessToken={accessToken || ""}
+                      placeholder="Select pass through routes"
+                    />
+                  </Form.Item>
+
                   <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
                     <MCPServerSelector
                       onChange={(val) => form.setFieldValue("mcp_servers_and_groups", val)}
@@ -686,9 +691,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Input type="hidden" />
                   </Form.Item>
 
-                  <Form.Item 
+                  <Form.Item
                     noStyle
-                    shouldUpdate={(prevValues, currentValues) => 
+                    shouldUpdate={(prevValues, currentValues) =>
                       prevValues.mcp_servers_and_groups !== currentValues.mcp_servers_and_groups ||
                       prevValues.mcp_tool_permissions !== currentValues.mcp_tool_permissions
                     }

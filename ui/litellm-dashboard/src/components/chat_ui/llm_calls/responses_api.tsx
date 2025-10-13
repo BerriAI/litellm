@@ -1,9 +1,7 @@
 import openai from "openai";
-import { message } from "antd";
 import { MessageType } from "../types";
 import { TokenUsage } from "../ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
-import { MCPTool } from "@/components/chat_ui/llm_calls/fetch_mcp_tools";
 import NotificationManager from "@/components/molecules/notifications_manager";
 import { MCPEvent } from "../MCPEventsDisplay";
 
