@@ -19,19 +19,35 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache
+from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+    get_deployment_failures_for_current_minute,
+)
 from litellm.types.router import ModelGroupInfo
 
 
 class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     """
-    Saturation-aware priority-based rate limiter using v3 infrastructure.
+    Adaptive saturation-aware priority-based rate limiter using v3 infrastructure.
+    
+    AUTOMATICALLY DETECTS AND SWITCHES BETWEEN TWO MODES:
+    
+    MODE 1: ABSOLUTE LIMITS (when model has rpm/tpm configured)
+    - Enforces actual TPM/RPM limits
+    - Saturation calculated from usage (e.g., 800/1000 RPM = 80%)
+    - Use case: Public APIs with known limits (OpenAI, Anthropic)
+    
+    MODE 2: PERCENTAGE SPLITTING (when model has NO rpm/tpm)
+    - Enforces traffic percentage splits
+    - Saturation calculated from error counts (e.g., 5 x 429 errors)
+    - Use case: Self-hosted models, Vertex AI dynamic quotas, unknown limits
     
     Key features:
-    1. Model capacity ALWAYS enforced at 100% (prevents over-allocation)
-    2. Priority usage tracked from first request (accurate accounting)
-    3. Priority limits only enforced when saturated >= threshold
-    4. Three-phase checking prevents partial counter increments
-    5. Reuses v3 limiter's Redis-based tracking (multi-instance safe)
+    1. Automatic mode detection based on model configuration
+    2. Model capacity enforcement (absolute mode) or traffic splitting (percentage mode)
+    3. Priority usage tracked from first request (accurate accounting)
+    4. Priority limits enforced when saturated >= threshold
+    5. Three-phase checking prevents partial counter increments
+    6. Reuses v3 limiter's Redis-based tracking (multi-instance safe)
     
     How it works:
     - Phase 1: Read-only check of ALL limits (no increments)
@@ -208,6 +224,142 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             # Fail open: assume not saturated on error
             return 0.0
 
+    ###############################################################################
+    # MODE DETECTION & ERROR-BASED SATURATION (for models without rpm/tpm limits)
+    ###############################################################################
+
+    def _has_explicit_limits(self, model_group_info: ModelGroupInfo) -> bool:
+        """
+        Check if model has explicit rpm/tpm limits configured.
+        
+        Used to automatically detect which rate limiting mode to use:
+        - Has limits → Use absolute TPM/RPM enforcement
+        - No limits → Use percentage-based traffic splitting
+        
+        Args:
+            model_group_info: Model configuration
+            
+        Returns:
+            True if model has rpm or tpm configured, False otherwise
+        """
+        return (
+            (model_group_info.rpm is not None and model_group_info.rpm > 0)
+            or (model_group_info.tpm is not None and model_group_info.tpm > 0)
+        )
+
+    def _get_model_group_failure_count(
+        self,
+        model: str,
+    ) -> int:
+        """
+        Get the total number of failures across all deployments in a model group.
+        
+        Reuses the router's existing failure tracking infrastructure (60s window).
+        
+        Args:
+            model: Model group name
+            
+        Returns:
+            int: Total failure count across all deployments
+        """
+        try:
+            # Get all deployment IDs for this model group
+            deployment_ids = self.llm_router.get_model_ids(model_name=model)
+            
+            if not deployment_ids:
+                return 0
+            
+            # Sum up failures across all deployments
+            total_failures = 0
+            for deployment_id in deployment_ids:
+                failures = get_deployment_failures_for_current_minute(
+                    litellm_router_instance=self.llm_router,
+                    deployment_id=deployment_id,
+                )
+                total_failures += failures
+            
+            verbose_proxy_logger.debug(
+                f"Model {model} total failures: {total_failures} "
+                f"(across {len(deployment_ids)} deployments)"
+            )
+            
+            return total_failures
+            
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Error getting failure count for {model}: {str(e)}"
+            )
+            return 0
+
+    def _check_error_saturation(
+        self,
+        model: str,
+    ) -> float:
+        """
+        Check if model is saturated based on failure counts from router's tracking.
+        
+        Reuses the router's existing failure tracking (60s TTL) instead of creating 
+        separate counters. Used in percentage mode when rpm/tpm limits are unknown.
+        
+        Args:
+            model: Model group name
+        
+        Returns:
+            float: Saturation ratio (0.0 = no saturation, 1.0 = at/above threshold)
+        """
+        try:
+            saturation_policy = litellm.priority_reservation_settings.saturation_policy  # type: ignore
+            
+            # Get failure threshold from saturation_policy
+            failure_threshold = None
+            
+            if saturation_policy is not None:
+                # Use RateLimitErrorSaturationThreshold as the primary threshold
+                failure_threshold = saturation_policy.RateLimitErrorSaturationThreshold
+                
+                # If not set, try other thresholds
+                if failure_threshold is None:
+                    thresholds = [
+                        saturation_policy.TimeoutErrorSaturationThreshold,
+                        saturation_policy.InternalServerErrorSaturationThreshold,
+                        saturation_policy.ServiceUnavailableErrorSaturationThreshold,
+                        saturation_policy.BadRequestErrorSaturationThreshold,
+                    ]
+                    # Use the first non-None threshold
+                    for threshold in thresholds:
+                        if threshold is not None and threshold > 0:
+                            failure_threshold = threshold
+                            break
+
+            if failure_threshold is None or failure_threshold <= 0:
+                return 0.0
+            
+            # Get total failures from router's existing tracking
+            total_failures = self._get_model_group_failure_count(model)
+            
+            if total_failures == 0:
+                return 0.0
+            
+            # Calculate saturation: 1.0 if at/above threshold, proportional below
+            error_saturation = min(1.0, total_failures / failure_threshold)
+            
+            verbose_proxy_logger.debug(
+                f"Model {model} error-based saturation: {total_failures}/{failure_threshold} "
+                f"({error_saturation:.1%})"
+            )
+            
+            return error_saturation
+            
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Error checking error saturation for {model}: {str(e)}"
+            )
+            return 0.0
+
+    ###############################################################################
+    # DESCRIPTOR CREATION (for both modes)
+    ###############################################################################
+
     def _create_priority_based_descriptors(
         self,
         model: str,
@@ -296,6 +448,80 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             },
         )
 
+    def _create_aggregate_traffic_descriptor(
+        self,
+        model: str,
+    ) -> RateLimitDescriptor:
+        """
+        Create descriptor for tracking total aggregate traffic across all priorities.
+        
+        Used in percentage mode to track ALL requests regardless of priority.
+        This counter serves as the denominator for percentage calculations.
+        
+        Uses very high limit so it never actually blocks, but gets tracked.
+        
+        Args:
+            model: Model name
+            
+        Returns:
+            Descriptor that tracks total traffic without enforcing limits
+        """
+        return RateLimitDescriptor(
+            key="aggregate_traffic",
+            value=model,
+            rate_limit={
+                "requests_per_unit": 999999999,  # Very high limit - tracking only
+                "window_size": self.v3_limiter.window_size,
+            },
+        )
+
+    def _create_priority_traffic_descriptors(
+        self,
+        model: str,
+        user_api_key_dict: UserAPIKeyAuth,
+        priority: Optional[str],
+    ) -> List[RateLimitDescriptor]:
+        """
+        Create tracking-only descriptors for percentage mode.
+        
+        In percentage mode, we track per-priority counters but don't enforce
+        absolute limits on them. Enforcement is based on percentage calculations.
+        
+        Args:
+            model: Model name
+            user_api_key_dict: User authentication
+            priority: Priority level
+            
+        Returns:
+            List with single descriptor for tracking this priority's traffic
+        """
+        descriptors: List[RateLimitDescriptor] = []
+        
+        # Get normalized priority weight and pool key
+        normalized_weights = self._normalize_priority_weights()
+        _, priority_key = self._get_priority_allocation(
+            model=model,
+            priority=priority,
+            normalized_weights=normalized_weights,
+        )
+        
+        # Create tracking-only descriptor (uses high limit so it gets tracked but never blocks)
+        descriptors.append(
+            RateLimitDescriptor(
+                key="priority_traffic",
+                value=priority_key,
+                rate_limit={
+                    "requests_per_unit": 999999999,  # Very high limit - tracking only
+                    "window_size": self.v3_limiter.window_size,
+                },
+            )
+        )
+
+        return descriptors
+
+    ###############################################################################
+    # RATE LIMIT CHECKING (mode-aware)
+    ###############################################################################
 
     async def _check_rate_limits(
         self,
@@ -305,25 +531,27 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         key_priority: Optional[str],
         saturation: float,
         data: dict,
+        mode: Literal["absolute", "percentage"] = "absolute",
     ) -> None:
         """
         Check rate limits using THREE-PHASE approach to prevent partial increments.
         
-        Phase 1: Read-only check of ALL limits (no increments)
-        Phase 2: Decide which limits to enforce based on saturation
-        Phase 3: Increment ALL counters atomically (model + priority)
+        ADAPTIVE: Automatically uses absolute or percentage mode based on model config.
+        
+        MODE: ABSOLUTE (when model has rpm/tpm)
+        - Phase 1: Read-only check of model + priority limits
+        - Phase 2: Enforce model capacity (always) + priority limits (when saturated)
+        - Phase 3: Increment model + priority counters
+        
+        MODE: PERCENTAGE (when model has NO rpm/tpm)
+        - Phase 1: Read aggregate + priority traffic counts
+        - Phase 2: Enforce percentage splits (when saturated by errors)
+        - Phase 3: Increment aggregate + priority counters
         
         This prevents the bug where:
-        - Model counter increments in stage 1
-        - Priority check fails in stage 2
-        - Request blocked but model counter already incremented
-        
-        Key behaviors:
-        - All checks performed first (read-only)
-        - Only increment counters if request will be allowed
-        - Model capacity: Always enforced at 100%
-        - Priority limits: Only enforced when saturated >= threshold
-        - Both counters tracked from first request (accurate accounting)
+        - Counter increments in phase 1
+        - Limit check fails in phase 2
+        - Request blocked but counter already incremented
         
         Args:
             model: Model name
@@ -332,11 +560,34 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             key_priority: User's priority level
             saturation: Current saturation level
             data: Request data dictionary
+            mode: "absolute" (rpm/tpm enforcement) or "percentage" (traffic split)
             
         Raises:
             HTTPException: If any limit is exceeded
         """
         import json
+
+        ###############################################################################
+        # MODE BRANCHING: Absolute vs Percentage
+        ###############################################################################
+        
+        if mode == "percentage":
+            # Percentage mode uses error saturation (>= 1.0 = saturated)
+            should_enforce_priority = saturation >= 1.0
+            
+            # Delegate to percentage-specific logic
+            await self._check_percentage_rate_limits(
+                model=model,
+                user_api_key_dict=user_api_key_dict,
+                key_priority=key_priority,
+                saturation=saturation,
+            )
+            return
+        
+        ###############################################################################
+        # ABSOLUTE MODE (traditional rpm/tpm enforcement)
+        ###############################################################################
+        
         saturation_threshold = litellm.priority_reservation_settings.saturation_threshold
         should_enforce_priority = saturation >= saturation_threshold
         
@@ -444,6 +695,161 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         else:
             data["litellm_proxy_rate_limit_response"] = model_increment_response
 
+    async def _check_percentage_rate_limits(
+        self,
+        model: str,
+        user_api_key_dict: UserAPIKeyAuth,
+        key_priority: Optional[str],
+        saturation: float,
+    ) -> None:
+        """
+        Percentage-based rate limiting for models without rpm/tpm limits.
+        
+        Flow:
+        1. Read current counters (aggregate + priority)
+        2. If saturated, check if priority would exceed percentage
+        3. If within limits, increment counters
+        
+        Args:
+            model: Model name
+            user_api_key_dict: User authentication
+            key_priority: User's priority level
+            saturation: Current saturation level (from error tracking)
+            
+        Raises:
+            HTTPException: If percentage limit exceeded when saturated
+        """
+        import json
+
+        # For percentage-based limiting, enforce when error saturation hits 100% (>= 1.0)
+        should_enforce_priority = saturation >= 1.0
+        
+        # Build descriptors for tracking
+        descriptors_to_check: List[RateLimitDescriptor] = []
+        
+        # Aggregate traffic counter (always)
+        agg_descriptor = self._create_aggregate_traffic_descriptor(model=model)
+        descriptors_to_check.append(agg_descriptor)
+        
+        # Priority traffic counter (always)
+        priority_descriptors = self._create_priority_traffic_descriptors(
+            model=model,
+            user_api_key_dict=user_api_key_dict,
+            priority=key_priority,
+        )
+        descriptors_to_check.extend(priority_descriptors)
+        
+        # STEP 1: Read current counts (read-only)
+        read_response = await self.v3_limiter.should_rate_limit(
+            descriptors=descriptors_to_check,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            read_only=True,  # Don't increment yet
+        )
+        
+        verbose_proxy_logger.debug(f"Read response: {json.dumps(read_response, indent=2)}")
+        
+        # Extract counts from response
+        aggregate_count = 0
+        priority_count = 0
+        
+        for status in read_response.get("statuses", []):
+            descriptor_key = status.get("descriptor_key")
+            # Calculate current usage from limit
+            current_limit = status.get("current_limit", 0)
+            limit_remaining = status.get("limit_remaining", 0)
+            current_usage = current_limit - limit_remaining
+            
+            # Match on descriptor key from the RateLimitDescriptor
+            if descriptor_key == "aggregate_traffic":
+                aggregate_count = int(current_usage)
+            elif descriptor_key == "priority_traffic":
+                priority_count = int(current_usage)
+        
+        # STEP 2: Check percentage limits if saturated (BEFORE incrementing)
+        if should_enforce_priority and aggregate_count > 0:
+            normalized_weights = self._normalize_priority_weights()
+            
+            # Check with the NEXT request included
+            is_within_limits, debug_msg = self._check_percentage_based_limits(
+                priority=key_priority,
+                normalized_weights=normalized_weights,
+                aggregate_count=aggregate_count + 1,  # Include this request
+                priority_count=priority_count + 1,    # Include this request
+            )
+            
+            verbose_proxy_logger.info(
+                f"[Percentage Rate Limiter] Model={model}, Saturated={saturation:.1%}, {debug_msg}"
+            )
+            
+            if not is_within_limits:
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "error": f"Priority-based percentage limit exceeded. {debug_msg}",
+                        "model": model,
+                        "priority": key_priority,
+                        "saturation": f"{saturation:.1%}",
+                    },
+                    headers={
+                        "retry-after": str(self.v3_limiter.window_size),
+                        "x-litellm-priority": key_priority or "default",
+                        "x-litellm-saturation": f"{saturation:.2%}",
+                        "x-litellm-limiter-type": "percentage-based",
+                    },
+                )
+        
+        # STEP 3: Increment counters (only if request allowed)
+        await self.v3_limiter.should_rate_limit(
+            descriptors=descriptors_to_check,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            read_only=False,
+        )
+
+    def _check_percentage_based_limits(
+        self,
+        priority: Optional[str],
+        normalized_weights: Dict[str, float],
+        aggregate_count: int,
+        priority_count: int,
+    ) -> tuple[bool, str]:
+        """
+        Check if this priority is within their percentage allocation.
+        
+        Args:
+            priority: Priority level
+            normalized_weights: Pre-computed normalized weights
+            aggregate_count: Total requests across all priorities
+            priority_count: Requests for this specific priority
+            
+        Returns:
+            tuple: (is_within_limits: bool, debug_message: str)
+        """
+        # Get priority allocation
+        priority_weight = (
+            normalized_weights.get(priority, self._get_priority_weight(priority))
+            if priority
+            else self._get_priority_weight(None)
+        )
+        
+        # Calculate current and allowed shares
+        current_share = priority_count / aggregate_count if aggregate_count > 0 else 0.0
+        allowed_share = priority_weight
+        
+        # Check if within limits (with small buffer to avoid edge cases)
+        buffer = 0.01
+        is_within_limits = current_share <= (allowed_share + buffer)
+        
+        debug_msg = (
+            f"Priority {priority}: {priority_count}/{aggregate_count} requests "
+            f"({current_share:.1%} of total, allowed: {allowed_share:.1%})"
+        )
+        
+        return is_within_limits, debug_msg
+
+    ###############################################################################
+    # PRE-CALL HOOK (adaptive mode detection)
+    ###############################################################################
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -510,22 +916,41 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return None
 
         try:
-            # STEP 1: Check current saturation level
-            saturation = await self._check_model_saturation(model, model_group_info)
+            ###################################################################
+            # STEP 1: AUTOMATIC MODE DETECTION
+            ###################################################################
             
-            saturation_threshold = litellm.priority_reservation_settings.saturation_threshold
+            has_explicit_limits = self._has_explicit_limits(model_group_info)
             
-            verbose_proxy_logger.debug(
-                f"[Dynamic Rate Limiter] Model={model}, Saturation={saturation:.1%}, "
-                f"Threshold={saturation_threshold:.1%}, Priority={key_priority}"
-            )
+            if has_explicit_limits:
+                # MODE: ABSOLUTE (traditional rpm/tpm enforcement)
+                saturation = await self._check_model_saturation(model, model_group_info)
+                mode: Literal["absolute", "percentage"] = "absolute"
+                saturation_threshold = litellm.priority_reservation_settings.saturation_threshold
+                
+                verbose_proxy_logger.debug(
+                    f"[Dynamic Rate Limiter V3] Mode=ABSOLUTE, Model={model}, "
+                    f"Saturation={saturation:.1%}, Threshold={saturation_threshold:.1%}, "
+                    f"Priority={key_priority}"
+                )
+            else:
+                # MODE: PERCENTAGE (error-based traffic splitting)
+                saturation = self._check_error_saturation(model)
+                mode = "percentage"
+                
+                verbose_proxy_logger.debug(
+                    f"[Dynamic Rate Limiter V3] Mode=PERCENTAGE, Model={model}, "
+                    f"Error Saturation={saturation:.1%}, Priority={key_priority}"
+                )
             
-
-            # STEP 2: Check rate limits in THREE phases
+            ###################################################################
+            # STEP 2: CHECK RATE LIMITS (mode-aware)
+            ###################################################################
+            
+            # Three-phase checking prevents partial increments:
             # Phase 1: Read-only check of ALL limits (no increments)
-            # Phase 2: Decide which limits to enforce (based on saturation)
+            # Phase 2: Decide which limits to enforce (based on saturation & mode)
             # Phase 3: Increment ALL counters only if request will be allowed
-            # This prevents partial increments and ensures accurate tracking
             await self._check_rate_limits(
                 model=model,
                 model_group_info=model_group_info,
@@ -533,6 +958,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 key_priority=key_priority,
                 saturation=saturation,
                 data=data,
+                mode=mode,  # Pass detected mode
             )
                 
         except HTTPException:
