@@ -7,11 +7,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Body
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.prompts.prompt_completion_service import PromptCompletionService, PromptCompletionRequest
 from litellm.types.prompts.init_prompts import (
     ListPromptsResponse,
     PromptInfo,
@@ -20,7 +21,6 @@ from litellm.types.prompts.init_prompts import (
     PromptSpec,
     PromptTemplateBase,
 )
-
 
 router = APIRouter()
 
@@ -679,20 +679,6 @@ async def convert_prompt_file_to_json(
             except OSError:
                 pass  # Directory not empty or other error
 
-class PromptCompletionRequest(BaseModel):
-    prompt_id: str = Field(..., description="Unique ID of the prompt registered in PromptHub.")
-    prompt_version: Optional[str] = Field(None, description="Optional version identifier.")
-    prompt_variables: Dict[str, Any] = Field(default_factory=dict, description="Key-value mapping for template variables.")
-
-
-class PromptCompletionResponse(BaseModel):
-    prompt_id: str
-    prompt_version: Optional[str]
-    model: str
-    metadata: Dict[str, Any]
-    variables: Dict[str, Any]
-    completion_text: str
-    raw_response: Dict[str, Any]
 
 
 @router.post(
@@ -707,157 +693,17 @@ async def generate_completion_from_prompt_id(
     """
     Generate a model completion using a managed prompt.
 
-    Parameter merge priority:
-    1. Prompt metadata/config (base defaults)
-    2. Prompt-level litellm_params overrides
-    3. User-supplied request.extra_params (highest precedence)
+    Merge priority:
+    1. Prompt metadata/config
+    2. Prompt-level litellm_params
+    3. User request.extra_body overrides
     """
 
-    import litellm
-    from litellm.proxy.prompts.prompt_registry import PROMPT_HUB
-    from litellm.integrations.custom_prompt_management import CustomPromptManagement
-    from litellm.integrations.gitlab import GitLabPromptManager
-    from litellm.integrations.dotprompt import DotpromptManager
-    from litellm.proxy._types import LitellmUserRoles
-
-    prompt_id = request.prompt_id
-    variables = request.prompt_variables or {}
-
-    # ------------------------------------------------------------
-    # Step 1: Access validation
-    # ------------------------------------------------------------
-    prompts: Optional[List[str]] = None
-    if user_api_key_dict.metadata is not None:
-        prompts = cast(Optional[List[str]], user_api_key_dict.metadata.get("prompts", None))
-        if prompts is not None and prompt_id not in prompts:
-            raise HTTPException(status_code=400, detail=f"Prompt {prompt_id} not found")
-
-    if user_api_key_dict.user_role not in (
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN.value,
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail=f"You are not authorized to access this prompt. Your role - {user_api_key_dict.user_role}, Your key's prompts - {prompts}",
-        )
-
-    # ------------------------------------------------------------
-    # Step 2: Load prompt and callback
-    # ------------------------------------------------------------
-    prompt_spec = PROMPT_HUB.get_prompt_by_id(prompt_id)
-    if prompt_spec is None:
-        raise HTTPException(status_code=404, detail=f"Prompt {prompt_id} not found")
-
-    prompt_callback: Optional[CustomPromptManagement] = PROMPT_HUB.get_prompt_callback_by_id(prompt_id)
-    if prompt_callback is None:
-        raise HTTPException(status_code=404, detail=f"No callback found for prompt {prompt_id}")
-
-    prompt_template: Optional[PromptTemplateBase] = None
-
-    if isinstance(prompt_callback, DotpromptManager):
-        template = prompt_callback.prompt_manager.get_all_prompts_as_json()
-        if template and len(template) == 1:
-            tid = list(template.keys())[0]
-            prompt_template = PromptTemplateBase(
-                litellm_prompt_id=tid,
-                content=template[tid]["content"],
-                metadata=template[tid]["metadata"],
-            )
-
-    elif isinstance(prompt_callback, GitLabPromptManager):
-        prompt_json = prompt_spec.model_dump()
-        prompt_template = PromptTemplateBase(
-            litellm_prompt_id=prompt_json.get("prompt_id", ""),
-            content=prompt_json.get("litellm_params", {}).get("model_config", {}).get("content", ""),
-            metadata=prompt_json.get("litellm_params", {}).get("model_config", {}).get("metadata", {}),
-        )
-
-    if not prompt_template:
-        raise HTTPException(status_code=400, detail=f"Could not load prompt template for {prompt_id}")
-
-    # ------------------------------------------------------------
-    # Step 3: Fill in template variables
-    # ------------------------------------------------------------
-    try:
-        filled_prompt = prompt_template.content.format(**variables)
-    except KeyError as e:
-        raise HTTPException(status_code=400, detail=f"Missing variable: {str(e)}")
-
-    metadata = prompt_template.metadata or {}
-    model = metadata.get("model")
-    if not model:
-        raise HTTPException(status_code=400, detail=f"Model not specified in metadata for {prompt_id}")
-
-    # ------------------------------------------------------------
-    # Step 4: Build messages using prompt callback
-    # ------------------------------------------------------------
-    system_prompt = metadata.get("config", {}).get("system_prompt", "You are a helpful assistant.")
-
-    completion_prompt = prompt_callback.get_chat_completion_prompt(
-        model=model,
-        messages=[{"role": "system", "content": system_prompt}],
-        non_default_params=metadata,
-        prompt_id=prompt_id,
-        prompt_variables=variables,
-        dynamic_callback_params={},
-        prompt_label=None,
+    service = PromptCompletionService(user_api_key_dict)
+    response = await service.run_completion(
+        prompt_id=request.prompt_id,
+        variables=request.prompt_variables or {},
         prompt_version=request.prompt_version,
+        extra_body=getattr(request, "extra_body", {}) or {},
     )
-
-    # ------------------------------------------------------------
-    # Step 5: Merge parameters from multiple sources
-    # ------------------------------------------------------------
-    base_params = metadata.get("config", {}) or {}
-    prompt_params = (
-        prompt_spec.litellm_params.get("config", {})
-        if hasattr(prompt_spec, "litellm_params") and isinstance(prompt_spec.litellm_params, dict)
-        else {}
-    )
-    user_overrides = getattr(request, "extra_body", {}) or {}
-
-    # Flatten nested "config" keys that sometimes leak through metadata
-    def flatten_config(d: dict) -> dict:
-        if "config" in d and isinstance(d["config"], dict):
-            flattened = {**d, **d["config"]}
-            flattened.pop("config", None)
-            return flattened
-        return d
-
-    base_params = flatten_config(base_params)
-    prompt_params = flatten_config(prompt_params)
-    user_overrides = flatten_config(user_overrides)
-
-    # Merge priority: base < prompt-level < user overrides
-    merged_params = {**base_params, **prompt_params, **user_overrides}
-    merged_params.setdefault("stream", False)
-    merged_params["user"] = user_api_key_dict.user_id
-    merged_params.pop("model", None)
-    merged_params.pop("messages", None)
-    # ------------------------------------------------------------
-    # Step 6: Invoke model
-    # ------------------------------------------------------------
-    try:
-        response = await litellm.acompletion(
-            model=completion_prompt[0],
-            messages=completion_prompt[1],
-            **merged_params,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error invoking model: {str(e)}")
-
-    # ------------------------------------------------------------
-    # Step 7: Extract text & return structured response
-    # ------------------------------------------------------------
-    completion_text = (
-        response.get("choices", [{}])[0].get("message", {}).get("content", "")
-    )
-
-    return PromptCompletionResponse(
-        prompt_id=prompt_id,
-        prompt_version=request.prompt_version,
-        model=model,
-        metadata=metadata,
-        variables=variables,
-        completion_text=completion_text,
-        raw_response=response.model_dump() if hasattr(response, "model_dump") else response,
-    )
+    return response

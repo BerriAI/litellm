@@ -2,7 +2,6 @@ import importlib
 import os
 from pathlib import Path
 from typing import Callable, Dict, Optional, List, Tuple, Iterable
-
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.gitlab import GitLabPromptCache, GitLabPromptManager
@@ -12,7 +11,6 @@ from litellm.types.prompts.init_prompts import (
     PromptLiteLLMParams,
     PromptSpec
 )
-
 
 prompt_initializer_registry = {}
 
