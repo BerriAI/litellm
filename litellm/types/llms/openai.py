@@ -1053,11 +1053,11 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
         List[Union[ResponseOutputItem, Dict]],
         List[Union[GenericResponseOutputItem, OutputFunctionToolCall]],
     ]
-    parallel_tool_calls: bool
+    parallel_tool_calls: Optional[bool] = None
     temperature: Optional[float] = None
-    tool_choice: ToolChoice
-    tools: Union[List[Tool], List[ResponseFunctionToolCall], List[Dict[str, Any]]]
-    top_p: Optional[float]
+    tool_choice: Optional[ToolChoice] = None
+    tools: Optional[Union[List[Tool], List[ResponseFunctionToolCall], List[Dict[str, Any]]]] = None
+    top_p: Optional[float] = None
     max_output_tokens: Optional[int] = None
     previous_response_id: Optional[str] = None
     reasoning: Optional[Reasoning] = None
