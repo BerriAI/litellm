@@ -1,9 +1,31 @@
 
 # Dynamic TPM/RPM Allocation 
 
-Prevent projects from gobbling too much tpm/rpm.
+Dynamically allocate TPM/RPM quota to api keys, based on active keys in that minute. 
 
-Dynamically allocate TPM/RPM quota to api keys, based on active keys in that minute. [**See Code**](https://github.com/BerriAI/litellm/blob/9bffa9a48e610cc6886fc2dce5c1815aeae2ad46/litellm/proxy/hooks/dynamic_rate_limiter.py#L125)
+## Overview
+
+Use dynamic rate limiting when you have multiple teams or keys sharing the same model and want to:
+- Prevent any single team from consuming all available capacity
+- Automatically split capacity across active keys
+- Prioritize critical workloads (production over development)
+- Handle models with unknown or dynamic rate limits (Vertex AI Gemini, vLLM)
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/9bffa9a48e610cc6886fc2dce5c1815aeae2ad46/litellm/proxy/hooks/dynamic_rate_limiter.py#L125)
+
+## How it works
+
+The rate limiter automatically detects your model configuration and operates in one of two modes:
+
+**Absolute Mode** - When `rpm` or `tpm` is set on the model
+- Enforces hard capacity limits
+- Example: Model has 100 RPM, splits across active keys
+
+**Percentage Mode** - When no `rpm`/`tpm` is configured
+- Monitors for 429 errors from the model
+- After threshold (e.g. 5 errors), activates priority-based traffic splitting
+- Higher priority keys get more traffic (e.g. prod: 90%, dev: 10%)
+- Use this for Vertex AI Gemini, vLLM, or any model with unknown/dynamic limits
 
 ## Quick Start Usage
 
@@ -98,6 +120,40 @@ except RateLimitError as e:
 This was rate limited b/c - Error code: 429 - {'error': {'message': {'error': 'Key=<hashed_token> over available TPM=0. Model TPM=0, Active keys=2'}, 'type': 'None', 'param': 'None', 'code': 429}}
 ```
 
+## Percentage Mode (for unknown limits)
+
+Use percentage mode when:
+- Your model doesn't have known rate limits (Vertex AI Gemini, self-hosted vLLM)
+- Rate limits change dynamically or are shared across workloads
+- You want rate limiting to only activate when the model is actually saturated
+
+```yaml showLineNumbers title="config.yaml"
+model_list: 
+  - model_name: gemini-pro
+    litellm_params:
+      model: vertex_ai/gemini-pro
+      vertex_project: my-project
+      vertex_location: us-central1
+      # No rpm/tpm configured
+
+litellm_settings: 
+  callbacks: ["dynamic_rate_limiter_v3"]
+  priority_reservation:
+    "prod": 0.9    # Production gets 90% of traffic
+    "dev": 0.1     # Development gets 10% of traffic
+  priority_reservation_settings:
+    saturation_policy:
+      RateLimitErrorSaturationThreshold: 5  # Activate after 5 x 429 errors
+
+general_settings:
+  master_key: sk-1234
+  database_url: postgres://..
+```
+
+**Behavior:**
+- Before saturation: All requests go through (no limiting)
+- After 5 x 429 errors: Traffic split enforced (prod: 90%, dev: 10%)
+- 60 second rolling window for error counting
 
 ## [BETA] Set Priority / Reserve Quota
 
