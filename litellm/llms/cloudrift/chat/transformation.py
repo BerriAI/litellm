@@ -33,6 +33,7 @@ class CloudRiftChatConfig(OpenAIGPTConfig):
         functions: Optional[list] = None,
         logit_bias: Optional[dict] = None,
         max_tokens: Optional[int] = None,
+        max_completion_tokens: Optional[int] = None,
         n: Optional[int] = None,
         presence_penalty: Optional[int] = None,
         stop: Optional[Union[str, list]] = None,
@@ -66,8 +67,6 @@ class CloudRiftChatConfig(OpenAIGPTConfig):
             "temperature",
             "top_p",
             "response_format",
-            "tools",
-            "tool_choice"
         ]
 
         if litellm.supports_reasoning(
