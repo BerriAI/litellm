@@ -2222,6 +2222,10 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     arize_space_key: Optional[str]
     arize_space_id: Optional[str]
 
+    # PostHog dynamic params
+    posthog_api_key: Optional[str]
+    posthog_api_url: Optional[str]
+
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
@@ -2378,6 +2382,7 @@ all_litellm_params = [
     "litellm_session_id",
     "use_litellm_proxy",
     "prompt_label",
+    "shared_session",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys()) + list(CustomPricingLiteLLMParams.model_fields.keys())
 
 

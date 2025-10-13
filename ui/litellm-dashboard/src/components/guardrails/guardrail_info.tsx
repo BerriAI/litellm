@@ -13,8 +13,7 @@ import {
   TabPanels,
   TextInput,
 } from "@tremor/react";
-import { Button, Form, Input, Select, message, Tooltip, Divider } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Button, Form, Input, Select, Divider } from "antd";
 import {
   getGuardrailInfo,
   updateGuardrailCall,

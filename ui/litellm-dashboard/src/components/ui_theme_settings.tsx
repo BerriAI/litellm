@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from "react";
 import { Card, Title, Text, TextInput, Button } from "@tremor/react";
-import { message } from "antd";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationsManager from "./molecules/notifications_manager";

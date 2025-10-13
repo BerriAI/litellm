@@ -1,32 +1,7 @@
 import React, { useState, useEffect } from "react";
-import {
-  Badge,
-  Metric,
-  Text,
-  Grid,
-  Button,
-  TextInput,
-  Select as Select2,
-  SelectItem,
-  Col,
-  Accordion,
-  AccordionBody,
-  AccordionHeader,
-  AccordionList,
-  Icon,
-  Title,
-} from "@tremor/react";
-import {
-  getCallbacksCall,
-  setCallbacksCall,
-  getGeneralSettingsCall,
-  deletePassThroughEndpointsCall,
-  getPassThroughEndpointsCall,
-  serviceHealthCheck,
-  updateConfigFieldSetting,
-  deleteConfigFieldSetting,
-} from "./networking";
-import { Modal, Form, Input, Select, Button as Button2, message, InputNumber, Tooltip } from "antd";
+import { Text, Button, Icon, Title } from "@tremor/react";
+import { deletePassThroughEndpointsCall, getPassThroughEndpointsCall } from "./networking";
+import { Tooltip } from "antd";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import AddPassThroughEndpoint from "./add_pass_through";
 import PassThroughInfoView from "./pass_through_info";

@@ -94,10 +94,10 @@ const sidebars = {
 
     {
       type: "category",
-      label: "LiteLLM Proxy Server",
+      label: "LiteLLM AI Gateway",
       link: {
         type: "generated-index",
-        title: "LiteLLM Proxy Server (LLM Gateway)",
+        title: "LiteLLM AI Gateway (LLM Proxy)",
         description: `OpenAI Proxy Server (LLM Gateway) to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
         slug: "/simple_proxy",
       },
@@ -189,12 +189,13 @@ const sidebars = {
           type: "category",
           label: "Budgets + Rate Limits",
           items: [
+            "proxy/users",
+            "proxy/team_budgets",
+            "proxy/tag_budgets",
             "proxy/customers",
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
-            "proxy/team_budgets",
             "proxy/temporary_budget_increase",
-            "proxy/users"
           ],
         },
         "proxy/caching",
@@ -423,6 +424,7 @@ const sidebars = {
           items: [
             "providers/vertex",
             "providers/vertex_partner",
+            "providers/vertex_self_deployed",
             "providers/vertex_image",
             "providers/vertex_batch",
           ]
@@ -533,6 +535,7 @@ const sidebars = {
         "providers/oci",
         "providers/datarobot",
         "providers/ovhcloud",  
+        "providers/wandb_inference",
       ],
     },
     {

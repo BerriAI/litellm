@@ -1,7 +1,6 @@
 "use client";
-import React, { Suspense, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { modelHubCall } from "@/components/networking";
 import ModelHubTable from "@/components/model_hub_table";
 
 export default function PublicModelHubTable() {
