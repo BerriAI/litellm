@@ -21,10 +21,10 @@ from litellm.utils import (
 )
 
 from ..common_utils import AWSEventStreamDecoder, SagemakerError
-from .transformation import SagemakerConfig, SagemakerEmbeddingConfig
+from .transformation import SagemakerConfig
+from ..embedding.transformation import SagemakerEmbeddingConfig
 
 sagemaker_config = SagemakerConfig()
-sagemaker_embedding_config = SagemakerEmbeddingConfig()
 
 """
 SAGEMAKER AUTH Keys/Vars
@@ -627,7 +627,7 @@ class SagemakerLLM(BaseAWSLLM):
 
         #### EMBEDDING LOGIC
         # Transform request based on model type
-        provider_config = sagemaker_embedding_config.get_model_config(model)
+        provider_config = SagemakerEmbeddingConfig.get_model_config(model)
         request_data = provider_config.transform_embedding_request(model, input, optional_params, {})
         data = json.dumps(request_data).encode("utf-8")
 
@@ -686,8 +686,7 @@ class SagemakerLLM(BaseAWSLLM):
         
         model_response = EmbeddingResponse()
         
-        # Use the appropriate transformation config
-        request_data = {"input": input} if "voyage" in model.lower() else {"inputs": input}
+        # Use the request_data that was already transformed above
         return provider_config.transform_embedding_response(
             model=model,
             raw_response=mock_response,
