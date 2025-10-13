@@ -50,12 +50,14 @@ async def test_azure_responses_api_preview_api_version():
 @pytest.mark.asyncio
 async def test_azure_responses_api_status_error():
     """
-    Ensure new azure preview api version is working
+    Test that 'status' field is not sent in the final request body to Azure API.
+    The status field should be filtered out from input messages before making the API call.
     """
-    litellm._turn_on_debug()
+    from unittest.mock import AsyncMock, MagicMock
+    import json
 
     request_data = {
-        "model": "gpt-5-mini",
+        "model": "computer-use-preview",
         "input": [
             {"content": "tell me an interesting fact", "role": "user"},
             {
@@ -71,7 +73,7 @@ async def test_azure_responses_api_status_error():
                 "content": [
                     {
                         "annotations": [],
-                        "text": "Octopuses have three hearts: two pump blood to the gills, while the third pumps it to the rest of the body. Even more unusual, their blood is blue because it uses the copper-containing protein hemocyanin to carry oxygen, which is more efficient than hemoglobin in cold, low-oxygen environments.",
+                        "text": "very good morning",
                         "type": "output_text",
                         "logprobs": [],
                     }
@@ -88,11 +90,95 @@ async def test_azure_responses_api_status_error():
         "stream": False,
         "tools": [],
     }
-    response = await litellm.aresponses(
-        model="azure/gpt-5-mini-2",
-        truncation="auto",
-        api_version="preview",
-        api_base=os.getenv("AZURE_GPT5_MINI_API_BASE"),
-        api_key=os.getenv("AZURE_GPT5_MINI_API_KEY"),
-        input=request_data["input"],
+
+    # Mock response
+    mock_response_data = {
+        "id": "resp_123",
+        "object": "response",
+        "created_at": 1234567890,
+        "model": "computer-use-preview",
+        "status": "completed",
+        "output": [
+            {
+                "id": "msg_123",
+                "role": "assistant",
+                "type": "message",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "Here's an interesting fact."}],
+            }
+        ],
+    }
+
+    captured_request_body = {}
+
+    async def mock_post(*args, **kwargs):
+        # Capture the request body
+        nonlocal captured_request_body
+        if "json" in kwargs:
+            captured_request_body = kwargs["json"]
+        elif "data" in kwargs:
+            captured_request_body = json.loads(kwargs["data"])
+
+        import httpx
+        
+        # Create a proper httpx Response object
+        response_content = json.dumps(mock_response_data).encode("utf-8")
+        response = httpx.Response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            content=response_content,
+            request=httpx.Request(method="POST", url="https://test.openai.azure.com"),
+        )
+        return response
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from unittest.mock import patch
+
+    with patch.object(AsyncHTTPHandler, "post", new=mock_post):
+        response = await litellm.aresponses(
+            model="azure/computer-use-preview",
+            truncation="auto",
+            api_version="preview",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            input=request_data["input"],
+        )
+
+    # Verify that 'status' field is not present in any of the input messages
+    print("Final request body:", json.dumps(captured_request_body, indent=4, default=str))
+    assert "input" in captured_request_body, "Request body should contain 'input' field"
+    
+    expected_input = [
+        {
+            "content": "tell me an interesting fact",
+            "role": "user"
+        },
+        {
+            "id": "rs_0ab687487834d9df0068e462a1b2d88197aabbc832c9ba5316",
+            "summary": [],
+            "type": "reasoning"
+        },
+        {
+            "id": "msg_0ab687487834d9df0068e462a1df188197b74b1eef05102c18",
+            "content": [
+                {
+                    "annotations": [],
+                    "text": "very good morning",
+                    "type": "output_text",
+                    "logprobs": []
+                }
+            ],
+            "role": "assistant",
+            "type": "message"
+        },
+        {
+            "role": "user",
+            "content": "tell me another"
+        }
+    ]
+    
+    assert captured_request_body["input"] == expected_input, (
+        f"Request body input should match expected format without 'status' field.\n"
+        f"Expected: {json.dumps(expected_input, indent=2)}\n"
+        f"Got: {json.dumps(captured_request_body['input'], indent=2)}"
     )
