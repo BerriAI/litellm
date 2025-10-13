@@ -635,3 +635,204 @@ def test_cache_reload_resets_and_reloads(prompt_cache):
     prompt_cache.reload()
     after = set(prompt_cache.list_ids())
     assert before == after
+
+
+# -----------------------
+# Test fakes / fixtures
+# -----------------------
+
+class FakeTemplateManager:
+    """
+    Minimal stand-in for GitLabTemplateManager that GitLabPromptCache expects.
+    """
+    def __init__(self, prompts_path="prompts"):
+        # simulate a configured prompts folder (affects _id_to_repo_path)
+        self.prompts_path = prompts_path.strip("/")
+        self.prompts = {}  # id -> GitLabPromptTemplate
+
+        # Seeds used by list_templates()
+        self._discoverable_ids = []
+
+    # Methods used by GitLabPromptCache.load_all
+    def list_templates(self, *, recursive: bool = True):
+        return list(self._discoverable_ids)
+
+    def _load_prompt_from_gitlab(self, pid, ref=None):
+        # Pretend we fetched and parsed a file; add a basic template if not present
+        if pid not in self.prompts:
+            self.prompts[pid] = GitLabPromptTemplate(
+                template_id=pid,
+                content=f"User: Hello from {pid}",
+                metadata={"model": "gpt-4", "temperature": 0.1},
+            )
+
+    def get_template(self, pid):
+        return self.prompts.get(pid)
+
+    def _id_to_repo_path(self, pid):
+        base = f"{self.prompts_path}/" if self.prompts_path else ""
+        return f"{base}{pid}.prompt"
+
+
+class FakePromptManagerWrapper:
+    """
+    Minimal wrapper to mimic GitLabPromptManager(prompt_manager=<GitLabTemplateManager>).
+    GitLabPromptCache.__init__ expects GitLabPromptManager(...).prompt_manager.
+    """
+    def __init__(self, fake_tm):
+        self.prompt_manager = fake_tm
+
+
+@pytest.fixture()
+def fake_managers():
+    """
+    Provide a fresh FakeTemplateManager plus a wrapper for each test.
+    """
+    tm = FakeTemplateManager(prompts_path="prompts/chat")
+    wrapper = FakePromptManagerWrapper(tm)
+    return tm, wrapper
+
+
+# -----------------------
+# Tests
+# -----------------------
+
+@patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabPromptManager")
+def test_cache_load_all_encodes_ids_and_populates_maps(mock_pm_cls, fake_managers):
+    tm, wrapper = fake_managers
+    # Simulate two files discovered under prompts_path
+    tm._discoverable_ids = ["a", "sub/b"]
+
+    # When GitLabPromptCache constructs GitLabPromptManager(...), return our wrapper
+    mock_pm_cls.return_value = wrapper
+
+    cache = GitLabPromptCache({"project": "g/s/r", "access_token": "tkn"})
+    result = cache.load_all()
+
+    # Encoded keys are present
+    assert set(result.keys()) == {encode_prompt_id("a"), encode_prompt_id("sub/b")}
+
+    # Files map built with full repo paths
+    expect_a_path = tm._id_to_repo_path("a")
+    expect_b_path = tm._id_to_repo_path("sub/b")
+    assert cache.list_files() == [expect_a_path, expect_b_path]
+
+    # IDs list is the encoded IDs
+    assert set(cache.list_ids()) == {encode_prompt_id("a"), encode_prompt_id("sub/b")}
+
+    # Stored entries have normalized json shape
+    a_entry = cache.get_by_id("gitlab::a")
+    assert a_entry["id"] == "a"  # id is the raw (decoded) id in the entry body
+    assert a_entry["path"] == expect_a_path
+    assert a_entry["metadata"]["model"] == "gpt-4"
+
+
+@patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabPromptManager")
+def test_cache_get_by_id_accepts_encoded_and_decoded(mock_pm_cls, fake_managers):
+    tm, wrapper = fake_managers
+    tm._discoverable_ids = ["x/y"]
+    mock_pm_cls.return_value = wrapper
+
+    cache = GitLabPromptCache({"project": "g/s/r", "access_token": "tkn"})
+    cache.load_all()
+
+    # Encoded lookup
+    encoded = encode_prompt_id("x/y")
+    decoded = "x/y"
+
+    by_encoded = cache.get_by_id(encoded)
+    by_decoded = cache.get_by_id(decoded)
+
+    assert by_encoded is not None
+    assert by_decoded is not None
+    assert by_encoded == by_decoded  # normalization works
+    # sanity on shape
+    assert by_encoded["id"] == "x/y"
+    assert by_encoded["path"].endswith("prompts/chat/x/y.prompt")
+
+
+@patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabPromptManager")
+def test_cache_reload_clears_then_reloads(mock_pm_cls, fake_managers):
+    tm, wrapper = fake_managers
+    tm._discoverable_ids = ["p1"]
+    mock_pm_cls.return_value = wrapper
+
+    cache = GitLabPromptCache({"project": "g/s/r", "access_token": "tkn"})
+    first = cache.load_all()
+    assert encode_prompt_id("p1") in first
+
+    # Change discovered ids and ensure reload reflects the change
+    tm._discoverable_ids = ["p2"]
+    reloaded = cache.reload()
+
+    assert encode_prompt_id("p1") not in reloaded
+    assert encode_prompt_id("p2") in reloaded
+    # internal maps should reflect only new state
+    assert cache.list_ids() == [encode_prompt_id("p2")]
+
+
+@patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabPromptManager")
+def test_cache_skips_when_template_missing_even_after_reload_attempt(mock_pm_cls, fake_managers):
+    """
+    If get_template(pid) returns None even after a retry load, the entry is skipped.
+    """
+    class MissingTemplateManager(FakeTemplateManager):
+        def get_template(self, pid):
+            # Always return None to trigger the continue path
+            return None
+
+        def _load_prompt_from_gitlab(self, pid, ref=None):
+            # Pretend to load, but still don't populate prompts so get_template stays None
+            pass
+
+    tm = MissingTemplateManager(prompts_path="prompts")
+    wrapper = FakePromptManagerWrapper(tm)
+    mock_pm_cls.return_value = wrapper
+
+    cache = GitLabPromptCache({"project": "g/s/r", "access_token": "tkn"})
+    tm._discoverable_ids = ["will/vanish"]
+    out = cache.load_all()
+
+    assert out == {}
+    assert cache.list_files() == []
+    assert cache.list_ids() == []
+
+
+@patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabPromptManager")
+def test_cache_get_by_file_returns_exact_entry(mock_pm_cls, fake_managers):
+    tm, wrapper = fake_managers
+    tm._discoverable_ids = ["alpha", "nested/beta"]
+    mock_pm_cls.return_value = wrapper
+
+    cache = GitLabPromptCache({"project": "g/s/r", "access_token": "tkn"})
+    cache.load_all()
+
+    alpha_path = tm._id_to_repo_path("alpha")
+    beta_path = tm._id_to_repo_path("nested/beta")
+
+    alpha = cache.get_by_file(alpha_path)
+    beta = cache.get_by_file(beta_path)
+
+    assert alpha and alpha["id"] == "alpha"
+    assert beta and beta["id"] == "nested/beta"
+
+
+@patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabPromptManager")
+def test_encode_decode_helpers_roundtrip_in_cache_context(mock_pm_cls, fake_managers):
+    tm, wrapper = fake_managers
+    tm._discoverable_ids = ["dir1/dir2/item"]
+    mock_pm_cls.return_value = wrapper
+
+    cache = GitLabPromptCache({"project": "g/s/r", "access_token": "tkn"})
+    cache.load_all()
+
+    encoded = encode_prompt_id("dir1/dir2/item")
+    assert encoded in cache.list_ids()
+
+    # decode → encode → lookup should still work
+    decoded = decode_prompt_id(encoded)
+    assert decoded == "dir1/dir2/item"
+
+    got = cache.get_by_id(decoded)
+    assert got is not None
+    assert got["id"] == "dir1/dir2/item"
