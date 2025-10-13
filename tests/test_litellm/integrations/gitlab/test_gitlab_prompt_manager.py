@@ -1,7 +1,6 @@
 import os
 import sys
 from unittest.mock import MagicMock, patch
-
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
@@ -10,6 +9,10 @@ from litellm.integrations.gitlab.gitlab_client import GitLabClient
 from litellm.integrations.gitlab.gitlab_prompt_manager import (
     GitLabPromptManager,
     GitLabPromptTemplate,
+    GitLabTemplateManager,
+    GitLabPromptCache,
+    encode_prompt_id,
+    decode_prompt_id,
 )
 
 # -----------------------
@@ -475,3 +478,160 @@ def test_gitlab_prompt_manager_version_precedence(mock_client_class):
         prompt_variables={"q": "hello"},
     )
     mock_client.get_file_content.assert_any_call("pC.prompt", ref="manager-default")
+
+
+
+
+# ---------------------------------------------------------------------
+# ID Encoding/Decoding helpers
+# ---------------------------------------------------------------------
+
+def test_encode_decode_prompt_id_roundtrip():
+    raw = "invoice/extract"
+    encoded = encode_prompt_id(raw)
+    assert encoded == "gitlab::invoice::extract"
+    assert decode_prompt_id(encoded) == raw
+
+def test_encode_prompt_id_already_encoded():
+    encoded = "gitlab::test::path"
+    assert encode_prompt_id(encoded) == encoded
+
+
+# ---------------------------------------------------------------------
+# GitLabTemplateManager behavior
+# ---------------------------------------------------------------------
+
+@pytest.fixture
+def mock_gitlab_client():
+    client = MagicMock()
+    client.get_file_content.return_value = """---
+model: bedrock/anthropic.claude-3-sonnet
+temperature: 0.3
+max_tokens: 100
+---
+system: You are a helpful bot.
+user: Hello {{ name }}
+"""
+    client.list_files.return_value = [
+        "prompts/chat/hello.prompt",
+        "prompts/chat/nested/sub.prompt",
+    ]
+    return client
+
+
+@pytest.fixture
+def manager(mock_gitlab_client):
+    cfg = {
+        "project": "group/repo",
+        "access_token": "token",
+        "prompts_path": "prompts/chat",
+    }
+    return GitLabTemplateManager(gitlab_config=cfg, gitlab_client=mock_gitlab_client)
+
+
+def test_list_templates_returns_encoded_ids(manager):
+    ids = manager.list_templates()
+    assert all(id.startswith("gitlab::") for id in ids)
+    assert "gitlab::hello" in ids
+    assert "gitlab::nested::sub" in ids
+
+
+def test_load_prompt_from_gitlab_parses_metadata(manager, mock_gitlab_client):
+    manager._load_prompt_from_gitlab("gitlab::hello")
+    assert "gitlab::hello" in manager.prompts
+
+    tmpl = manager.prompts["gitlab::hello"]
+    assert isinstance(tmpl, GitLabPromptTemplate)
+    assert tmpl.metadata["model"].startswith("bedrock/")
+    assert "You are a helpful bot." in tmpl.content
+
+
+def test_render_template_renders_jinja(manager, mock_gitlab_client):
+    manager._load_prompt_from_gitlab("gitlab::hello")
+    output = manager.render_template("gitlab::hello", {"name": "Prishu"})
+    assert "Hello Prishu" in output
+
+
+def test_get_template_returns_none_if_not_loaded(manager):
+    assert manager.get_template("gitlab::missing") is None
+
+
+def test_repo_path_conversion(manager):
+    raw = "gitlab::nested::sub"
+    repo_path = manager._id_to_repo_path(raw)
+    assert repo_path.endswith("nested/sub.prompt")
+    # Ensure decode/encode reversibility
+    decoded = manager._repo_path_to_id(repo_path)
+    assert decoded == raw
+
+
+# ---------------------------------------------------------------------
+# GitLabPromptManager high-level integration
+# ---------------------------------------------------------------------
+
+@pytest.fixture
+def prompt_manager(mock_gitlab_client):
+    cfg = {"project": "group/repo", "access_token": "tkn", "prompts_path": "prompts/chat"}
+    return GitLabPromptManager(gitlab_config=cfg, gitlab_client=mock_gitlab_client)
+
+
+def test_get_prompt_template_renders_content(prompt_manager):
+    encoded_id = "gitlab::hello"
+    content, meta = prompt_manager.get_prompt_template(encoded_id, {"name": "World"})
+    assert "Hello World" in content
+    assert "model" in meta
+
+
+def test_pre_call_hook_parses_roles(prompt_manager):
+    prompt_id = "gitlab::hello"
+    messages, params = prompt_manager.pre_call_hook(
+        user_id="user123",
+        messages=[],
+        prompt_id=prompt_id,
+        prompt_variables={"name": "Tester"},
+    )
+    assert isinstance(messages, list)
+    roles = [m["role"] for m in messages]
+    assert "system" in roles and "user" in roles
+    assert "model" in params
+
+
+def test_get_available_prompts_returns_sorted(prompt_manager):
+    ids = prompt_manager.get_available_prompts()
+    assert any(id.startswith("gitlab::") for id in ids)
+    assert ids == sorted(ids)
+
+
+# ---------------------------------------------------------------------
+# GitLabPromptCache behavior
+# ---------------------------------------------------------------------
+
+@pytest.fixture
+def prompt_cache(mock_gitlab_client):
+    cfg = {"project": "group/repo", "access_token": "tkn", "prompts_path": "prompts/chat"}
+    return GitLabPromptCache(cfg, gitlab_client=mock_gitlab_client)
+
+
+def test_cache_load_all_builds_internal_maps(prompt_cache):
+    result = prompt_cache.load_all()
+    assert isinstance(result, dict)
+    # check encoded key presence
+    assert any(k.startswith("gitlab::") for k in result)
+    assert prompt_cache.list_files()
+    assert prompt_cache.list_ids()
+
+
+def test_cache_get_by_id_handles_encoded_and_decoded(prompt_cache):
+    prompt_cache.load_all()
+    encoded = "gitlab::hello"
+    decoded = decode_prompt_id(encoded)
+    assert prompt_cache.get_by_id(encoded)
+    assert prompt_cache.get_by_id(decoded)
+
+
+def test_cache_reload_resets_and_reloads(prompt_cache):
+    prompt_cache.load_all()
+    before = set(prompt_cache.list_ids())
+    prompt_cache.reload()
+    after = set(prompt_cache.list_ids())
+    assert before == after
