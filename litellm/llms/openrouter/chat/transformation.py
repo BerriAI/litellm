@@ -147,7 +147,69 @@ class OpenrouterConfig(OpenAIGPTConfig):
             model, messages, optional_params, litellm_params, headers
         )
         response.update(extra_body)
+
+        # ALWAYS add usage parameter to get cost data from OpenRouter
+        # This ensures cost tracking works for all OpenRouter models
+        if "usage" not in response:
+            response["usage"] = {"include": True}
+
         return response
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: Any,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        """
+        Transform the response from OpenRouter API.
+
+        Extracts cost information from response headers if available.
+
+        Returns:
+            ModelResponse: The transformed response with cost information.
+        """
+        # Call parent transform_response to get the standard ModelResponse
+        model_response = super().transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+
+        # Extract cost from OpenRouter response body
+        # OpenRouter returns cost information in the usage object when usage.include=true
+        try:
+            response_json = raw_response.json()
+            if "usage" in response_json and response_json["usage"]:
+                response_cost = response_json["usage"].get("cost")
+                if response_cost is not None:
+                    # Store cost in hidden params for the cost calculator to use
+                    if not hasattr(model_response, "_hidden_params"):
+                        model_response._hidden_params = {}
+                    if "additional_headers" not in model_response._hidden_params:
+                        model_response._hidden_params["additional_headers"] = {}
+                    model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(response_cost)
+        except Exception:
+            # If we can't extract cost, continue without it - don't fail the response
+            pass
+
+        return model_response
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
