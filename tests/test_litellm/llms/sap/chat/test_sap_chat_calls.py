@@ -7,6 +7,7 @@ from typing import List
 
 import pytest
 
+
 @pytest.fixture(autouse=True, scope="function")
 def fake_gen_ai_hub_modules(monkeypatch):
     """
@@ -44,16 +45,70 @@ def fake_gen_ai_hub_modules(monkeypatch):
     # ----- orchestration.models.* -----
     models_config_mod = types.ModuleType("gen_ai_hub.orchestration.models.config")
     models_message_mod = types.ModuleType("gen_ai_hub.orchestration.models.message")
+    models_multimodal_items_mod = types.ModuleType(
+        "gen_ai_hub.orchestration.models.multimodal_items"
+    )
     models_llm_mod = types.ModuleType("gen_ai_hub.orchestration.models.llm")
     models_template_mod = types.ModuleType("gen_ai_hub.orchestration.models.template")
-    models_response_format_mod = types.ModuleType("gen_ai_hub.orchestration.models.response_format")
+    models_response_format_mod = types.ModuleType(
+        "gen_ai_hub.orchestration.models.response_format"
+    )
     models_tools_mod = types.ModuleType("gen_ai_hub.orchestration.models.tools")
-    native_openai_clients_mod = types.ModuleType("gen_ai_hub.proxy.native.openai.clients")
+    native_openai_clients_mod = types.ModuleType(
+        "gen_ai_hub.proxy.native.openai.clients"
+    )
+    dacite_mod = types.ModuleType("dacite")
 
     @dataclass
     class Message:
         role: str
         content: str
+
+    @dataclass
+    class TextPart:
+        text: str
+        type: str = "text"
+
+        def to_dict(self):
+            return {
+                "type": self.type,
+                "text": self.text,
+            }
+
+    @dataclass
+    class ImageUrl:
+        url: str
+
+    @dataclass
+    class ImagePart:
+        image_url: ImageUrl
+        type: str = "image_url"
+
+        def to_dict(self):
+            base = {
+                "type": self.type,
+                "image_url": {
+                    "url": self.image_url.url,
+                },
+            }
+
+            return base
+
+    @dataclass
+    class ToolMessage:
+        tool_call_id: str
+        content: object
+
+    @dataclass
+    class FunctionCall:
+        name: str
+        arguments: str
+
+    @dataclass
+    class MessageToolCall:
+        id: str
+        type: str
+        function: FunctionCall
 
     @dataclass
     class LLM:
@@ -71,6 +126,7 @@ def fake_gen_ai_hub_modules(monkeypatch):
     class OrchestrationConfig:
         template: Template
         llm: LLM
+
         def to_dict(self):
             return {
                 "template": {
@@ -95,8 +151,29 @@ def fake_gen_ai_hub_modules(monkeypatch):
         name: str
         description: str = ""
 
+    def _from_dict(data_class, data):
+        if data_class.__name__ == "MessageToolCall":
+            fn = data.get("function") or {}
+            return MessageToolCall(
+                id=data.get("id", ""),
+                type=data.get("type", "function"),
+                function=FunctionCall(
+                    name=fn.get("name", ""),
+                    arguments=fn.get("arguments", "")
+                    if isinstance(fn.get("arguments", ""), str)
+                    else "",
+                ),
+            )
+        return data_class(**data)
+
     models_config_mod.OrchestrationConfig = OrchestrationConfig
     models_message_mod.Message = Message
+    models_message_mod.ToolMessage = ToolMessage
+    models_message_mod.MessageToolCall = MessageToolCall
+    models_message_mod.FunctionCall = FunctionCall
+    models_multimodal_items_mod.TextPart = TextPart
+    models_multimodal_items_mod.ImagePart = ImagePart
+    models_multimodal_items_mod.ImageUrl = ImageUrl
     models_llm_mod.LLM = LLM
     models_template_mod.Template = Template
     models_response_format_mod.ResponseFormatJsonSchema = ResponseFormatJsonSchema
@@ -104,6 +181,7 @@ def fake_gen_ai_hub_modules(monkeypatch):
     models_response_format_mod.ResponseFormatText = ResponseFormatText
     models_tools_mod.FunctionTool = FunctionTool
     native_openai_clients_mod.DEFAULT_API_VERSION = "2024-05-01-preview"
+    dacite_mod.from_dict = _from_dict
 
     # ----- orchestration.service -----
     service_mod = types.ModuleType("gen_ai_hub.orchestration.service")
@@ -133,7 +211,7 @@ def fake_gen_ai_hub_modules(monkeypatch):
     class _FakeLLMStreamChoice:
         index: int
         delta: _FakeLLMChoiceSreamDelta
-        finish_reason:str = None
+        finish_reason: str = None
 
     @dataclass
     class _FakeOrchestrationResult:
@@ -165,29 +243,31 @@ def fake_gen_ai_hub_modules(monkeypatch):
             return _FakeResponse()
 
         def stream(self, config):
-            return iter([
-                _FakeLLMStreamResult(
-                    orchestration_result=_FakeOrchestrationResult(
-                        choices=[
-                            _FakeLLMStreamChoice(
-                                index=0,
-                                delta=_FakeLLMChoiceSreamDelta(content="Hello ")
-                            )
-                        ]
-                    )
-                ),
-                _FakeLLMStreamResult(
-                    orchestration_result=_FakeOrchestrationResult(
-                        choices=[
-                            _FakeLLMStreamChoice(
-                                index=0,
-                                delta=_FakeLLMChoiceSreamDelta(content="SAP!"),
-                                finish_reason="stop"
-                            )
-                        ]
-                    )
-                )
-            ])
+            return iter(
+                [
+                    _FakeLLMStreamResult(
+                        orchestration_result=_FakeOrchestrationResult(
+                            choices=[
+                                _FakeLLMStreamChoice(
+                                    index=0,
+                                    delta=_FakeLLMChoiceSreamDelta(content="Hello "),
+                                )
+                            ]
+                        )
+                    ),
+                    _FakeLLMStreamResult(
+                        orchestration_result=_FakeOrchestrationResult(
+                            choices=[
+                                _FakeLLMStreamChoice(
+                                    index=0,
+                                    delta=_FakeLLMChoiceSreamDelta(content="SAP!"),
+                                    finish_reason="stop",
+                                )
+                            ]
+                        )
+                    ),
+                ]
+            )
 
         async def arun(self, config):
             return _FakeResponse()
@@ -199,7 +279,7 @@ def fake_gen_ai_hub_modules(monkeypatch):
                         choices=[
                             _FakeLLMStreamChoice(
                                 index=0,
-                                delta=_FakeLLMChoiceSreamDelta(content="Hello ")
+                                delta=_FakeLLMChoiceSreamDelta(content="Hello "),
                             )
                         ]
                     )
@@ -210,30 +290,52 @@ def fake_gen_ai_hub_modules(monkeypatch):
                             _FakeLLMStreamChoice(
                                 index=0,
                                 delta=_FakeLLMChoiceSreamDelta(content="SAP!"),
-                                finish_reason="stop"
+                                finish_reason="stop",
                             )
                         ]
                     )
                 )
+
             return agen()
-
-
 
     service_mod.OrchestrationService = OrchestrationService
 
     # ----- registration in sys.modules -----
     monkeypatch.setitem(sys.modules, "gen_ai_hub.proxy.gen_ai_hub_proxy", proxy_mod)
     monkeypatch.setitem(sys.modules, "gen_ai_hub.orchestration.exceptions", exc_mod)
-    monkeypatch.setitem(sys.modules, "gen_ai_hub.orchestration.models.config", models_config_mod)
-    monkeypatch.setitem(sys.modules, "gen_ai_hub.orchestration.models.message", models_message_mod)
-    monkeypatch.setitem(sys.modules, "gen_ai_hub.orchestration.models.llm", models_llm_mod)
-    monkeypatch.setitem(sys.modules, "gen_ai_hub.orchestration.models.template", models_template_mod)
-    monkeypatch.setitem(sys.modules, "gen_ai_hub.orchestration.models.response_format", models_response_format_mod)
-    monkeypatch.setitem(sys.modules, "gen_ai_hub.orchestration.models.tools", models_tools_mod)
+    monkeypatch.setitem(
+        sys.modules, "gen_ai_hub.orchestration.models.config", models_config_mod
+    )
+    monkeypatch.setitem(
+        sys.modules, "gen_ai_hub.orchestration.models.message", models_message_mod
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "gen_ai_hub.orchestration.models.multimodal_items",
+        models_multimodal_items_mod,
+    )
+    monkeypatch.setitem(
+        sys.modules, "gen_ai_hub.orchestration.models.llm", models_llm_mod
+    )
+    monkeypatch.setitem(
+        sys.modules, "gen_ai_hub.orchestration.models.template", models_template_mod
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "gen_ai_hub.orchestration.models.response_format",
+        models_response_format_mod,
+    )
+    monkeypatch.setitem(
+        sys.modules, "gen_ai_hub.orchestration.models.tools", models_tools_mod
+    )
     monkeypatch.setitem(sys.modules, "gen_ai_hub.orchestration.service", service_mod)
-    monkeypatch.setitem(sys.modules, "gen_ai_hub.proxy.native.openai.clients", native_openai_clients_mod)
+    monkeypatch.setitem(
+        sys.modules, "gen_ai_hub.proxy.native.openai.clients", native_openai_clients_mod
+    )
+    monkeypatch.setitem(sys.modules, "dacite", dacite_mod)
 
     import importlib
+
     for name in [
         "litellm.llms.sap.chat.transformation",
         "litellm.llms.sap.chat.handler",
@@ -248,9 +350,12 @@ def fake_gen_ai_hub_modules(monkeypatch):
 
     yield
 
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_sap_chat_with_fake_gen_ai_hub(fake_gen_ai_hub_modules, monkeypatch, sync_mode):
+async def test_sap_chat_with_fake_gen_ai_hub(
+    fake_gen_ai_hub_modules, monkeypatch, sync_mode
+):
     import litellm
 
     model = "sap/gpt-4o"
@@ -263,6 +368,7 @@ async def test_sap_chat_with_fake_gen_ai_hub(fake_gen_ai_hub_modules, monkeypatc
     assert response.choices[0].message.content == "Hello from SAP!"
     assert response.model == "gpt-4o"
     assert response.usage.total_tokens == 7
+
 
 def test_sap_streaming_with_fake_gen_ai_hub(fake_gen_ai_hub_modules, monkeypatch):
     import litellm
@@ -280,8 +386,11 @@ def test_sap_streaming_with_fake_gen_ai_hub(fake_gen_ai_hub_modules, monkeypatch
 
     assert full == "Hello SAP!"
 
+
 @pytest.mark.asyncio
-async def test_sap_astreaming_with_fake_gen_ai_hub(fake_gen_ai_hub_modules, monkeypatch):
+async def test_sap_astreaming_with_fake_gen_ai_hub(
+    fake_gen_ai_hub_modules, monkeypatch
+):
     import litellm
 
     stream = await litellm.acompletion(
