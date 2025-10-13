@@ -248,7 +248,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ]
         
         # Add penalty parameters only for non-preview models
-        if not self._supports_penalty_parameters(model):
+        if self._supports_penalty_parameters(model):
             supported_params.extend(["frequency_penalty", "presence_penalty"])
         
         if supports_reasoning(model):
