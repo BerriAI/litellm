@@ -1,9 +1,8 @@
 """Public API for Opik payload building."""
 
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
-from litellm import _logging
 from litellm.integrations.opik import utils
 
 from . import extractors, payload_builders, types
@@ -15,7 +14,7 @@ def build_opik_payload(
     start_time: datetime,
     end_time: datetime,
     project_name: str,
-) -> types.OpikPayloadList:
+) -> Tuple[Optional[types.TracePayload], types.SpanPayload]:
     """
     Build Opik trace and span payloads from LiteLLM completion data.
     
@@ -33,15 +32,11 @@ def build_opik_payload(
         project_name: Default Opik project name
     
     Returns:
-        List of payload items (TracePayload and/or SpanPayload)
-        Returns empty list if standard_logging_object is missing
+        Tuple of (optional trace payload, span payload)
+        - First element is TracePayload if creating a new trace, None if attaching to existing
+        - Second element is always SpanPayload
     """
-    standard_logging_object = kwargs.get("standard_logging_object")
-    if standard_logging_object is None:
-        _logging.verbose_logger.debug(
-            "OpikLogger skipping event; no standard_logging_object found"
-        )
-        return []
+    standard_logging_object = kwargs["standard_logging_object"]
     
     # Extract litellm params and metadata
     litellm_params = kwargs.get("litellm_params", {}) or {}
@@ -83,17 +78,11 @@ def build_opik_payload(
     input_data = standard_logging_object.get("messages", {})
     output_data = standard_logging_object.get("response", {})
     
-    # Build payload list
-    payload: types.OpikPayloadList = []
-    
     # Decide whether to create a new trace or attach to existing
+    trace_payload: Optional[types.TracePayload] = None
     if trace_id is None:
         trace_id = utils.create_uuid7()
-        _logging.verbose_logger.debug(
-            f"OpikLogger creating new trace with id {trace_id}"
-        )
-        
-        trace = payload_builders.build_trace_payload(
+        trace_payload = payload_builders.build_trace_payload(
             project_name=current_project_name,
             trace_id=trace_id,
             response_obj=response_obj,
@@ -105,15 +94,10 @@ def build_opik_payload(
             tags=tags,
             thread_id=thread_id,
         )
-        payload.append(trace)
-    else:
-        _logging.verbose_logger.debug(
-            f"OpikLogger attaching span to existing trace with id {trace_id}"
-        )
     
     # Always create a span
     usage = utils.create_usage_object(response_obj["usage"])
-    span = payload_builders.build_span_payload(
+    span_payload = payload_builders.build_span_payload(
         project_name=current_project_name,
         trace_id=trace_id,
         parent_span_id=parent_span_id,
@@ -126,9 +110,6 @@ def build_opik_payload(
         tags=tags,
         usage=usage,
     )
-    payload.append(span)
     
-    _logging.verbose_logger.debug(f"Created Opik payload with {len(payload)} items")
-    
-    return payload
+    return trace_payload, span_payload
 
