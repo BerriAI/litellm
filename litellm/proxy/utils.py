@@ -3753,16 +3753,25 @@ async def count_tokens_with_anthropic_api(
 
         # Get Anthropic API key from deployment config
         anthropic_api_key = None
+        anthropic_api_base: Optional[str] = None
         if deployment is not None:
-            anthropic_api_key = deployment.get("litellm_params", {}).get("api_key")
+            litellm_params = deployment.get("litellm_params", {})
+            anthropic_api_key = litellm_params.get("api_key")
+            anthropic_api_base = litellm_params.get("api_base")
 
         # Fallback to environment variable
         if not anthropic_api_key:
             anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not anthropic_api_base:
+            anthropic_api_base = os.getenv("ANTHROPIC_API_BASE")
 
         if anthropic_api_key and messages:
             # Call Anthropic API directly for more accurate token counting
-            client = anthropic.Anthropic(api_key=anthropic_api_key)
+            client_kwargs: Dict[str, Any] = {"api_key": anthropic_api_key}
+            if anthropic_api_base:
+                client_kwargs["base_url"] = anthropic_api_base
+
+            client = anthropic.Anthropic(**client_kwargs)
 
             # Call with explicit parameters to satisfy type checking
             # Type ignore for now since messages come from generic dict input
