@@ -17,7 +17,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm import embedding
-from litellm.llms.sagemaker.completion.transformation import SagemakerEmbeddingConfig
+from litellm.llms.sagemaker.embedding.transformation import SagemakerEmbeddingConfig
 from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from litellm.types.utils import EmbeddingResponse, Usage
 
