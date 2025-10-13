@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.78.0-stable - MCP Gateway: Control Tool Access by Team/Key"
+title: "[Preview] v1.78.0-stable - MCP Gateway: Control Tool Access by Team, Key"
 slug: "v1-78-0"
 date: 2025-10-11T10:00:00
 authors:
@@ -37,6 +37,10 @@ import TabItem from '@theme/TabItem';
 <TabItem value="docker" label="Docker">
 
 ``` showLineNumbers title="docker run litellm"
+docker run \
+-e STORE_MODEL_IN_DB=True \
+-p 4000:4000 \
+ghcr.io/berriai/litellm:v1.78.0.rc.1
 ```
 
 </TabItem>
@@ -44,7 +48,7 @@ import TabItem from '@theme/TabItem';
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.78.0
+pip install litellm==1.78.0.rc.1
 ```
 
 </TabItem>
@@ -54,12 +58,80 @@ pip install litellm==1.78.0
 
 ## Key Highlights
 
-- **MCP Gateway Enhancements** - Fine-grained tool control at team/key level, OpenAPI to MCP server conversion, and per-tool parameter allowlists
+- **MCP Gateway - Control Tool Access by Team, Key** - Control MCP tool access by team/key. 
+- **Performance Improvements** - 70% Lower p99 Latency
 - **GPT-5 Pro & GPT-Image-1-Mini** - Day 0 support for OpenAI's GPT-5 Pro (400K context) and gpt-image-1-mini image generation
-- **UI Performance Boost** - Replaces bloated key list calls with lean key aliases endpoint, Turbopack for faster development, and major UI refactors
 - **EnkryptAI Guardrails** - New guardrail integration for content moderation
 - **Tag-Based Budgets** - Support for setting budgets based on request tags
-- **Azure AD & SSO** - Enhanced Azure AD default credentials selection and EntraID app roles support
+
+---
+
+### MCP Gateway - Control Tool Access by Team, Key
+
+<Image 
+  img={require('../../img/release_notes/tool_control.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br/>
+
+Proxy admins can now control MCP tool access by team or key. This makes it easy to grant different teams selective access to tools from the same MCP server.
+
+For example, you can now give your Engineering team access to `list_repositories`, `create_issue`, and `search_code` tools, while Sales only gets `search_code` and `close_issue` tools. 
+
+This makes it easier for Proxy Admins to govern MCP Tool Access.
+
+[Get Started](../../docs/mcp_control#set-allowed-tools-for-a-key-team-or-organization)
+
+---
+
+## Performance - 70% Lower p99 Latency
+
+<Image img={require('../../img/release_notes/1_78_0_perf.png')}  style={{ width: '800px', height: 'auto' }} />
+
+<br/>
+
+This release cuts p99 latency by 70% on LiteLLM AI Gateway, making it even better for low-latency use cases.
+
+These gains come from two key enhancements:
+
+**Reliable Sessions**
+
+Added support for shared sessions with aiohttp. The shared_session parameter is now consistently used across all calls, enabling connection pooling.
+
+**Faster Routing**
+
+A new `model_name_to_deployment_indices` hash map replaces O(n) list scans in `_get_all_deployments()` with O(1) hash lookups, boosting routing performance and scalability.
+
+As a result, performance improved across all latency percentiles:
+
+- **Median latency:** 110 ms → **100 ms** (−9.1%)
+- **p95 latency:** 440 ms → **150 ms** (−65.9%)
+- **p99 latency:** 810 ms → **240 ms** (−70.4%)
+- **Average latency:** 310 ms → **111.73 ms** (−64.0%)
+
+### **Test Setup**
+
+**Locust**
+
+- **Concurrent users:** 1,000
+- **Ramp-up:** 500
+
+**System Specs**
+
+- **Database was used**
+- **CPU:** 4 vCPUs
+- **Memory:** 8 GB RAM
+- **LiteLLM Workers:** 4
+- **Instances**: 4
+
+**Configuration (config.yaml)**
+
+View the complete configuration: [gist.github.com/AlexsanderHamir/config.yaml](https://gist.github.com/AlexsanderHamir/53f7d554a5d2afcf2c4edb5b6be68ff4)
+
+**Load Script (no_cache_hits.py)**
+
+View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache_hits.py](https://gist.github.com/AlexsanderHamir/42c33d7a4dc7a57f56a78b560dee3a42)
 
 ---
 
