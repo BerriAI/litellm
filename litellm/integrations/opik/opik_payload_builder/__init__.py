@@ -8,4 +8,3 @@ Public API:
 from .api import build_opik_payload
 
 __all__ = ["build_opik_payload"]
-

@@ -3,10 +3,9 @@ Opik Logger that logs LLM events to an Opik server
 """
 
 import asyncio
-import json
 import traceback
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -40,17 +39,23 @@ class OpikLogger(CustomBatchLogger):
         )
         self.sync_httpx_client = _get_httpx_client()
 
-        self.opik_project_name: str = utils.get_opik_config_variable(
-            "project_name",
-            user_value=kwargs.get("project_name", None),
-            default_value="Default Project",
-        ) or "Default Project"
+        self.opik_project_name: str = (
+            utils.get_opik_config_variable(
+                "project_name",
+                user_value=kwargs.get("project_name", None),
+                default_value="Default Project",
+            )
+            or "Default Project"
+        )
 
-        opik_base_url: str = utils.get_opik_config_variable(
-            "url_override",
-            user_value=kwargs.get("url", None),
-            default_value="https://www.comet.com/opik/api",
-        ) or "https://www.comet.com/opik/api"
+        opik_base_url: str = (
+            utils.get_opik_config_variable(
+                "url_override",
+                user_value=kwargs.get("url", None),
+                default_value="https://www.comet.com/opik/api",
+            )
+            or "https://www.comet.com/opik/api"
+        )
         opik_api_key: Optional[str] = utils.get_opik_config_variable(
             "api_key", user_value=kwargs.get("api_key", None), default_value=None
         )
@@ -91,7 +96,7 @@ class OpikLogger(CustomBatchLogger):
         try:
             if _should_skip_event(kwargs):
                 return
-            
+
             # Build payload using the payload builder
             trace_payload, span_payload = opik_payload_builder.build_opik_payload(
                 kwargs=kwargs,
@@ -100,12 +105,12 @@ class OpikLogger(CustomBatchLogger):
                 end_time=end_time,
                 project_name=self.opik_project_name,
             )
-            
+
             # Add payloads to queue
             if trace_payload is not None:
                 self.log_queue.append(trace_payload)
             self.log_queue.append(span_payload)
-            
+
             verbose_logger.debug(
                 f"OpikLogger added event to log_queue - Will flush in {self.flush_interval} seconds..."
             )
@@ -118,7 +123,9 @@ class OpikLogger(CustomBatchLogger):
                 f"OpikLogger failed to log success event - {str(e)}\n{traceback.format_exc()}"
             )
 
-    def _sync_send(self, url: str, headers: Dict[str, str], batch: Dict[str, Any]) -> None:
+    def _sync_send(
+        self, url: str, headers: Dict[str, str], batch: Dict[str, Any]
+    ) -> None:
         try:
             response = self.sync_httpx_client.post(
                 url=url, headers=headers, json=batch  # type: ignore
@@ -143,7 +150,7 @@ class OpikLogger(CustomBatchLogger):
         try:
             if _should_skip_event(kwargs):
                 return
-            
+
             # Build payload using the payload builder
             trace_payload, span_payload = opik_payload_builder.build_opik_payload(
                 kwargs=kwargs,
@@ -152,13 +159,15 @@ class OpikLogger(CustomBatchLogger):
                 end_time=end_time,
                 project_name=self.opik_project_name,
             )
-            
+
             # Send trace if present
             if trace_payload is not None:
                 self._sync_send(
-                    url=self.trace_url, headers=self.headers, batch={"traces": [trace_payload]}
+                    url=self.trace_url,
+                    headers=self.headers,
+                    batch={"traces": [trace_payload]},
                 )
-            
+
             # Always send span
             self._sync_send(
                 url=self.span_url, headers=self.headers, batch={"spans": [span_payload]}

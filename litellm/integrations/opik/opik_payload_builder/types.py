@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
 class TracePayload(TypedDict, total=False):
     """Opik trace payload structure"""
+
     project_name: str
     id: str
     name: str
@@ -19,6 +20,7 @@ class TracePayload(TypedDict, total=False):
 
 class SpanPayload(TypedDict, total=False):
     """Opik span payload structure"""
+
     id: str
     project_name: str
     trace_id: str
@@ -36,4 +38,3 @@ class SpanPayload(TypedDict, total=False):
 
 PayloadItem = Union[TracePayload, SpanPayload]
 OpikPayloadList = List[PayloadItem]
-
