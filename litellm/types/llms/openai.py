@@ -43,12 +43,7 @@ from openai.types.responses.response import (
 
 # Handle OpenAI SDK version compatibility for Text type
 try:
-    # fmt: off
-    from openai.types.responses.response_create_params import (
-        Text as ResponseText,  # type: ignore[attr-defined]
-    )
-
-    # fmt: on
+    from openai.types.responses.response_create_params import ( Text as ResponseText ) # type: ignore[attr-defined] # fmt: skip # isort: skip
 except (ImportError, AttributeError):
     # Fall back to the concrete config type available in all SDK versions
     from openai.types.responses.response_text_config_param import (
