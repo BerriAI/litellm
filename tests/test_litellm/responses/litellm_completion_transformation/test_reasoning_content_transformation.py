@@ -281,6 +281,7 @@ def test_streaming_chunk_id_raw():
     )
 
     iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
         litellm_custom_stream_wrapper=AsyncMock(),
         request_input="Test input",
         responses_api_request={},
