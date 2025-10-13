@@ -259,3 +259,52 @@ class VectorStorePreCallHook(CustomLogger):
             verbose_logger.exception(f"Error adding search results to response: {str(e)}")
             # Don't fail the request if search results fail to be added
             return None
+
+    async def async_post_call_streaming_deployment_hook(
+        self,
+        request_data: dict,
+        response_chunk: Any,
+        call_type: Optional[Any],
+    ) -> Optional[Any]:
+        """
+        Add search results to the final streaming chunk.
+        
+        This hook is called for the final streaming chunk, allowing us to add
+        search results to the stream before it's returned to the user.
+        """
+        try:
+            verbose_logger.debug("VectorStorePreCallHook.async_post_call_streaming_deployment_hook called")
+            
+            # Get search results from model_call_details (already in OpenAI format)
+            search_results: Optional[List[VectorStoreSearchResponse]] = (
+                request_data.get("search_results")
+            )
+            
+            verbose_logger.debug(f"Search results found for streaming chunk: {search_results is not None}")
+            
+            if not search_results:
+                verbose_logger.debug("No search results found for streaming chunk")
+                return response_chunk
+            
+            # Add search results to streaming chunk
+            if hasattr(response_chunk, "choices") and response_chunk.choices:
+                for choice in response_chunk.choices:
+                    if hasattr(choice, "delta") and choice.delta:
+                        # Get existing provider_specific_fields or create new dict
+                        provider_fields = getattr(choice.delta, "provider_specific_fields", None) or {}
+                        
+                        # Add search results (already in OpenAI-compatible format)
+                        provider_fields["search_results"] = search_results
+                        
+                        # Set the provider_specific_fields
+                        choice.delta.provider_specific_fields = provider_fields
+                        
+            verbose_logger.debug(f"Added {len(search_results)} search results to streaming chunk")
+            
+            # Return modified chunk
+            return response_chunk
+            
+        except Exception as e:
+            verbose_logger.exception(f"Error adding search results to streaming chunk: {str(e)}")
+            # Don't fail the request if search results fail to be added
+            return response_chunk
