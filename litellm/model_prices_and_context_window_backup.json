@@ -17204,6 +17204,25 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159
     },
+    "openrouter/anthropic/claude-sonnet-4.5": {
+        "input_cost_per_image": 0.0048,
+        "input_cost_per_token": 3e-06,
+        "input_cost_per_token_above_200k_tokens": 6e-06,
+        "output_cost_per_token_above_200k_tokens": 2.25e-05,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 1000000,
+        "max_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 159
+    },
     "openrouter/bytedance/ui-tars-1.5-7b": {
         "input_cost_per_token": 1e-07,
         "litellm_provider": "openrouter",
