@@ -312,24 +312,30 @@ class OpikLogger(CustomBatchLogger):
 
         payload = []
         if trace_id is None:
+            # Create a new trace only if trace_id is not provided
             trace_id = create_uuid7()
             verbose_logger.debug(
                 f"OpikLogger creating payload for trace with id {trace_id}"
             )
-        payload.append(
-            {
-                "project_name": project_name,
-                "id": trace_id,
-                "name": trace_name,
-                "start_time": start_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "end_time": end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "input": input_data,
-                "output": output_data,
-                "metadata": metadata,
-                "tags": opik_tags,
-                "thread_id": thread_id,
-            }
-        )
+            payload.append(
+                {
+                    "project_name": project_name,
+                    "id": trace_id,
+                    "name": trace_name,
+                    "start_time": start_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "end_time": end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "input": input_data,
+                    "output": output_data,
+                    "metadata": metadata,
+                    "tags": opik_tags,
+                    "thread_id": thread_id,
+                }
+            )
+        else:
+            # trace_id is provided, so we're attaching to an existing trace
+            verbose_logger.debug(
+                f"OpikLogger attaching span to existing trace with id {trace_id}"
+            )
 
         span_id = create_uuid7()
         verbose_logger.debug(
