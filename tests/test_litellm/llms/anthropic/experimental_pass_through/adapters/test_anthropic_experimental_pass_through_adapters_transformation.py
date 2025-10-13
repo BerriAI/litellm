@@ -536,3 +536,63 @@ def test_translate_streaming_openai_chunk_to_anthropic_raises_when_thinking_and_
         LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
             choices=choices
         )
+def test_translate_anthropic_messages_with_thinking_blocks_to_openai():
+    """Test that thinking blocks are properly converted from Anthropic to OpenAI format"""
+    
+    # Test data: Anthropic format with thinking blocks
+    anthropic_message = {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": "I need to recall basic geography knowledge. France is a country in Western Europe, and Paris has been its capital for centuries. This is a straightforward factual question.",
+                "signature": "abc123def456"
+            },
+            {
+                "type": "text",
+                "text": "The capital of France is Paris."
+            }
+        ]
+    }
+    
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_messages = [anthropic_message]
+    openai_messages = adapter.translate_anthropic_messages_to_openai(anthropic_messages)
+    
+    # Verify thinking blocks are preserved
+    assert "thinking_blocks" in openai_messages[0], "Thinking blocks should be present in OpenAI format"
+    assert len(openai_messages[0]["thinking_blocks"]) == 1, "Should have one thinking block"
+    assert openai_messages[0]["thinking_blocks"][0]["type"] == "thinking", "Thinking block type should be 'thinking'"
+    assert openai_messages[0]["thinking_blocks"][0]["thinking"] == "I need to recall basic geography knowledge. France is a country in Western Europe, and Paris has been its capital for centuries. This is a straightforward factual question.", "Thinking content should match"
+    assert openai_messages[0]["thinking_blocks"][0]["signature"] == "abc123def456", "Signature should match"
+    assert openai_messages[0]["content"] == "The capital of France is Paris.", "Text content should be preserved"
+
+
+def test_translate_anthropic_messages_with_redacted_thinking_blocks_to_openai():
+    """Test that redacted thinking blocks are properly converted from Anthropic to OpenAI format"""
+    
+    # Test data: Anthropic format with redacted thinking blocks
+    anthropic_message = {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "redacted_thinking",
+                "data": "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpPkNRj2YfWXGmKDxH4mPnZ5sQ7vB9URj2pLmN3kF8/dW5hR7xJ0aP1oLs9yTcMnKVf2wRpEGjH9XZaBt4UvDcPrQ..."
+            },
+            {
+                "type": "text",
+                "text": "The capital of France is Paris."
+            }
+        ]
+    }
+    
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_messages = [anthropic_message]
+    openai_messages = adapter.translate_anthropic_messages_to_openai(anthropic_messages)
+    
+    # Verify redacted thinking blocks are preserved
+    assert "thinking_blocks" in openai_messages[0], "Thinking blocks should be present in OpenAI format"
+    assert len(openai_messages[0]["thinking_blocks"]) == 1, "Should have one thinking block"
+    assert openai_messages[0]["thinking_blocks"][0]["type"] == "redacted_thinking", "Thinking block type should be 'redacted_thinking'"
+    assert openai_messages[0]["thinking_blocks"][0]["data"] == "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpPkNRj2YfWXGmKDxH4mPnZ5sQ7vB9URj2pLmN3kF8/dW5hR7xJ0aP1oLs9yTcMnKVf2wRpEGjH9XZaBt4UvDcPrQ...", "Data should match"
+    assert openai_messages[0]["content"] == "The capital of France is Paris.", "Text content should be preserved"

@@ -23,6 +23,8 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesToolChoice,
     AnthropicMessagesUserMessageParam,
     AnthropicResponseContentBlockText,
+    AnthropicResponseContentBlockRedactedThinking,
+    AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockRedactedThinking,
@@ -45,6 +47,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantToolCall,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionRequest,
     ChatCompletionSystemMessage,
     ChatCompletionTextObject,
@@ -111,7 +114,6 @@ class AnthropicAdapter:
     def translate_completion_output_params(
         self, response: ModelResponse
     ) -> Optional[AnthropicMessagesResponse]:
-
         return LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
             response=response
         )
@@ -279,7 +281,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 thinking_blocks.append(redacted_thinking_block)
 
 
-            if assistant_message_str is not None or len(tool_calls) > 0:
+            if assistant_message_str is not None or len(tool_calls) > 0 or len(thinking_blocks) > 0:
                 assistant_message = ChatCompletionAssistantMessage(
                     role="assistant",
                     content=assistant_message_str,
@@ -287,6 +289,8 @@ class LiteLLMAnthropicMessagesAdapter:
                 )
                 if len(tool_calls) > 0:
                     assistant_message["tool_calls"] = tool_calls
+                if len(thinking_blocks) > 0:
+                    assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
                 new_messages.append(assistant_message)
 
         return new_messages
@@ -339,6 +343,7 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         This is used by the beta Anthropic Adapter, for translating anthropic `/v1/messages` requests to the openai format.
         """
+        # Debug: Processing Anthropic message request
         new_messages: List[AllMessageValues] = []
 
         ## CONVERT ANTHROPIC MESSAGES TO OPENAI
@@ -417,6 +422,26 @@ class LiteLLMAnthropicMessagesAdapter:
             ]
         ] = []
         for choice in choices:
+            # Handle thinking blocks first
+            if hasattr(choice.message, 'thinking_blocks') and choice.message.thinking_blocks:
+                for thinking_block in choice.message.thinking_blocks:
+                    if thinking_block.get("type") == "thinking":
+                        new_content.append(
+                            AnthropicResponseContentBlockThinking(
+                                type="thinking",
+                                thinking=thinking_block.get("thinking", ""),
+                                signature=thinking_block.get("signature", ""),
+                            )
+                        )
+                    elif thinking_block.get("type") == "redacted_thinking":
+                        new_content.append(
+                            AnthropicResponseContentBlockRedactedThinking(
+                                type="redacted_thinking",
+                                data=thinking_block.get("data", ""),
+                            )
+                        )
+            
+            # Handle tool calls
             if (
                 choice.message.tool_calls is not None
                 and len(choice.message.tool_calls) > 0
@@ -430,6 +455,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             input=json.loads(tool_call.function.arguments) if tool_call.function.arguments else {},
                         )
                     )
+            # Handle text content
             elif choice.message.content is not None:
                 new_content.append(
                     AnthropicResponseContentBlockText(

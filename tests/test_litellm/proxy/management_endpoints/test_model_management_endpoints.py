@@ -453,6 +453,92 @@ class TestClearCache:
             )
 
 
+class TestTeamModelUpdate:
+    """Test team model update handles team_id consistently with model creation"""
+
+    @pytest.mark.asyncio
+    async def test_patch_model_with_team_id_creates_proper_setup(self):
+        """Test PATCH with team_id creates unique model name, alias, and team membership like POST does"""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _update_team_model_in_db,
+        )
+        from litellm.types.router import ModelInfo
+
+        patch_data = updateDeployment(
+            model_name="tenant-azure-gpt4",
+            model_info=ModelInfo(
+                team_id="test_team_123",
+                base_model="azure/gpt-4",
+            ),
+        )
+        db_model = Deployment(
+            model_name="original-model",
+            litellm_params=LiteLLM_Params(model="test_model"),
+            model_info=ModelInfo(),
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        prisma_client = MockPrismaClient(team_exists=True)
+
+        with patch(
+            "litellm.proxy.proxy_server.premium_user",
+            True,
+        ), patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.update_team"
+        ) as mock_update_team, patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+        ) as mock_team_model_add:
+            result = await _update_team_model_in_db(
+                db_model=db_model,
+                patch_data=patch_data,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,  # type: ignore
+            )
+
+            assert result.get("model_name", "").startswith("model_name_test_team_123_")
+            assert "team_public_model_name" in str(result.get("model_info", ""))
+            mock_update_team.assert_called_once()
+            mock_team_model_add.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_patch_model_with_team_id_validates_permissions(self):
+        """Test PATCH with team_id runs same validation as POST for team permissions"""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _update_team_model_in_db,
+        )
+        from litellm.types.router import ModelInfo
+
+        patch_data = updateDeployment(
+            model_name="tenant-azure-gpt4",
+            model_info=ModelInfo(team_id="test_team_123"),
+        )
+        db_model = Deployment(
+            model_name="original-model",
+            litellm_params=LiteLLM_Params(model="test_model"),
+            model_info=ModelInfo(),
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_user",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        prisma_client = MockPrismaClient(team_exists=True, user_admin=False)
+
+        with patch(
+            "litellm.proxy.proxy_server.premium_user",
+            True,
+        ):
+            with pytest.raises(Exception) as exc_info:
+                await _update_team_model_in_db(
+                    db_model=db_model,
+                    patch_data=patch_data,
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=prisma_client,  # type: ignore
+                )
+            assert "403" in str(exc_info.value)
+
+
 class TestModelInfoEndpoint:
     """Test the model_info endpoint for retrieving individual model information"""
 

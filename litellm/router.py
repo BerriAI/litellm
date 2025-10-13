@@ -59,6 +59,7 @@ from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
@@ -125,7 +126,6 @@ from litellm.types.router import (
     AllowedFailsPolicy,
     AssistantsTypedDict,
     CredentialLiteLLMParams,
-    CustomPricingLiteLLMParams,
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
@@ -142,10 +142,18 @@ from litellm.types.router import (
     RoutingStrategy,
 )
 from litellm.types.services import ServiceTypes
-from litellm.types.utils import GenericBudgetConfigType, LiteLLMBatch
+from litellm.types.utils import (
+    CustomPricingLiteLLMParams,
+    GenericBudgetConfigType,
+    LiteLLMBatch,
+)
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import ModelResponseStream, StandardLoggingPayload, Usage
+from litellm.types.utils import (
+    ModelResponseStream,
+    StandardLoggingPayload,
+    Usage,
+)
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -416,10 +424,12 @@ class Router:
 
         # Initialize model ID to deployment index mapping for O(1) lookups
         self.model_id_to_deployment_index_map: Dict[str, int] = {}
+        # Initialize model name to deployment indices mapping for O(1) lookups
+        # Maps model_name -> list of indices in model_list
+        self.model_name_to_deployment_indices: Dict[str, List[int]] = {}
 
         if model_list is not None:
-            # Build model index immediately to enable O(1) lookups from the start
-            self._build_model_id_to_deployment_index_map(model_list)
+            # set_model_list will build indices automatically
             self.set_model_list(model_list)
             self.healthy_deployments: List = self.model_list  # type: ignore
             for m in model_list:
@@ -906,8 +916,13 @@ class Router:
         try:
             _deployment_copy = copy.deepcopy(deployment)
             litellm_params: dict = _deployment_copy["litellm_params"]
-            if "api_key" in litellm_params:
+
+            if litellm.redact_user_api_key_info:
+                masker = SensitiveDataMasker(visible_prefix=2, visible_suffix=0)
+                _deployment_copy["litellm_params"] = masker.mask_dict(litellm_params)
+            elif "api_key" in litellm_params:
                 litellm_params["api_key"] = litellm_params["api_key"][:2] + "*" * 10
+
             return _deployment_copy
         except Exception as e:
             verbose_router_logger.debug(
@@ -5097,6 +5112,7 @@ class Router:
         original_model_list = copy.deepcopy(model_list)
         self.model_list = []
         self.model_id_to_deployment_index_map = {}  # Reset the index
+        self.model_name_to_deployment_indices = {}  # Reset the model_name index
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
 
         for model in original_model_list:
@@ -5138,6 +5154,9 @@ class Router:
             f"\nInitialized Model List {self.get_model_names()}"
         )
         self.model_names = [m["model_name"] for m in model_list]
+        
+        # Note: model_name_to_deployment_indices is already built incrementally
+        # by _create_deployment -> _add_model_to_list_and_index_map
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
@@ -5360,25 +5379,52 @@ class Router:
         # Remove the deleted model from index
         if model_id in self.model_id_to_deployment_index_map:
             del self.model_id_to_deployment_index_map[model_id]
+        
+        # Update model_name_to_deployment_indices
+        for model_name, indices in list(self.model_name_to_deployment_indices.items()):
+            # Remove the deleted index
+            if removal_idx in indices:
+                indices.remove(removal_idx)
+            
+            # Decrement all indices greater than removal_idx
+            updated_indices = []
+            for idx in indices:
+                if idx > removal_idx:
+                    updated_indices.append(idx - 1)
+                else:
+                    updated_indices.append(idx)
+            
+            # Update or remove the entry
+            if len(updated_indices) > 0:
+                self.model_name_to_deployment_indices[model_name] = updated_indices
+            else:
+                del self.model_name_to_deployment_indices[model_name]
 
     def _add_model_to_list_and_index_map(
         self, model: dict, model_id: Optional[str] = None
     ) -> None:
         """
-        Helper method to add a model to the model_list and update the model_id_to_deployment_index_map.
+        Helper method to add a model to the model_list and update both indices.
 
         Parameters:
         - model: dict - the model to add to the list
         - model_id: Optional[str] - the model ID to use for indexing. If None, will try to get from model["model_info"]["id"]
         """
+        idx = len(self.model_list)
         self.model_list.append(model)
-        # Update model index for O(1) lookup
+        
+        # Update model_id index for O(1) lookup
         if model_id is not None:
-            self.model_id_to_deployment_index_map[model_id] = len(self.model_list) - 1
+            self.model_id_to_deployment_index_map[model_id] = idx
         elif model.get("model_info", {}).get("id") is not None:
-            self.model_id_to_deployment_index_map[model["model_info"]["id"]] = (
-                len(self.model_list) - 1
-            )
+            self.model_id_to_deployment_index_map[model["model_info"]["id"]] = idx
+        
+        # Update model_name index for O(1) lookup
+        model_name = model.get("model_name")
+        if model_name:
+            if model_name not in self.model_name_to_deployment_indices:
+                self.model_name_to_deployment_indices[model_name] = []
+            self.model_name_to_deployment_indices[model_name].append(idx)
 
     def upsert_deployment(self, deployment: Deployment) -> Optional[Deployment]:
         """
@@ -6094,6 +6140,22 @@ class Router:
                         additional_headers[header] = value
         return response
 
+    def _build_model_name_index(self, model_list: list) -> None:
+        """
+        Build model_name -> deployment indices mapping for O(1) lookups.
+        
+        This index allows us to find all deployments for a given model_name in O(1) time
+        instead of O(n) linear scan through the entire model_list.
+        """
+        self.model_name_to_deployment_indices.clear()
+        
+        for idx, model in enumerate(model_list):
+            model_name = model.get("model_name")
+            if model_name:
+                if model_name not in self.model_name_to_deployment_indices:
+                    self.model_name_to_deployment_indices[model_name] = []
+                self.model_name_to_deployment_indices[model_name].append(idx)
+
     def _build_model_id_to_deployment_index_map(self, model_list: list):
         """
         Build model index from model list to enable O(1) lookups immediately.
@@ -6198,18 +6260,41 @@ class Router:
         Used for accurate 'get_model_list'.
 
         if team_id specified, only return team-specific models
+        
+        Optimized with O(1) index lookup instead of O(n) linear scan.
         """
         returned_models: List[DeploymentTypedDict] = []
-        for model in self.model_list:
-            if self.should_include_deployment(
-                model_name=model_name, model=model, team_id=team_id
-            ):
-                if model_alias is not None:
-                    alias_model = copy.deepcopy(model)
-                    alias_model["model_name"] = model_alias
-                    returned_models.append(alias_model)
-                else:
-                    returned_models.append(model)
+        
+        # O(1) lookup in model_name index
+        if model_name in self.model_name_to_deployment_indices:
+            indices = self.model_name_to_deployment_indices[model_name]
+            
+            # O(k) where k = deployments for this model_name (typically 1-10)
+            for idx in indices:
+                model = self.model_list[idx]
+                if self.should_include_deployment(
+                    model_name=model_name, model=model, team_id=team_id
+                ):
+                    if model_alias is not None:
+                        alias_model = copy.deepcopy(model)
+                        alias_model["model_name"] = model_alias
+                        returned_models.append(alias_model)
+                    else:
+                        returned_models.append(model)
+        elif team_id is not None:
+            # Fallback: if team_id is provided and model_name not in index,
+            # check if model_name matches any team_public_model_name
+            # O(n) scan but only when team_id lookup fails
+            for idx, model in enumerate(self.model_list):
+                if self.should_include_deployment(
+                    model_name=model_name, model=model, team_id=team_id
+                ):
+                    if model_alias is not None:
+                        alias_model = copy.deepcopy(model)
+                        alias_model["model_name"] = model_alias
+                        returned_models.append(alias_model)
+                    else:
+                        returned_models.append(model)
 
         return returned_models
 
