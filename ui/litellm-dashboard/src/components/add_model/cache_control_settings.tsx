@@ -1,5 +1,5 @@
 import React from "react";
-import { Form, Switch, Select, Input, Typography } from "antd";
+import { Form, Switch, Select, Typography } from "antd";
 import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
 import NumericalInput from "../shared/numerical_input";
 

@@ -11,12 +11,12 @@ Endpoints for /organization operations
 
 #### ORGANIZATION MANAGEMENT ####
 
-from litellm._uuid import uuid
 from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import can_user_call_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth

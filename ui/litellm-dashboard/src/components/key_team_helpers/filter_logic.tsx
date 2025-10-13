@@ -4,7 +4,6 @@ import { keyListCall, Organization } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAllKeyAliases, fetchAllOrganizations, fetchAllTeams } from "./filter_helpers";
-import { Setter } from "@/types";
 import { debounce } from "lodash";
 import { defaultPageSize } from "../constants";
 
