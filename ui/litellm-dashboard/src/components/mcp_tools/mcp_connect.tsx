@@ -1,20 +1,9 @@
 /* eslint-disable react/no-unescaped-entities */
 
 import React, { useState } from "react";
-import { Card, Typography, Space, Alert, Button, message, Switch, Input, Form, Collapse } from "antd";
+import { Card, Typography, Space, Alert, Button, Switch, Form, Collapse } from "antd";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab, Title as TremorTitle, Text as TremorText } from "@tremor/react";
-import {
-  CopyIcon,
-  Code,
-  Terminal,
-  Globe,
-  CheckIcon,
-  ExternalLinkIcon,
-  ShieldAlertIcon,
-  KeyIcon,
-  ServerIcon,
-  Zap,
-} from "lucide-react";
+import { CopyIcon, Code, Terminal, Globe, CheckIcon, ExternalLinkIcon, KeyIcon, ServerIcon, Zap } from "lucide-react";
 import { getProxyBaseUrl } from "../networking";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 

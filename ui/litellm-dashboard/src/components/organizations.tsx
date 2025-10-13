@@ -26,7 +26,6 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { PencilAltIcon, TrashIcon, RefreshIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { TextInput } from "@tremor/react";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
-import { message } from "antd";
 import OrganizationInfoView from "./organization/organization_view";
 import { Organization, organizationListCall, organizationCreateCall, organizationDeleteCall } from "./networking";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
