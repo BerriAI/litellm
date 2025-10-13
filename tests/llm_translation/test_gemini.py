@@ -1144,3 +1144,13 @@ def test_gemini_additional_properties_bug():
     response = litellm.completion(
         model="gemini/gemini-2.5-flash", messages=messages, tools=tools
     )
+
+
+def test_gemini_embedding():
+    litellm._turn_on_debug()
+    response = litellm.embedding(
+        model="gemini/gemini-embedding-001",
+        input="Hello, world!",
+    )
+    print("response: ", response)
+    assert response is not None
