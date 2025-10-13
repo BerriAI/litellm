@@ -47,6 +47,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
+    _set_object_permission,
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
 )
@@ -562,6 +563,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
 
     data_json = handle_key_type(data, data_json)
+
     # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
     if "max_budget" in data_json:
         data_json["key_max_budget"] = data_json.pop("max_budget", None)
@@ -837,7 +839,8 @@ async def generate_key_fn(
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
@@ -987,7 +990,7 @@ async def generate_service_account_key_fn(
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -1111,31 +1114,6 @@ def prepare_metadata_fields(
 
     non_default_values["metadata"] = casted_metadata
     return non_default_values
-
-
-async def _set_object_permission(
-    data_json: dict,
-    prisma_client: Optional[PrismaClient],
-):
-    """
-    Creates the LiteLLM_ObjectPermissionTable record for the key.
-    - Handles permissions for vector stores and mcp servers.
-    """
-    if prisma_client is None:
-        return data_json
-
-    if "object_permission" in data_json:
-        created_object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.create(
-                data=data_json["object_permission"],
-            )
-        )
-        data_json["object_permission_id"] = (
-            created_object_permission.object_permission_id
-        )
-        # delete the object_permission from the data_json
-        data_json.pop("object_permission")
-    return data_json
 
 
 async def prepare_key_update_data(
@@ -1299,8 +1277,9 @@ async def update_key_fn(
     - temp_budget_increase: Optional[float] - Temporary budget increase for the key (Enterprise only).
     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
+    - allowed_passthrough_routes: Optional[list] - List of allowed pass through routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through routes the key can access, without specifying the routes. If allowed_routes is specified, allowed_passthrough_routes is ignored.
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
     - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
     Example:
@@ -2825,6 +2804,80 @@ async def list_keys(
 
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in list_keys: {e}")
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"error({str(e)})"),
+                type=ProxyErrorTypes.internal_server_error,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type=ProxyErrorTypes.internal_server_error,
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.get(
+    "/key/aliases",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def key_aliases() -> Dict[str, List[str]]:
+    """
+    Lists all key aliases
+
+    Returns:
+        {
+            "aliases": List[str]
+        }
+    """
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        verbose_proxy_logger.debug("Entering key_aliases function")
+
+        if prisma_client is None:
+            verbose_proxy_logger.error("Database not connected")
+            raise Exception("Database not connected")
+
+        where: Dict[str, Any] = {}
+        try:
+            where.update(_get_condition_to_filter_out_ui_session_tokens())
+        except NameError:
+            # Helper may not exist in some builds; ignore if missing
+            pass
+
+        rows = await prisma_client.db.litellm_verificationtoken.find_many(
+            where=where,
+            order=[{"key_alias": "asc"}],
+        )
+
+        seen = set()
+        aliases: List[str] = []
+        for row in rows:
+            alias = getattr(row, "key_alias", None)
+            if alias is None and isinstance(row, dict):
+                alias = row.get("key_alias")
+
+            if not alias:
+                continue
+
+            alias_str = str(alias).strip()
+            if alias_str and alias_str not in seen:
+                seen.add(alias_str)
+                aliases.append(alias_str)
+
+        verbose_proxy_logger.debug(f"Returning {len(aliases)} key aliases")
+
+        return {"aliases": aliases}
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error in key_aliases: {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"error({str(e)})"),

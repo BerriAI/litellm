@@ -1,24 +1,14 @@
 import React, { useState, useEffect } from "react";
-import {
-  Card,
-  Title,
-  Text,
-  Grid,
-  Col,
-  Button as TremorButton,
-  Callout,
-  TextInput,
-  Divider,
-} from "@tremor/react";
-import { message, Form } from "antd";
+import { Card, Title, Text, Grid, Button as TremorButton, Callout, TextInput, Divider } from "@tremor/react";
+import { Form } from "antd";
 import { keyCreateCall } from "./networking";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { 
-  LinkOutlined, 
-  KeyOutlined, 
+import {
+  LinkOutlined,
+  KeyOutlined,
   CopyOutlined,
   ExclamationCircleOutlined,
-  PlusCircleOutlined
+  PlusCircleOutlined,
 } from "@ant-design/icons";
 import { parseErrorMessage } from "./shared/errorUtils";
 import NotificationsManager from "./molecules/notifications_manager";
@@ -34,38 +24,38 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
   const [isCreatingToken, setIsCreatingToken] = useState(false);
   const [tokenData, setTokenData] = useState<any>(null);
   const [baseUrl, setBaseUrl] = useState("<your_proxy_base_url>");
-  
+
   useEffect(() => {
     let url = "<your_proxy_base_url>";
-    
+
     if (proxySettings && proxySettings.PROXY_BASE_URL && proxySettings.PROXY_BASE_URL !== undefined) {
       url = proxySettings.PROXY_BASE_URL;
-    } else if (typeof window !== 'undefined') {
+    } else if (typeof window !== "undefined") {
       // Use the current origin as the base URL if no proxy URL is set
       url = window.location.origin;
     }
-    
+
     setBaseUrl(url);
   }, [proxySettings]);
-  
+
   const scimBaseUrl = `${baseUrl}/scim/v2`;
-  
+
   const handleCreateSCIMToken = async (values: any) => {
     if (!accessToken || !userID) {
       NotificationsManager.fromBackend("You need to be logged in to create a SCIM token");
       return;
     }
-    
+
     try {
       setIsCreatingToken(true);
-      
+
       const formData = {
         key_alias: values.key_alias || "SCIM Access Token",
         team_id: null,
         models: [],
         allowed_routes: ["/scim/*"],
       };
-      
+
       const response = await keyCreateCall(accessToken, userID, formData);
       setTokenData(response);
       NotificationsManager.success("SCIM token created successfully");
@@ -84,11 +74,12 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
           <Title>SCIM Configuration</Title>
         </div>
         <Text className="text-gray-600">
-          System for Cross-domain Identity Management (SCIM) allows you to automatically provision and manage users and groups in LiteLLM.
+          System for Cross-domain Identity Management (SCIM) allows you to automatically provision and manage users and
+          groups in LiteLLM.
         </Text>
-        
+
         <Divider />
-        
+
         <div className="space-y-8">
           {/* Step 1: SCIM URL */}
           <div>
@@ -105,11 +96,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
               Use this URL in your identity provider SCIM integration settings.
             </Text>
             <div className="flex items-center">
-              <TextInput
-                value={scimBaseUrl}
-                disabled={true}
-                className="flex-grow"
-              />
+              <TextInput value={scimBaseUrl} disabled={true} className="flex-grow" />
               <CopyToClipboard
                 text={scimBaseUrl}
                 onCopy={() => NotificationsManager.success("URL copied to clipboard")}
@@ -133,18 +120,15 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
                 Authentication Token
               </Title>
             </div>
-            
+
             <Callout title="Using SCIM" color="blue" className="mb-4">
-              You need a SCIM token to authenticate with the SCIM API. Create one below and use it in your SCIM provider configuration.
+              You need a SCIM token to authenticate with the SCIM API. Create one below and use it in your SCIM provider
+              configuration.
             </Callout>
 
             {!tokenData ? (
               <div className="bg-gray-50 p-4 rounded-lg">
-                <Form
-                  form={form}
-                  onFinish={handleCreateSCIMToken}
-                  layout="vertical"
-                >
+                <Form form={form} onFinish={handleCreateSCIMToken} layout="vertical">
                   <Form.Item
                     name="key_alias"
                     label="Token Name"
@@ -191,11 +175,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
                     </TremorButton>
                   </CopyToClipboard>
                 </div>
-                <TremorButton
-                  className="mt-4 flex items-center"
-                  variant="secondary"
-                  onClick={() => setTokenData(null)}
-                >
+                <TremorButton className="mt-4 flex items-center" variant="secondary" onClick={() => setTokenData(null)}>
                   <PlusCircleOutlined className="h-4 w-4 mr-1" />
                   Create Another Token
                 </TremorButton>
@@ -208,4 +188,4 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
   );
 };
 
-export default SCIMConfig; 
+export default SCIMConfig;

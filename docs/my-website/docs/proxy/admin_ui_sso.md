@@ -81,6 +81,23 @@ MICROSOFT_TENANT="5a39737
     http://localhost:4000/sso/callback
     ```
 
+**Using App Roles for User Permissions**
+
+You can assign user roles directly from Entra ID using App Roles. LiteLLM will automatically read the app roles from the JWT token and assign the corresponding role to the user.
+
+Supported roles:
+- `proxy_admin` - Admin over the platform
+- `proxy_admin_viewer` - Can login, view all keys, view all spend (read-only)
+- `internal_user` - Normal user. Can login, view spend and depending on team-member permissions - view/create/delete their own keys.
+
+
+To set up app roles:
+1. Navigate to your App Registration on https://portal.azure.com/
+2. Go to "App roles" and create a new app role
+3. Use one of the supported role names above (e.g., `proxy_admin`)
+4. Assign users to these roles in your Enterprise Application
+5. When users sign in via SSO, LiteLLM will automatically assign them the corresponding role
+
 </TabItem>
 
 <TabItem value="Generic" label="Generic SSO Provider">

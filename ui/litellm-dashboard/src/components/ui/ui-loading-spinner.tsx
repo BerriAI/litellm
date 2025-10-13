@@ -1,6 +1,6 @@
-import React, { useId } from 'react';
-import { useSafeLayoutEffect } from '@/hooks/use-safe-layout-effect';
-import { cx } from '@/lib/cva.config';
+import React, { useId } from "react";
+import { useSafeLayoutEffect } from "@/hooks/use-safe-layout-effect";
+import { cx } from "@/lib/cva.config";
 
 type LoadingSpinnerProps = React.SVGProps<SVGSVGElement>;
 
@@ -10,16 +10,12 @@ export function UiLoadingSpinner({ className = "", ...props }: LoadingSpinnerPro
   useSafeLayoutEffect(() => {
     const animations = document
       .getAnimations()
-      .filter((a) => a instanceof CSSAnimation && a.animationName === 'spin') as CSSAnimation[];
+      .filter((a) => a instanceof CSSAnimation && a.animationName === "spin") as CSSAnimation[];
 
-    const self = animations.find(
-      (a) => (a.effect as KeyframeEffect).target?.getAttribute('data-spinner-id') === id,
-    );
+    const self = animations.find((a) => (a.effect as KeyframeEffect).target?.getAttribute("data-spinner-id") === id);
 
     const anyOther = animations.find(
-      (a) =>
-        a.effect instanceof KeyframeEffect &&
-        a.effect.target?.getAttribute('data-spinner-id') !== id,
+      (a) => a.effect instanceof KeyframeEffect && a.effect.target?.getAttribute("data-spinner-id") !== id,
     );
 
     if (self && anyOther) {
@@ -30,19 +26,12 @@ export function UiLoadingSpinner({ className = "", ...props }: LoadingSpinnerPro
   return (
     <svg
       data-spinner-id={id}
-      className={cx('pointer-events-none size-12 animate-spin text-current', className)}
+      className={cx("pointer-events-none size-12 animate-spin text-current", className)}
       fill="none"
       viewBox="0 0 24 24"
       {...props}
     >
-      <circle
-        className="opacity-25"
-        cx="12"
-        cy="12"
-        r="10"
-        stroke="currentColor"
-        strokeWidth="4"
-      ></circle>
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
       <path
         className="opacity-75"
         fill="currentColor"

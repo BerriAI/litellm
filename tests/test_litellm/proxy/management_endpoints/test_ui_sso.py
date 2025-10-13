@@ -2,13 +2,14 @@ import asyncio
 import json
 import os
 import sys
-from litellm._uuid import uuid
 from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
+
+from litellm._uuid import uuid
 
 sys.path.insert(
     0, os.path.abspath("../../../")
@@ -46,7 +47,7 @@ def test_microsoft_sso_handler_openid_from_response_user_principal_name():
     # Act
     # Call the method being tested
     result = MicrosoftSSOHandler.openid_from_response(
-        response=mock_response, team_ids=expected_team_ids
+        response=mock_response, team_ids=expected_team_ids, user_role=None
     )
 
     # Assert
@@ -77,7 +78,7 @@ def test_microsoft_sso_handler_openid_from_response():
     # Act
     # Call the method being tested
     result = MicrosoftSSOHandler.openid_from_response(
-        response=mock_response, team_ids=expected_team_ids
+        response=mock_response, team_ids=expected_team_ids, user_role=None
     )
 
     # Assert
@@ -98,7 +99,7 @@ def test_microsoft_sso_handler_with_empty_response():
     # Test with None response
 
     # Act
-    result = MicrosoftSSOHandler.openid_from_response(response=None, team_ids=[])
+    result = MicrosoftSSOHandler.openid_from_response(response=None, team_ids=[], user_role=None)
 
     # Assert
     assert isinstance(result, CustomOpenID)
@@ -993,6 +994,40 @@ class TestSSOStateHandling:
         
         assert state is None
 
+    def test_get_cli_state_with_existing_key(self):
+        """Test generating CLI state with existing_key embedded in state parameter"""
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+        
+        state = SSOAuthenticationHandler._get_cli_state(
+            source="litellm-cli", 
+            key="sk-new-key-123",
+            existing_key="sk-existing-key-456"
+        )
+        
+        assert state is not None
+        assert state.startswith("litellm-session-token:")
+        assert "sk-new-key-123" in state
+        assert "sk-existing-key-456" in state
+        # Verify the format: {PREFIX}:{key}:{existing_key}
+        assert state == "litellm-session-token:sk-new-key-123:sk-existing-key-456"
+
+    def test_get_cli_state_without_existing_key(self):
+        """Test generating CLI state without existing_key"""
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+        
+        state = SSOAuthenticationHandler._get_cli_state(
+            source="litellm-cli", 
+            key="sk-new-key-789",
+            existing_key=None
+        )
+        
+        assert state is not None
+        assert state.startswith("litellm-session-token:")
+        assert "sk-new-key-789" in state
+        # Verify the format: {PREFIX}:{key} (no third part)
+        assert state == "litellm-session-token:sk-new-key-789"
+        assert state.count(":") == 1  # Only one colon separator
+
 
 class TestStateRouting:
     """Test state parameter routing logic"""
@@ -1008,6 +1043,36 @@ class TestStateRouting:
         # Test extraction of key from state
         key_id = cli_state.split(":", 1)[1]
         assert key_id == "sk-test123"
+
+    def test_cli_state_parsing_with_existing_key(self):
+        """Test parsing CLI state with existing_key embedded"""
+        from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
+
+        # State format: {PREFIX}:{key}:{existing_key}
+        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-new-key-456:sk-existing-key-789"
+        
+        # Parse as done in auth_callback
+        state_parts = cli_state.split(":", 2)  # Split into max 3 parts
+        key_id = state_parts[1] if len(state_parts) > 1 else None
+        existing_key = state_parts[2] if len(state_parts) > 2 else None
+        
+        assert key_id == "sk-new-key-456"
+        assert existing_key == "sk-existing-key-789"
+
+    def test_cli_state_parsing_without_existing_key(self):
+        """Test parsing CLI state without existing_key"""
+        from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
+
+        # State format: {PREFIX}:{key}
+        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-new-key-999"
+        
+        # Parse as done in auth_callback
+        state_parts = cli_state.split(":", 2)  # Split into max 3 parts
+        key_id = state_parts[1] if len(state_parts) > 1 else None
+        existing_key = state_parts[2] if len(state_parts) > 2 else None
+        
+        assert key_id == "sk-new-key-999"
+        assert existing_key is None
 
     def test_non_cli_state_detection(self):
         """Test detection of non-CLI state parameters"""
@@ -1310,16 +1375,15 @@ class TestCLIKeyRegenerationFlow:
 
     @pytest.mark.asyncio
     async def test_auth_callback_routes_to_cli_with_existing_key(self):
-        """Test that auth_callback properly routes CLI requests and preserves existing_key parameter"""
+        """Test that auth_callback properly routes CLI requests and extracts existing_key from state parameter"""
         from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
         from litellm.proxy.management_endpoints.ui_sso import auth_callback
 
-        # Mock request with existing_key query parameter
+        # Mock request (no query params needed - existing_key is in state)
         mock_request = MagicMock(spec=Request)
-        mock_request.query_params.get.return_value = "sk-existing-cli-key-123"
         
-        # CLI state
-        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-new-session-key-456"
+        # CLI state with existing_key embedded: {PREFIX}:{key}:{existing_key}
+        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-new-session-key-456:sk-existing-cli-key-123"
         
         # Mock the CLI callback and required proxy server components
         mock_result = {"user_id": "test-user", "email": "test@example.com"}
@@ -1337,7 +1401,7 @@ class TestCLIKeyRegenerationFlow:
             # Act
             await auth_callback(request=mock_request, state=cli_state)
             
-            # Assert
+            # Assert - existing_key should be extracted from state parameter
             mock_cli_callback.assert_called_once_with(
                 request=mock_request,
                 key="sk-new-session-key-456",
@@ -1345,8 +1409,8 @@ class TestCLIKeyRegenerationFlow:
                 result=mock_result
             )
 
-    def test_get_redirect_url_preserves_existing_key(self):
-        """Test that redirect URL generation preserves existing_key parameter"""
+    def test_get_redirect_url_does_not_include_existing_key_in_url(self):
+        """Test that redirect URL generation does NOT include existing_key in URL (uses state parameter instead)"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Mock request
@@ -1354,14 +1418,16 @@ class TestCLIKeyRegenerationFlow:
         mock_request.base_url = "https://test.litellm.ai/"
         
         with patch("litellm.proxy.utils.get_custom_url", return_value="https://test.litellm.ai"):
-            # Test with existing_key
+            # Test with existing_key - should NOT be in URL
             redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
                 request=mock_request,
                 sso_callback_route="sso/callback",
                 existing_key="sk-existing-123"
             )
             
-            assert "https://test.litellm.ai/sso/callback?existing_key=sk-existing-123" == redirect_url
+            # existing_key should NOT be in the URL
+            assert "https://test.litellm.ai/sso/callback" == redirect_url
+            assert "existing_key" not in redirect_url
 
     def test_get_redirect_url_without_existing_key(self):
         """Test that redirect URL generation works without existing_key parameter"""

@@ -426,6 +426,7 @@ class BaseLLMHTTPHandler:
                     ),
                     json_mode=json_mode,
                     signed_json_body=signed_json_body,
+                    shared_session=shared_session,
                 )
 
         if stream is True:
@@ -1532,6 +1533,7 @@ class BaseLLMHTTPHandler:
                         data=data,
                         fake_stream=fake_stream,
                     )
+
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,

@@ -58,7 +58,7 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=responses_api_request,
                 **kwargs,
             )
-        
+
         completion_args = {}
         completion_args.update(kwargs)
         completion_args.update(litellm_completion_request)
@@ -83,6 +83,7 @@ class LiteLLMCompletionTransformationHandler:
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
             return LiteLLMCompletionStreamingIterator(
+                model=model,
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=input,
                 responses_api_request=responses_api_request,
@@ -106,7 +107,7 @@ class LiteLLMCompletionTransformationHandler:
                 previous_response_id=previous_response_id,
                 litellm_completion_request=litellm_completion_request,
             )
-        
+
         acompletion_args = {}
         acompletion_args.update(kwargs)
         acompletion_args.update(litellm_completion_request)
@@ -130,9 +131,12 @@ class LiteLLMCompletionTransformationHandler:
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
             return LiteLLMCompletionStreamingIterator(
+                model=litellm_completion_request.get("model") or "",
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=request_input,
                 responses_api_request=responses_api_request,
-                custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
+                custom_llm_provider=litellm_completion_request.get(
+                    "custom_llm_provider"
+                ),
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
             )

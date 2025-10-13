@@ -191,7 +191,8 @@ class TestTTLExtraction:
 class TestTransformationWithTTL:
     """Test the complete transformation with TTL support"""
     
-    def test_transform_with_valid_ttl(self):
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    def test_transform_with_valid_ttl(self, custom_llm_provider):
         """Test transformation includes TTL when provided"""
         messages = [
             {
@@ -205,19 +206,32 @@ class TestTransformationWithTTL:
                 ]
             }
         ]
+
+        vertex_location="test_location"
+        vertex_project="test_project"
         
         result = transform_openai_messages_to_gemini_context_caching(
             model="gemini-1.5-pro",
             messages=messages,
-            cache_key="test-cache-key"
+            cache_key="test-cache-key",
+            custom_llm_provider=custom_llm_provider,
+            vertex_location="test_location",
+            vertex_project="test_project"
         )
         
         assert "ttl" in result
         assert result["ttl"] == "3600s"
-        assert result["model"] == "models/gemini-1.5-pro"
+
+        if custom_llm_provider == "gemini":
+            assert result["model"] == "models/gemini-1.5-pro"
+        else:
+            assert result["model"] == f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/gemini-1.5-pro"
+        
+
         assert result["displayName"] == "test-cache-key"
     
-    def test_transform_without_ttl(self):
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    def test_transform_without_ttl(self, custom_llm_provider):
         """Test transformation without TTL"""
         messages = [
             {
@@ -231,18 +245,30 @@ class TestTransformationWithTTL:
                 ]
             }
         ]
+
+        vertex_location="test_location"
+        vertex_project="test_project"
         
         result = transform_openai_messages_to_gemini_context_caching(
             model="gemini-1.5-pro", 
             messages=messages,
-            cache_key="test-cache-key"
+            cache_key="test-cache-key",
+            custom_llm_provider=custom_llm_provider,
+            vertex_location=vertex_location,
+            vertex_project=vertex_project
         )
         
         assert "ttl" not in result
-        assert result["model"] == "models/gemini-1.5-pro"
+
+        if custom_llm_provider == "gemini":
+            assert result["model"] == "models/gemini-1.5-pro"
+        else:
+            assert result["model"] == f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/gemini-1.5-pro"
+        
         assert result["displayName"] == "test-cache-key"
     
-    def test_transform_with_invalid_ttl(self):
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    def test_transform_with_invalid_ttl(self, custom_llm_provider):
         """Test transformation with invalid TTL (should be ignored)"""
         messages = [
             {
@@ -256,18 +282,29 @@ class TestTransformationWithTTL:
                 ]
             }
         ]
+        vertex_location="test_location"
+        vertex_project="test_project"
         
         result = transform_openai_messages_to_gemini_context_caching(
             model="gemini-1.5-pro",
             messages=messages, 
-            cache_key="test-cache-key"
+            cache_key="test-cache-key",
+            custom_llm_provider=custom_llm_provider,
+            vertex_location=vertex_location,
+            vertex_project=vertex_project
         )
         
         assert "ttl" not in result
-        assert result["model"] == "models/gemini-1.5-pro"
+
+        if custom_llm_provider == "gemini":
+            assert result["model"] == "models/gemini-1.5-pro"
+        else:
+            assert result["model"] == f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/gemini-1.5-pro"
+        
         assert result["displayName"] == "test-cache-key"
     
-    def test_transform_with_system_message_and_ttl(self):
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    def test_transform_with_system_message_and_ttl(self, custom_llm_provider):
         """Test transformation with system message and TTL"""
         messages = [
             {
@@ -290,17 +327,28 @@ class TestTransformationWithTTL:
                 ]
             }
         ]
+
+        vertex_location="test_location"
+        vertex_project="test_project"
         
         result = transform_openai_messages_to_gemini_context_caching(
             model="gemini-1.5-pro",
             messages=messages,
-            cache_key="test-cache-key"
+            cache_key="test-cache-key",
+            custom_llm_provider=custom_llm_provider,
+            vertex_location=vertex_location,
+            vertex_project=vertex_project
         )
         
         assert "ttl" in result
         assert result["ttl"] == "7200s"
         assert "system_instruction" in result
-        assert result["model"] == "models/gemini-1.5-pro"
+        
+        if custom_llm_provider == "gemini":
+            assert result["model"] == "models/gemini-1.5-pro"
+        else:
+            assert result["model"] == f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/gemini-1.5-pro"
+        
         assert result["displayName"] == "test-cache-key"
 
 

@@ -62,6 +62,8 @@ def _is_cooldown_required(
                     return False
 
         if isinstance(exception_status, str):
+            if len(exception_status) == 0:
+                return False
             exception_status = int(exception_status)
 
         if exception_status >= 400 and exception_status < 500:

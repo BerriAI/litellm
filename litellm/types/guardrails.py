@@ -5,6 +5,10 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
+from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
+    EnkryptAIGuardrailConfigs,
+)
+
 """
 Pydantic object defining how to set guardrails on litellm proxy
 
@@ -39,7 +43,7 @@ class SupportedGuardrailIntegrations(Enum):
     NOMA = "noma"
     TOOL_PERMISSION = "tool_permission"
     JAVELIN = "javelin"
-
+    ENKRYPTAI = "enkryptai"
 
 class Role(Enum):
     SYSTEM = "system"
@@ -502,6 +506,7 @@ class LitellmParams(
     ToolPermissionGuardrailConfigModel,
     JavelinGuardrailConfigModel,
     BaseLitellmParams,
+    EnkryptAIGuardrailConfigs,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(

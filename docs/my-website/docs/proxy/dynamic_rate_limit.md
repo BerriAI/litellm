@@ -141,6 +141,7 @@ litellm_settings:
     "dev": 0.1   # 10% reserved for development (1 RPM)
   priority_reservation_settings:
     default_priority: 0  # Weight (0%) assigned to keys without explicit priority metadata
+    saturation_threshold: 0.50 #  A model is saturated if it has hit 50% of its RPM limit
 
 general_settings:
   master_key: sk-1234 # OR set `LITELLM_MASTER_KEY=".."` in your .env
@@ -156,6 +157,8 @@ general_settings:
 
 `priority_reservation_settings`: Object (Optional)
 - **default_priority (float)**: Weight/percentage (0.0 to 1.0) assigned to API keys that have no priority metadata set (defaults to 0.5)
+- **saturation_threshold (float)**: Saturation level (0.0 to 1.0) at which strict priority enforcement begins for a model. Saturation is calculated as `max(current_rpm/max_rpm, current_tpm/max_tpm)`. Below this threshold, generous mode allows priority borrowing from unused capacity. Above this threshold, strict mode enforces normalized priority limits.
+  - Example: When model usage is low, keys can use more than their allocated share. When model usage is high, keys are strictly limited to their allocated share.
 
 **Start Proxy**
 

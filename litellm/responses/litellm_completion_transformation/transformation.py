@@ -708,7 +708,7 @@ class LiteLLMCompletionResponsesConfig:
                     return [
                         GenericResponseOutputItem(
                             type="reasoning",
-                            id=f"{chat_completion_response.id}_reasoning",
+                            id=f"rs_{hash(str(message.reasoning_content))}",
                             status=choice.finish_reason,
                             role="assistant",
                             content=[

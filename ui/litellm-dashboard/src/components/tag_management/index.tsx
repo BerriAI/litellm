@@ -1,33 +1,13 @@
 import React, { useState, useEffect } from "react";
-import {
-  Card,
-  Icon,
-  Button,
-  Col,
-  Text,
-  Grid,
-  TextInput,
-} from "@tremor/react";
-import {
-  InformationCircleIcon,
-  RefreshIcon,
-} from "@heroicons/react/outline";
-import {
-  Modal,
-  Form,
-  Select as Select2,
-  message,
-  Tooltip,
-  Input
-} from "antd";
-import { InfoCircleOutlined } from '@ant-design/icons';
-import NumericalInput from "../shared/numerical_input";
+import { Icon, Button, Col, Text, Grid } from "@tremor/react";
+import { RefreshIcon } from "@heroicons/react/outline";
 import TagInfoView from "./tag_info";
 import { modelInfoCall } from "../networking";
 import { tagCreateCall, tagListCall, tagDeleteCall } from "../networking";
 import { Tag } from "./types";
 import TagTable from "./TagTable";
 import NotificationsManager from "../molecules/notifications_manager";
+import CreateTagModal from "./components/CreateTagModal";
 
 interface ModelInfo {
   model_name: string;
@@ -45,11 +25,7 @@ interface TagProps {
   userRole: string | null;
 }
 
-const TagManagement: React.FC<TagProps> = ({
-  accessToken,
-  userID,
-  userRole,
-}) => {
+const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) => {
   const [tags, setTags] = useState<Tag[]>([]);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null);
@@ -57,7 +33,6 @@ const TagManagement: React.FC<TagProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [tagToDelete, setTagToDelete] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState("");
-  const [form] = Form.useForm();
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
 
   const fetchTags = async () => {
@@ -85,10 +60,14 @@ const TagManagement: React.FC<TagProps> = ({
         name: formValues.tag_name,
         description: formValues.description,
         models: formValues.allowed_llms,
+        max_budget: formValues.max_budget,
+        soft_budget: formValues.soft_budget,
+        tpm_limit: formValues.tpm_limit,
+        rpm_limit: formValues.rpm_limit,
+        budget_duration: formValues.budget_duration,
       });
       NotificationsManager.success("Tag created successfully");
       setIsCreateModalVisible(false);
-      form.resetFields();
       fetchTags();
     } catch (error) {
       console.error("Error creating tag:", error);
@@ -164,18 +143,20 @@ const TagManagement: React.FC<TagProps> = ({
               />
             </div>
           </div>
-          
-          
+
           <Text className="mb-4">
             Click on a tag name to view and edit its details.
-
-            <p>You can use tags to restrict the usage of certain LLMs based on tags passed in the request. Read more about tag routing <a href="https://docs.litellm.ai/docs/proxy/tag_routing" target="_blank" rel="noopener noreferrer">here</a>.</p>
+            <p>
+              You can use tags to restrict the usage of certain LLMs based on tags passed in the request. Read more
+              about tag routing{" "}
+              <a href="https://docs.litellm.ai/docs/proxy/tag_routing" target="_blank" rel="noopener noreferrer">
+                here
+              </a>
+              .
+            </p>
           </Text>
 
-          <Button
-            className="mb-4"
-            onClick={() => setIsCreateModalVisible(true)}
-          >
+          <Button className="mb-4" onClick={() => setIsCreateModalVisible(true)}>
             + Create New Tag
           </Button>
 
@@ -194,71 +175,12 @@ const TagManagement: React.FC<TagProps> = ({
           </Grid>
 
           {/* Create Tag Modal */}
-          <Modal
-            title="Create New Tag"
+          <CreateTagModal
             visible={isCreateModalVisible}
-            width={800}
-            footer={null}
-            onCancel={() => {
-              setIsCreateModalVisible(false);
-              form.resetFields();
-            }}
-          >
-            <Form
-              form={form}
-              onFinish={handleCreate}
-              labelCol={{ span: 8 }}
-              wrapperCol={{ span: 16 }}
-              labelAlign="left"
-            >
-              <Form.Item
-                label="Tag Name"
-                name="tag_name"
-                rules={[{ required: true, message: "Please input a tag name" }]}
-              >
-                <TextInput />
-              </Form.Item>
-
-              <Form.Item
-                label="Description"
-                name="description"
-              >
-                <Input.TextArea rows={4} />
-              </Form.Item>
-
-              <Form.Item
-                label={
-                  <span>
-                    Allowed Models{' '}
-                    <Tooltip title="Select which LLMs are allowed to process requests from this tag">
-                      <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                    </Tooltip>
-                  </span>
-                }
-                name="allowed_llms"
-              >
-                <Select2
-                  mode="multiple"
-                  placeholder="Select LLMs"
-                >
-                  {availableModels.map((model) => (
-                    <Select2.Option key={model.model_info.id} value={model.model_info.id}>
-                      <div>
-                        <span>{model.model_name}</span>
-                        <span className="text-gray-400 ml-2">({model.model_info.id})</span>
-                      </div>
-                    </Select2.Option>
-                  ))}
-                </Select2>
-              </Form.Item>
-
-              <div style={{ textAlign: "right", marginTop: "10px" }}>
-                <Button type="submit">
-                  Create Tag
-                </Button>
-              </div>
-            </Form>
-          </Modal>
+            onCancel={() => setIsCreateModalVisible(false)}
+            onSubmit={handleCreate}
+            availableModels={availableModels}
+          />
 
           {/* Delete Confirmation Modal */}
           {isDeleteModalOpen && (
@@ -271,29 +193,23 @@ const TagManagement: React.FC<TagProps> = ({
                   <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
                     <div className="sm:flex sm:items-start">
                       <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                        <h3 className="text-lg leading-6 font-medium text-gray-900">
-                          Delete Tag
-                        </h3>
+                        <h3 className="text-lg leading-6 font-medium text-gray-900">Delete Tag</h3>
                         <div className="mt-2">
-                          <p className="text-sm text-gray-500">
-                            Are you sure you want to delete this tag?
-                          </p>
+                          <p className="text-sm text-gray-500">Are you sure you want to delete this tag?</p>
                         </div>
                       </div>
                     </div>
                   </div>
                   <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                    <Button
-                      onClick={confirmDelete}
-                      color="red"
-                      className="ml-2"
-                    >
+                    <Button onClick={confirmDelete} color="red" className="ml-2">
                       Delete
                     </Button>
-                    <Button onClick={() => {
-                      setIsDeleteModalOpen(false);
-                      setTagToDelete(null);
-                    }}>
+                    <Button
+                      onClick={() => {
+                        setIsDeleteModalOpen(false);
+                        setTagToDelete(null);
+                      }}
+                    >
                       Cancel
                     </Button>
                   </div>

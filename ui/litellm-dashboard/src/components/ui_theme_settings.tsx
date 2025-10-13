@@ -1,14 +1,7 @@
-import React, { useState, useEffect } from "react"
-import {
-  Card,
-  Title,
-  Text,
-  TextInput,
-  Button,
-} from "@tremor/react"
-import { message } from "antd"
-import { useTheme } from "@/contexts/ThemeContext"
-import { getProxyBaseUrl } from "@/components/networking"
+import React, { useState, useEffect } from "react";
+import { Card, Title, Text, TextInput, Button } from "@tremor/react";
+import { useTheme } from "@/contexts/ThemeContext";
+import { getProxyBaseUrl } from "@/components/networking";
 import NotificationsManager from "./molecules/notifications_manager";
 
 interface UIThemeSettingsProps {
@@ -17,11 +10,7 @@ interface UIThemeSettingsProps {
   accessToken: string | null;
 }
 
-const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
-  userID,
-  userRole,
-  accessToken,
-}) => {
+const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, accessToken }) => {
   const { logoUrl, setLogoUrl } = useTheme();
   const [logoUrlInput, setLogoUrlInput] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -47,7 +36,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
 
       if (response.ok) {
         const data = await response.json();
-        const logoUrl = data.values?.logo_url || '';
+        const logoUrl = data.values?.logo_url || "";
         setLogoUrlInput(logoUrl);
         setLogoUrl(logoUrl || null);
       }
@@ -89,7 +78,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
   const handleReset = async () => {
     setLogoUrlInput("");
     setLogoUrl(null);
-    
+
     // Save null to backend to clear the logo
     setLoading(true);
     try {
@@ -127,17 +116,13 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
     <div className="w-full mx-auto max-w-4xl px-6 py-8">
       <div className="mb-8">
         <Title className="text-2xl font-bold mb-2">Logo Customization</Title>
-        <Text className="text-gray-600">
-          Customize your LiteLLM admin dashboard with a custom logo.
-        </Text>
+        <Text className="text-gray-600">Customize your LiteLLM admin dashboard with a custom logo.</Text>
       </div>
 
       <Card className="shadow-sm p-6">
         <div className="space-y-6">
           <div>
-            <Text className="text-sm font-medium text-gray-700 mb-2 block">
-              Custom Logo URL
-            </Text>
+            <Text className="text-sm font-medium text-gray-700 mb-2 block">Custom Logo URL</Text>
             <TextInput
               placeholder="https://example.com/logo.png"
               value={logoUrlInput}
@@ -155,21 +140,19 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
 
           {/* Logo Preview */}
           <div>
-            <Text className="text-sm font-medium text-gray-700 mb-2 block">
-              Current Logo
-            </Text>
+            <Text className="text-sm font-medium text-gray-700 mb-2 block">Current Logo</Text>
             <div className="bg-gray-50 rounded-lg p-6 flex items-center justify-center min-h-[120px]">
               {logoUrlInput ? (
-                <img 
-                  src={logoUrlInput} 
+                <img
+                  src={logoUrlInput}
                   alt="Custom logo"
                   className="max-w-full max-h-24 object-contain"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
-                    target.style.display = 'none';
-                    const fallbackText = document.createElement('div');
-                    fallbackText.className = 'text-gray-500 text-sm';
-                    fallbackText.textContent = 'Failed to load image';
+                    target.style.display = "none";
+                    const fallbackText = document.createElement("div");
+                    fallbackText.className = "text-gray-500 text-sm";
+                    fallbackText.textContent = "Failed to load image";
                     target.parentElement?.appendChild(fallbackText);
                   }}
                 />
@@ -181,21 +164,10 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
 
           {/* Action Buttons */}
           <div className="flex gap-3 pt-4">
-            <Button
-              onClick={handleSave}
-              loading={loading}
-              disabled={loading}
-              color="indigo"
-            >
+            <Button onClick={handleSave} loading={loading} disabled={loading} color="indigo">
               Save Changes
             </Button>
-            <Button
-              onClick={handleReset}
-              loading={loading}
-              disabled={loading}
-              variant="secondary"
-              color="gray"
-            >
+            <Button onClick={handleReset} loading={loading} disabled={loading} variant="secondary" color="gray">
               Reset to Default
             </Button>
           </div>

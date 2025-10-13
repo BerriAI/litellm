@@ -11,13 +11,7 @@ import {
   Badge,
   Text,
 } from "@tremor/react";
-import {
-  PencilAltIcon,
-  TrashIcon,
-  SwitchVerticalIcon,
-  ChevronUpIcon,
-  ChevronDownIcon,
-} from "@heroicons/react/outline";
+import { PencilAltIcon, TrashIcon, SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 import { Tooltip } from "antd";
 import {
   ColumnDef,
@@ -36,15 +30,8 @@ interface TagTableProps {
   onSelectTag: (tagName: string) => void;
 }
 
-const TagTable: React.FC<TagTableProps> = ({
-  data,
-  onEdit,
-  onDelete,
-  onSelectTag,
-}) => {
-  const [sorting, setSorting] = React.useState<SortingState>([
-    { id: "created_at", desc: true }
-  ]);
+const TagTable: React.FC<TagTableProps> = ({ data, onEdit, onDelete, onSelectTag }) => {
+  const [sorting, setSorting] = React.useState<SortingState>([{ id: "created_at", desc: true }]);
 
   const columns: ColumnDef<Tag>[] = [
     {
@@ -75,9 +62,7 @@ const TagTable: React.FC<TagTableProps> = ({
         const tag = row.original;
         return (
           <Tooltip title={tag.description}>
-            <span className="text-xs">
-              {tag.description || "-"}
-            </span>
+            <span className="text-xs">{tag.description || "-"}</span>
           </Tooltip>
         );
       },
@@ -95,16 +80,9 @@ const TagTable: React.FC<TagTableProps> = ({
               </Badge>
             ) : (
               tag?.models?.map((modelId) => (
-                <Badge
-                  key={modelId}
-                  size="xs"
-                  className="mb-1"
-                  color="blue"
-                >
+                <Badge key={modelId} size="xs" className="mb-1" color="blue">
                   <Tooltip title={`ID: ${modelId}`}>
-                    <Text>
-                      {tag.model_info?.[modelId] || modelId}
-                    </Text>
+                    <Text>{tag.model_info?.[modelId] || modelId}</Text>
                   </Tooltip>
                 </Badge>
               ))
@@ -119,11 +97,7 @@ const TagTable: React.FC<TagTableProps> = ({
       sortingFn: "datetime",
       cell: ({ row }) => {
         const tag = row.original;
-        return (
-          <span className="text-xs">
-            {new Date(tag.created_at).toLocaleDateString()}
-          </span>
-        );
+        return <span className="text-xs">{new Date(tag.created_at).toLocaleDateString()}</span>;
       },
     },
     {
@@ -133,18 +107,8 @@ const TagTable: React.FC<TagTableProps> = ({
         const tag = row.original;
         return (
           <div className="flex space-x-2">
-            <Icon
-              icon={PencilAltIcon}
-              size="sm"
-              onClick={() => onEdit(tag)}
-              className="cursor-pointer"
-            />
-            <Icon
-              icon={TrashIcon}
-              size="sm"
-              onClick={() => onDelete(tag.name)}
-              className="cursor-pointer"
-            />
+            <Icon icon={PencilAltIcon} size="sm" onClick={() => onEdit(tag)} className="cursor-pointer" />
+            <Icon icon={TrashIcon} size="sm" onClick={() => onDelete(tag.name)} className="cursor-pointer" />
           </div>
         );
       },
@@ -174,27 +138,20 @@ const TagTable: React.FC<TagTableProps> = ({
                   <TableHeaderCell
                     key={header.id}
                     className={`py-1 h-8 ${
-                      header.id === 'actions'
-                        ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]'
-                        : ''
+                      header.id === "actions" ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]" : ""
                     }`}
                     onClick={header.column.getToggleSortingHandler()}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center">
-                        {header.isPlaceholder ? null : (
-                          flexRender(
-                            header.column.columnDef.header,
-                            header.getContext()
-                          )
-                        )}
+                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
                       </div>
-                      {header.id !== 'actions' && (
+                      {header.id !== "actions" && (
                         <div className="w-4">
                           {header.column.getIsSorted() ? (
                             {
                               asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                              desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />
+                              desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
                             }[header.column.getIsSorted() as string]
                           ) : (
                             <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
@@ -215,9 +172,9 @@ const TagTable: React.FC<TagTableProps> = ({
                     <TableCell
                       key={cell.id}
                       className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
-                        cell.column.id === 'actions'
-                          ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]'
-                          : ''
+                        cell.column.id === "actions"
+                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
+                          : ""
                       }`}
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -241,4 +198,4 @@ const TagTable: React.FC<TagTableProps> = ({
   );
 };
 
-export default TagTable; 
+export default TagTable;
