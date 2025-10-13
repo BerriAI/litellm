@@ -5,7 +5,7 @@ This hook is called before making an LLM request when a vector store is configur
 It searches the vector store for relevant context and appends it to the messages.
 """
 
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 import litellm
 import litellm.vector_stores
@@ -88,6 +88,8 @@ class VectorStorePreCallHook(CustomLogger):
                 return model, messages, non_default_params
             
             modified_messages: List[AllMessageValues] = messages.copy()
+            all_search_results: List[VectorStoreSearchResponse] = []
+            
             for vector_store_to_run in vector_stores_to_run:
             
                 # Get vector store id from the vector store config
@@ -104,6 +106,8 @@ class VectorStorePreCallHook(CustomLogger):
 
                 verbose_logger.debug(f"search_response: {search_response}")
                 
+                # Store search results for later use in citations
+                all_search_results.append(search_response)
                 
                 # Process search results and append as context
                 modified_messages = self._append_search_results_to_messages(
@@ -115,6 +119,10 @@ class VectorStorePreCallHook(CustomLogger):
                 num_results = 0
                 num_results = len(search_response.get("data", []) or [])
                 verbose_logger.debug(f"Vector store search completed. Added context from {num_results} results")
+            
+            # Store search results as-is (already in OpenAI-compatible format)
+            if litellm_logging_obj and all_search_results:
+                litellm_logging_obj.model_call_details["search_results"] = all_search_results
                 
             return model, modified_messages, non_default_params
             
@@ -194,3 +202,60 @@ class VectorStorePreCallHook(CustomLogger):
             return modified_messages
         
         return messages
+
+    async def async_post_call_success_deployment_hook(
+        self,
+        request_data: dict,
+        response: Any,
+        call_type: Optional[Any],
+    ) -> Optional[Any]:
+        """
+        Add search results to the response after successful LLM call.
+        
+        This hook adds the vector store search results (already in OpenAI-compatible format)
+        to the response's provider_specific_fields.
+        """
+        try:
+            verbose_logger.debug("VectorStorePreCallHook.async_post_call_success_deployment_hook called")
+            
+            # Get logging object from request_data
+            litellm_logging_obj = request_data.get("litellm_logging_obj")
+            if not litellm_logging_obj:
+                verbose_logger.debug("No litellm_logging_obj in request_data")
+                return None
+            
+            verbose_logger.debug(f"model_call_details keys: {list(litellm_logging_obj.model_call_details.keys())}")
+            
+            # Get search results from model_call_details (already in OpenAI format)
+            search_results: Optional[List[VectorStoreSearchResponse]] = (
+                litellm_logging_obj.model_call_details.get("search_results")
+            )
+            
+            verbose_logger.debug(f"Search results found: {search_results is not None}")
+            
+            if not search_results:
+                verbose_logger.debug("No search results found")
+                return None
+            
+            # Add search results to response object
+            if hasattr(response, "choices") and response.choices:
+                for choice in response.choices:
+                    if hasattr(choice, "message") and choice.message:
+                        # Get existing provider_specific_fields or create new dict
+                        provider_fields = getattr(choice.message, "provider_specific_fields", None) or {}
+                        
+                        # Add search results (already in OpenAI-compatible format)
+                        provider_fields["search_results"] = search_results
+                        
+                        # Set the provider_specific_fields
+                        setattr(choice.message, "provider_specific_fields", provider_fields)
+                        
+            verbose_logger.debug(f"Added {len(search_results)} search results to response")
+            
+            # Return modified response
+            return response
+            
+        except Exception as e:
+            verbose_logger.exception(f"Error adding search results to response: {str(e)}")
+            # Don't fail the request if search results fail to be added
+            return None
