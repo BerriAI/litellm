@@ -168,7 +168,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_streaming(s
     """
     
     # Init client
-    litellm._turn_on_debug()
+    # litellm._turn_on_debug()
     async_client = AsyncHTTPHandler()
     response = await litellm.acompletion(
         model="anthropic/claude-3-5-haiku-latest",
