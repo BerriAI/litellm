@@ -540,6 +540,26 @@ class RetryPolicy(BaseModel):
     InternalServerErrorRetries: Optional[int] = None
 
 
+class SaturationPolicy(BaseModel):
+    """
+    Use this to set a custom saturation threshold for priority-based rate limiting.
+    When total failures across a model group exceed the threshold within 60s,
+    the model is considered saturated and strict priority enforcement begins.
+    
+    Example: If RateLimitErrorSaturationThreshold = 5, then receiving 5 total failures  
+    (across all deployments) within 60s will mark the model as saturated.
+    
+    **Reuses the router's existing failure tracking infrastructure** - no additional counters needed.
+    The router already tracks all failures (429, 500, 503, timeouts, etc.) per deployment with a 60s TTL.
+    """
+
+    RateLimitErrorSaturationThreshold: Optional[int] = None
+    TimeoutErrorSaturationThreshold: Optional[int] = None
+    InternalServerErrorSaturationThreshold: Optional[int] = None
+    ServiceUnavailableErrorSaturationThreshold: Optional[int] = None
+    BadRequestErrorSaturationThreshold: Optional[int] = None
+
+
 class AlertingConfig(BaseModel):
     """
     Use this configure alerting for the router. Receive alerts on the following events
