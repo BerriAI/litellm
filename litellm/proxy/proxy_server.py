@@ -311,6 +311,12 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     set_files_config,
 )
+from litellm.proxy.openai_videos_endpoints.video_endpoints import (
+    router as openai_videos_router,
+)
+from litellm.proxy.openai_videos_endpoints.video_endpoints import (
+    set_videos_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -2343,6 +2349,10 @@ class ProxyConfig:
         ## /files endpoint config
         files_config = config.get("files_settings", None)
         set_files_config(config=files_config)
+
+        ## /videos endpoint config
+        videos_config = config.get("videos_settings", None)
+        set_videos_config(config=videos_config)
 
         ## default config for vertex ai routes
         default_vertex_config = config.get("default_vertex_config", None)
@@ -9782,6 +9792,7 @@ app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
 app.include_router(ui_crud_endpoints_router)
 app.include_router(openai_files_router)
+app.include_router(openai_videos_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)

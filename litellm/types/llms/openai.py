@@ -2,40 +2,41 @@ from enum import Enum
 from os import PathLike
 from typing import IO, Any, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
-import httpx
 from openai._legacy_response import (
     HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
 )
-from openai.lib.streaming._assistants import (
+from openai.types import Batch, EmbeddingCreateParams, FileObject  # noqa: F401
+from openai.types.chat import ChatCompletionChunk
+from openai.types.embedding import Embedding as OpenAIEmbedding  # noqa: F401
+from openai.types.fine_tuning.fine_tuning_job import FineTuningJob  # noqa: F401
+from openai.types.beta.assistant import Assistant  # noqa: F401
+from openai.lib.streaming._assistants import (  # noqa: F401
     AssistantEventHandler,
     AssistantStreamManager,
     AsyncAssistantEventHandler,
     AsyncAssistantStreamManager,
 )
-from openai.pagination import AsyncCursorPage, SyncCursorPage
-from openai.types import Batch, EmbeddingCreateParams, FileObject
-from openai.types.beta.assistant import Assistant
-from openai.types.beta.assistant_tool_param import AssistantToolParam
-from openai.types.beta.thread_create_params import (
+from openai.pagination import AsyncCursorPage, SyncCursorPage  # noqa: F401
+from openai.types.beta.assistant_tool_param import AssistantToolParam  # noqa: F401
+from openai.types.beta.thread_create_params import (  # noqa: F401
     Message as OpenAICreateThreadParamsMessage,
 )
-from openai.types.beta.threads.message import Message as OpenAIMessage
-from openai.types.beta.threads.message_content import MessageContent
-from openai.types.beta.threads.run import Run
-from openai.types.chat import ChatCompletionChunk
-from openai.types.chat.chat_completion_audio_param import ChatCompletionAudioParam
+from openai.types.beta.threads.message import Message as OpenAIMessage  # noqa: F401
+from openai.types.beta.threads.message_content import MessageContent  # noqa: F401
+from openai.types.beta.threads.run import Run  # noqa: F401
+from openai.types.chat.chat_completion_audio_param import ChatCompletionAudioParam  # noqa: F401
+from openai.types.chat.chat_completion_modality import ChatCompletionModality  # noqa: F401
+from openai.types.chat.chat_completion_prediction_content_param import (  # noqa: F401
+    ChatCompletionPredictionContentParam,
+)
+from openai.types.responses.response import (  # noqa: F401
+    Response,
+)
 from openai.types.chat.chat_completion_content_part_input_audio_param import (
     ChatCompletionContentPartInputAudioParam,
 )
-from openai.types.chat.chat_completion_modality import ChatCompletionModality
-from openai.types.chat.chat_completion_prediction_content_param import (
-    ChatCompletionPredictionContentParam,
-)
-from openai.types.embedding import Embedding as OpenAIEmbedding
-from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
 from openai.types.responses.response import (
     IncompleteDetails,
-    Response,
     ResponseOutputItem,
     Tool,
     ToolChoice,
@@ -59,11 +60,10 @@ from openai.types.responses.response_create_params import (
     Reasoning,
     ResponseIncludable,
     ResponseInputParam,
-    ToolChoice,
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -381,6 +381,77 @@ class FileContentRequest(TypedDict, total=False):
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
 
+# OpenAI Videos Types
+class CreateVideoRequest(TypedDict, total=False):
+    """
+    CreateVideoRequest
+    Used by Videos API
+
+    Required Params:
+        prompt: str
+
+    Optional Params:
+        input_reference: Optional[Tuple[str, bytes, str]]  # (filename, content, content_type)
+        model: Optional[str]
+        seconds: Optional[str]
+        size: Optional[str]
+        extra_headers: Optional[Dict[str, str]]
+        extra_body: Optional[Dict[str, str]]
+        timeout: Optional[float]
+    """
+
+    prompt: str
+    input_reference: Optional[Tuple[str, bytes, str]]  # (filename, content, content_type)
+    model: Optional[str]
+    seconds: Optional[str]
+    size: Optional[str]
+    extra_headers: Optional[Dict[str, str]]
+    extra_body: Optional[Dict[str, str]]
+    timeout: Optional[float]
+
+class OpenAIVideoObject(BaseModel):
+    """
+    Structured information describing a generated video job.
+    """
+
+    id: str
+    """Unique identifier for the video job."""
+
+    model: str
+    """The video generation model that produced the job."""
+
+    object: Literal["video"]
+    """The object type, which is always `video`."""
+
+    status: str
+    """Current lifecycle status of the video job."""
+
+    created_at: int
+    """Unix timestamp (seconds) for when the job was created."""
+
+    completed_at: Optional[int] = None
+    """Unix timestamp (seconds) for when the job completed, if finished."""
+
+    expires_at: Optional[int] = None
+    """Unix timestamp (seconds) for when the downloadable assets expire, if set."""
+
+    error: Optional[dict] = None
+    """Error payload that explains why generation failed, if applicable."""
+
+    progress: Optional[int] = None
+    """Approximate completion percentage for the generation task."""
+
+    remixed_from_video_id: Optional[str] = None
+    """Identifier of the source video if this video is a remix."""
+
+    seconds: Optional[str] = None
+    """Duration of the generated clip in seconds."""
+
+    size: Optional[str] = None
+    """The resolution of the generated video."""
+
+    usage: Optional[Dict[str, Any]] = None
+    """Usage information for cost calculation."""
 
 # OpenAI Batches Types
 class CreateBatchRequest(TypedDict, total=False):

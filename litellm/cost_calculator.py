@@ -287,6 +287,37 @@ def cost_per_token(  # noqa: PLR0915
             )
 
         return prompt_cost, completion_cost
+    elif call_type in ["create_video", "acreate_video"]:
+        # Video generation cost calculation based on duration and model
+        video_model_info = litellm.get_model_info(
+            model=model_without_prefix, custom_llm_provider=custom_llm_provider
+        )
+        cost_metric = select_cost_metric_for_model(video_model_info)
+        
+        if cost_metric == "cost_per_video_per_second":
+            # Get video duration from usage object or default to 4 seconds
+            video_duration_seconds = getattr(usage_object, 'video_duration_seconds', 4) if usage_object else 4
+            if video_duration_seconds is None:
+                video_duration_seconds = 4  # Default duration
+            
+            # Calculate cost based on duration and model
+            cost_per_second = video_model_info.get("input_cost_per_video_per_second", 0.0)
+            if cost_per_second is not None:
+                total_cost = video_duration_seconds * cost_per_second
+            else:
+                total_cost = 0.0
+            prompt_cost = total_cost
+            completion_cost = 0.0
+        else:
+            # Fallback to generic cost calculation
+            prompt_cost, completion_cost = generic_cost_per_token(
+                model=model_without_prefix,
+                usage=usage_block,
+                custom_llm_provider=custom_llm_provider,
+                service_tier=service_tier,
+            )
+        
+        return prompt_cost, completion_cost
     elif call_type == "arerank" or call_type == "rerank":
         return rerank_cost(
             model=model,

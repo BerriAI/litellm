@@ -287,6 +287,20 @@ class CallTypes(Enum):
     allm_passthrough_route = "allm_passthrough_route"
 
     #########################################################
+    # Video Generation Call Types
+    #########################################################
+    create_video = "create_video"
+    acreate_video = "acreate_video"
+    avideo_retrieve = "avideo_retrieve"
+    video_retrieve = "video_retrieve"
+    avideo_delete = "avideo_delete"
+    video_delete = "video_delete"
+    avideo_list = "avideo_list"
+    video_list = "video_list"
+    avideo_content = "avideo_content"
+    video_content = "video_content"
+
+    #########################################################
     # Google GenAI Native Call Types
     #########################################################
     generate_content = "generate_content"

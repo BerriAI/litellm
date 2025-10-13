@@ -192,6 +192,11 @@ files_settings:
   - custom_llm_provider: openai
     api_key: os.environ/OPENAI_API_KEY
 
+# for /videos endpoints
+videos_settings:
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+
 router_settings:
   routing_strategy: usage-based-routing-v2 
   redis_host: os.environ/REDIS_HOST

@@ -1327,6 +1327,7 @@ from .responses.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *
+from .videos.main import *
 from .scheduler import *
 from .cost_calculator import response_cost_calculator, cost_per_token
 

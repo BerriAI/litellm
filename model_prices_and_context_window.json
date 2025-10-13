@@ -23235,5 +23235,19 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
+    },
+    "sora-2": {
+        "litellm_provider": "openai",
+        "mode": "video_generation",
+        "input_cost_per_video_per_second": 0.10,
+        "max_video_duration_seconds": 12,
+        "supported_resolutions": ["720x1280", "1280x720"]
+    },
+    "sora-2-pro": {
+        "litellm_provider": "openai",
+        "mode": "video_generation",
+        "input_cost_per_video_per_second": 0.30,
+        "max_video_duration_seconds": 12,
+        "supported_resolutions": ["720x1280", "1280x720", "1024x1792", "1792x1024"]
     }
 }

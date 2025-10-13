@@ -4915,6 +4915,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 input_cost_per_audio_token=_model_info.get(
                     "input_cost_per_audio_token", None
                 ),
+                input_cost_per_video_per_second=_model_info.get(
+                    "input_cost_per_video_per_second", None
+                ),
                 input_cost_per_token_batches=_model_info.get(
                     "input_cost_per_token_batches"
                 ),
@@ -4948,6 +4951,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
+                output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get(
                     "citation_cost_per_token", None
@@ -5045,7 +5049,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             litellm_provider: Required[str]
             mode: Required[
                 Literal[
-                    "completion", "embedding", "image_generation", "chat", "audio_transcription"
+                    "completion", "embedding", "image_generation", "video_generation", "chat", "audio_transcription"
                 ]
             ]
             supported_openai_params: Required[Optional[List[str]]]
