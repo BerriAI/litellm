@@ -4,7 +4,7 @@ from typing import Dict, Iterable, List, Optional, Union
 from pydantic import BaseModel
 from typing_extensions import Literal, Required, TypedDict
 
-from .openai import ChatCompletionCachedContent, ChatCompletionThinkingBlock
+from .openai import ChatCompletionCachedContent, ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
 
 
 class AnthropicMessagesToolChoice(TypedDict, total=False):
@@ -104,6 +104,7 @@ AnthropicMessagesAssistantMessageValues = Union[
     AnthropicMessagesTextParam,
     AnthropicMessagesToolUseParam,
     ChatCompletionThinkingBlock,
+    ChatCompletionRedactedThinkingBlock,
 ]
 
 
@@ -264,11 +265,29 @@ class ContentJsonBlockDelta(TypedDict):
     partial_json: str
 
 
+class ContentThinkingBlockDelta(TypedDict):
+    """
+    "delta": {"type": "thinking_delta", "thinking": "Let me solve this step by step:"}}
+    """
+
+    type: Literal["thinking_delta"]
+    thinking: str
+
+
+class ContentThinkingSignatureBlockDelta(TypedDict):
+    """
+    "delta": {"type": "signature_delta", "signature": "EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdjrkzLoky3dl1pkiMOYds..."}}
+    """
+
+    type: Literal["signature_delta"]
+    signature: str
+
+
 class ContentBlockDelta(TypedDict):
     type: Literal["content_block_delta"]
     index: int
     delta: Union[
-        ContentTextBlockDelta, ContentJsonBlockDelta, ContentCitationsBlockDelta
+        ContentTextBlockDelta, ContentJsonBlockDelta, ContentCitationsBlockDelta, ContentThinkingBlockDelta, ContentThinkingSignatureBlockDelta
     ]
 
 
@@ -311,7 +330,7 @@ class ContentBlockStartText(TypedDict):
     content_block: TextBlock
 
 
-ContentBlockContentBlockDict = Union[ToolUseBlock, TextBlock]
+ContentBlockContentBlockDict = Union[ToolUseBlock, TextBlock, ChatCompletionThinkingBlock]
 
 ContentBlockStart = Union[ContentBlockStartToolUse, ContentBlockStartText]
 
@@ -387,7 +406,7 @@ class AnthropicResponseContentBlockToolUse(BaseModel):
 class AnthropicResponseContentBlockThinking(BaseModel):
     type: Literal["thinking"]
     thinking: str
-    signature: str
+    signature: Optional[str]
 
 
 class AnthropicResponseContentBlockRedactedThinking(BaseModel):

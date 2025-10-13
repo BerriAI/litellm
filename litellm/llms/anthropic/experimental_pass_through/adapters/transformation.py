@@ -13,6 +13,8 @@ from typing import (
 
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
+from litellm.types.utils import StreamingChoices
+
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthopicMessagesAssistantMessageParam,
@@ -24,9 +26,13 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockRedactedThinking,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
+    AnthropicResponseContentBlockThinking,
+    AnthropicResponseContentBlockRedactedThinking,
     ContentBlockDelta,
     ContentJsonBlockDelta,
     ContentTextBlockDelta,
+    ContentThinkingBlockDelta,
+    ContentThinkingSignatureBlockDelta,
     MessageBlockDelta,
     MessageDelta,
     UsageDelta,
@@ -46,6 +52,7 @@ from litellm.types.llms.openai import (
     ChatCompletionSystemMessage,
     ChatCompletionTextObject,
     ChatCompletionThinkingBlock,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolChoiceFunctionParam,
     ChatCompletionToolChoiceObjectParam,
@@ -258,30 +265,27 @@ class LiteLLMAnthropicMessagesAdapter:
                                     )
                                 )
                             elif content.get("type") == "thinking":
-                                # Special handling for thinking blocks - 
-                                # Handle thinking blocks
                                 thinking_block = ChatCompletionThinkingBlock(
                                     type="thinking",
-                                    thinking=content.get("thinking", ""),
-                                    signature=content.get("signature", ""),
+                                    thinking=content.get("thinking") or "",
+                                    signature=content.get("signature") or "",
+                                    cache_control=content.get("cache_control", {})
                                 )
-                                if "cache_control" in content:
-                                    thinking_block["cache_control"] = content["cache_control"]
                                 thinking_blocks.append(thinking_block)
                             elif content.get("type") == "redacted_thinking":
-                                # Handle redacted thinking blocks
                                 redacted_thinking_block = ChatCompletionRedactedThinkingBlock(
                                     type="redacted_thinking",
-                                    data=content.get("data", ""),
+                                    data=content.get("data") or "",
+                                    cache_control=content.get("cache_control", {})
                                 )
-                                if "cache_control" in content:
-                                    redacted_thinking_block["cache_control"] = content["cache_control"]
                                 thinking_blocks.append(redacted_thinking_block)
+
 
             if assistant_message_str is not None or len(tool_calls) > 0 or len(thinking_blocks) > 0:
                 assistant_message = ChatCompletionAssistantMessage(
                     role="assistant",
                     content=assistant_message_str,
+                    thinking_blocks=thinking_blocks if len(thinking_blocks) > 0 else None,
                 )
                 if len(tool_calls) > 0:
                     assistant_message["tool_calls"] = tool_calls
@@ -458,6 +462,34 @@ class LiteLLMAnthropicMessagesAdapter:
                         type="text", text=choice.message.content
                     )
                 )
+            elif choice.message.thinking_blocks is not None:
+                for thinking_block in choice.message.thinking_blocks:
+                    if "thinking" in thinking_block and "signature" in thinking_block:
+                        thinking = thinking_block.get("thinking")
+                        signature = thinking_block.get("signature")
+
+                        assert isinstance(thinking, str)
+                        assert isinstance(signature, str) or signature is None
+
+                        new_content.append(
+                            AnthropicResponseContentBlockThinking(
+                                type="thinking",
+                                thinking=thinking,
+                                signature=signature,
+                            )
+                        )
+                    elif "data" in thinking_block:
+                        data = thinking_block.get("data")
+
+                        assert isinstance(data, str)
+
+                        new_content.append(
+                            AnthropicResponseContentBlockRedactedThinking(
+                                type="redacted_thinking",
+                                data=data,
+                            )
+                        )
+                    
 
         return new_content
 
@@ -501,9 +533,9 @@ class LiteLLMAnthropicMessagesAdapter:
         return translated_obj
 
     def _translate_streaming_openai_chunk_to_anthropic_content_block(
-        self, choices: List[OpenAIStreamingChoice]
+        self, choices: List[Union[OpenAIStreamingChoice, StreamingChoices]]
     ) -> Tuple[
-        Literal["text", "tool_use"],
+        Literal["text", "tool_use", "thinking"],
         "ContentBlockContentBlockDict",
     ]:
         from litellm._uuid import uuid
@@ -524,17 +556,41 @@ class LiteLLMAnthropicMessagesAdapter:
                     name=choice.delta.tool_calls[0].function.name or "",
                     input={},
                 )
+            elif (
+                isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks")
+            ):
+                thinking_blocks = choice.delta.thinking_blocks or []
+                if len(thinking_blocks) > 0:
+                    thinking_block = thinking_blocks[0]
+                    if thinking_block["type"] == "thinking":
+                        thinking = thinking_block.get("thinking") or ""
+                        signature = thinking_block.get("signature") or ""
+
+                        assert isinstance(thinking, str)
+                        assert isinstance(signature, str)
+
+                        if thinking and signature:
+                            raise ValueError("Both `thinking` and `signature` in a single streaming chunk isn't supported.")
+
+                        return "thinking", ChatCompletionThinkingBlock(
+                            type="thinking",
+                            thinking=thinking,
+                            signature=signature
+                        )
+
 
         return "text", TextBlock(type="text", text="")
 
     def _translate_streaming_openai_chunk_to_anthropic(
-        self, choices: List[OpenAIStreamingChoice]
+        self, choices: List[Union[OpenAIStreamingChoice, StreamingChoices]]
     ) -> Tuple[
-        Literal["text_delta", "input_json_delta"],
-        Union[ContentTextBlockDelta, ContentJsonBlockDelta],
+        Literal["text_delta", "input_json_delta", "thinking_delta", "signature_delta"],
+        Union[ContentTextBlockDelta, ContentJsonBlockDelta, ContentThinkingBlockDelta, ContentThinkingSignatureBlockDelta],
     ]:
 
         text: str = ""
+        reasoning_content: str = ""
+        reasoning_signature: str = ""
         partial_json: Optional[str] = None
         for choice in choices:
             if choice.delta.content is not None and len(choice.delta.content) > 0:
@@ -547,10 +603,32 @@ class LiteLLMAnthropicMessagesAdapter:
                         and tool.function.arguments is not None
                     ):
                         partial_json += tool.function.arguments
+            elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
+                thinking_blocks = choice.delta.thinking_blocks or []
+                if len(thinking_blocks) > 0:
+                    for thinking_block in thinking_blocks:
+                        if thinking_block["type"] == "thinking":
+                            thinking = thinking_block.get("thinking") or ""
+                            signature = thinking_block.get("signature") or ""
+
+                            assert isinstance(thinking, str)
+                            assert isinstance(signature, str)
+
+                            reasoning_content += thinking
+                            reasoning_signature += signature
+        
+        if reasoning_content and reasoning_signature:
+            raise ValueError("Both `reasoning` and `signature` in a single streaming chunk isn't supported.")
+
+
         if partial_json is not None:
             return "input_json_delta", ContentJsonBlockDelta(
                 type="input_json_delta", partial_json=partial_json
             )
+        elif reasoning_content:
+            return "thinking_delta", ContentThinkingBlockDelta(type="thinking_delta", thinking=reasoning_content)
+        elif reasoning_signature:
+            return "signature_delta", ContentThinkingSignatureBlockDelta(type="signature_delta", signature=reasoning_signature)
         else:
             return "text_delta", ContentTextBlockDelta(type="text_delta", text=text)
 
