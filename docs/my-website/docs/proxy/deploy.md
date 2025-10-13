@@ -788,7 +788,7 @@ docker run --name litellm-proxy \
 ## Platform-specific Guide
 
 <Tabs>
-<TabItem value="AWS ECS" label="AWS ECS - Elastic Container Service>
+<TabItem value="AWS ECS" label="AWS ECS - Elastic Container Service">
 
 ### Terraform-based ECS Deployment
 
