@@ -220,7 +220,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         unsupported_models = ["gemini-2.5-pro-preview-06-05"]
 
         for pattern in unsupported_models:
-            if pattern in model:
+            if model in pattern:
                 return False
 
         return True
@@ -238,8 +238,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "response_format",
             "n",
             "stop",
-            "frequency_penalty",
-            "presence_penalty",
             "extra_headers",
             "seed",
             "logprobs",
@@ -249,8 +247,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "web_search_options",
         ]
         
-        # Add penalty parameters only for models that support them
-        if self._supports_penalty_parameters(model):
+        # Add penalty parameters only for non-preview models
+        if not self._supports_penalty_parameters(model):
             supported_params.extend(["frequency_penalty", "presence_penalty"])
         
         if supports_reasoning(model):
@@ -693,9 +691,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     value=value, optional_params=optional_params
                 )
             elif param == "frequency_penalty":
+                optional_params["frequency_penalty"] = value
                 if self._supports_penalty_parameters(model):
                     optional_params["frequency_penalty"] = value
             elif param == "presence_penalty":
+                optional_params["presence_penalty"] = value
                 if self._supports_penalty_parameters(model):
                     optional_params["presence_penalty"] = value
             elif param == "logprobs":
