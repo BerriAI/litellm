@@ -156,6 +156,36 @@ class CitationsObject(TypedDict):
     enabled: bool
 
 
+class AnthropicCitationPageLocation(TypedDict, total=False):
+    """
+    Anthropic citation for page-based references.
+    Used when citing from documents with page numbers.
+    """
+    type: Literal["page_location"]
+    cited_text: str  # The exact text being cited (not counted towards output tokens)
+    document_index: int  # Index referencing the cited document
+    document_title: Optional[str]  # Title of the cited document
+    start_page_number: int  # 1-indexed starting page
+    end_page_number: int  # Exclusive ending page
+
+
+class AnthropicCitationCharLocation(TypedDict, total=False):
+    """
+    Anthropic citation for character-based references.
+    Used when citing from text with character positions.
+    """
+    type: Literal["char_location"]
+    cited_text: str  # The exact text being cited (not counted towards output tokens)
+    document_index: int  # Index referencing the cited document
+    document_title: Optional[str]  # Title of the cited document
+    start_char_index: int  # Starting character index for the citation
+    end_char_index: int  # Ending character index for the citation
+
+
+# Union type for all citation formats
+AnthropicCitation = Union[AnthropicCitationPageLocation, AnthropicCitationCharLocation]
+
+
 class AnthropicMessagesDocumentParam(TypedDict, total=False):
     type: Required[Literal["document"]]
     source: Required[
