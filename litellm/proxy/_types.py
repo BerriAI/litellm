@@ -1527,7 +1527,6 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
-    metadata: Optional[dict] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -2061,6 +2060,20 @@ class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
     models: Optional[List[str]] = None
     updated_by: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    model_tpm_limit: Optional[Dict[str, int]] = None
+    model_rpm_limit: Optional[Dict[str, int]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def set_model_info(cls, values):
+        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+            if values.get(field) is not None:
+                # add to metadata
+                if values.get("metadata") is None:
+                    values.update({"metadata": {}})
+                values["metadata"][field] = values.get(field)
+                values.pop(field)
+        return values
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):

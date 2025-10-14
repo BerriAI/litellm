@@ -33,6 +33,7 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.utils import _update_dictionary
 
 router = APIRouter()
 
@@ -317,9 +318,6 @@ async def update_organization(
     if data.updated_by is None:
         data.updated_by = user_api_key_dict.user_id
 
-    updated_organization_row = prisma_client.jsonify_object(
-        data.model_dump(exclude_none=True)
-    )
     existing_organization_row = (
         await prisma_client.db.litellm_organizationtable.find_unique(
             where={"organization_id": data.organization_id},
@@ -331,6 +329,19 @@ async def update_organization(
             f"Organization not found for organization_id={data.organization_id}"
         )
 
+    updated_organization_row_json = data.model_dump(exclude_none=True)
+    # Merge metadata from existing organization with updated metadata
+    if updated_organization_row_json.get("metadata") is not None:
+        existing_metadata = existing_organization_row.metadata or {}
+        updated_metadata = updated_organization_row_json.get("metadata", {})
+        merged_metadata = _update_dictionary(
+            existing_dict=existing_metadata.copy(), new_dict=updated_metadata
+        )
+        updated_organization_row_json["metadata"] = merged_metadata
+
+    updated_organization_row = prisma_client.jsonify_object(
+        updated_organization_row_json
+    )
     if data.object_permission is not None:
         updated_organization_row = await handle_update_object_permission(
             data_json=updated_organization_row,
