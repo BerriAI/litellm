@@ -691,7 +691,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         model_has_failures = False
         requested_model = data.get("model", None)
         
-        if (rpm_limit_type == "dynamic" or tpm_limit_type == "dynamic") and requested_model:
+        if self._is_dynamic_rate_limiting_enabled(rpm_limit_type, tpm_limit_type) and requested_model:
             model_has_failures = await self._check_model_has_recent_failures(
                 model=requested_model,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
