@@ -586,7 +586,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if limit_value is None:
             return None
         
-        if self._should_enforce_rate_limit(limit_type, model_has_failures):
+        if self._should_enforce_rate_limit(
+            limit_type=limit_type,
+            model_has_failures=model_has_failures,
+        ):
             return limit_value
         
         return None
@@ -691,7 +694,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         model_has_failures = False
         requested_model = data.get("model", None)
         
-        if self._is_dynamic_rate_limiting_enabled(rpm_limit_type, tpm_limit_type) and requested_model:
+        if self._is_dynamic_rate_limiting_enabled(
+            rpm_limit_type=rpm_limit_type,
+            tpm_limit_type=tpm_limit_type,
+        ) and requested_model:
             model_has_failures = await self._check_model_has_recent_failures(
                 model=requested_model,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
