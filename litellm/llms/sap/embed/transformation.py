@@ -11,7 +11,7 @@ from litellm.llms.base_llm.embedding.transformation import (
     LiteLLMLoggingObj,
 )
 from litellm.types.llms.openai import AllEmbeddingInputValues
-from litellm.types.utils import EmbeddingResponse, Usage
+from litellm.types.utils import EmbeddingResponse
 
 # Type checking block for optional imports
 if TYPE_CHECKING:

@@ -18,8 +18,7 @@ try:
     from gen_ai_hub.orchestration.models.message import (
         Message,
         ToolMessage,
-        MessageToolCall,
-        FunctionCall,
+        MessageToolCall
     )
     from gen_ai_hub.orchestration.models.multimodal_items import (
         TextPart,
@@ -28,11 +27,7 @@ try:
     )
     from gen_ai_hub.orchestration.models.llm import LLM
     from gen_ai_hub.orchestration.models.template import Template
-    from gen_ai_hub.orchestration.models.response_format import (
-        ResponseFormatJsonSchema,
-        ResponseFormatJsonObject,
-        ResponseFormatText,
-    )
+    from gen_ai_hub.orchestration.models.response_format import ResponseFormatJsonSchema
     from gen_ai_hub.orchestration.models.tools import FunctionTool
     from dacite import from_dict
 
@@ -54,10 +49,10 @@ except ImportError as err:
 def modify_content_to_sdk_types(item: str | dict):
     if isinstance(item, dict) and item.get("type", None) == "image_url":
         return ImagePart(image_url=ImageUrl(url=item["image_url"].get("url")))
-    elif (isinstance(item, dict) and item.get("type") == "text") or isinstance(
-        item, str
-    ):
+    elif isinstance(item, dict) and item.get("type") == "text":
         return TextPart(text=item["text"])
+    elif isinstance(item, str):
+        return TextPart(text=item)
     else:
         raise GenAIHubOrchestrationError(
             status_code=400, message=f"Unsupported content type: {item.get('type')}"
@@ -155,7 +150,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         model: str,
         messages: List[Dict[str, str]],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict | None = None,
     ) -> OrchestrationConfig:
         supported_params = self.get_supported_openai_params(model)
         model_params = {
@@ -172,12 +167,12 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
             elif message.get("role") == "assistant" and message.get("tool_calls"):
                 content = check_content(message.get("content"))
-                tool_calls_list = message.get("tool_calls", [])
+                tool_calls_list = message.get("tool_calls", []) # type: ignore
                 if tool_calls_list:
                     tool_calls = []
                     for tool_call in tool_calls_list:
                         tool_calls.append(
-                            from_dict(data_class=MessageToolCall, data=tool_call)
+                            from_dict(data_class=MessageToolCall, data=tool_call) # type: ignore
                         )
                     messages_.append(
                         Message(
