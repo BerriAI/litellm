@@ -41,42 +41,52 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   return (
     <>
       <div className="mb-4">
-        <div className="flex justify-between items-end gap-4">
-          <Grid numItems={compactLayout ? 1 : 2} className={`gap-2 ${compactLayout ? "w-1/2" : "flex-1"}`}>
-            <Col>
-              <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
-            </Col>
-            {showFilters && filterOptions.length > 0 && (
-              <Col>
-                {filterLabel && <Text>{filterLabel}</Text>}
-                <Select
-                  mode="multiple"
-                  style={{ width: "100%" }}
-                  placeholder={filterPlaceholder}
-                  value={selectedFilters}
-                  onChange={onFiltersChange}
-                  options={filterOptions}
-                  className="mt-2"
-                  allowClear
-                />
-              </Col>
-            )}
-          </Grid>
-          <Button
-            onClick={() => setIsExportModalOpen(true)}
-            icon={() => (
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                />
-              </svg>
-            )}
-          >
-            Export Data
-          </Button>
+        {/**
+         * Use CSS grid with items-end so all cells (date picker, filter, button)
+         * align to the same baseline regardless of label heights. This removes
+         * vertical drift when the right column has a label above the input.
+         */}
+        <div
+          className={`grid ${
+            showFilters && filterOptions.length > 0 ? "grid-cols-[1fr_1fr_auto]" : "grid-cols-[1fr_auto]"
+          } items-end gap-4`}
+        >
+          <div>
+            <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
+          </div>
+
+          {showFilters && filterOptions.length > 0 && (
+            <div>
+              {filterLabel && <Text className="mb-2">{filterLabel}</Text>}
+              <Select
+                mode="multiple"
+                style={{ width: "100%" }}
+                placeholder={filterPlaceholder}
+                value={selectedFilters}
+                onChange={onFiltersChange}
+                options={filterOptions}
+                allowClear
+              />
+            </div>
+          )}
+
+          <div className="justify-self-end">
+            <Button
+              onClick={() => setIsExportModalOpen(true)}
+              icon={() => (
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                  />
+                </svg>
+              )}
+            >
+              Export Data
+            </Button>
+          </div>
         </div>
       </div>
 
