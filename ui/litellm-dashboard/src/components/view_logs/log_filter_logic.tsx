@@ -1,6 +1,6 @@
 import moment from "moment";
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { modelAvailableCall, uiSpendLogsCall } from "../networking";
+import { uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAllKeyAliases, fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";

@@ -2,13 +2,14 @@ import asyncio
 import json
 import os
 import sys
-from litellm._uuid import uuid
 from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
+
+from litellm._uuid import uuid
 
 sys.path.insert(
     0, os.path.abspath("../../../")
@@ -46,7 +47,7 @@ def test_microsoft_sso_handler_openid_from_response_user_principal_name():
     # Act
     # Call the method being tested
     result = MicrosoftSSOHandler.openid_from_response(
-        response=mock_response, team_ids=expected_team_ids
+        response=mock_response, team_ids=expected_team_ids, user_role=None
     )
 
     # Assert
@@ -77,7 +78,7 @@ def test_microsoft_sso_handler_openid_from_response():
     # Act
     # Call the method being tested
     result = MicrosoftSSOHandler.openid_from_response(
-        response=mock_response, team_ids=expected_team_ids
+        response=mock_response, team_ids=expected_team_ids, user_role=None
     )
 
     # Assert
@@ -98,7 +99,7 @@ def test_microsoft_sso_handler_with_empty_response():
     # Test with None response
 
     # Act
-    result = MicrosoftSSOHandler.openid_from_response(response=None, team_ids=[])
+    result = MicrosoftSSOHandler.openid_from_response(response=None, team_ids=[], user_role=None)
 
     # Assert
     assert isinstance(result, CustomOpenID)

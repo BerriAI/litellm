@@ -12,8 +12,6 @@ import {
   Text,
   Grid,
   Col,
-  DateRangePicker,
-  TextInput,
 } from "@tremor/react";
 import { CredentialItem, credentialListCall, CredentialsResponse } from "../networking";
 
@@ -26,7 +24,6 @@ import { Select, SelectItem, DateRangePickerValue } from "@tremor/react";
 import UsageDatePicker from "../shared/usage_date_picker";
 import {
   modelInfoCall,
-  Model,
   modelCostMap,
   healthCheckCall,
   modelMetricsCall,
@@ -41,7 +38,7 @@ import {
   allEndUsersCall,
 } from "../networking";
 import { BarChart, AreaChart } from "@tremor/react";
-import { Popover, Form, InputNumber, message } from "antd";
+import { Popover, Form, InputNumber } from "antd";
 import { Button } from "@tremor/react";
 import { Typography } from "antd";
 import { RefreshIcon, FilterIcon } from "@heroicons/react/outline";
@@ -112,7 +109,7 @@ const retry_policy_map: Record<string, string> = {
   "InternalServerError (500)": "InternalServerErrorRetries",
 };
 
-const ModelDashboard: React.FC<ModelDashboardProps> = ({
+const OldModelDashboard: React.FC<ModelDashboardProps> = ({
   accessToken,
   token,
   userRole,
@@ -1757,4 +1754,4 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   );
 };
 
-export default ModelDashboard;
+export default OldModelDashboard;
