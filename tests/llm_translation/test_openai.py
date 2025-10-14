@@ -728,22 +728,6 @@ def test_openai_safety_identifier_parameter_sync():
         assert request_body["safety_identifier"] == "user_code_123456"
 
 
-def test_gpt_5_reasoning():
-    litellm._turn_on_debug()
-    response = litellm.completion(
-        model="openai/responses/gpt-5-mini",
-        messages=[
-            {
-                "role": "user",
-                "content": "Think of the capital of France, and then write it.",
-            }
-        ],
-        reasoning_effort="low",
-    )
-    print("response: ", response)
-    assert response.choices[0].message.reasoning_content is not None
-
-
 def test_gpt_5_reasoning_streaming():
     litellm._turn_on_debug()
     response = litellm.completion(

@@ -377,6 +377,7 @@ class LiteLLMRoutes(enum.Enum):
     llm_api_routes = (
         openai_routes
         + anthropic_routes
+        + google_routes
         + mapped_pass_through_routes
         + passthrough_routes_wildcard
         + apply_guardrail_routes
@@ -776,6 +777,7 @@ class KeyRequestBase(GenerateRequestBase):
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
+    allowed_passthrough_routes: Optional[list] = None
     rpm_limit_type: Optional[
         Literal["guaranteed_throughput", "best_effort_throughput"]
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
@@ -1281,6 +1283,7 @@ class NewTeamRequest(TeamBase):
     guardrails: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    allowed_passthrough_routes: Optional[list] = None
     team_member_budget: Optional[float] = (
         None  # allow user to set a budget for all team members
     )
@@ -1336,6 +1339,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_member_rpm_limit: Optional[int] = None
     team_member_tpm_limit: Optional[int] = None
     team_member_key_duration: Optional[str] = None
+    allowed_passthrough_routes: Optional[list] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -1443,7 +1447,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
         "1234567890": ["tool_name_1", "tool_name_2"]
     }
     """
-    
+
     vector_stores: Optional[List[str]] = []
 
 
@@ -3138,6 +3142,7 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "team_member_key_duration",
     "prompts",
     "logging",
+    "allowed_passthrough_routes",
 ]
 
 
