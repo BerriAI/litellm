@@ -24,6 +24,7 @@ from fastapi import HTTPException
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
@@ -648,7 +649,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     deployment_id=deployment_id,
                 )
                 
-                if failure_count > 0:
+                if failure_count > DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE:
                     verbose_proxy_logger.debug(
                         f"[Dynamic Rate Limit] Deployment {deployment_id} has {failure_count} failures "
                         f"in current minute - enforcing rate limits for model {model}"
