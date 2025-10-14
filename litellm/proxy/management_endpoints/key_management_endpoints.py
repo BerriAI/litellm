@@ -1966,6 +1966,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "allowed_cache_controls": allowed_cache_controls,
             "permissions": permissions_json,
             "model_max_budget": model_max_budget_json,
+            "organization_id": organization_id,
             "budget_id": budget_id,
             "blocked": blocked,
             "created_by": created_by,
@@ -2072,6 +2073,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     if request_type == "user":
         # if this is a /user/new request update the key_date with user_data fields
         key_data.update(user_data)
+
     return key_data
 
 

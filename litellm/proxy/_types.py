@@ -811,6 +811,7 @@ class GenerateKeyRequest(KeyRequestBase):
         default=None,
         description="How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True",
     )
+    organization_id: Optional[str] = None
 
 
 class GenerateKeyResponse(KeyRequestBase):
@@ -819,6 +820,7 @@ class GenerateKeyResponse(KeyRequestBase):
     expires: Optional[datetime] = None
     user_id: Optional[str] = None
     token_id: Optional[str] = None
+    organization_id: Optional[str] = None
     litellm_budget_table: Optional[Any] = None
     token: Optional[str] = None
     created_by: Optional[str] = None
@@ -1844,6 +1846,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     allowed_routes: Optional[list] = []
     permissions: Dict = {}
     model_spend: Dict = {}
+    organization_id: Optional[str] = None
     model_max_budget: Dict = {}
     soft_budget_cooldown: bool = False
     blocked: Optional[bool] = None
@@ -1891,6 +1894,12 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_tpm_limit: Optional[int] = None
     end_user_rpm_limit: Optional[int] = None
     end_user_max_budget: Optional[float] = None
+
+    # Organization Params
+    organization_max_budget: Optional[float] = None
+    organization_tpm_limit: Optional[int] = None
+    organization_rpm_limit: Optional[int] = None
+    organization_metadata: Optional[dict] = None
 
     # Time stamps
     last_refreshed_at: Optional[float] = None  # last time joint view was pulled from db

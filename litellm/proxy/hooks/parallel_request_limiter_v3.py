@@ -26,6 +26,10 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import (
+    get_model_rate_limit_from_metadata,
+    get_team_model_tpm_limit,
+)
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 
 if TYPE_CHECKING:
@@ -548,6 +552,82 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         return rate_limit_response
 
+    def create_organization_rate_limit_descriptor(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: Optional[str] = None
+    ) -> List[RateLimitDescriptor]:
+        descriptors: List[RateLimitDescriptor] = []
+
+        # Global org rate limits
+        if user_api_key_dict.organization_id is not None and (
+            user_api_key_dict.organization_rpm_limit is not None
+            or user_api_key_dict.organization_tpm_limit is not None
+        ):
+            descriptors.append(
+                RateLimitDescriptor(
+                    key="organization",
+                    value=user_api_key_dict.organization_id,
+                    rate_limit={
+                        "requests_per_unit": user_api_key_dict.organization_rpm_limit,
+                        "tokens_per_unit": user_api_key_dict.organization_tpm_limit,
+                        "window_size": self.window_size,
+                    },
+                )
+            )
+
+        # Model specific org rate limits
+        if (
+            get_model_rate_limit_from_metadata(
+                user_api_key_dict, "organization_metadata", "model_rpm_limit"
+            )
+            is not None
+            or get_model_rate_limit_from_metadata(
+                user_api_key_dict, "organization_metadata", "model_tpm_limit"
+            )
+            is not None
+        ):
+            _tpm_limit_for_team_model = (
+                get_model_rate_limit_from_metadata(
+                    user_api_key_dict, "organization_metadata", "model_tpm_limit"
+                )
+                or {}
+            )
+            _rpm_limit_for_team_model = (
+                get_model_rate_limit_from_metadata(
+                    user_api_key_dict, "organization_metadata", "model_rpm_limit"
+                )
+                or {}
+            )
+            should_check_rate_limit = False
+            if requested_model in _tpm_limit_for_team_model:
+                should_check_rate_limit = True
+            elif requested_model in _rpm_limit_for_team_model:
+                should_check_rate_limit = True
+
+            if should_check_rate_limit:
+                model_specific_tpm_limit = None
+                model_specific_rpm_limit = None
+                if requested_model in _tpm_limit_for_team_model:
+                    model_specific_tpm_limit = _tpm_limit_for_team_model[
+                        requested_model
+                    ]
+                if requested_model in _rpm_limit_for_team_model:
+                    model_specific_rpm_limit = _rpm_limit_for_team_model[
+                        requested_model
+                    ]
+                descriptors.append(
+                    RateLimitDescriptor(
+                        key="model_per_organization",
+                        value=f"{user_api_key_dict.organization_id}:{requested_model}",
+                        rate_limit={
+                            "requests_per_unit": model_specific_rpm_limit,
+                            "tokens_per_unit": model_specific_tpm_limit,
+                            "window_size": self.window_size,
+                        },
+                    )
+                )
+
+        return descriptors
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -561,8 +641,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         from litellm.proxy.auth.auth_utils import (
             get_key_model_rpm_limit,
             get_key_model_tpm_limit,
-            get_team_model_rpm_limit,
-            get_team_model_tpm_limit,
         )
 
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
@@ -694,14 +772,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
         if (
-            get_team_model_rpm_limit(user_api_key_dict) is not None
-            or get_team_model_tpm_limit(user_api_key_dict) is not None
+            get_model_rate_limit_from_metadata(
+                user_api_key_dict, "team_metadata", "model_rpm_limit"
+            )
+            is not None
+            or get_model_rate_limit_from_metadata(
+                user_api_key_dict, "team_metadata", "model_tpm_limit"
+            )
+            is not None
         ):
             _tpm_limit_for_team_model = (
-                get_team_model_tpm_limit(user_api_key_dict) or {}
+                get_model_rate_limit_from_metadata(
+                    user_api_key_dict, "team_metadata", "model_tpm_limit"
+                )
+                or {}
             )
             _rpm_limit_for_team_model = (
-                get_team_model_rpm_limit(user_api_key_dict) or {}
+                get_model_rate_limit_from_metadata(
+                    user_api_key_dict, "team_metadata", "model_rpm_limit"
+                )
+                or {}
             )
             should_check_rate_limit = False
             if requested_model in _tpm_limit_for_team_model:
@@ -710,8 +800,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 should_check_rate_limit = True
 
             if should_check_rate_limit:
-                model_specific_tpm_limit: Optional[int] = None
-                model_specific_rpm_limit: Optional[int] = None
+                model_specific_tpm_limit = None
+                model_specific_rpm_limit = None
                 if requested_model in _tpm_limit_for_team_model:
                     model_specific_tpm_limit = _tpm_limit_for_team_model[
                         requested_model
@@ -731,6 +821,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         },
                     )
                 )
+
+        # Org Level Rate Limits
+        descriptors.extend(
+            self.create_organization_rate_limit_descriptor(
+                user_api_key_dict, requested_model
+            )
+        )
         # Only check rate limits if we have descriptors with actual limits
         if descriptors:
             response = await self.should_rate_limit(
@@ -933,6 +1030,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             user_api_key = litellm_metadata.get("user_api_key")
             user_api_key_user_id = litellm_metadata.get("user_api_key_user_id")
             user_api_key_team_id = litellm_metadata.get("user_api_key_team_id")
+            user_api_key_organization_id = litellm_metadata.get(
+                "user_api_key_organization_id"
+            )
             user_api_key_end_user_id = kwargs.get("user") or litellm_metadata.get(
                 "user_api_key_end_user_id"
             )
@@ -1039,6 +1139,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     self._create_pipeline_operations(
                         key="model_per_team",
                         value=f"{user_api_key_team_id}:{model_group}",
+                        rate_limit_type="tokens",
+                        total_tokens=total_tokens,
+                    )
+                )
+
+            if model_group and user_api_key_organization_id:
+                pipeline_operations.extend(
+                    self._create_pipeline_operations(
+                        key="model_per_organization",
+                        value=f"{user_api_key_organization_id}:{model_group}",
                         rate_limit_type="tokens",
                         total_tokens=total_tokens,
                     )

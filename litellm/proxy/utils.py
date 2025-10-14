@@ -2157,7 +2157,7 @@ class PrismaClient:
                             o.metadata as organization_metadata,
                             b2.max_budget as organization_max_budget,
                             b2.tpm_limit as organization_tpm_limit,
-                            b2.rpm_limit as organization_rpm_limit,
+                            b2.rpm_limit as organization_rpm_limit
                         FROM "LiteLLM_VerificationToken" AS v
                         LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
                         LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id

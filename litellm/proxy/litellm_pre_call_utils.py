@@ -584,6 +584,7 @@ class LiteLLMProxyRequestSetup:
                 if user_api_key_dict.budget_reset_at
                 else None
             ),
+            user_api_key_organization_id=user_api_key_dict.organization_id,
             user_api_key_auth_metadata=None,
         )
         return user_api_key_logged_metadata
