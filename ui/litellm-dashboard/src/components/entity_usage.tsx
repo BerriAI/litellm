@@ -31,7 +31,7 @@ import TopKeyView from "./top_key_view";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { valueFormatterSpend } from "./usage/utils/value_formatters";
 import { getProviderLogoAndName } from "./provider_info_helpers";
-import EntityUsageExportModal from "./entity_usage_export_modal";
+import EntityUsageExportModal from "./EntityUsageExport";
 
 interface EntityMetrics {
   metrics: {
