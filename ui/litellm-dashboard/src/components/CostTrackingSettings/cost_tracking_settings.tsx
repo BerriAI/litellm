@@ -9,6 +9,12 @@ import { getProviderBackendValue } from "./provider_display_helpers";
 import ProviderDiscountTable from "./provider_discount_table";
 import AddProviderForm from "./add_provider_form";
 import { ExclamationCircleOutlined } from "@ant-design/icons";
+import { DocsMenu } from "../HelpLink";
+
+const DOCS_LINKS = [
+  { label: "Custom pricing for models", href: "https://docs.litellm.ai/docs/proxy/custom_pricing" },
+  { label: "Spend tracking", href: "https://docs.litellm.ai/docs/proxy/cost_tracking" },
+];
 
 const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ 
   userID, 
@@ -180,8 +186,11 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
       {/* Header Section - Outside the card */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-6">
         <div>
-          <Title>Cost Tracking Settings</Title>
-          <Text className="text-gray-500">
+          <div className="flex items-center gap-2">
+            <Title>Cost Tracking Settings</Title>
+            <DocsMenu items={DOCS_LINKS} />
+          </div>
+          <Text className="text-gray-500 mt-1">
             Configure cost discounts for different LLM providers. Changes are saved automatically.
           </Text>
         </div>
@@ -208,9 +217,25 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
             />
           </div>
         ) : (
-          <div className="py-16 text-center">
-            <Text className="text-gray-500">
-              No provider discounts configured. Click "Add Provider Discount" to get started.
+          <div className="py-16 px-6 text-center">
+            <svg
+              className="mx-auto h-12 w-12 text-gray-400 mb-4"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+            <Text className="text-gray-700 font-medium mb-2">
+              No provider discounts configured
+            </Text>
+            <Text className="text-gray-500 text-sm">
+              Click "Add Provider Discount" to get started
             </Text>
           </div>
         )}
