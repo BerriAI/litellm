@@ -1,14 +1,6 @@
 import React from "react";
-import {
-  Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
-  TableBody,
-  TableCell,
-  TextInput,
-  Button,
-} from "@tremor/react";
+import { TextInput, Button } from "@tremor/react";
+import { SimpleTable } from "../common_components/simple_table";
 import { DiscountConfig } from "./types";
 import { getProviderDisplayInfo, handleImageError } from "./provider_display_helpers";
 
@@ -18,73 +10,87 @@ interface ProviderDiscountTableProps {
   onRemoveProvider: (provider: string) => void;
 }
 
+interface ProviderDiscountRow {
+  provider: string;
+  discount: number;
+}
+
 const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
   discountConfig,
   onDiscountChange,
   onRemoveProvider,
 }) => {
+  // Convert discount config to array and sort
+  const data: ProviderDiscountRow[] = Object.entries(discountConfig)
+    .map(([provider, discount]) => ({ provider, discount }))
+    .sort((a, b) => {
+      const displayA = getProviderDisplayInfo(a.provider).displayName;
+      const displayB = getProviderDisplayInfo(b.provider).displayName;
+      return displayA.localeCompare(displayB);
+    });
+
   return (
-    <Table>
-      <TableHead>
-        <TableRow>
-          <TableHeaderCell>Provider</TableHeaderCell>
-          <TableHeaderCell>Discount Value</TableHeaderCell>
-          <TableHeaderCell>Percentage</TableHeaderCell>
-          <TableHeaderCell>Actions</TableHeaderCell>
-        </TableRow>
-      </TableHead>
-      <TableBody>
-        {Object.entries(discountConfig)
-          .sort(([a], [b]) => {
-            const displayA = getProviderDisplayInfo(a).displayName;
-            const displayB = getProviderDisplayInfo(b).displayName;
-            return displayA.localeCompare(displayB);
-          })
-          .map(([provider, discount]) => {
-            const { displayName, logo } = getProviderDisplayInfo(provider);
+    <SimpleTable
+      data={data}
+      columns={[
+        {
+          header: "Provider",
+          cell: (row) => {
+            const { displayName, logo } = getProviderDisplayInfo(row.provider);
             return (
-              <TableRow key={provider}>
-                <TableCell>
-                  <div className="flex items-center space-x-2">
-                    {logo && (
-                      <img
-                        src={logo}
-                        alt={`${displayName} logo`}
-                        className="w-5 h-5"
-                        onError={(e) => handleImageError(e, displayName)}
-                      />
-                    )}
-                    <span className="font-medium">{displayName}</span>
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <TextInput
-                    value={discount.toString()}
-                    onValueChange={(value) => onDiscountChange(provider, value)}
-                    placeholder="0.05"
-                    className="w-32"
+              <div className="flex items-center space-x-2">
+                {logo && (
+                  <img
+                    src={logo}
+                    alt={`${displayName} logo`}
+                    className="w-5 h-5"
+                    onError={(e) => handleImageError(e, displayName)}
                   />
-                </TableCell>
-                <TableCell>
-                  <span className="text-gray-700 font-medium">
-                    {(discount * 100).toFixed(1)}%
-                  </span>
-                </TableCell>
-                <TableCell>
-                  <Button
-                    size="xs"
-                    variant="secondary"
-                    color="red"
-                    onClick={() => onRemoveProvider(provider)}
-                  >
-                    Remove
-                  </Button>
-                </TableCell>
-              </TableRow>
+                )}
+                <span className="font-medium">{displayName}</span>
+              </div>
             );
-          })}
-      </TableBody>
-    </Table>
+          },
+        },
+        {
+          header: "Discount Value",
+          cell: (row) => (
+            <TextInput
+              value={row.discount.toString()}
+              onValueChange={(value) => onDiscountChange(row.provider, value)}
+              placeholder="0.05"
+              className="w-32"
+            />
+          ),
+          width: "200px",
+        },
+        {
+          header: "Percentage",
+          cell: (row) => (
+            <span className="text-gray-700 font-medium">
+              {(row.discount * 100).toFixed(1)}%
+            </span>
+          ),
+          width: "120px",
+        },
+        {
+          header: "Actions",
+          cell: (row) => (
+            <Button
+              size="xs"
+              variant="secondary"
+              color="red"
+              onClick={() => onRemoveProvider(row.provider)}
+            >
+              Remove
+            </Button>
+          ),
+          width: "120px",
+        },
+      ]}
+      getRowKey={(row) => row.provider}
+      emptyMessage="No provider discounts configured"
+    />
   );
 };
 
