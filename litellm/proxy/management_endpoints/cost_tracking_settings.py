@@ -15,6 +15,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.utils import LlmProvidersSet
 
 router = APIRouter()
 
@@ -97,6 +98,20 @@ async def update_cost_discount_config(
             status_code=500,
             detail={
                 "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+            },
+        )
+    
+    # Validate that all providers are valid LiteLLM providers
+    invalid_providers = []
+    for provider in cost_discount_config.keys():
+        if provider not in LlmProvidersSet:
+            invalid_providers.append(provider)
+    
+    if invalid_providers:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid provider(s): {', '.join(invalid_providers)}. Must be valid LiteLLM providers. Full list of valid providers: {LlmProvidersSet}"
             },
         )
     
