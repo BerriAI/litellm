@@ -612,99 +612,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         return rpm_limit_type == "dynamic" or tpm_limit_type == "dynamic"
 
-    async def _check_model_has_recent_failures(
-        self,
-        model: str,
-        parent_otel_span: Optional[Span] = None,
-    ) -> bool:
-        """
-        Check if any deployment for this model has recent failures by using
-        the router's existing failure tracking.
-        
-        Returns True if any deployment has failures in the current minute.
-        """
-        from litellm.proxy.proxy_server import llm_router
-        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
-            get_deployment_failures_for_current_minute,
-        )
-        
-        if llm_router is None:
-            return False
-        
-        try:
-            # Get all deployments for this model
-            model_list = llm_router.get_model_list(model_name=model)
-            if not model_list:
-                return False
-            
-            # Check each deployment's failure count
-            for deployment in model_list:
-                deployment_id = deployment.get("model_info", {}).get("id")
-                if not deployment_id:
-                    continue
-                
-                # Use router's existing failure tracking
-                failure_count = get_deployment_failures_for_current_minute(
-                    litellm_router_instance=llm_router,
-                    deployment_id=deployment_id,
-                )
-                
-                if failure_count > DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE:
-                    verbose_proxy_logger.debug(
-                        f"[Dynamic Rate Limit] Deployment {deployment_id} has {failure_count} failures "
-                        f"in current minute - enforcing rate limits for model {model}"
-                    )
-                    return True
-            
-            verbose_proxy_logger.debug(
-                f"[Dynamic Rate Limit] No failures detected for model {model} - allowing dynamic exceeding"
-            )
-            return False
-            
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Error checking model failure status: {str(e)}, defaulting to enforce limits"
-            )
-            # Fail safe: enforce limits if we can't check
-            return True
-
-    async def async_pre_call_hook(
+    def _create_rate_limit_descriptors(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        cache: DualCache,
         data: dict,
-        call_type: str,
-    ):
+        rpm_limit_type: Optional[str],
+        tpm_limit_type: Optional[str],
+        model_has_failures: bool,
+    ) -> List[RateLimitDescriptor]:
         """
-        Pre-call hook to check rate limits before making the API call.
-        Supports dynamic rate limiting based on deployment health.
+        Create all rate limit descriptors for the request.
+        
+        Returns list of descriptors for API key, user, team, team member, end user, and model-specific limits.
         """
         from litellm.proxy.auth.auth_utils import (
             get_key_model_rpm_limit,
             get_key_model_tpm_limit,
         )
-
-        verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
-
-        # Get rate limit types from metadata
-        metadata = user_api_key_dict.metadata or {}
-        rpm_limit_type = metadata.get("rpm_limit_type")
-        tpm_limit_type = metadata.get("tpm_limit_type")
         
-        # For dynamic mode, check if the model has recent failures
-        model_has_failures = False
-        requested_model = data.get("model", None)
-        
-        if self._is_dynamic_rate_limiting_enabled(
-            rpm_limit_type=rpm_limit_type,
-            tpm_limit_type=tpm_limit_type,
-        ) and requested_model:
-            model_has_failures = await self._check_model_has_recent_failures(
-                model=requested_model,
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
-
-        # Create rate limit descriptors
         descriptors = []
 
         # API Key rate limits
@@ -729,7 +654,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                             model_has_failures=model_has_failures,
                         ),
                         "max_parallel_requests": user_api_key_dict.max_parallel_requests,
-                        "window_size": self.window_size, # 1 minute window
+                        "window_size": self.window_size,
                     },
                 )
             )
@@ -837,6 +762,104 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         },
                     )
                 )
+        
+        return descriptors
+
+    async def _check_model_has_recent_failures(
+        self,
+        model: str,
+        parent_otel_span: Optional[Span] = None,
+    ) -> bool:
+        """
+        Check if any deployment for this model has recent failures by using
+        the router's existing failure tracking.
+        
+        Returns True if any deployment has failures in the current minute.
+        """
+        from litellm.proxy.proxy_server import llm_router
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
+        
+        if llm_router is None:
+            return False
+        
+        try:
+            # Get all deployments for this model
+            model_list = llm_router.get_model_list(model_name=model)
+            if not model_list:
+                return False
+            
+            # Check each deployment's failure count
+            for deployment in model_list:
+                deployment_id = deployment.get("model_info", {}).get("id")
+                if not deployment_id:
+                    continue
+                
+                # Use router's existing failure tracking
+                failure_count = get_deployment_failures_for_current_minute(
+                    litellm_router_instance=llm_router,
+                    deployment_id=deployment_id,
+                )
+                
+                if failure_count > DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE:
+                    verbose_proxy_logger.debug(
+                        f"[Dynamic Rate Limit] Deployment {deployment_id} has {failure_count} failures "
+                        f"in current minute - enforcing rate limits for model {model}"
+                    )
+                    return True
+            
+            verbose_proxy_logger.debug(
+                f"[Dynamic Rate Limit] No failures detected for model {model} - allowing dynamic exceeding"
+            )
+            return False
+            
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Error checking model failure status: {str(e)}, defaulting to enforce limits"
+            )
+            # Fail safe: enforce limits if we can't check
+            return True
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: str,
+    ):
+        """
+        Pre-call hook to check rate limits before making the API call.
+        Supports dynamic rate limiting based on deployment health.
+        """
+        verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
+
+        # Get rate limit types from metadata
+        metadata = user_api_key_dict.metadata or {}
+        rpm_limit_type = metadata.get("rpm_limit_type")
+        tpm_limit_type = metadata.get("tpm_limit_type")
+        
+        # For dynamic mode, check if the model has recent failures
+        model_has_failures = False
+        requested_model = data.get("model", None)
+        
+        if self._is_dynamic_rate_limiting_enabled(
+            rpm_limit_type=rpm_limit_type,
+            tpm_limit_type=tpm_limit_type,
+        ) and requested_model:
+            model_has_failures = await self._check_model_has_recent_failures(
+                model=requested_model,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
+
+        # Create rate limit descriptors
+        descriptors = self._create_rate_limit_descriptors(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            rpm_limit_type=rpm_limit_type,
+            tpm_limit_type=tpm_limit_type,
+            model_has_failures=model_has_failures,
+        )
 
         # Only check rate limits if we have descriptors with actual limits
         if descriptors:
