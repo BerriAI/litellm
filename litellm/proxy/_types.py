@@ -377,6 +377,7 @@ class LiteLLMRoutes(enum.Enum):
     llm_api_routes = (
         openai_routes
         + anthropic_routes
+        + google_routes
         + mapped_pass_through_routes
         + passthrough_routes_wildcard
         + apply_guardrail_routes
