@@ -13,7 +13,6 @@ import litellm
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-    from litellm.types.videos.main import VideoResponse as _VideoResponse
 
     from ...base_llm.videos_generation.transformation import BaseVideoGenerationConfig as _BaseVideoGenerationConfig
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
@@ -21,7 +20,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     BaseVideoGenerationConfig = _BaseVideoGenerationConfig
     BaseLLMException = _BaseLLMException
-    VideoResponse = _VideoResponse
 else:
     LiteLLMLoggingObj = Any
     BaseVideoGenerationConfig = Any
