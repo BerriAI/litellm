@@ -127,7 +127,9 @@ client = OpenAI(
 response = client.chat.completions.create(
     model="gemini-1.5-pro",
     messages=[{"role": "user", "content": "hi"}],
-    prompt_id="1234"
+    extra_body={
+        "prompt_id": "1234"
+    }
 )
 
 print(response.choices[0].message.content)
