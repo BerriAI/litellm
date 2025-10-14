@@ -255,9 +255,9 @@ const sidebars = {
           type: "category",
           label: "Spend Tracking",
           items: [
-            "proxy/billing",
             "proxy/cost_tracking",
-            "proxy/custom_pricing"
+            "proxy/custom_pricing",
+            "proxy/billing",
           ],
         },
       ]

@@ -2,7 +2,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# 💸 Spend Tracking
+# Spend Tracking
 
 Track spend for keys, users, and teams across 100+ LLMs.
 
