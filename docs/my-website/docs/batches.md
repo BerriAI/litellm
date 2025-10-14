@@ -3,7 +3,7 @@ import TabItem from '@theme/TabItem';
 
 # Batches
 
-:::warning Deprecated
+:::warning
 
 The `custom_llm_provider` flow for batches is deprecated. The `/batches` route itself is still supported. For the new managed batches flow, go to **[Managed Batches](/docs/proxy/managed_batches)**
 
