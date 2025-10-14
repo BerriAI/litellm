@@ -112,7 +112,7 @@ You can apply discounts to all LiteLLM supported providers. Common examples:
 - `cohere` - Cohere
 - `openrouter` - OpenRouter
 
-See the full list of providers in the [LLM Providers enum](https://github.com/BerriAI/litellm/blob/main/litellm/types/utils.py).
+See the full list of providers in the [LlmProviders](https://github.com/BerriAI/litellm/blob/main/litellm/types/utils.py) enum.
 
 ## Override Model Cost Map
 
