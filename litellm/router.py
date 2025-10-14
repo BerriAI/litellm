@@ -5158,6 +5158,10 @@ class Router:
         
         # Build model_name index for O(1) lookups
         self._build_model_name_index(self.model_list)
+        
+        # Invalidate cooldown cache since model list was reset
+        if hasattr(self, "cooldown_cache"):
+            self.cooldown_cache.invalidate_cached_keys()
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
@@ -5406,6 +5410,10 @@ class Router:
             if model_name not in self.model_name_to_deployment_indices:
                 self.model_name_to_deployment_indices[model_name] = []
             self.model_name_to_deployment_indices[model_name].append(idx)
+        
+        # Invalidate cooldown cache since model list changed
+        if hasattr(self, "cooldown_cache"):
+            self.cooldown_cache.invalidate_cached_keys()
 
     def upsert_deployment(self, deployment: Deployment) -> Optional[Deployment]:
         """
@@ -5476,6 +5484,9 @@ class Router:
                 self._update_deployment_indices_after_removal(
                     model_id=id, removal_idx=deployment_idx
                 )
+                # Invalidate cooldown cache since model was removed
+                if hasattr(self, "cooldown_cache"):
+                    self.cooldown_cache.invalidate_cached_keys()
                 return item
             else:
                 return None
