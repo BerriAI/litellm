@@ -1,23 +1,12 @@
 import React, { useState, useEffect } from "react";
-import {
-  Card,
-  Title,
-  Text,
-  TextInput,
-  Button,
-  Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
-  TableBody,
-  TableCell,
-  Grid,
-  Col,
-  Subtitle,
-} from "@tremor/react";
+import { Card, Title, Text, Subtitle, Grid, Col, Button } from "@tremor/react";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationsManager from "../molecules/notifications_manager";
+import { Providers, provider_map } from "../provider_info_helpers";
 import { CostTrackingSettingsProps, DiscountConfig } from "./types";
+import { getProviderBackendValue } from "./provider_display_helpers";
+import ProviderDiscountTable from "./provider_discount_table";
+import AddProviderForm from "./add_provider_form";
 
 const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ 
   userID, 
@@ -25,7 +14,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
   accessToken 
 }) => {
   const [discountConfig, setDiscountConfig] = useState<DiscountConfig>({});
-  const [newProvider, setNewProvider] = useState<string>("");
+  const [selectedProvider, setSelectedProvider] = useState<string | undefined>(undefined);
   const [newDiscount, setNewDiscount] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [isFetching, setIsFetching] = useState(true);
@@ -100,8 +89,8 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
   };
 
   const handleAddProvider = () => {
-    if (!newProvider || !newDiscount) {
-      NotificationsManager.fromBackend("Please enter both provider and discount value");
+    if (!selectedProvider || !newDiscount) {
+      NotificationsManager.fromBackend("Please select a provider and enter discount value");
       return;
     }
     
@@ -111,11 +100,25 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
       return;
     }
 
+    const providerValue = getProviderBackendValue(selectedProvider);
+    
+    if (!providerValue) {
+      NotificationsManager.fromBackend("Invalid provider selected");
+      return;
+    }
+
+    if (discountConfig[providerValue]) {
+      NotificationsManager.fromBackend(
+        `Discount for ${Providers[selectedProvider as keyof typeof Providers]} already exists. Edit it in the table above.`
+      );
+      return;
+    }
+
     setDiscountConfig(prev => ({
       ...prev,
-      [newProvider.trim()]: discountValue,
+      [providerValue]: discountValue,
     }));
-    setNewProvider("");
+    setSelectedProvider(undefined);
     setNewDiscount("");
   };
 
@@ -140,8 +143,6 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
   if (!accessToken) {
     return null;
   }
-
-  const hasChanges = Object.keys(discountConfig).length > 0;
 
   return (
     <div style={{ width: "100%" }} className="relative">
@@ -180,48 +181,11 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
               <>
                 {Object.keys(discountConfig).length > 0 ? (
                   <div className="mt-4">
-                    <Table>
-                      <TableHead>
-                        <TableRow>
-                          <TableHeaderCell>Provider</TableHeaderCell>
-                          <TableHeaderCell>Discount Value</TableHeaderCell>
-                          <TableHeaderCell>Percentage</TableHeaderCell>
-                          <TableHeaderCell>Actions</TableHeaderCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {Object.entries(discountConfig)
-                          .sort(([a], [b]) => a.localeCompare(b))
-                          .map(([provider, discount]) => (
-                            <TableRow key={provider}>
-                              <TableCell className="font-medium">{provider}</TableCell>
-                              <TableCell>
-                                <TextInput
-                                  value={discount.toString()}
-                                  onValueChange={(value) => handleDiscountChange(provider, value)}
-                                  placeholder="0.05"
-                                  className="w-32"
-                                />
-                              </TableCell>
-                              <TableCell>
-                                <span className="text-gray-700 font-medium">
-                                  {(discount * 100).toFixed(1)}%
-                                </span>
-                              </TableCell>
-                              <TableCell>
-                                <Button
-                                  size="xs"
-                                  variant="secondary"
-                                  color="red"
-                                  onClick={() => handleRemoveProvider(provider)}
-                                >
-                                  Remove
-                                </Button>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                      </TableBody>
-                    </Table>
+                    <ProviderDiscountTable
+                      discountConfig={discountConfig}
+                      onDiscountChange={handleDiscountChange}
+                      onRemoveProvider={handleRemoveProvider}
+                    />
                   </div>
                 ) : (
                   <div className="py-8 text-center border border-dashed border-gray-300 rounded-lg">
@@ -231,39 +195,14 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
                   </div>
                 )}
 
-                <div className="border-t pt-6 mt-6">
-                  <div className="mb-3">
-                    <Text className="font-medium text-gray-900">Add Provider Discount</Text>
-                    <Text className="text-xs text-gray-500 mt-1">
-                      Common providers: vertex_ai, gemini, openai, anthropic, openrouter, bedrock, azure
-                    </Text>
-                  </div>
-                  <Grid numItems={3} className="gap-3">
-                    <Col numColSpan={1}>
-                      <TextInput
-                        placeholder="Provider name"
-                        value={newProvider}
-                        onValueChange={setNewProvider}
-                      />
-                    </Col>
-                    <Col numColSpan={1}>
-                      <TextInput
-                        placeholder="Discount (0.05 for 5%)"
-                        value={newDiscount}
-                        onValueChange={setNewDiscount}
-                      />
-                    </Col>
-                    <Col numColSpan={1}>
-                      <Button 
-                        onClick={handleAddProvider} 
-                        className="w-full"
-                        disabled={!newProvider || !newDiscount}
-                      >
-                        Add Provider
-                      </Button>
-                    </Col>
-                  </Grid>
-                </div>
+                <AddProviderForm
+                  discountConfig={discountConfig}
+                  selectedProvider={selectedProvider}
+                  newDiscount={newDiscount}
+                  onProviderChange={setSelectedProvider}
+                  onDiscountChange={setNewDiscount}
+                  onAddProvider={handleAddProvider}
+                />
               </>
             )}
           </Card>
@@ -300,4 +239,3 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
 };
 
 export default CostTrackingSettings;
-
