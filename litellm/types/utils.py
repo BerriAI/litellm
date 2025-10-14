@@ -9,29 +9,18 @@ from typing import (
     Literal,
     Mapping,
     Optional,
-    Tuple,
     Union,
 )
 
-from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
-from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
-from openai.types.chat.chat_completion import ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
     CompletionUsage,
     PromptTokensDetails,
 )
-from openai.types.moderation import (
-    Categories,
-    CategoryAppliedInputTypes,
-    CategoryScores,
-)
-from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
-from typing_extensions import Callable, Dict, Required, TypedDict, override
+from typing_extensions import Required, TypedDict
 
-import litellm
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
@@ -57,7 +46,6 @@ from .llms.openai import (
     OpenAIRealtimeStreamList,
     WebSearchOptions,
 )
-from .rerank import RerankResponse
 
 if TYPE_CHECKING:
     from .vector_stores import VectorStoreSearchResponse
@@ -1167,7 +1155,6 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         super().__init__(**kwargs)
 
 
-from openai.types.chat import ChatCompletionChunk
 
 
 class ModelResponseBase(OpenAIObject):

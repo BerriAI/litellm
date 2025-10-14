@@ -104,7 +104,7 @@ if litellm_mode == "DEV":
 # Register async client cleanup to prevent resource leaks
 register_async_client_cleanup()
 ####################################################
-if set_verbose == True:
+if set_verbose:
     _turn_on_debug()
 ####################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
@@ -1209,7 +1209,6 @@ from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig,
 )
 
-from .llms.snowflake.chat.transformation import SnowflakeConfig
 from .llms.gradient_ai.chat.transformation import GradientAIConfig
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
@@ -1245,7 +1244,6 @@ from .llms.cerebras.chat import CerebrasConfig
 from .llms.baseten.chat import BasetenConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
-from .llms.ai21.chat.transformation import AI21ChatConfig
 from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
 from .llms.fireworks_ai.audio_transcription.transformation import (

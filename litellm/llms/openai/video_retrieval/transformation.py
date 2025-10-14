@@ -1,11 +1,9 @@
-import types
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import httpx
 
-from litellm.types.llms.openai import OpenAIVideoObject
-from litellm.types.videos.main import VideoResponse
-from litellm.types.router import GenericLiteLLMParams
+from litellm.secret_managers.main import get_secret_str
+import litellm
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -39,16 +37,19 @@ class OpenAIVideoRetrievalConfig(BaseVideoRetrievalConfig):
         model: str,
         api_key: Optional[str] = None,
     ) -> dict:
-        """
-        Validate the environment for OpenAI video retrieval.
-        """
-        if api_key is None:
-            raise ValueError("OpenAI API key is required for video retrieval")
-        
-        headers["Authorization"] = f"Bearer {api_key}"
-        headers["Content-Type"] = "application/json"
-        
+        api_key = (
+            api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret_str("OPENAI_API_KEY")
+        )
+        headers.update(
+            {
+                "Authorization": f"Bearer {api_key}",
+            }
+        )
         return headers
+        
 
     def get_complete_url(
         self,
@@ -57,7 +58,8 @@ class OpenAIVideoRetrievalConfig(BaseVideoRetrievalConfig):
         litellm_params: dict,
     ) -> str:
         """
-        Get the complete URL for OpenAI video retrieval.
+        Get the complete URL for OpenAI video operations.
+        For video content download, this returns the base videos URL.
         """
         if api_base is None:
             api_base = "https://api.openai.com/v1"
@@ -69,23 +71,13 @@ class OpenAIVideoRetrievalConfig(BaseVideoRetrievalConfig):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> VideoResponse:
+    ) -> bytes:
         """
-        Transform the OpenAI video retrieval response.
+        Transform the OpenAI video content download response.
+        Returns raw video content as bytes.
         """
-        response_data = raw_response.json()
-        
-        # Transform the response data
-        video_obj = OpenAIVideoObject(**response_data)
-        
-        # Create the response
-        response = VideoResponse(
-            data=[video_obj],
-            usage={},
-            hidden_params={},
-        )
-        
-        return response
+        # For video content download, return the raw content as bytes
+        return raw_response.content
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
