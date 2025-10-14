@@ -135,7 +135,7 @@ class GenAIHubOrchestration(BaseLLM):
                         except StopAsyncIteration:
                             break
             except Exception as e:
-                raise
+                raise e
 
         return CustomStreamWrapper(
             completion_stream=_safe_async_iter(),
@@ -216,7 +216,7 @@ class GenAIHubOrchestration(BaseLLM):
                 except StopIteration:
                     break
                 except Exception as e:
-                    raise
+                    raise e
 
         return CustomStreamWrapper(
             completion_stream=_safe_iter(),

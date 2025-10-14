@@ -18,8 +18,7 @@ try:
     from gen_ai_hub.orchestration.models.message import (
         Message,
         ToolMessage,
-        MessageToolCall,
-        FunctionCall,
+        MessageToolCall
     )
     from gen_ai_hub.orchestration.models.multimodal_items import (
         TextPart,
@@ -28,11 +27,7 @@ try:
     )
     from gen_ai_hub.orchestration.models.llm import LLM
     from gen_ai_hub.orchestration.models.template import Template
-    from gen_ai_hub.orchestration.models.response_format import (
-        ResponseFormatJsonSchema,
-        ResponseFormatJsonObject,
-        ResponseFormatText,
-    )
+    from gen_ai_hub.orchestration.models.response_format import ResponseFormatJsonSchema
     from gen_ai_hub.orchestration.models.tools import FunctionTool
     from dacite import from_dict
 
