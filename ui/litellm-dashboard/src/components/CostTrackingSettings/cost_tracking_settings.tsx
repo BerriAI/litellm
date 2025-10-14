@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Card, Title, Text, Subtitle, Grid, Col, Button } from "@tremor/react";
+import { Modal } from "antd";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import { Providers, provider_map } from "../provider_info_helpers";
@@ -18,6 +19,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
   const [newDiscount, setNewDiscount] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [isFetching, setIsFetching] = useState(true);
+  const [isModalVisible, setIsModalVisible] = useState(false);
 
   useEffect(() => {
     if (accessToken) {
@@ -120,6 +122,13 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
     }));
     setSelectedProvider(undefined);
     setNewDiscount("");
+    setIsModalVisible(false);
+  };
+
+  const handleModalCancel = () => {
+    setIsModalVisible(false);
+    setSelectedProvider(undefined);
+    setNewDiscount("");
   };
 
   const handleRemoveProvider = (provider: string) => {
@@ -146,94 +155,101 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
 
   return (
     <div style={{ width: "100%" }} className="relative">
-      <div className="mb-6">
-        <Title>Cost Tracking Settings</Title>
-        <Subtitle>
-          Configure cost discounts for different LLM providers. Discounts are applied as multipliers.
-        </Subtitle>
-      </div>
-
-      <Grid numItems={1} className="gap-6">
-        <Col>
-          <Card>
-            <div className="flex justify-between items-start mb-4">
-              <div>
-                <Title>Provider Discounts</Title>
-                <Text className="mt-1 text-sm text-gray-500">
-                  Set custom discount rates per provider (e.g., 0.05 = 5% discount)
-                </Text>
-              </div>
+      <div className="bg-white rounded-lg shadow w-full">
+        <div className="border-b px-6 py-4">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
+            <div>
+              <Title>Cost Tracking Settings</Title>
+              <Text className="mt-1 text-sm text-gray-500">
+                Configure cost discounts for different LLM providers. Discounts are applied as multipliers.
+              </Text>
+            </div>
+            <div className="flex gap-3">
+              <Button
+                onClick={() => setIsModalVisible(true)}
+                size="sm"
+              >
+                + Add Provider Discount
+              </Button>
               <Button
                 onClick={handleSave}
                 loading={loading}
                 disabled={loading || isFetching}
                 size="sm"
+                variant="primary"
               >
                 Save Changes
               </Button>
             </div>
+          </div>
+        </div>
 
-            {isFetching ? (
-              <div className="py-8 text-center">
-                <Text className="text-gray-500">Loading configuration...</Text>
-              </div>
-            ) : (
-              <>
-                {Object.keys(discountConfig).length > 0 ? (
-                  <div className="mt-4">
-                    <ProviderDiscountTable
-                      discountConfig={discountConfig}
-                      onDiscountChange={handleDiscountChange}
-                      onRemoveProvider={handleRemoveProvider}
-                    />
-                  </div>
-                ) : (
-                  <div className="py-8 text-center border border-dashed border-gray-300 rounded-lg">
-                    <Text className="text-gray-500">
-                      No provider discounts configured. Add your first provider below.
-                    </Text>
-                  </div>
-                )}
+        {isFetching ? (
+          <div className="py-12 text-center">
+            <Text className="text-gray-500">Loading configuration...</Text>
+          </div>
+        ) : Object.keys(discountConfig).length > 0 ? (
+          <div className="p-6">
+            <ProviderDiscountTable
+              discountConfig={discountConfig}
+              onDiscountChange={handleDiscountChange}
+              onRemoveProvider={handleRemoveProvider}
+            />
+          </div>
+        ) : (
+          <div className="py-16 text-center">
+            <Text className="text-gray-500">
+              No provider discounts configured. Click "Add Provider Discount" to get started.
+            </Text>
+          </div>
+        )}
 
-                <AddProviderForm
-                  discountConfig={discountConfig}
-                  selectedProvider={selectedProvider}
-                  newDiscount={newDiscount}
-                  onProviderChange={setSelectedProvider}
-                  onDiscountChange={setNewDiscount}
-                  onAddProvider={handleAddProvider}
-                />
-              </>
-            )}
-          </Card>
-        </Col>
-
-        <Col>
-          <Card>
-            <Title>How It Works</Title>
-            <div className="mt-4 space-y-3">
-              <div>
-                <Text className="font-medium text-gray-900">Cost Calculation</Text>
-                <Text className="text-sm text-gray-600 mt-1">
-                  Discounts are applied to provider costs: <code className="bg-gray-100 px-1 py-0.5 rounded">final_cost = base_cost × (1 - discount)</code>
-                </Text>
-              </div>
-              <div>
-                <Text className="font-medium text-gray-900">Example</Text>
-                <Text className="text-sm text-gray-600 mt-1">
-                  A 5% discount (0.05) on a $10.00 request results in: $10.00 × (1 - 0.05) = $9.50
-                </Text>
-              </div>
-              <div>
-                <Text className="font-medium text-gray-900">Valid Range</Text>
-                <Text className="text-sm text-gray-600 mt-1">
-                  Discount values must be between 0 (0%) and 1 (100%)
-                </Text>
-              </div>
+        <div className="border-t px-6 py-4 bg-gray-50">
+          <Title className="mb-3">How It Works</Title>
+          <div className="space-y-2">
+            <div>
+              <Text className="font-medium text-gray-900 text-sm">Cost Calculation</Text>
+              <Text className="text-xs text-gray-600">
+                Discounts are applied to provider costs: <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs">final_cost = base_cost × (1 - discount)</code>
+              </Text>
             </div>
-          </Card>
-        </Col>
-      </Grid>
+            <div>
+              <Text className="font-medium text-gray-900 text-sm">Example</Text>
+              <Text className="text-xs text-gray-600">
+                A 5% discount (0.05) on a $10.00 request results in: $10.00 × (1 - 0.05) = $9.50
+              </Text>
+            </div>
+            <div>
+              <Text className="font-medium text-gray-900 text-sm">Valid Range</Text>
+              <Text className="text-xs text-gray-600">
+                Discount values must be between 0 (0%) and 1 (100%)
+              </Text>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <Modal
+        title="Add Provider Discount"
+        open={isModalVisible}
+        onCancel={handleModalCancel}
+        footer={null}
+        width={600}
+      >
+        <div className="py-4">
+          <Text className="text-sm text-gray-600 mb-4">
+            Select a provider and set its discount rate. Discount should be between 0 (0%) and 1 (100%).
+          </Text>
+          <AddProviderForm
+            discountConfig={discountConfig}
+            selectedProvider={selectedProvider}
+            newDiscount={newDiscount}
+            onProviderChange={setSelectedProvider}
+            onDiscountChange={setNewDiscount}
+            onAddProvider={handleAddProvider}
+          />
+        </div>
+      </Modal>
     </div>
   );
 };
