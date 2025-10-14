@@ -3,7 +3,7 @@ Wrapper around router cache. Meant to handle model cooldown logic
 """
 
 import time
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from typing_extensions import TypedDict
 
@@ -38,6 +38,8 @@ class CooldownCache:
             visible_suffix=0,  # Show last 0 characters
             mask_char="*",  # Use * for masking
         )
+        # Cache for model_id -> cache_key mapping for O(1) lookups
+        self._key_cache: Dict[str, str] = {}
 
     def _common_add_cooldown_logic(
         self, model_id: str, original_exception, exception_status, cooldown_time: float
@@ -107,14 +109,35 @@ class CooldownCache:
     def get_cooldown_cache_key(model_id: str) -> str:
         return f"deployment:{model_id}:cooldown"
 
+    def invalidate_cached_keys(self) -> None:
+        """
+        Invalidate the cached keys. Will be regenerated on next access.
+        Called when model_list changes (add/remove models).
+        """
+        self._key_cache.clear()
+        verbose_logger.debug("CooldownCache: Cleared key cache")
+
+    def _get_cache_key(self, model_id: str) -> str:
+        """
+        Get cache key for a single model_id with O(1) lookup.
+        Generates and caches if not already present.
+        """
+        if model_id not in self._key_cache:
+            self._key_cache[model_id] = CooldownCache.get_cooldown_cache_key(model_id)
+        return self._key_cache[model_id]
+
+    def _get_keys_for_model_ids(self, model_ids: List[str]) -> List[str]:
+        """
+        Get cache keys for the given model_ids with O(1) lookup per model_id.
+        """
+        return [self._get_cache_key(model_id) for model_id in model_ids]
+
     async def async_get_active_cooldowns(
         self, model_ids: List[str], parent_otel_span: Optional[Span]
     ) -> List[Tuple[str, CooldownCacheValue]]:
-        # Generate the keys for the deployments
-        keys = [
-            CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids
-        ]
-
+        # Generate the keys for the deployments using cache
+        keys = self._get_keys_for_model_ids(model_ids)
+        
         # Retrieve the values for the keys using mget
         ## more likely to be none if no models ratelimited. So just check redis every 1s
         ## each redis call adds ~100ms latency.
@@ -139,8 +162,8 @@ class CooldownCache:
     def get_active_cooldowns(
         self, model_ids: List[str], parent_otel_span: Optional[Span]
     ) -> List[Tuple[str, CooldownCacheValue]]:
-        # Generate the keys for the deployments
-        keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
+        # Generate the keys for the deployments using cache
+        keys = self._get_keys_for_model_ids(model_ids)
         # Retrieve the values for the keys using mget
         results = (
             self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
@@ -161,8 +184,8 @@ class CooldownCache:
     ) -> float:
         """Return min cooldown time required for a group of model id's."""
 
-        # Generate the keys for the deployments
-        keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
+        # Generate the keys for the deployments using cache
+        keys = self._get_keys_for_model_ids(model_ids)
 
         # Retrieve the values for the keys using mget
         results = (
