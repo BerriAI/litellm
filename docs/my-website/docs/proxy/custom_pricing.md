@@ -70,7 +70,7 @@ model_list:
 
 Apply percentage-based discounts to specific providers (e.g., negotiated enterprise pricing).
 
-### Usage with LiteLLM Proxy Server
+#### Usage with LiteLLM Proxy Server
 
 **Step 1: Add discount config to config.yaml**
 
@@ -92,14 +92,14 @@ litellm /path/to/config.yaml
 The discount will be automatically applied to all cost calculations for the configured providers.
 
 
-### How Discounts Work
+#### How Discounts Work
 
 - Discounts are applied **after** all other cost calculations (tokens, caching, tools, etc.)
 - The discount is a percentage (0.05 = 5%, 0.10 = 10%, etc.)
 - Discounts only apply to the configured providers
 - Original cost, discount amount, and final cost are tracked in cost breakdown logs
 
-### Supported Providers
+#### Supported Providers
 
 You can apply discounts to all LiteLLM supported providers. Common examples:
 
