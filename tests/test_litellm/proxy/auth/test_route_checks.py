@@ -156,6 +156,31 @@ def test_virtual_key_llm_api_route_includes_passthrough_prefix(route):
     assert result is True
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1beta/models/gemini-2.5-flash:countTokens",
+        "/v1beta/models/gemini-2.0-flash:generateContent",
+        "/v1beta/models/gemini-1.5-pro:streamGenerateContent",
+        "/models/gemini-2.5-flash:countTokens",
+        "/models/gemini-2.0-flash:generateContent",
+        "/models/gemini-1.5-pro:streamGenerateContent",
+    ],
+)
+def test_virtual_key_llm_api_routes_allows_google_routes(route):
+    """
+    Test that virtual keys with llm_api_routes permission can access Google AI Studio routes.
+    """
+
+    valid_token = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route, valid_token=valid_token
+    )
+
+    assert result is True
+
+
 def test_virtual_key_allowed_routes_with_multiple_litellm_routes_member_names():
     """Test that virtual key works with multiple LiteLLMRoutes member names in allowed_routes"""
 
