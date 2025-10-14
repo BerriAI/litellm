@@ -28,9 +28,11 @@ def build_trace_payload(
         project_name=project_name,
         id=trace_id,
         name=trace_name,
-        start_time=start_time.astimezone(timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z"),
+        start_time=(
+            start_time.astimezone(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        ),
         end_time=end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         input=input_data,
         output=output_data,
@@ -73,9 +75,11 @@ def build_span_payload(
         name=span_name,
         type="llm",
         model=model,
-        start_time=start_time.astimezone(timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z"),
+        start_time=(
+            start_time.astimezone(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        ),
         end_time=end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         input=input_data,
         output=output_data,
