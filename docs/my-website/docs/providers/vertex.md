@@ -3174,3 +3174,41 @@ print(response.results)
 - `semantic-ranker-default-002`
 
 For detailed model specifications, see the [Google Cloud ranking API documentation](https://cloud.google.com/generative-ai-app-builder/docs/ranking#rank_or_rerank_a_set_of_records_according_to_a_query).
+
+### Proxy Usage
+
+Add to your `config.yaml`:
+
+```yaml
+model_list:
+  - model_name: semantic-ranker-default@latest
+    litellm_params:
+      model: vertex_ai/semantic-ranker-default@latest
+      vertex_ai_project: "your-project-id"
+      vertex_ai_location: "us-central1"
+      vertex_ai_credentials: "path/to/service-account.json" 
+```
+
+Start the proxy:
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+Test with curl:
+
+```bash
+curl http://0.0.0.0:4000/rerank \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "semantic-ranker-default@latest",
+    "query": "What is Google Gemini?",
+    "documents": [
+      "Gemini is a cutting edge large language model created by Google.",
+      "The Gemini zodiac symbol often depicts two figures standing side-by-side.",
+      "Gemini is a constellation that can be seen in the night sky."
+    ],
+    "top_n": 2
+  }'
+```
