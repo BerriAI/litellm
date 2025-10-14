@@ -7247,6 +7247,8 @@ class ProviderConfigManager:
             return litellm.DeepinfraRerankConfig()
         elif litellm.LlmProviders.NVIDIA_NIM == provider:
             return litellm.NvidiaNimRerankConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            return litellm.VertexAIRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
