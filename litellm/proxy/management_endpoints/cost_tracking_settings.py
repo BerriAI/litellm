@@ -111,7 +111,7 @@ async def update_cost_discount_config(
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"Invalid provider(s): {', '.join(invalid_providers)}. Must be valid LiteLLM providers. Full list of valid providers: {LlmProvidersSet}"
+                "error": f"Invalid provider(s): {', '.join(invalid_providers)}. Must be valid LiteLLM providers. See https://docs.litellm.ai/docs/providers for the full list."
             },
         )
     
