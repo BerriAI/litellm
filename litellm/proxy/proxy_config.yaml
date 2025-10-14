@@ -1,8 +1,11 @@
 model_list:
-  - model_name: db-openai-endpoint
+  - model_name: fake-openai-endpoint
     litellm_params:
       model: openai/gm
       api_key: hi
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
-
+  - model_name: db-openai-endpoint
+    litellm_params:
+      model: openai/gm
+      api_key: hi
+      api_base: http://0.0.0.0:8092
