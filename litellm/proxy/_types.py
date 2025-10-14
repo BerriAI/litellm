@@ -1608,6 +1608,18 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default={},
         description="Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint",
     )
+    auth: bool = Field(
+        default=True,
+        description="If True, requires authentication via user_api_key_auth for this endpoint. If False, the endpoint is publicly accessible without authentication.",
+    )
+    forward_headers: bool = Field(
+        default=False,
+        description="If True, forwards incoming request headers to the target endpoint.",
+    )
+    merge_query_params: bool = Field(
+        default=False,
+        description="If True, merges query parameters from the incoming request with the target URL query parameters.",
+    )
     include_subpath: bool = Field(
         default=False,
         description="If True, requests to subpaths of the path will be forwarded to the target endpoint. For example, if the path is /bria and include_subpath is True, requests to /bria/v1/text-to-image/base/2.3 will be forwarded to the target endpoint.",
