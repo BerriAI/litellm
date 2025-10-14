@@ -1,6 +1,6 @@
-import React from "react";
-import { TextInput, Icon } from "@tremor/react";
-import { TrashIcon } from "@heroicons/react/outline";
+import React, { useState } from "react";
+import { TextInput, Icon, Text } from "@tremor/react";
+import { TrashIcon, PencilAltIcon, CheckIcon, XIcon } from "@heroicons/react/outline";
 import { SimpleTable } from "../common_components/simple_table";
 import { DiscountConfig } from "./types";
 import { getProviderDisplayInfo, handleImageError } from "./provider_display_helpers";
@@ -21,6 +21,36 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
   onDiscountChange,
   onRemoveProvider,
 }) => {
+  const [editingProvider, setEditingProvider] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState<string>("");
+
+  const handleStartEdit = (provider: string, currentDiscount: number) => {
+    setEditingProvider(provider);
+    setEditValue((currentDiscount * 100).toString());
+  };
+
+  const handleSaveEdit = (provider: string) => {
+    const percentValue = parseFloat(editValue);
+    if (!isNaN(percentValue) && percentValue >= 0 && percentValue <= 100) {
+      onDiscountChange(provider, (percentValue / 100).toString());
+    }
+    setEditingProvider(null);
+    setEditValue("");
+  };
+
+  const handleCancelEdit = () => {
+    setEditingProvider(null);
+    setEditValue("");
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent, provider: string) => {
+    if (e.key === 'Enter') {
+      handleSaveEdit(provider);
+    } else if (e.key === 'Escape') {
+      handleCancelEdit();
+    }
+  };
+
   // Convert discount config to array and sort
   const data: ProviderDiscountRow[] = Object.entries(discountConfig)
     .map(([provider, discount]) => ({ provider, discount }))
@@ -57,22 +87,44 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
           header: "Discount Percentage",
           cell: (row) => (
             <div className="flex items-center gap-2">
-              <TextInput
-                value={(row.discount * 100).toString()}
-                onValueChange={(value) => {
-                  // Convert percentage back to decimal
-                  const percentValue = parseFloat(value);
-                  if (!isNaN(percentValue)) {
-                    onDiscountChange(row.provider, (percentValue / 100).toString());
-                  }
-                }}
-                placeholder="5"
-                className="w-20"
-              />
-              <span className="text-gray-600">%</span>
+              {editingProvider === row.provider ? (
+                <>
+                  <TextInput
+                    value={editValue}
+                    onValueChange={setEditValue}
+                    onKeyDown={(e) => handleKeyDown(e, row.provider)}
+                    placeholder="5"
+                    className="w-20"
+                    autoFocus
+                  />
+                  <span className="text-gray-600">%</span>
+                  <Icon
+                    icon={CheckIcon}
+                    size="sm"
+                    onClick={() => handleSaveEdit(row.provider)}
+                    className="cursor-pointer text-green-600 hover:text-green-700"
+                  />
+                  <Icon
+                    icon={XIcon}
+                    size="sm"
+                    onClick={handleCancelEdit}
+                    className="cursor-pointer text-gray-600 hover:text-gray-700"
+                  />
+                </>
+              ) : (
+                <>
+                  <Text className="font-medium">{(row.discount * 100).toFixed(1)}%</Text>
+                  <Icon
+                    icon={PencilAltIcon}
+                    size="sm"
+                    onClick={() => handleStartEdit(row.provider, row.discount)}
+                    className="cursor-pointer text-blue-600 hover:text-blue-700"
+                  />
+                </>
+              )}
             </div>
           ),
-          width: "200px",
+          width: "250px",
         },
         {
           header: "Actions",
