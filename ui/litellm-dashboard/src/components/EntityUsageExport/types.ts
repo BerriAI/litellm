@@ -21,6 +21,7 @@ export interface EntityUsageExportModalProps {
   spendData: EntitySpendData;
   dateRange: DateRangePickerValue;
   selectedFilters: string[];
+  customTitle?: string;
 }
 
 export interface ExportMetadata {

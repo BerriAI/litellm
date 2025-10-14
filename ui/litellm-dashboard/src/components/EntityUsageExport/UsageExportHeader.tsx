@@ -18,6 +18,8 @@ interface UsageExportHeaderProps {
   selectedFilters?: string[];
   onFiltersChange?: (filters: string[]) => void;
   filterOptions?: Array<{ label: string; value: string }>;
+  customTitle?: string;
+  compactLayout?: boolean;
 }
 
 const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
@@ -31,6 +33,8 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   selectedFilters = [],
   onFiltersChange,
   filterOptions = [],
+  customTitle,
+  compactLayout = false,
 }) => {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
@@ -38,7 +42,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
     <>
       <div className="mb-4">
         <div className="flex justify-between items-end gap-4">
-          <Grid numItems={2} className="gap-2 flex-1">
+          <Grid numItems={compactLayout ? 1 : 2} className={`gap-2 ${compactLayout ? "w-1/2" : "flex-1"}`}>
             <Col>
               <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
             </Col>
@@ -83,6 +87,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
         spendData={spendData}
         dateRange={dateValue}
         selectedFilters={selectedFilters}
+        customTitle={customTitle}
       />
     </>
   );

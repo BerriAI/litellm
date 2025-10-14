@@ -423,6 +423,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                 results: userSpendData.results,
                 metadata: userSpendData.metadata,
               }}
+              customTitle="Export Usage Data"
+              compactLayout={true}
             />
             <TabGroup>
               <TabList variant="solid" className="mt-1">

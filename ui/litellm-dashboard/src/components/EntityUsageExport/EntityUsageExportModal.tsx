@@ -16,12 +16,14 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   spendData,
   dateRange,
   selectedFilters,
+  customTitle,
 }) => {
   const [exportFormat, setExportFormat] = useState<ExportFormat>("csv");
   const [exportScope, setExportScope] = useState<ExportScope>("daily");
   const [isExporting, setIsExporting] = useState(false);
 
   const entityLabel = entityType === "tag" ? "Tag" : "Team";
+  const modalTitle = customTitle || `Export ${entityLabel} Usage`;
 
   const handleExportCSV = () => {
     const data = generateExportData(spendData, exportScope, entityLabel);
@@ -80,7 +82,7 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
 
   return (
     <Modal
-      title={<span className="text-base font-semibold">Export {entityLabel} Usage</span>}
+      title={<span className="text-base font-semibold">{modalTitle}</span>}
       open={isOpen}
       onCancel={onClose}
       footer={null}
