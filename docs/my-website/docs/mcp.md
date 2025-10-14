@@ -206,14 +206,14 @@ Examples for each auth type:
 mcp_servers:
   api_key_example:
     url: "https://my-mcp-server.com/mcp"
-    transport: "sse"
+    transport: "http"
     auth_type: "api_key"
     auth_value: "abc123"        # headers={"X-API-Key": "abc123"}
 
   # NEW – OAuth 2.0 Client Credentials (v1.77.5)
   oauth2_example:
     url: "https://my-mcp-server.com/mcp"
-    transport: "sse"
+    transport: "http"
     auth_type: "oauth2"         # 👈 KEY CHANGE
     authorization_url: "https://my-mcp-server.com/oauth/authorize" # optional for client-credentials
     token_url: "https://my-mcp-server.com/oauth/token"             # required
@@ -223,19 +223,19 @@ mcp_servers:
 
   bearer_example:
     url: "https://my-mcp-server.com/mcp"
-    transport: "sse"
+    transport: "http"
     auth_type: "bearer_token"
     auth_value: "abc123"        # headers={"Authorization": "Bearer abc123"}
 
   basic_example:
     url: "https://my-mcp-server.com/mcp"
-    transport: "sse"
+    transport: "http"
     auth_type: "basic"
     auth_value: "dXNlcjpwYXNz"  # headers={"Authorization": "Basic dXNlcjpwYXNz"}
 
   custom_auth_example:
     url: "https://my-mcp-server.com/mcp"
-    transport: "sse"
+    transport: "http"
     auth_type: "authorization"
     auth_value: "Token example123"  # headers={"Authorization": "Token example123"}
 
