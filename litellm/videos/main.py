@@ -3,8 +3,8 @@ import contextvars
 from functools import partial
 from typing import Any, Coroutine, Literal, Optional, Union, overload, Dict
 
+import json
 import litellm
-import orjson
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.videos.main import (
     VideoCreateOptionalRequestParams,
@@ -190,7 +190,7 @@ def video_generation(  # noqa: PLR0915
         mock_response = kwargs.get("mock_response", None)
         if mock_response is not None:
             if isinstance(mock_response, str):
-                mock_response = orjson.loads(mock_response)
+                mock_response = json.loads(mock_response)
             
             response = VideoResponse(
                 data=[VideoObject(**video_data) for video_data in mock_response.get("data", [])],
