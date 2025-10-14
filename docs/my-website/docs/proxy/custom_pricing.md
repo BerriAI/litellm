@@ -98,6 +98,10 @@ The discount will be automatically applied to all cost calculations for the conf
 - The discount is a percentage (0.05 = 5%, 0.10 = 10%, etc.)
 - Discounts only apply to the configured providers
 - Original cost, discount amount, and final cost are tracked in cost breakdown logs
+- Discount information is returned in response headers:
+  - `x-litellm-response-cost` - Final cost after discount
+  - `x-litellm-response-cost-original` - Cost before discount
+  - `x-litellm-response-cost-discount-amount` - Discount amount in USD
 
 #### Supported Providers
 
