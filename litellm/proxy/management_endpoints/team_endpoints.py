@@ -67,6 +67,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
+    _update_metadata_field,
     _upsert_budget_and_membership,
     _user_has_admin_view,
 )
@@ -917,14 +918,14 @@ async def update_team(
     _team_metadata_fields = LiteLLM_ManagementEndpoint_MetadataFields_Premium
     for field in _team_metadata_fields:
         if field in updated_kv and updated_kv[field] is not None:
-            _update_team_metadata_field(
+            _update_metadata_field(
                 updated_kv=updated_kv,
                 field_name=field,
             )
 
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
         if field in updated_kv and updated_kv[field] is not None:
-            _update_team_metadata_field(
+            _update_metadata_field(
                 updated_kv=updated_kv,
                 field_name=field,
             )
@@ -2652,26 +2653,6 @@ async def get_paginated_teams(
             f"[Non-Blocking] Error getting paginated teams: {e}"
         )
         return [], 0
-
-
-def _update_team_metadata_field(updated_kv: dict, field_name: str) -> None:
-    """
-    Helper function to update metadata fields that require premium user checks in the update endpoint
-
-    Args:
-        updated_kv: The key-value dict being used for the update
-        field_name: Name of the metadata field being updated
-    """
-    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        _premium_user_check()
-
-    if field_name in updated_kv and updated_kv[field_name] is not None:
-        # remove field from updated_kv
-        _value = updated_kv.pop(field_name)
-        if "metadata" in updated_kv and updated_kv["metadata"] is not None:
-            updated_kv["metadata"][field_name] = _value
-        else:
-            updated_kv["metadata"] = {field_name: _value}
 
 
 @router.get(

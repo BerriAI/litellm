@@ -1525,6 +1525,7 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
+    metadata: Optional[dict] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1555,6 +1556,8 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
     models: List = []
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
+    model_rpm_limit: Optional[Dict[str, int]] = None
+    model_tpm_limit: Optional[Dict[str, int]] = None
 
     #########################################################
     # Object Permission - MCP, Vector Stores etc.
