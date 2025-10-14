@@ -285,18 +285,23 @@ class DualCache(BaseCache):
                     )
 
                     if redis_result is not None:
-                        # Update in-memory cache with the value from Redis
+                        # OPTIMIZATION: Create key->index mapping once (O(n) instead of O(n²))
+                        key_to_index = {key: idx for idx, key in enumerate(keys)}
+                        
+                        # OPTIMIZATION: Single loop instead of two, skip None values early
                         for key, value in redis_result.items():
                             if value is not None:
+                                # Update in-memory cache with the value from Redis
                                 await self.in_memory_cache.async_set_cache(
-                                    key, redis_result[key], **kwargs
+                                    key, value, **kwargs
                                 )
+                                # Update result array using O(1) lookup
+                                idx = key_to_index.get(key)
+                                if idx is not None:
+                                    result[idx] = value
+                            
                             # Update the last access time for each key fetched from Redis
                             self.last_redis_batch_access_time[key] = current_time
-
-                    for key, value in redis_result.items():
-                        index = keys.index(key)
-                        result[index] = value
 
             return result
         except Exception:
