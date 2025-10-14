@@ -4,6 +4,7 @@ from litellm.proxy._types import (
     KeyRequestBase,
     LiteLLM_BudgetTable,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
+    LiteLLM_OrganizationTable,
     LiteLLM_TeamTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
@@ -31,7 +32,12 @@ def _is_user_team_admin(
 
 
 def _set_object_metadata_field(
-    object_data: Union[LiteLLM_TeamTable, KeyRequestBase, LiteLLM_BudgetTable],
+    object_data: Union[
+        LiteLLM_TeamTable,
+        KeyRequestBase,
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+    ],
     field_name: str,
     value: Any,
 ) -> None:

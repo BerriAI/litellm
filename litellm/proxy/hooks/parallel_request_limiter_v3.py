@@ -597,6 +597,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 or {}
             )
+
             should_check_rate_limit = False
             if requested_model in _tpm_limit_for_team_model:
                 should_check_rate_limit = True

@@ -184,15 +184,6 @@ async def new_organization(
         _budget_data = {k: v for k, v in _json_data.items() if k in budget_params}
         budget_row = LiteLLM_BudgetTable(**_budget_data)
 
-        for field in {"model_rpm_limit", "model_tpm_limit"}:
-            if field in _json_data and _json_data[field] is not None:
-                _set_object_metadata_field(
-                    object_data=budget_row,
-                    value=_json_data[field],
-                    field_name=field,
-                )
-                _json_data.pop(field)
-
         new_budget = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
 
         _budget = await prisma_client.db.litellm_budgettable.create(
@@ -236,6 +227,15 @@ async def new_organization(
         created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
         updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
     )
+
+    for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        if getattr(data, field, None) is not None:
+            _set_object_metadata_field(
+                object_data=organization_row,
+                field_name=field,
+                value=getattr(data, field),
+            )
+
     new_organization_row = prisma_client.jsonify_object(
         organization_row.json(exclude_none=True)
     )
