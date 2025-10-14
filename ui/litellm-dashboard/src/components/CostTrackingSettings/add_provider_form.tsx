@@ -1,6 +1,7 @@
 import React from "react";
-import { Text, TextInput, Button, Grid, Col } from "@tremor/react";
-import { Select as AntdSelect } from "antd";
+import { Text, TextInput, Button } from "@tremor/react";
+import { Select as AntdSelect, Form, Tooltip } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import { Providers, provider_map, providerLogoMap } from "../provider_info_helpers";
 import { DiscountConfig } from "./types";
 import { handleImageError } from "./provider_display_helpers";
@@ -23,11 +24,18 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
   onAddProvider,
 }) => {
   return (
-    <div className="space-y-4">
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
-          Provider
-        </label>
+    <div className="space-y-6">
+      <Form.Item
+        label={
+          <span className="text-sm font-medium text-gray-700 flex items-center">
+            Provider
+            <Tooltip title="Select the LLM provider you want to configure a discount for">
+              <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+            </Tooltip>
+          </span>
+        }
+        rules={[{ required: true, message: "Please select a provider" }]}
+      >
         <AntdSelect
           showSearch
           placeholder="Select provider"
@@ -61,30 +69,37 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
             );
           })}
         </AntdSelect>
-      </div>
+      </Form.Item>
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
-          Discount Value
-        </label>
-        <TextInput
-          placeholder="0.05 for 5%"
-          value={newDiscount}
-          onValueChange={onDiscountChange}
-        />
-        {newDiscount && !isNaN(parseFloat(newDiscount)) && (
-          <Text className="text-xs text-gray-500 mt-1">
-            = {(parseFloat(newDiscount) * 100).toFixed(1)}% discount
-          </Text>
-        )}
-      </div>
+      <Form.Item
+        label={
+          <span className="text-sm font-medium text-gray-700 flex items-center">
+            Discount Percentage
+            <Tooltip title="Enter a percentage value (e.g., 5 for 5% discount)">
+              <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+            </Tooltip>
+          </span>
+        }
+        rules={[{ required: true, message: "Please enter a discount percentage" }]}
+      >
+        <div className="flex items-center gap-2">
+          <TextInput
+            placeholder="5"
+            value={newDiscount}
+            onValueChange={onDiscountChange}
+            className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500 flex-1"
+          />
+          <span className="text-gray-600">%</span>
+        </div>
+      </Form.Item>
 
-      <div className="flex justify-end pt-2">
+      <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
         <Button 
+          variant="primary"
           onClick={onAddProvider} 
           disabled={!selectedProvider || !newDiscount}
         >
-          Add Provider
+          Add Provider Discount
         </Button>
       </div>
     </div>

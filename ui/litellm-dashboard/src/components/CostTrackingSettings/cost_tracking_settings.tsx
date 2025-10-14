@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Card, Title, Text, Subtitle, Grid, Col, Button } from "@tremor/react";
-import { Modal } from "antd";
+import { Modal, Form } from "antd";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import { Providers, provider_map } from "../provider_info_helpers";
@@ -8,6 +8,7 @@ import { CostTrackingSettingsProps, DiscountConfig } from "./types";
 import { getProviderBackendValue } from "./provider_display_helpers";
 import ProviderDiscountTable from "./provider_discount_table";
 import AddProviderForm from "./add_provider_form";
+import { ExclamationCircleOutlined } from "@ant-design/icons";
 
 const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ 
   userID, 
@@ -17,9 +18,10 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
   const [discountConfig, setDiscountConfig] = useState<DiscountConfig>({});
   const [selectedProvider, setSelectedProvider] = useState<string | undefined>(undefined);
   const [newDiscount, setNewDiscount] = useState<string>("");
-  const [loading, setLoading] = useState(false);
   const [isFetching, setIsFetching] = useState(true);
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [form] = Form.useForm();
+  const [modal, contextHolder] = Modal.useModal();
 
   useEffect(() => {
     if (accessToken) {
@@ -57,8 +59,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
     }
   };
 
-  const handleSave = async () => {
-    setLoading(true);
+  const saveDiscountConfig = async (config: DiscountConfig) => {
     try {
       const proxyBaseUrl = getProxyBaseUrl();
       const url = proxyBaseUrl 
@@ -71,11 +72,11 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(discountConfig),
+        body: JSON.stringify(config),
       });
 
       if (response.ok) {
-        NotificationsManager.success("Cost discount configuration updated successfully");
+        NotificationsManager.success("Discount configuration updated successfully");
         await fetchDiscountConfig();
       } else {
         const errorData = await response.json();
@@ -85,20 +86,18 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
     } catch (error) {
       console.error("Error updating discount config:", error);
       NotificationsManager.fromBackend("Failed to update discount configuration");
-    } finally {
-      setLoading(false);
     }
   };
 
-  const handleAddProvider = () => {
+  const handleAddProvider = async () => {
     if (!selectedProvider || !newDiscount) {
-      NotificationsManager.fromBackend("Please select a provider and enter discount value");
+      NotificationsManager.fromBackend("Please select a provider and enter discount percentage");
       return;
     }
     
-    const discountValue = parseFloat(newDiscount);
-    if (isNaN(discountValue) || discountValue < 0 || discountValue > 1) {
-      NotificationsManager.fromBackend("Discount must be between 0 and 1 (0% to 100%)");
+    const percentageValue = parseFloat(newDiscount);
+    if (isNaN(percentageValue) || percentageValue < 0 || percentageValue > 100) {
+      NotificationsManager.fromBackend("Discount must be between 0% and 100%");
       return;
     }
 
@@ -116,10 +115,15 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
       return;
     }
 
-    setDiscountConfig(prev => ({
-      ...prev,
+    // Convert percentage to decimal for storage
+    const discountValue = percentageValue / 100;
+    const updatedConfig = {
+      ...discountConfig,
       [providerValue]: discountValue,
-    }));
+    };
+    
+    setDiscountConfig(updatedConfig);
+    await saveDiscountConfig(updatedConfig);
     setSelectedProvider(undefined);
     setNewDiscount("");
     setIsModalVisible(false);
@@ -127,25 +131,41 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
 
   const handleModalCancel = () => {
     setIsModalVisible(false);
+    form.resetFields();
     setSelectedProvider(undefined);
     setNewDiscount("");
   };
 
-  const handleRemoveProvider = (provider: string) => {
-    setDiscountConfig(prev => {
-      const updated = { ...prev };
-      delete updated[provider];
-      return updated;
+  const handleFormSubmit = (values: any) => {
+    handleAddProvider();
+  };
+
+  const handleRemoveProvider = async (provider: string, providerDisplayName: string) => {
+    modal.confirm({
+      title: 'Remove Provider Discount',
+      icon: <ExclamationCircleOutlined />,
+      content: `Are you sure you want to remove the discount for ${providerDisplayName}?`,
+      okText: 'Remove',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        const updatedConfig = { ...discountConfig };
+        delete updatedConfig[provider];
+        setDiscountConfig(updatedConfig);
+        await saveDiscountConfig(updatedConfig);
+      },
     });
   };
 
-  const handleDiscountChange = (provider: string, value: string) => {
+  const handleDiscountChange = async (provider: string, value: string) => {
     const discountValue = parseFloat(value);
     if (!isNaN(discountValue) && discountValue >= 0 && discountValue <= 1) {
-      setDiscountConfig(prev => ({
-        ...prev,
+      const updatedConfig = {
+        ...discountConfig,
         [provider]: discountValue,
-      }));
+      };
+      setDiscountConfig(updatedConfig);
+      await saveDiscountConfig(updatedConfig);
     }
   };
 
@@ -154,33 +174,23 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
   }
 
   return (
-    <div style={{ width: "100%" }} className="relative">
-      <div className="bg-white rounded-lg shadow w-full">
+    <div className="w-full p-8">
+      {contextHolder}
+      <div className="bg-white rounded-lg shadow w-full max-w-full">
         <div className="border-b px-6 py-4">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
             <div>
               <Title>Cost Tracking Settings</Title>
               <Text className="mt-1 text-sm text-gray-500">
-                Configure cost discounts for different LLM providers. Discounts are applied as multipliers.
+                Configure cost discounts for different LLM providers. Changes are saved automatically.
               </Text>
             </div>
-            <div className="flex gap-3">
-              <Button
-                onClick={() => setIsModalVisible(true)}
-                size="sm"
-              >
-                + Add Provider Discount
-              </Button>
-              <Button
-                onClick={handleSave}
-                loading={loading}
-                disabled={loading || isFetching}
-                size="sm"
-                variant="primary"
-              >
-                Save Changes
-              </Button>
-            </div>
+            <Button
+              onClick={() => setIsModalVisible(true)}
+              size="sm"
+            >
+              + Add Provider Discount
+            </Button>
           </div>
         </div>
 
@@ -210,19 +220,19 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
             <div>
               <Text className="font-medium text-gray-900 text-sm">Cost Calculation</Text>
               <Text className="text-xs text-gray-600">
-                Discounts are applied to provider costs: <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs">final_cost = base_cost × (1 - discount)</code>
+                Discounts are applied to provider costs: <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs">final_cost = base_cost × (1 - discount%/100)</code>
               </Text>
             </div>
             <div>
               <Text className="font-medium text-gray-900 text-sm">Example</Text>
               <Text className="text-xs text-gray-600">
-                A 5% discount (0.05) on a $10.00 request results in: $10.00 × (1 - 0.05) = $9.50
+                A 5% discount on a $10.00 request results in: $10.00 × (1 - 0.05) = $9.50
               </Text>
             </div>
             <div>
               <Text className="font-medium text-gray-900 text-sm">Valid Range</Text>
               <Text className="text-xs text-gray-600">
-                Discount values must be between 0 (0%) and 1 (100%)
+                Discount percentages must be between 0% and 100%
               </Text>
             </div>
           </div>
@@ -230,24 +240,40 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
       </div>
 
       <Modal
-        title="Add Provider Discount"
+        title={
+          <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
+            <h2 className="text-xl font-semibold text-gray-900">Add Provider Discount</h2>
+          </div>
+        }
         open={isModalVisible}
+        width={1000}
         onCancel={handleModalCancel}
         footer={null}
-        width={600}
+        className="top-8"
+        styles={{
+          body: { padding: "24px" },
+          header: { padding: "24px 24px 0 24px", border: "none" },
+        }}
       >
-        <div className="py-4">
-          <Text className="text-sm text-gray-600 mb-4">
-            Select a provider and set its discount rate. Discount should be between 0 (0%) and 1 (100%).
+        <div className="mt-6">
+          <Text className="text-sm text-gray-600 mb-6">
+            Select a provider and set its discount percentage. Enter a value between 0% and 100% (e.g., 5 for a 5% discount).
           </Text>
-          <AddProviderForm
-            discountConfig={discountConfig}
-            selectedProvider={selectedProvider}
-            newDiscount={newDiscount}
-            onProviderChange={setSelectedProvider}
-            onDiscountChange={setNewDiscount}
-            onAddProvider={handleAddProvider}
-          />
+          <Form
+            form={form}
+            onFinish={handleFormSubmit}
+            layout="vertical"
+            className="space-y-6"
+          >
+            <AddProviderForm
+              discountConfig={discountConfig}
+              selectedProvider={selectedProvider}
+              newDiscount={newDiscount}
+              onProviderChange={setSelectedProvider}
+              onDiscountChange={setNewDiscount}
+              onAddProvider={handleAddProvider}
+            />
+          </Form>
         </div>
       </Modal>
     </div>

@@ -1,5 +1,6 @@
 import React from "react";
-import { TextInput, Button } from "@tremor/react";
+import { TextInput, Icon } from "@tremor/react";
+import { TrashIcon } from "@heroicons/react/outline";
 import { SimpleTable } from "../common_components/simple_table";
 import { DiscountConfig } from "./types";
 import { getProviderDisplayInfo, handleImageError } from "./provider_display_helpers";
@@ -7,7 +8,7 @@ import { getProviderDisplayInfo, handleImageError } from "./provider_display_hel
 interface ProviderDiscountTableProps {
   discountConfig: DiscountConfig;
   onDiscountChange: (provider: string, value: string) => void;
-  onRemoveProvider: (provider: string) => void;
+  onRemoveProvider: (provider: string, providerDisplayName: string) => void;
 }
 
 interface ProviderDiscountRow {
@@ -53,39 +54,40 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
           },
         },
         {
-          header: "Discount Value",
+          header: "Discount Percentage",
           cell: (row) => (
-            <TextInput
-              value={row.discount.toString()}
-              onValueChange={(value) => onDiscountChange(row.provider, value)}
-              placeholder="0.05"
-              className="w-32"
-            />
+            <div className="flex items-center gap-2">
+              <TextInput
+                value={(row.discount * 100).toString()}
+                onValueChange={(value) => {
+                  // Convert percentage back to decimal
+                  const percentValue = parseFloat(value);
+                  if (!isNaN(percentValue)) {
+                    onDiscountChange(row.provider, (percentValue / 100).toString());
+                  }
+                }}
+                placeholder="5"
+                className="w-20"
+              />
+              <span className="text-gray-600">%</span>
+            </div>
           ),
           width: "200px",
         },
         {
-          header: "Percentage",
-          cell: (row) => (
-            <span className="text-gray-700 font-medium">
-              {(row.discount * 100).toFixed(1)}%
-            </span>
-          ),
-          width: "120px",
-        },
-        {
           header: "Actions",
-          cell: (row) => (
-            <Button
-              size="xs"
-              variant="secondary"
-              color="red"
-              onClick={() => onRemoveProvider(row.provider)}
-            >
-              Remove
-            </Button>
-          ),
-          width: "120px",
+          cell: (row) => {
+            const { displayName } = getProviderDisplayInfo(row.provider);
+            return (
+              <Icon
+                icon={TrashIcon}
+                size="sm"
+                onClick={() => onRemoveProvider(row.provider, displayName)}
+                className="cursor-pointer hover:text-red-600"
+              />
+            );
+          },
+          width: "80px",
         },
       ]}
       getRowKey={(row) => row.provider}
