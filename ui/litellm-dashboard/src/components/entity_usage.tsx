@@ -20,6 +20,7 @@ import {
   Tab,
   TabPanels,
   Subtitle,
+  Button,
 } from "@tremor/react";
 import AdvancedDatePicker from "./shared/advanced_date_picker";
 import { Select } from "antd";
@@ -30,6 +31,7 @@ import TopKeyView from "./top_key_view";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { valueFormatterSpend } from "./usage/utils/value_formatters";
 import { getProviderLogoAndName } from "./provider_info_helpers";
+import EntityUsageExportModal from "./entity_usage_export_modal";
 
 interface EntityMetrics {
   metrics: {
@@ -103,6 +105,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
     to: new Date(),
   });
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
   const fetchSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
@@ -328,27 +331,45 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   };
 
   return (
-    <div style={{ width: "100%" }}>
-      <Grid numItems={2} className="gap-2 w-full mb-4">
-        <Col>
-          <AdvancedDatePicker value={dateValue} onValueChange={setDateValue} />
-        </Col>
-        {entityList && entityList.length > 0 && (
+    <div style={{ width: "100%" }} className="relative">
+      <div className="flex justify-between items-start mb-4">
+        <Grid numItems={2} className="gap-2 flex-1">
           <Col>
-            <Text>Filter by {entityType === "tag" ? "Tags" : "Teams"}</Text>
-            <Select
-              mode="multiple"
-              style={{ width: "100%" }}
-              placeholder={`Select ${entityType === "tag" ? "tags" : "teams"} to filter...`}
-              value={selectedTags}
-              onChange={setSelectedTags}
-              options={getAllTags()}
-              className="mt-2"
-              allowClear
-            />
+            <AdvancedDatePicker value={dateValue} onValueChange={setDateValue} />
           </Col>
-        )}
-      </Grid>
+          {entityList && entityList.length > 0 && (
+            <Col>
+              <Text>Filter by {entityType === "tag" ? "Tags" : "Teams"}</Text>
+              <Select
+                mode="multiple"
+                style={{ width: "100%" }}
+                placeholder={`Select ${entityType === "tag" ? "tags" : "teams"} to filter...`}
+                value={selectedTags}
+                onChange={setSelectedTags}
+                options={getAllTags()}
+                className="mt-2"
+                allowClear
+              />
+            </Col>
+          )}
+        </Grid>
+        <Button
+          onClick={() => setIsExportModalOpen(true)}
+          className="ml-4"
+          icon={() => (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+              />
+            </svg>
+          )}
+        >
+          Export Data
+        </Button>
+      </div>
       <TabGroup>
         <TabList variant="solid" className="mt-1">
           <Tab>Cost</Tab>
@@ -653,6 +674,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           </TabPanel>
         </TabPanels>
       </TabGroup>
+
+      <EntityUsageExportModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        entityType={entityType}
+        spendData={spendData}
+        dateRange={dateValue}
+        selectedFilters={selectedTags}
+      />
     </div>
   );
 };
