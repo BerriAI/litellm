@@ -22,10 +22,13 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
-    from ..types import EndpointType
+    from litellm.types.utils import LiteLLMBatch
 else:
     PassThroughEndpointLogging = Any
-    EndpointType = Any
+    LiteLLMBatch = Any
+
+# Define EndpointType locally to avoid import issues
+EndpointType = Any
 
 
 class VertexPassthroughLoggingHandler:
@@ -204,6 +207,17 @@ class VertexPassthroughLoggingHandler:
                 "result": litellm_prediction_response,
                 "kwargs": kwargs,
             }
+        elif "batchPredictionJobs" in url_route:
+            return VertexPassthroughLoggingHandler.batch_prediction_jobs_handler(
+                httpx_response=httpx_response,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                **kwargs,
+            )
         else:
             return {
                 "result": None,
@@ -412,3 +426,167 @@ class VertexPassthroughLoggingHandler:
         logging_obj.model_call_details["model"] = logging_obj.model
         logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
         return kwargs
+
+    @staticmethod
+    def batch_prediction_jobs_handler(
+        httpx_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        url_route: str,
+        result: str,
+        start_time: datetime,
+        end_time: datetime,
+        cache_hit: bool,
+        **kwargs,
+    ) -> PassThroughEndpointLoggingTypedDict:
+        """
+        Handle batch prediction jobs passthrough logging.
+        Creates a managed object for cost tracking when batch job is successfully created.
+        """
+        from litellm.types.utils import LiteLLMBatch
+        from litellm.llms.vertex_ai.batches.transformation import VertexAIBatchTransformation
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            _is_base64_encoded_unified_file_id,
+            get_batch_id_from_unified_batch_id,
+            get_model_id_from_unified_batch_id,
+        )
+        from litellm._uuid import uuid
+        import base64
+
+        try:
+            _json_response = httpx_response.json()
+            
+            # Only handle successful batch job creation (POST requests)
+            if httpx_response.status_code == 200 and "name" in _json_response:
+                # Transform Vertex AI response to LiteLLM batch format
+                litellm_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
+                    response=_json_response
+                )
+                
+                # Extract batch ID and model from the response
+                batch_id = VertexAIBatchTransformation._get_batch_id_from_vertex_ai_batch_response(_json_response)
+                model_name = _json_response.get("model", "unknown")
+                
+                # Create unified object ID for tracking
+                # Format: base64(model_id:batch_id)
+                unified_object_id = base64.b64encode(f"{model_name}:{batch_id}".encode()).decode()
+                
+                # Store the managed object for cost tracking
+                # This will be picked up by check_batch_cost polling mechanism
+                VertexPassthroughLoggingHandler._store_batch_managed_object(
+                    unified_object_id=unified_object_id,
+                    batch_object=litellm_batch_response,
+                    model_object_id=batch_id,
+                    logging_obj=logging_obj,
+                    **kwargs,
+                )
+                
+                # Create a simple model response for logging
+                litellm_model_response = ModelResponse()
+                litellm_model_response.id = str(uuid.uuid4())
+                litellm_model_response.model = model_name
+                litellm_model_response.object = "batch_prediction_job"
+                litellm_model_response.created = int(start_time.timestamp())
+                
+                # Set response cost to 0 initially (will be updated when batch completes)
+                response_cost = 0.0
+                kwargs["response_cost"] = response_cost
+                kwargs["model"] = model_name
+                kwargs["batch_id"] = batch_id
+                kwargs["unified_object_id"] = unified_object_id
+                
+                logging_obj.model = model_name
+                logging_obj.model_call_details["model"] = logging_obj.model
+                logging_obj.model_call_details["response_cost"] = response_cost
+                logging_obj.model_call_details["batch_id"] = batch_id
+                
+                return {
+                    "result": litellm_model_response,
+                    "kwargs": kwargs,
+                }
+                
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error in batch_prediction_jobs_handler: {e}")
+            # Return basic response on error
+            litellm_model_response = ModelResponse()
+            litellm_model_response.id = str(uuid.uuid4())
+            litellm_model_response.model = "vertex_ai_batch"
+            litellm_model_response.object = "batch_prediction_job"
+            litellm_model_response.created = int(start_time.timestamp())
+            
+            kwargs["response_cost"] = 0.0
+            kwargs["model"] = "vertex_ai_batch"
+            
+            return {
+                "result": litellm_model_response,
+                "kwargs": kwargs,
+            }
+
+    @staticmethod
+    def _store_batch_managed_object(
+        unified_object_id: str,
+        batch_object: LiteLLMBatch,
+        model_object_id: str,
+        logging_obj: LiteLLMLoggingObj,
+        **kwargs,
+    ) -> None:
+        """
+        Store batch managed object for cost tracking.
+        This will be picked up by the check_batch_cost polling mechanism.
+        """
+        try:
+            # Get the managed files hook from the logging object
+            # This is a bit of a hack, but we need access to the proxy logging system
+            from litellm.proxy.proxy_server import proxy_logging_obj
+            
+            managed_files_hook = proxy_logging_obj.get_proxy_hook("managed_files")
+            if managed_files_hook is not None:
+                # Create a mock user API key dict for the managed object storage
+                from litellm.proxy._types import UserAPIKeyAuth
+                user_api_key_dict = UserAPIKeyAuth(
+                    user_id=kwargs.get("user_id", "default-user"),
+                    api_key="",
+                    team_id=None,
+                    team_alias=None,
+                    user_role="",
+                    user_email=None,
+                    max_budget=None,
+                    spend=None,
+                    models=None,
+                    tpm_limit=None,
+                    rpm_limit=None,
+                    budget_duration=None,
+                    budget_reset_at=None,
+                    max_parallel_requests=None,
+                    allowed_model_region=None,
+                    metadata=None,
+                    user_info=None,
+                    key_alias=None,
+                    permissions=None,
+                    model_max_budget=None,
+                    model_spend=None,
+                    model_budget_duration=None,
+                    model_budget_reset_at=None,
+                )
+                
+                # Store the unified object for batch cost tracking
+                import asyncio
+                asyncio.create_task(
+                    managed_files_hook.store_unified_object_id(
+                        unified_object_id=unified_object_id,
+                        file_object=batch_object,
+                        litellm_parent_otel_span=None,
+                        model_object_id=model_object_id,
+                        file_purpose="batch",
+                        user_api_key_dict=user_api_key_dict,
+                    )
+                )
+                
+                verbose_proxy_logger.info(
+                    f"Stored batch managed object with unified_object_id={unified_object_id}, batch_id={model_object_id}"
+                )
+            else:
+                verbose_proxy_logger.warning("Managed files hook not available, cannot store batch object for cost tracking")
+                
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error storing batch managed object: {e}")
+
