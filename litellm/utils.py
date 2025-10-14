@@ -1507,7 +1507,7 @@ def client(original_function):  # noqa: PLR0915
             )
             # Only run if call_type is a valid value in CallTypes
             if call_type in [ct.value for ct in CallTypes]:
-                await async_post_call_success_deployment_hook(
+                result = await async_post_call_success_deployment_hook(
                     request_data=kwargs,
                     response=result,
                     call_type=CallTypes(call_type),
@@ -7211,6 +7211,9 @@ class ProviderConfigManager:
             return VolcEngineEmbeddingConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudEmbeddingConfig()
+        elif litellm.LlmProviders.SAGEMAKER == provider:
+            from litellm.llms.sagemaker.embedding.transformation import SagemakerEmbeddingConfig
+            return SagemakerEmbeddingConfig.get_model_config(model)
         return None
 
     @staticmethod
