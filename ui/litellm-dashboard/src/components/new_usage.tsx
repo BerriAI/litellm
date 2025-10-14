@@ -28,7 +28,6 @@ import {
   TableCell,
   DateRangePickerValue,
 } from "@tremor/react";
-import AdvancedDatePicker from "./shared/advanced_date_picker";
 
 import { userDailyActivityCall, userDailyActivityAggregatedCall, tagListCall } from "./networking";
 import { Tag } from "./tag_management/types";
@@ -46,6 +45,7 @@ import { valueFormatterSpend } from "./usage/utils/value_formatters";
 import CloudZeroExportModal from "./cloudzero_export_modal";
 import { ChartLoader } from "./shared/chart_loader";
 import { getProviderLogoAndName } from "./provider_info_helpers";
+import { UsageExportHeader } from "./EntityUsageExport";
 
 interface NewUsagePageProps {
   accessToken: string | null;
@@ -415,11 +415,15 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         <TabPanels>
           {/* Your Usage Panel */}
           <TabPanel>
-            <Grid numItems={2} className="gap-10 w-1/2 mb-4">
-              <Col>
-                <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
-              </Col>
-            </Grid>
+            <UsageExportHeader
+              dateValue={dateValue}
+              onDateChange={handleDateChange}
+              entityType="team"
+              spendData={{
+                results: userSpendData.results,
+                metadata: userSpendData.metadata,
+              }}
+            />
             <TabGroup>
               <TabList variant="solid" className="mt-1">
                 <Tab>Cost</Tab>
