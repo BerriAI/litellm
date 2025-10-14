@@ -244,3 +244,48 @@ async def test_dual_cache_delete(is_async):
         result = dual_cache.get_cache(test_key)
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_async_batch_get_cache_complexity_is_linear():
+    """
+    Validates async_batch_get_cache remains O(n) complexity.
+    
+    Verifies the optimization that replaced O(n²) list.index() calls with O(1) dict lookup.
+    Tests scaling with 10, 50, 100, 200 keys - for O(n), doubling input should roughly
+    double time (factor ~1). For O(n²), it would quadruple (factor ~4).
+    """
+    in_memory = InMemoryCache()
+    redis_cache = RedisCache(host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"))
+    dual_cache = DualCache(in_memory_cache=in_memory, redis_cache=redis_cache)
+    
+    timings = []
+    for size in [10, 50, 100, 200]:
+        test_keys = [f"perf_test_{str(uuid.uuid4())}" for _ in range(size)]
+        test_values = [{"test": f"value_{i}", "data": "x" * 100} for i in range(size)]
+        
+        # Populate only Redis to force the optimized lookup path
+        await redis_cache.async_set_cache_pipeline(list(zip(test_keys, test_values)), ttl=30)
+        in_memory.cache_dict = {}
+        
+        start_time = time.perf_counter()
+        result = await dual_cache.async_batch_get_cache(test_keys)
+        timings.append((size, time.perf_counter() - start_time))
+        
+        assert result == test_values
+        for key in test_keys:
+            await dual_cache.async_delete_cache(key)
+    
+    # Calculate average complexity factor: time_ratio / size_ratio
+    # O(n) should have factor ~1, O(n²) would have factor approaching size_ratio
+    complexity_factors = [
+        (timings[i][1] / timings[i-1][1]) / (timings[i][0] / timings[i-1][0])
+        for i in range(1, len(timings))
+    ]
+    avg_factor = sum(complexity_factors) / len(complexity_factors)
+    
+    assert avg_factor < 2.5, (
+        f"Performance regression: complexity factor {avg_factor:.2f} suggests non-linear growth. "
+        f"Expected < 2.5 for O(n). Factors: {[f'{f:.2f}' for f in complexity_factors]}"
+    )
+
