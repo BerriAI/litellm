@@ -1,6 +1,7 @@
 # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
+import os
 import sys
 from datetime import datetime, timedelta
 from typing import (
@@ -2360,7 +2361,6 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
     }
     """
 
-    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
     from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
 
     configured_tags = litellm.custom_prometheus_tags
@@ -2368,7 +2368,6 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
         return {}
 
     result: Dict[str, str] = {}
-    pattern_router = PatternMatchRouter()
 
     for configured_tag in configured_tags:
         label_name = _sanitize_prometheus_label_name(f"tag_{configured_tag}")

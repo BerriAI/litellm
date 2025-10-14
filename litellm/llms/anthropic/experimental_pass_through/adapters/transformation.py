@@ -26,8 +26,6 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockRedactedThinking,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
-    AnthropicResponseContentBlockThinking,
-    AnthropicResponseContentBlockRedactedThinking,
     ContentBlockDelta,
     ContentJsonBlockDelta,
     ContentTextBlockDelta,
@@ -52,7 +50,6 @@ from litellm.types.llms.openai import (
     ChatCompletionSystemMessage,
     ChatCompletionTextObject,
     ChatCompletionThinkingBlock,
-    ChatCompletionRedactedThinkingBlock,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolChoiceFunctionParam,
     ChatCompletionToolChoiceObjectParam,
@@ -426,18 +423,21 @@ class LiteLLMAnthropicMessagesAdapter:
             if hasattr(choice.message, 'thinking_blocks') and choice.message.thinking_blocks:
                 for thinking_block in choice.message.thinking_blocks:
                     if thinking_block.get("type") == "thinking":
+                        thinking_value = thinking_block.get("thinking", "")
+                        signature_value = thinking_block.get("signature", "")
                         new_content.append(
                             AnthropicResponseContentBlockThinking(
                                 type="thinking",
-                                thinking=thinking_block.get("thinking", ""),
-                                signature=thinking_block.get("signature", ""),
+                                thinking=str(thinking_value) if thinking_value is not None else "",
+                                signature=str(signature_value) if signature_value is not None else None,
                             )
                         )
                     elif thinking_block.get("type") == "redacted_thinking":
+                        data_value = thinking_block.get("data", "")
                         new_content.append(
                             AnthropicResponseContentBlockRedactedThinking(
                                 type="redacted_thinking",
-                                data=thinking_block.get("data", ""),
+                                data=str(data_value) if data_value is not None else "",
                             )
                         )
             
