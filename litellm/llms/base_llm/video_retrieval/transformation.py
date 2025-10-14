@@ -1,10 +1,9 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import httpx
 
-from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -75,7 +74,7 @@ class BaseVideoRetrievalConfig(ABC):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> VideoResponse:
+    ) -> bytes:
         pass
 
     def get_error_class(

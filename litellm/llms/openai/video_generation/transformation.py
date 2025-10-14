@@ -1,14 +1,15 @@
-import types
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, IO
 from io import BufferedReader
 
 import httpx
 from httpx._types import RequestFiles
 
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
-from litellm.types.llms.openai import CreateVideoRequest, OpenAIVideoObject
+from litellm.types.llms.openai import CreateVideoRequest
 from litellm.types.videos.main import VideoResponse
 from litellm.types.router import GenericLiteLLMParams
+from litellm.secret_managers.main import get_secret_str
+import litellm
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -25,7 +26,6 @@ else:
     LiteLLMLoggingObj = Any
     BaseVideoGenerationConfig = Any
     BaseLLMException = Any
-    VideoResponse = Any
 
 
 class OpenAIVideoGenerationConfig(BaseVideoGenerationConfig):
@@ -65,15 +65,17 @@ class OpenAIVideoGenerationConfig(BaseVideoGenerationConfig):
         model: str,
         api_key: Optional[str] = None,
     ) -> dict:
-        """
-        Validate the environment for OpenAI video generation.
-        """
-        if api_key is None:
-            raise ValueError("OpenAI API key is required for video generation")
-        
-        headers["Authorization"] = f"Bearer {api_key}"
-        headers["Content-Type"] = "application/json"
-        
+        api_key = (
+            api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret_str("OPENAI_API_KEY")
+        )
+        headers.update(
+            {
+                "Authorization": f"Bearer {api_key}",
+            }
+        )
         return headers
 
     def get_complete_url(
@@ -115,7 +117,7 @@ class OpenAIVideoGenerationConfig(BaseVideoGenerationConfig):
         )
         
         # Handle file uploads
-        files_list: RequestFiles = []
+        files_list: List[Tuple[str, Tuple[str, Union[IO[bytes], bytes, str], str]]] = []
         
         # Handle input_reference parameter if provided
         _input_reference = video_create_optional_request_params.get("input_reference")
@@ -140,7 +142,7 @@ class OpenAIVideoGenerationConfig(BaseVideoGenerationConfig):
                 )
         
         # Convert to dict for JSON serialization
-        data = video_create_request.model_dump(exclude_none=True)
+        data = dict(video_create_request)
         
         return data, files_list
 
@@ -156,9 +158,10 @@ class OpenAIVideoGenerationConfig(BaseVideoGenerationConfig):
         response_data = raw_response.json()
         
         # Transform the response data
+        from litellm.types.videos.main import VideoObject
         video_objects = []
         for video_data in response_data.get("data", []):
-            video_obj = OpenAIVideoObject(**video_data)
+            video_obj = VideoObject(**video_data)
             video_objects.append(video_obj)
         
         # Create the response

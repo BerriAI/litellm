@@ -261,6 +261,7 @@ from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
 from litellm.llms.base_llm.videos_generation.transformation import BaseVideoGenerationConfig
+from litellm.llms.base_llm.video_retrieval.transformation import BaseVideoRetrievalConfig
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
@@ -7544,6 +7545,19 @@ class ProviderConfigManager:
             )
 
             return OpenAIVideoGenerationConfig()
+        return None
+
+    @staticmethod
+    def get_provider_video_content_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseVideoRetrievalConfig]:
+        if LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.video_retrieval.transformation import (
+                OpenAIVideoRetrievalConfig,
+            )
+
+            return OpenAIVideoRetrievalConfig()
         return None
 
     @staticmethod
