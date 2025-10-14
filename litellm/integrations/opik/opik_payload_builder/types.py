@@ -27,6 +27,7 @@ class SpanPayload(TypedDict, total=False):
     parent_span_id: Optional[str]
     name: str
     type: Literal["llm"]
+    model: str
     start_time: str
     end_time: str
     input: Any

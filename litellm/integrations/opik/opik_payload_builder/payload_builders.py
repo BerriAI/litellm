@@ -72,6 +72,7 @@ def build_span_payload(
         parent_span_id=parent_span_id,
         name=span_name,
         type="llm",
+        model=model,
         start_time=start_time.astimezone(timezone.utc)
         .isoformat()
         .replace("+00:00", "Z"),
