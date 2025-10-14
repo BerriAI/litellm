@@ -1609,7 +1609,7 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         description="Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint",
     )
     auth: bool = Field(
-        default=True,
+        default=False,
         description="If True, requires authentication via user_api_key_auth for this endpoint. If False, the endpoint is publicly accessible without authentication.",
     )
     forward_headers: bool = Field(
