@@ -13,7 +13,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.rerank import RerankResponse
+from litellm.types.rerank import RerankResponse, RerankResponseMeta, RerankBilledUnits, RerankResponseResult
+
 
 
 class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
@@ -170,18 +171,27 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         # Sort by relevance score (descending)
         results.sort(key=lambda x: x["relevance_score"], reverse=True)
         
-        # Create response in Cohere format
-        response_data = {
-            "id": f"vertex_ai_rerank_{model}",
-            "results": results,
-            "meta": {
-                "billed_units": {
-                    "search_units": len(records)
-                }
-            }
-        }
+        # Create response in Cohere format        
+        # Convert results to proper RerankResponseResult objects
+        rerank_results = []
+        for result in results:
+            rerank_results.append(RerankResponseResult(
+                index=result["index"],
+                relevance_score=result["relevance_score"]
+            ))
         
-        return RerankResponse(**response_data)
+        # Create meta object
+        meta = RerankResponseMeta(
+            billed_units=RerankBilledUnits(
+                search_units=len(records)
+            )
+        )
+        
+        return RerankResponse(
+            id=f"vertex_ai_rerank_{model}",
+            results=rerank_results,
+            meta=meta
+        )
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return [
