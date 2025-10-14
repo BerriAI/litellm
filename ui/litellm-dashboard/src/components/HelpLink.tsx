@@ -1,10 +1,21 @@
-import React from "react";
-import { ExternalLink } from "lucide-react";
+import React, { useState, useRef, useEffect } from "react";
+import { ExternalLink, ChevronDown } from "lucide-react";
 
 interface HelpLinkProps {
   href: string;
   children?: React.ReactNode;
   variant?: "inline" | "subtle" | "button";
+  className?: string;
+}
+
+interface DocMenuItem {
+  label: string;
+  href: string;
+}
+
+interface DocsMenuProps {
+  items: DocMenuItem[];
+  children?: React.ReactNode;
   className?: string;
 }
 
