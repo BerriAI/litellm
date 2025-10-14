@@ -176,24 +176,25 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
   return (
     <div className="w-full p-8">
       {contextHolder}
-      <div className="bg-white rounded-lg shadow w-full max-w-full">
-        <div className="border-b px-6 py-4">
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
-            <div>
-              <Title>Cost Tracking Settings</Title>
-              <Text className="mt-1 text-sm text-gray-500">
-                Configure cost discounts for different LLM providers. Changes are saved automatically.
-              </Text>
-            </div>
-            <Button
-              onClick={() => setIsModalVisible(true)}
-              size="sm"
-            >
-              + Add Provider Discount
-            </Button>
-          </div>
+      
+      {/* Header Section - Outside the card */}
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-6">
+        <div>
+          <Title>Cost Tracking Settings</Title>
+          <Text className="text-gray-500">
+            Configure cost discounts for different LLM providers. Changes are saved automatically.
+          </Text>
         </div>
+        <Button
+          onClick={() => setIsModalVisible(true)}
+          className="mt-4 md:mt-0"
+        >
+          + Add Provider Discount
+        </Button>
+      </div>
 
+      {/* Main Content Card */}
+      <div className="bg-white rounded-lg shadow w-full max-w-full">
         {isFetching ? (
           <div className="py-12 text-center">
             <Text className="text-gray-500">Loading configuration...</Text>
