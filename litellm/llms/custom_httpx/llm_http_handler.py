@@ -43,6 +43,8 @@ from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.base_llm.videos_generation.transformation import BaseVideoGenerationConfig
+from litellm.llms.base_llm.video_retrieval.transformation import BaseVideoRetrievalConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -80,6 +82,7 @@ from litellm.types.vector_stores import (
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
 )
+from litellm.types.videos.main import VideoResponse
 from litellm.utils import (
     CustomStreamWrapper,
     ImageResponse,
@@ -2995,6 +2998,7 @@ class BaseLLMHTTPHandler:
             BaseGoogleGenAIGenerateContentConfig,
             BaseAnthropicMessagesConfig,
             BaseBatchesConfig,
+            BaseVideoGenerationConfig,
             "BasePassthroughConfig",
         ],
     ):
@@ -3496,6 +3500,369 @@ class BaseLLMHTTPHandler:
         )
 
         return model_response
+
+    ###### VIDEO GENERATION HANDLER ######
+    def video_generation_handler(
+        self,
+        model: str,
+        prompt: str,
+        video_generation_provider_config: "BaseVideoGenerationConfig",
+        video_generation_optional_request_params: Dict,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        fake_stream: bool = False,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        api_key: Optional[str] = None,
+    ) -> Union[
+        VideoResponse,
+        Coroutine[Any, Any, VideoResponse],
+    ]:
+        """
+        Handles video generation requests.
+        When _is_async=True, returns a coroutine instead of making the call directly.
+        """
+        if _is_async:
+            # Return the async coroutine if called with _is_async=True
+            return self.async_video_generation_handler(
+                model=model,
+                prompt=prompt,
+                video_generation_provider_config=video_generation_provider_config,
+                video_generation_optional_request_params=video_generation_optional_request_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout,
+                client=client if isinstance(client, AsyncHTTPHandler) else None,
+                fake_stream=fake_stream,
+                litellm_metadata=litellm_metadata,
+                api_key=api_key,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = video_generation_provider_config.validate_environment(
+            api_key=api_key,
+            headers=video_generation_optional_request_params.get("extra_headers", {})
+            or {},
+            model=model,
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = video_generation_provider_config.get_complete_url(
+            model=model,
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        data, files = video_generation_provider_config.transform_video_create_request(
+            model=model,
+            prompt=prompt,
+            video_create_optional_request_params=video_generation_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=prompt,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            # Use JSON when no files, otherwise use form data with files
+            if files is None or len(files) == 0:
+                # --- BEGIN MOCK VIDEO RESPONSE ---
+                mock_video_response = {
+                    "data": [
+                        {
+                            "id": "video_123",
+                            "object": "video",
+                            "model": "sora-2",
+                            "status": "queued",
+                            "progress": 0,
+                            "created_at": 1712697600,
+                            "size": "1024x1808",
+                            "seconds": "8",
+                            "quality": "standard",
+                        }
+                    ],
+                    "usage": {},
+                    "hidden_params": {},
+                }
+
+                import types
+                class MockHTTPXResponse:
+                    def __init__(self, json_data):
+                        self._json_data = json_data
+                        self.status_code = 200
+                        self.text = str(json_data)
+                    def json(self):
+                        return self._json_data
+                response = MockHTTPXResponse(mock_video_response)
+                # --- END MOCK VIDEO RESPONSE ---
+            else:
+                print(f"DEBUG: Using multipart form data request")
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files=files,
+                    timeout=timeout,
+                )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=video_generation_provider_config,
+            )
+
+        return video_generation_provider_config.transform_video_create_response(
+            model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_video_generation_handler(
+        self,
+        model: str,
+        prompt: str,
+        video_generation_provider_config: "BaseVideoGenerationConfig",
+        video_generation_optional_request_params: Dict,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        fake_stream: bool = False,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        api_key: Optional[str] = None,
+    ) -> VideoResponse:
+        """
+        Async version of the video generation handler.
+        Uses async HTTP client to make requests.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = video_generation_provider_config.validate_environment(
+            api_key=api_key,
+            headers=video_generation_optional_request_params.get("extra_headers", {})
+            or {},
+            model=model,
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = video_generation_provider_config.get_complete_url(
+            model=model,
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        data, files = video_generation_provider_config.transform_video_create_request(
+            model=model,
+            prompt=prompt,
+            video_create_optional_request_params=video_generation_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=prompt,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            # Use JSON when no files, otherwise use form data with files
+            if files is None or len(files) == 0:
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
+            else:
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files=files,
+                    timeout=timeout,
+                )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=video_generation_provider_config,
+            )
+
+        return video_generation_provider_config.transform_video_create_response(
+            model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    ###### VIDEO CONTENT HANDLER ######
+    def video_content_handler(
+        self,
+        video_id: str,
+        video_content_provider_config: "BaseVideoRetrievalConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        extra_headers: Optional[Dict[str, Any]] = None,
+        api_key: Optional[str] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        variant: Optional[str] = None,
+    ) -> bytes:
+        """
+        Handle video content download requests.
+        """
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = video_content_provider_config.validate_environment(
+            api_key=api_key,
+            headers=extra_headers or {},
+            model="",  # No model needed for content download
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = video_content_provider_config.get_complete_url(
+            model="",  # No model needed for content download
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        # Construct the URL for video content download
+        url = f"{api_base.rstrip('/')}/{video_id}/content"
+        
+        # Add variant query parameter if provided
+        params = {}
+        if variant:
+            params["variant"] = variant
+
+        try:
+            # Make the GET request to download content
+            response = sync_httpx_client.get(
+                url=url,
+                headers=headers,
+                params=params,
+            )
+            
+            # Return the raw content as bytes
+            return response.content
+            
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=video_content_provider_config,
+            )
+
+    async def async_video_content_handler(
+        self,
+        video_id: str,
+        video_content_provider_config: "BaseVideoRetrievalConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        extra_headers: Optional[Dict[str, Any]] = None,
+        api_key: Optional[str] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        variant: Optional[str] = None,
+    ) -> bytes:
+        """
+        Async version of the video content download handler.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = video_content_provider_config.validate_environment(
+            api_key=api_key,
+            headers=extra_headers or {},
+            model="",  # No model needed for content download
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = video_content_provider_config.get_complete_url(
+            model="",  # No model needed for content download
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        # Construct the URL for video content download
+        url = f"{api_base.rstrip('/')}/{video_id}/content"
+        
+        # Add variant query parameter if provided
+        params = {}
+        if variant:
+            params["variant"] = variant
+
+        try:
+            # Make the GET request to download content
+            response = await async_httpx_client.get(
+                url=url,
+                headers=headers,
+                params=params,
+            )
+            
+            # Return the raw content as bytes
+            return response.content
+            
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=video_content_provider_config,
+            )
 
     ###### VECTOR STORE HANDLER ######
     async def async_vector_store_search_handler(

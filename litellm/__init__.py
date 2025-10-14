@@ -973,6 +973,9 @@ all_embedding_models = (
 ####### IMAGE GENERATION MODELS ###################
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
+####### VIDEO GENERATION MODELS ###################
+openai_video_generation_models = ["sora-2"]
+
 from .timeout import timeout
 from .cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
@@ -1320,6 +1323,7 @@ from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .images.main import *
+from .videos.main import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
