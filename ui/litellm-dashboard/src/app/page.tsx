@@ -35,6 +35,7 @@ import { MCPServers } from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
 import VectorStoreManagement from "@/components/vector_store_management";
 import UIThemeSettings from "@/components/ui_theme_settings";
+import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
 import useFeatureFlags from "@/hooks/useFeatureFlags";
@@ -426,6 +427,8 @@ export default function CreateKeyPage() {
                   />
                 ) : page == "ui-theme" ? (
                   <UIThemeSettings userID={userID} userRole={userRole} accessToken={accessToken} />
+                ) : page == "cost-tracking-settings" ? (
+                  <CostTrackingSettings userID={userID} userRole={userRole} accessToken={accessToken} />
                 ) : page == "model-hub-table" ? (
                   <ModelHubTable
                     accessToken={accessToken}
