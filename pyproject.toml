@@ -152,6 +152,9 @@ opentelemetry-sdk = "1.25.0"
 opentelemetry-exporter-otlp = "1.25.0"
 azure-identity = "^1.15.0"
 
+[tool.poetry.group.test.dependencies]
+google-cloud-aiplatform = ">=1.38"
+
 [build-system]
 requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
