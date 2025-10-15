@@ -1260,7 +1260,7 @@ class BaseLLMHTTPHandler:
     def _prepare_ocr_request(
         self,
         model: str,
-        image: FileTypes,
+        document: Dict[str, str],
         optional_params: dict,
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str],
@@ -1268,7 +1268,7 @@ class BaseLLMHTTPHandler:
         headers: Optional[Dict[str, Any]],
         provider_config: BaseOCRConfig,
         litellm_params: dict,
-    ) -> Tuple[Dict[str, Any], str, Union[Dict, bytes, None], Optional[Dict[str, Any]]]:
+    ) -> Tuple[Dict[str, Any], str, Dict[str, Any], None]:
         """
         Shared logic for preparing OCR requests.
         Returns: (headers, complete_url, data, files)
@@ -1290,7 +1290,7 @@ class BaseLLMHTTPHandler:
         # Transform the request to get data and files
         transformed_result = provider_config.transform_ocr_request(
             model=model,
-            image=image,
+            document=document,
             optional_params=optional_params,
             headers=headers,
         )
@@ -1301,21 +1301,24 @@ class BaseLLMHTTPHandler:
                 f"Provider {provider_config.__class__.__name__} must return OCRRequestData"
             )
 
+        # Data is always a dict for Mistral OCR format
+        if not isinstance(transformed_result.data, dict):
+            raise ValueError(f"Expected dict data for OCR request, got {type(transformed_result.data)}")
+        
         data = transformed_result.data
-        files = transformed_result.files
 
         ## LOGGING
         logging_obj.pre_call(
-            input=f"OCR image processing",
+            input=f"OCR document processing",
             api_key=api_key,
             additional_args={
-                "complete_input_dict": data or {},
+                "complete_input_dict": data,
                 "api_base": complete_url,
                 "headers": headers,
             },
         )
 
-        return headers, complete_url, data, files
+        return headers, complete_url, data, None
 
     def _transform_ocr_response(
         self,
@@ -1334,7 +1337,7 @@ class BaseLLMHTTPHandler:
     def ocr(
         self,
         model: str,
-        image: FileTypes,
+        document: Dict[str, str],
         optional_params: dict,
         timeout: Union[float, httpx.Timeout],
         logging_obj: LiteLLMLoggingObj,
@@ -1361,7 +1364,7 @@ class BaseLLMHTTPHandler:
         if aocr is True:
             return self.async_ocr(
                 model=model,
-                image=image,
+                document=document,
                 optional_params=optional_params,
                 timeout=timeout,
                 logging_obj=logging_obj,
@@ -1377,7 +1380,7 @@ class BaseLLMHTTPHandler:
         # Prepare the request
         headers, complete_url, data, files = self._prepare_ocr_request(
             model=model,
-            image=image,
+            document=document,
             optional_params=optional_params,
             logging_obj=logging_obj,
             api_key=api_key,
@@ -1391,30 +1394,13 @@ class BaseLLMHTTPHandler:
             client = _get_httpx_client()
 
         try:
-            # Make the POST request - handle different data types
-            if isinstance(data, dict):
-                response = client.post(
-                    url=complete_url,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
-            elif isinstance(data, bytes):
-                response = client.post(
-                    url=complete_url,
-                    headers=headers,
-                    data=data,
-                    timeout=timeout,
-                )
-            elif files is not None:
-                response = client.post(
-                    url=complete_url,
-                    headers=headers,
-                    files=files,
-                    timeout=timeout,
-                )
-            else:
-                raise ValueError("No data or files provided for OCR request")
+            # Make the POST request with JSON data (Mistral format)
+            response = client.post(
+                url=complete_url,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -1428,7 +1414,7 @@ class BaseLLMHTTPHandler:
     async def async_ocr(
         self,
         model: str,
-        image: FileTypes,
+        document: Dict[str, str],
         optional_params: dict,
         timeout: Union[float, httpx.Timeout],
         logging_obj: LiteLLMLoggingObj,
@@ -1454,7 +1440,7 @@ class BaseLLMHTTPHandler:
         # Prepare the request
         headers, complete_url, data, files = self._prepare_ocr_request(
             model=model,
-            image=image,
+            document=document,
             optional_params=optional_params,
             logging_obj=logging_obj,
             api_key=api_key,
@@ -1472,30 +1458,13 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         try:
-            # Make the async POST request - handle different data types
-            if isinstance(data, dict):
-                response = await async_httpx_client.post(
-                    url=complete_url,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
-            elif isinstance(data, bytes):
-                response = await async_httpx_client.post(
-                    url=complete_url,
-                    headers=headers,
-                    data=data,
-                    timeout=timeout,
-                )
-            elif files is not None:
-                response = await async_httpx_client.post(
-                    url=complete_url,
-                    headers=headers,
-                    files=files,
-                    timeout=timeout,
-                )
-            else:
-                raise ValueError("No data or files provided for OCR request")
+            # Make the async POST request with JSON data (Mistral format)
+            response = await async_httpx_client.post(
+                url=complete_url,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
