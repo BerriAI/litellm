@@ -252,7 +252,7 @@ litellm --config /path/to/config.yaml
 3. Use the MCP server in Claude Code
 
 ```bash
-claude mcp add --transport http litellm_proxy http://0.0.0.0:4000 --header "Authorization: Bearer sk-LITELLM_VIRTUAL_KEY"
+claude mcp add --transport http litellm_proxy http://0.0.0.0:4000/github_mcp/mcp --header "Authorization: Bearer sk-LITELLM_VIRTUAL_KEY"
 ```
 
 4. Authenticate via Claude Code
