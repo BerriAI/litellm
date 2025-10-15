@@ -19,7 +19,7 @@ documentation = "https://docs.litellm.ai"
 Documentation = "https://docs.litellm.ai"
 
 [tool.poetry.dependencies]
-python = ">=3.8.1,<4.0, !=3.9.7"
+python = ">=3.9,<4.0"
 fastuuid = ">=0.13.0"
 httpx = ">=0.23.0"
 openai = ">=1.99.5"
