@@ -182,7 +182,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
             # If it's not already a data URI, convert it
             if document_url and not document_url.startswith("data:"):
                 verbose_logger.debug(
-                    f"Azure AI OCR: Converting document URL to base64 data URI (sync)"
+                    "Azure AI OCR: Converting document URL to base64 data URI (sync)"
                 )
                 data_uri = self._convert_url_to_data_uri_sync(url=document_url)
                 transformed_document["document_url"] = data_uri
@@ -191,7 +191,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
             # If it's not already a data URI, convert it
             if image_url and not image_url.startswith("data:"):
                 verbose_logger.debug(
-                    f"Azure AI OCR: Converting image URL to base64 data URI (sync)"
+                    "Azure AI OCR: Converting image URL to base64 data URI (sync)"
                 )
                 data_uri = self._convert_url_to_data_uri_sync(url=image_url)
                 transformed_document["image_url"] = data_uri
@@ -243,7 +243,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
             # If it's not already a data URI, convert it
             if document_url and not document_url.startswith("data:"):
                 verbose_logger.debug(
-                    f"Azure AI OCR: Converting document URL to base64 data URI (async)"
+                    "Azure AI OCR: Converting document URL to base64 data URI (async)"
                 )
                 data_uri = await self._convert_url_to_data_uri_async(url=document_url)
                 transformed_document["document_url"] = data_uri
@@ -252,7 +252,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
             # If it's not already a data URI, convert it
             if image_url and not image_url.startswith("data:"):
                 verbose_logger.debug(
-                    f"Azure AI OCR: Converting image URL to base64 data URI (async)"
+                    "Azure AI OCR: Converting image URL to base64 data URI (async)"
                 )
                 data_uri = await self._convert_url_to_data_uri_async(url=image_url)
                 transformed_document["image_url"] = data_uri
