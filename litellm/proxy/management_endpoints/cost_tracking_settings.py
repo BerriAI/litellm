@@ -7,7 +7,7 @@ GET /config/cost_discount_config - Get current cost discount configuration
 PATCH /config/cost_discount_config - Update cost discount configuration
 """
 
-from typing import Dict, Optional
+from typing import Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 
