@@ -240,7 +240,7 @@ def ocr(
             )
 
         verbose_logger.debug(
-            f"OCR call - model: {model}, provider: {custom_llm_provider}"
+            "OCR call initiated."
         )
 
         # Extract OCR-specific parameters from kwargs
