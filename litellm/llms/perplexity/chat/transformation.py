@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
@@ -31,9 +30,9 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         return "perplexity"
 
     def _get_openai_compatible_provider_info(
-        self, api_base: str | None, api_key: str | None,
-    ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"  # type: ignore[assignment]
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"  # type: ignore
         dynamic_api_key = (
             api_key
             or get_secret_str("PERPLEXITYAI_API_KEY")
@@ -41,10 +40,9 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         )
         return api_base, dynamic_api_key
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
-        """Get supported OpenAI parameters for Perplexity.
-
-        Perplexity supports a subset of OpenAI params.
+    def get_supported_openai_params(self, model: str) -> list:
+        """
+        Perplexity supports a subset of OpenAI params
 
         Ref: https://docs.perplexity.ai/api-reference/chat-completions
 
@@ -65,21 +63,22 @@ class PerplexityChatConfig(OpenAIGPTConfig):
 
         try:
             if litellm.supports_reasoning(
-                model=model, custom_llm_provider=self.custom_llm_provider,
+                model=model, custom_llm_provider=self.custom_llm_provider
             ):
                 base_openai_params.append("reasoning_effort")
-        except (ValueError, TypeError) as e:
+        except Exception as e:
             verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
-
+        
         try:
             if litellm.supports_web_search(
-                model=model, custom_llm_provider=self.custom_llm_provider,
+                model=model, custom_llm_provider=self.custom_llm_provider
             ):
                 base_openai_params.append("web_search_options")
-        except (ValueError, TypeError) as e:
+        except Exception as e:
             verbose_logger.debug(f"Error checking if model supports web search: {e}")
-
+        
         return base_openai_params
+
 
     def transform_response(  # noqa: PLR0913
         self,
@@ -91,9 +90,9 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,  # noqa: ANN401
+        encoding: Any,  
         api_key: str | None = None,
-        json_mode: bool | None = None,  # noqa: FBT001
+        json_mode: bool | None = None,  
     ) -> ModelResponse:
         """Transform Perplexity response to standard format."""
         # Call the parent transform_response first to handle the standard transformation
@@ -124,7 +123,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
 
         return model_response
 
-    def _enhance_usage_with_perplexity_fields(  # noqa: C901
+    def _enhance_usage_with_perplexity_fields(  
         self, model_response: ModelResponse, raw_response_json: dict,
     ) -> None:
         """Extract citation tokens and search queries from Perplexity API response.
@@ -182,12 +181,12 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             if num_search_queries is not None and num_search_queries > 0:
                 usage.prompt_tokens_details.web_search_requests = num_search_queries
 
-    def _add_citations_as_annotations(  # noqa: C901, PLR0912
-        self, model_response: ModelResponse, raw_response_json: dict,
+    def _add_citations_as_annotations(
+        self, model_response: ModelResponse, raw_response_json: dict
     ) -> None:
-        """Extract citations and search_results from Perplexity API response.
-
-        Add them as ChatCompletionAnnotation objects to the message.
+        """
+        Extract citations and search_results from Perplexity API response
+        and add them as ChatCompletionAnnotation objects to the message.
         """
         if not model_response.choices:
             return
@@ -216,6 +215,8 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             return
 
         # Find all citation markers like [1], [2], [3], [4] in the text
+        import re
+
         citation_pattern = r"\[(\d+)\]"
         citation_matches = list(re.finditer(citation_pattern, content))
 
@@ -255,10 +256,9 @@ class PerplexityChatConfig(OpenAIGPTConfig):
 
         # Also add the raw citations and search_results as attributes for backward compatibility
         if citations:
-            model_response.citations = citations  # type: ignore[attr-defined]
+            setattr(model_response, "citations", citations)
         if search_results:
-            model_response.search_results = search_results  # type: ignore[attr-defined]
-
+            setattr(model_response, "search_results", search_results)
 
     def add_cost_to_usage(self, model_response: ModelResponse, raw_response_json: dict) -> None:
         """Add the cost to the usage object."""
@@ -281,10 +281,10 @@ class PerplexityChatConfig(OpenAIGPTConfig):
                 if response_cost is not None:
                     # Store cost in hidden params for the cost calculator to use
                     if not hasattr(model_response, "_hidden_params"):
-                        model_response._hidden_params = {}  # noqa: SLF001
-                    if "additional_headers" not in model_response._hidden_params:  # noqa: SLF001
-                        model_response._hidden_params["additional_headers"] = {}  # noqa: SLF001
-                    model_response._hidden_params["additional_headers"][  # noqa: SLF001
+                        model_response._hidden_params = {}  
+                    if "additional_headers" not in model_response._hidden_params:  
+                        model_response._hidden_params["additional_headers"] = {}  
+                    model_response._hidden_params["additional_headers"][  
                         "llm_provider-x-litellm-response-cost"
                     ] = float(response_cost)
         except (ValueError, TypeError, KeyError) as e:
