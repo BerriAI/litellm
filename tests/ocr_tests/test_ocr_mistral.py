@@ -6,9 +6,7 @@ import sys
 import pytest
 import litellm
 
-# Test configuration
-MISTRAL_API_KEY = "rPbRmlDxrBKh3INEWlsSo90vTxIwGMTb"
-MODEL = "mistral/mistral-ocr-latest"
+
 
 # Use a simple test image or PDF URL
 TEST_IMAGE_PATH = "test_image_edit.png"
@@ -23,8 +21,8 @@ class TestMistralOCR:
     def get_base_ocr_call_args(self) -> dict:
         """Return the base OCR call args for Mistral"""
         return {
-            "model": MODEL,
-            "api_key": MISTRAL_API_KEY,
+            "model": "mistral/mistral-ocr-latest",
+            "api_key": os.getenv("MISTRAL_API_KEY"),
         }
 
     @pytest.mark.parametrize("sync_mode", [True, False])
