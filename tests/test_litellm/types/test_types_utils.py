@@ -75,6 +75,25 @@ def test_usage_dump():
     assert new_usage.prompt_tokens_details.web_search_requests == 1
 
 
+def test_usage_calculation():
+    from litellm.utils import ModelResponse
+    from litellm.types.utils import Usage
+    from litellm.litellm_core_utils.streaming_handler import calculate_total_usage
+
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="test-model",
+        object="chat.completion",
+        choices=[],
+        usage=Usage(
+            completion_tokens=37,
+            prompt_tokens=7,
+        )
+    )
+    assert calculate_total_usage(chunks=[response]).total_tokens == 44
+
+
 def test_usage_completion_tokens_details_text_tokens():
     from litellm.types.utils import Usage
 
