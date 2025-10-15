@@ -39,7 +39,7 @@ except ImportError as err:
 try:
     import httpcore  # type: ignore
 except Exception:
-    httpcore = None
+    httpcore = None # type: ignore
 
 
 class OptionalDependencyError(ImportError):
