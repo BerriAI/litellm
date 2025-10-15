@@ -192,6 +192,13 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
           roles: all_admin_roles,
         },
         {
+          key: "27",
+          page: "cost-tracking-settings",
+          label: "Cost Tracking",
+          icon: <BarChartOutlined style={{ fontSize: "18px" }} />,
+          roles: all_admin_roles,
+        },
+        {
           key: "14",
           page: "ui-theme",
           label: "UI Theme",
