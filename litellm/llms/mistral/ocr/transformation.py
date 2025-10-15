@@ -1,9 +1,6 @@
 """
 Mistral OCR transformation implementation.
 """
-import base64
-import json
-import os
 from typing import Any, Dict, Optional
 
 import httpx
@@ -11,11 +8,11 @@ import httpx
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.ocr.transformation import (
     BaseOCRConfig,
+    DocumentType,
     OCRRequestData,
     OCRResponse,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import FileTypes
 
 
 class MistralOCRConfig(BaseOCRConfig):
@@ -126,90 +123,11 @@ class MistralOCRConfig(BaseOCRConfig):
 
         return f"{api_base}/v1/ocr"
 
-    def _is_url(self, image: str) -> bool:
-        """Check if the image is a URL."""
-        return isinstance(image, str) and (
-            image.startswith("http://") or image.startswith("https://")
-        )
-    
-    def _prepare_image_data(self, image: FileTypes) -> tuple:
-        """
-        Prepare image data for the request.
-        
-        Args:
-            image: Image file to process (can be file path, URL, bytes, file object, etc.)
-            
-        Returns:
-            Tuple of (filename, file_data, content_type)
-            Returns ("", b"", "") for URLs (handled separately)
-        """
-        # Handle different types of file inputs
-        if isinstance(image, str):
-            # Check if it's a URL
-            if self._is_url(image):
-                # URLs are handled separately in transform_ocr_request
-                return "", b"", ""
-            
-            # File path
-            if not os.path.exists(image):
-                raise ValueError(f"Image file not found: {image}")
-            
-            with open(image, "rb") as f:
-                file_data = f.read()
-            
-            filename = os.path.basename(image)
-            
-            # Determine content type based on extension
-            ext = os.path.splitext(filename)[1].lower()
-            content_type_map = {
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-                ".png": "image/png",
-                ".gif": "image/gif",
-                ".webp": "image/webp",
-                ".bmp": "image/bmp",
-                ".pdf": "application/pdf",
-            }
-            content_type = content_type_map.get(ext, "application/octet-stream")
-            
-            return filename, file_data, content_type
-        
-        elif isinstance(image, bytes):
-            # Raw bytes
-            return "image.jpg", image, "image/jpeg"
-        
-        elif hasattr(image, "read") and callable(getattr(image, "read", None)):
-            # File-like object
-            read_method = getattr(image, "read")
-            file_data = read_method()
-            filename = getattr(image, "name", "image.jpg")
-            if isinstance(filename, str):
-                filename = os.path.basename(filename)
-            else:
-                filename = "image.jpg"
-            
-            # Determine content type
-            ext = os.path.splitext(filename)[1].lower()
-            content_type_map = {
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-                ".png": "image/png",
-                ".gif": "image/gif",
-                ".webp": "image/webp",
-                ".bmp": "image/bmp",
-                ".pdf": "application/pdf",
-            }
-            content_type = content_type_map.get(ext, "application/octet-stream")
-            
-            return filename, file_data, content_type
-        
-        else:
-            raise ValueError(f"Unsupported image type: {type(image)}")
 
     def transform_ocr_request(
         self,
         model: str,
-        image: FileTypes,
+        document: DocumentType,
         optional_params: dict,
         headers: dict,
         **kwargs,
@@ -231,7 +149,7 @@ class MistralOCRConfig(BaseOCRConfig):
         
         Args:
             model: Model name (e.g., "mistral-ocr-latest")
-            image: Image file to process (URL or local file)
+            document: Document dict from user (Mistral format) - already validated in main.py
             optional_params: Already mapped optional parameters
             headers: Request headers
             
@@ -240,34 +158,15 @@ class MistralOCRConfig(BaseOCRConfig):
         """
         verbose_logger.debug(f"Mistral OCR transform_ocr_request - model: {model}")
         
-        # Check if image is a URL
-        if isinstance(image, str) and self._is_url(image):
-            # For URLs, use document_url directly
-            document_url = image
-        else:
-            # For local files/bytes, convert to base64 data URI
-            filename, file_data, content_type = self._prepare_image_data(image)
-            
-            # Encode file data as base64 for data URI
-            import base64
-            encoded = base64.b64encode(file_data).decode('utf-8')
-            
-            # Determine mime type for data URI
-            mime_type = content_type
-            if mime_type == "application/octet-stream":
-                # Default to image/jpeg for unknown types
-                mime_type = "image/jpeg"
-            
-            # Create data URI
-            document_url = f"data:{mime_type};base64,{encoded}"
+        # Document parameter is the Mistral-format dict from the user
+        # Just pass it through as-is to the Mistral API
+        if not isinstance(document, dict):
+            raise ValueError(f"Expected document dict, got {type(document)}")
         
-        # Build request data
+        # Build request data - use document dict directly
         data = {
             "model": model,
-            "document": {
-                "type": "document_url",
-                "document_url": document_url,
-            },
+            "document": document,  # Pass through the Mistral-format document dict
         }
         
         # Add all optional parameters from the already-mapped optional_params
