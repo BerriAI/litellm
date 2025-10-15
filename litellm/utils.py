@@ -7588,8 +7588,11 @@ class ProviderConfigManager:
         """
         Get OCR configuration for a given provider.
         """
+        from litellm.llms.azure_ai.ocr.transformation import AzureAIOCRConfig
+
         PROVIDER_TO_CONFIG_MAP = {
             litellm.LlmProviders.MISTRAL: MistralOCRConfig,
+            litellm.LlmProviders.AZURE_AI: AzureAIOCRConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
