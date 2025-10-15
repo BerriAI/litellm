@@ -1,6 +1,7 @@
 """Base OCR transformation module."""
 from .transformation import (
     BaseOCRConfig,
+    DocumentType,
     OCRPage,
     OCRPageDimensions,
     OCRPageImage,
@@ -11,6 +12,7 @@ from .transformation import (
 
 __all__ = [
     "BaseOCRConfig",
+    "DocumentType",
     "OCRResponse",
     "OCRPage",
     "OCRPageDimensions",
