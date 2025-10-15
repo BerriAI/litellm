@@ -15,7 +15,9 @@ from typing import (
 
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
-from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
+from openai.types.audio.transcription_create_params import (
+    FileTypes as OpenAIFileTypes,  # type: ignore
+)
 from openai.types.chat.chat_completion import ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
@@ -63,6 +65,10 @@ if TYPE_CHECKING:
     from .vector_stores import VectorStoreSearchResponse
 else:
     VectorStoreSearchResponse = Any
+
+
+# FileTypes - Override OpenAI's FileTypes to include str for URLs and file paths
+FileTypes = Union[OpenAIFileTypes, str]
 
 
 def _generate_id():  # private helper function

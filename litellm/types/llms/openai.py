@@ -70,6 +70,8 @@ from litellm.types.responses.main import (
 FileContent = Union[IO[bytes], bytes, PathLike]
 
 FileTypes = Union[
+    # file path (str) or URL
+    str,
     # file (or bytes)
     FileContent,
     # (filename, file (or bytes))
