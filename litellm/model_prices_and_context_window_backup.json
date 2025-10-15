@@ -13197,11 +13197,11 @@
             "text"
         ],
         "supports_function_calling": true,
-        "supports_native_streaming": true,
+        "supports_native_streaming": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true,
+        "supports_reasoning": false,
         "supports_response_schema": true,
         "supports_system_messages": false,
         "supports_tool_choice": true,
