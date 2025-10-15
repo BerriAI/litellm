@@ -764,13 +764,12 @@ def completion_cost(  # noqa: PLR0915
                             ).model_dump()
 
                     # get input/output tokens from completion_response
-                    # For video generation, these fields may be None, so handle gracefully
-                    prompt_tokens = _usage.get("prompt_tokens", 0) or 0
-                    completion_tokens = _usage.get("completion_tokens", 0) or 0
+                    prompt_tokens = _usage.get("prompt_tokens", 0)
+                    completion_tokens = _usage.get("completion_tokens", 0)
                     cache_creation_input_tokens = _usage.get(
                         "cache_creation_input_tokens", 0
-                    ) or 0
-                    cache_read_input_tokens = _usage.get("cache_read_input_tokens", 0) or 0
+                    )
+                    cache_read_input_tokens = _usage.get("cache_read_input_tokens", 0)
                     if (
                         "prompt_tokens_details" in _usage
                         and _usage["prompt_tokens_details"] != {}
