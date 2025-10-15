@@ -1,5 +1,8 @@
 """
 Test OCR functionality with Azure AI API.
+
+Note: Azure AI OCR automatically converts URLs to base64 data URIs since
+the Azure AI endpoint doesn't have internet access.
 """
 import os
 from tests.ocr_tests.test_ocr_mistral import TestMistralOCR
@@ -9,7 +12,8 @@ class TestAzureAIOCR(TestMistralOCR):
     Test class for Azure AI OCR functionality.
     Inherits from TestMistralOCR and overrides provider-specific methods.
     
-    Note: Azure AI only supports base64 data URIs, not regular URLs.
+    Note: For Azure AI, LiteLLM will automatically convert URLs to base64 data URIs before
+    sending to the API, since Azure AI OCR endpoint doesn't have internet access.
     """
 
     def get_base_ocr_call_args(self) -> dict:
@@ -18,6 +22,6 @@ class TestAzureAIOCR(TestMistralOCR):
         """
         return {
             "model": "azure_ai/mistral-document-ai-2505",
-            "api_key": os.getenv("AZURE_AI_API_KEY"),
-            "api_base": os.getenv("AZURE_AI_API_BASE"),
+            "api_key": os.getenv("AZURE_AI_API_KEY_MISTRAL"),
+            "api_base": os.getenv("AZURE_AI_API_BASE_MISTRAL"),
         }
