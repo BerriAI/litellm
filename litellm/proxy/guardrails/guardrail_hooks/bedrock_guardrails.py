@@ -29,6 +29,9 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.common_payloads import (
+    get_guardrail_input_payload,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues
@@ -385,7 +388,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
             # Re-raise the exception to maintain existing behavior
             raise
-        
+
         #########################################################
         # Add guardrail information to request trace
         #########################################################
@@ -460,7 +463,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     ) -> GuardrailStatus:
         """
         Get the status of the bedrock guardrail response.
-        
+
         Returns:
             "success": Content allowed through with no violations
             "guardrail_intervened": Content blocked due to policy violations
@@ -469,16 +472,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if response.status_code == 200:
             if self._check_bedrock_response_for_exception(response):
                 return "guardrail_failed_to_respond"
-            
+
             # Check if the guardrail would block content
             try:
                 _json_response = response.json()
                 bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
-                if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
+                if self._should_raise_guardrail_blocked_exception(
+                    bedrock_guardrail_response
+                ):
                     return "guardrail_intervened"
             except Exception:
                 pass
-            
+
             return "success"
         return "guardrail_failed_to_respond"
 
@@ -612,30 +617,34 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
-        if new_messages is None:
+        payload = get_guardrail_input_payload(data=data, call_type=call_type)
+        if payload is None or payload.is_empty:
             verbose_proxy_logger.warning(
-                "Bedrock AI: not running guardrail. No messages in data"
+                "Bedrock AI: not running guardrail. No input payload extracted for call type %s",
+                call_type,
             )
             return data
+
+        request_messages = payload.to_message_list()
 
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
         bedrock_guardrail_response = await self.make_bedrock_api_request(
-            source="INPUT", messages=new_messages, request_data=data
+            source="INPUT", messages=request_messages, request_data=data
         )
         #########################################################
 
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data["messages"] = (
+        updated_messages = (
             self._update_messages_with_updated_bedrock_guardrail_response(
-                messages=new_messages,
+                messages=request_messages,
                 bedrock_guardrail_response=bedrock_guardrail_response,
             )
         )
+        payload.apply_masked_messages(data=data, masked_messages=updated_messages)
 
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########
@@ -685,11 +694,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data["messages"] = (
-            self._update_messages_with_updated_bedrock_guardrail_response(
-                messages=new_messages,
-                bedrock_guardrail_response=bedrock_guardrail_response,
-            )
+        data[
+            "messages"
+        ] = self._update_messages_with_updated_bedrock_guardrail_response(
+            messages=new_messages,
+            bedrock_guardrail_response=bedrock_guardrail_response,
         )
 
         #########################################################
@@ -733,10 +742,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             has_text_content = False
             for choice in response.choices:
                 if isinstance(choice, litellm.Choices):
-                    if choice.message.content and isinstance(choice.message.content, str):
+                    if choice.message.content and isinstance(
+                        choice.message.content, str
+                    ):
                         has_text_content = True
                         break
-            
+
             if not has_text_content:
                 verbose_proxy_logger.warning(
                     "Bedrock AI: not running guardrail. No output text in response"
