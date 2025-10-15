@@ -6281,7 +6281,9 @@ class Router:
                     model_name=model_name, model=model, team_id=team_id
                 ):
                     if model_alias is not None:
-                        alias_model = copy.deepcopy(model)
+                        # Optimized: Use shallow copy since we only modify top-level model_name
+                        # This is much faster than deepcopy for nested dict structures
+                        alias_model = model.copy()
                         alias_model["model_name"] = model_alias
                         returned_models.append(alias_model)
                     else:
@@ -6295,7 +6297,8 @@ class Router:
                     model_name=model_name, model=model, team_id=team_id
                 ):
                     if model_alias is not None:
-                        alias_model = copy.deepcopy(model)
+                        # Optimized: Use shallow copy since we only modify top-level model_name
+                        alias_model = model.copy()
                         alias_model["model_name"] = model_alias
                         returned_models.append(alias_model)
                     else:
