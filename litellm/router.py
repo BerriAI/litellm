@@ -189,7 +189,7 @@ class RoutingArgs(enum.Enum):
 
 
 class Router:
-    model_names: List = []
+    model_names: set = set()
     cache_responses: Optional[bool] = False
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
     tenacity = None
@@ -5157,7 +5157,7 @@ class Router:
         verbose_router_logger.debug(
             f"\nInitialized Model List {self.get_model_names()}"
         )
-        self.model_names = [m["model_name"] for m in model_list]
+        self.model_names = {m["model_name"] for m in model_list}
         
         # Build model_name index for O(1) lookups
         self._build_model_name_index(self.model_list)
@@ -5363,7 +5363,7 @@ class Router:
         self._add_model_to_list_and_index_map(
             model=_deployment, model_id=deployment.model_info.id
         )
-        self.model_names.append(deployment.model_name)
+        self.model_names.add(deployment.model_name)
         return deployment
 
     def _update_deployment_indices_after_removal(
