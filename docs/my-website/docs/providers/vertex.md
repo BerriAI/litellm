@@ -3114,3 +3114,78 @@ Once that's done, when you deploy the new container in the Google Cloud Run serv
 
 
 s/o @[Darien Kindlund](https://www.linkedin.com/in/kindlund/) for this tutorial
+
+## Batch Passthrough
+
+LiteLLM supports Vertex AI batch prediction jobs through passthrough endpoints, allowing you to create and manage batch jobs directly through the proxy server.
+
+### Features
+
+- **Batch Job Creation**: Create batch prediction jobs using Vertex AI models
+- **Cost Tracking**: Automatic cost calculation and usage tracking for batch operations
+- **Status Monitoring**: Track job status and retrieve results
+- **Model Support**: Works with all supported Vertex AI models (Gemini, Text Embedding)
+
+### Quick Start
+
+1. **Configure your model** in the proxy configuration:
+
+```yaml
+model_list:
+  - model_name: gemini-1.5-flash
+    litellm_params:
+      model: vertex_ai/gemini-1.5-flash
+      vertex_project: your-project-id
+      vertex_location: us-central1
+      vertex_credentials: path/to/service-account.json
+```
+
+2. **Create a batch job**:
+
+```bash
+curl -X POST "http://localhost:4000/v1/projects/your-project/locations/us-central1/batchPredictionJobs" \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "displayName": "my-batch-job",
+    "model": "projects/your-project/locations/us-central1/publishers/google/models/gemini-1.5-flash",
+    "inputConfig": {
+      "gcsSource": {
+        "uris": ["gs://my-bucket/input.jsonl"]
+      },
+      "instancesFormat": "jsonl"
+    },
+    "outputConfig": {
+      "gcsDestination": {
+        "outputUriPrefix": "gs://my-bucket/output/"
+      },
+      "predictionsFormat": "jsonl"
+    }
+  }'
+```
+
+3. **Monitor job status**:
+
+```bash
+curl -X GET "http://localhost:4000/v1/projects/your-project/locations/us-central1/batchPredictionJobs/job-id" \
+  -H "Authorization: Bearer your-api-key"
+```
+
+### Model Configuration
+
+When configuring models for batch operations, use these naming conventions:
+
+- **`model_name`**: Base model name (e.g., `gemini-1.5-flash`)
+- **`model`**: Full LiteLLM identifier (e.g., `vertex_ai/gemini-1.5-flash`)
+
+### Supported Models
+
+- `gemini-1.5-flash` / `vertex_ai/gemini-1.5-flash`
+- `gemini-1.5-pro` / `vertex_ai/gemini-1.5-pro`
+- `gemini-2.0-flash` / `vertex_ai/gemini-2.0-flash`
+- `gemini-2.0-pro` / `vertex_ai/gemini-2.0-pro`
+
+### Cost Tracking
+
+Cost tracking is enabled for Vertex AI usage in LiteLLM. 
+
