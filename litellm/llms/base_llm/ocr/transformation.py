@@ -1,7 +1,7 @@
 """
 Base OCR transformation configuration.
 """
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 from pydantic import BaseModel
@@ -15,11 +15,51 @@ else:
     LiteLLMLoggingObj = Any
 
 
+class OCRPageDimensions(BaseModel):
+    """Page dimensions from OCR response."""
+    dpi: Optional[int] = None
+    height: Optional[int] = None
+    width: Optional[int] = None
+
+
+class OCRPageImage(BaseModel):
+    """Image extracted from OCR page."""
+    image_base64: Optional[str] = None
+    bbox: Optional[Dict[str, Any]] = None
+    
+    model_config = {"extra": "allow"}
+
+
+class OCRPage(BaseModel):
+    """Single page from OCR response."""
+    index: int
+    markdown: str
+    images: Optional[List[OCRPageImage]] = None
+    dimensions: Optional[OCRPageDimensions] = None
+    
+    model_config = {"extra": "allow"}
+
+
+class OCRUsageInfo(BaseModel):
+    """Usage information from OCR response."""
+    pages_processed: Optional[int] = None
+    doc_size_bytes: Optional[int] = None
+    
+    model_config = {"extra": "allow"}
+
+
 class OCRResponse(BaseModel):
-    """Standard OCR response format."""
-    text: str
+    """
+    Standard OCR response format.
+    Standardized to Mistral OCR format - other providers should transform to this format.
+    """
+    pages: List[OCRPage]
+    model: str
+    document_annotation: Optional[Any] = None
+    usage_info: Optional[OCRUsageInfo] = None
     object: str = "ocr"
-    model: Optional[str] = None
+    
+    model_config = {"extra": "allow"}
 
 
 class OCRRequestData(BaseModel):
