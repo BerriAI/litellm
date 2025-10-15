@@ -1,5 +1,5 @@
 """
-Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration  `/completion`
+Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`/completion`
 """
 
 from typing import List, Optional, Union, Dict, Any
