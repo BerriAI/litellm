@@ -146,6 +146,39 @@ class BaseOCRConfig:
         """
         raise NotImplementedError("transform_ocr_request must be implemented by provider")
 
+    async def async_transform_ocr_request(
+        self,
+        model: str,
+        document: DocumentType,
+        optional_params: dict,
+        headers: dict,
+        **kwargs,
+    ) -> OCRRequestData:
+        """
+        Async transform OCR request to provider-specific format.
+        Optional method - providers can override if they need async transformations
+        (e.g., Azure AI for URL-to-base64 conversion).
+        
+        Default implementation falls back to sync transform_ocr_request.
+        
+        Args:
+            model: Model name
+            document: Document to process (Mistral format dict, or file path, bytes, etc.)
+            optional_params: Optional parameters for the request
+            headers: Request headers
+            
+        Returns:
+            OCRRequestData with data and files fields
+        """
+        # Default implementation: call sync version
+        return self.transform_ocr_request(
+            model=model,
+            document=document,
+            optional_params=optional_params,
+            headers=headers,
+            **kwargs,
+        )
+
     def transform_ocr_response(
         self,
         model: str,

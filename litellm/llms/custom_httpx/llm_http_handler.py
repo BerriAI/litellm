@@ -1277,6 +1277,7 @@ class BaseLLMHTTPHandler:
 
         headers = provider_config.validate_environment(
             api_key=api_key,
+            api_base=api_base,
             headers=headers or {},
             model=model,
         )
@@ -1289,6 +1290,70 @@ class BaseLLMHTTPHandler:
 
         # Transform the request to get data and files
         transformed_result = provider_config.transform_ocr_request(
+            model=model,
+            document=document,
+            optional_params=optional_params,
+            headers=headers,
+        )
+
+        # All providers return OCRRequestData
+        if not isinstance(transformed_result, OCRRequestData):
+            raise ValueError(
+                f"Provider {provider_config.__class__.__name__} must return OCRRequestData"
+            )
+
+        # Data is always a dict for Mistral OCR format
+        if not isinstance(transformed_result.data, dict):
+            raise ValueError(f"Expected dict data for OCR request, got {type(transformed_result.data)}")
+        
+        data = transformed_result.data
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input="OCR document processing",
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": complete_url,
+                "headers": headers,
+            },
+        )
+
+        return headers, complete_url, data, None
+
+    async def _async_prepare_ocr_request(
+        self,
+        model: str,
+        document: Dict[str, str],
+        optional_params: dict,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        headers: Optional[Dict[str, Any]],
+        provider_config: BaseOCRConfig,
+        litellm_params: dict,
+    ) -> Tuple[Dict[str, Any], str, Dict[str, Any], None]:
+        """
+        Async version of _prepare_ocr_request for providers that need async transforms.
+        Returns: (headers, complete_url, data, files)
+        """
+        from litellm.llms.base_llm.ocr.transformation import OCRRequestData
+
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers or {},
+            model=model,
+        )
+
+        complete_url = provider_config.get_complete_url(
+            api_base=api_base,
+            model=model,
+            optional_params=optional_params,
+        )
+
+        # Use async transform (providers can override this method if they need async operations)
+        transformed_result = await provider_config.async_transform_ocr_request(
             model=model,
             document=document,
             optional_params=optional_params,
@@ -1437,8 +1502,8 @@ class BaseLLMHTTPHandler:
         if litellm_params is None:
             litellm_params = {}
 
-        # Prepare the request
-        headers, complete_url, data, files = self._prepare_ocr_request(
+        # Prepare the request using async prepare method
+        headers, complete_url, data, files = await self._async_prepare_ocr_request(
             model=model,
             document=document,
             optional_params=optional_params,
