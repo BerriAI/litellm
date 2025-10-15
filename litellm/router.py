@@ -3607,6 +3607,8 @@ class Router:
                 "aimage_edit",
                 "agenerate_content",
                 "agenerate_content_stream",
+                "aocr",
+                "ocr",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

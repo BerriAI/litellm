@@ -4,7 +4,7 @@ Main OCR function for LiteLLM.
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Dict, Optional, Union
+from typing import Any, Coroutine, Dict, Optional, Union
 
 import httpx
 
@@ -141,7 +141,7 @@ def ocr(
     custom_llm_provider: Optional[str] = None,
     extra_headers: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> OCRResponse:
+) -> Union[OCRResponse, Coroutine[Any, Any, OCRResponse]]:
     """
     Synchronous OCR function.
     
@@ -289,10 +289,6 @@ def ocr(
             },
         )
 
-        # Since _is_async is False for sync ocr(), response should be OCRResponse
-        if not isinstance(response, OCRResponse):
-            raise ValueError(f"Expected OCRResponse, got {type(response)}")
-        
         return response
     except Exception as e:
         raise litellm.exception_type(
