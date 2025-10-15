@@ -187,6 +187,15 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "Spend Tracking",
+          items: [
+            "proxy/cost_tracking",
+            "proxy/custom_pricing",
+            "proxy/billing",
+          ],
+        },
+        {
+          type: "category",
           label: "Budgets + Rate Limits",
           items: [
             "proxy/users",
@@ -250,15 +259,6 @@ const sidebars = {
             "secret",
             "oidc"
           ]
-        },
-        {
-          type: "category",
-          label: "Spend Tracking",
-          items: [
-            "proxy/billing",
-            "proxy/cost_tracking",
-            "proxy/custom_pricing"
-          ],
         },
       ]
     },
