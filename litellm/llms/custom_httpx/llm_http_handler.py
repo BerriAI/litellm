@@ -1309,7 +1309,7 @@ class BaseLLMHTTPHandler:
 
         ## LOGGING
         logging_obj.pre_call(
-            input=f"OCR document processing",
+            input="OCR document processing",
             api_key=api_key,
             additional_args={
                 "complete_input_dict": data,

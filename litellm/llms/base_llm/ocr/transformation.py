@@ -1,7 +1,7 @@
 """
 Base OCR transformation configuration.
 """
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 from pydantic import BaseModel
