@@ -4,8 +4,7 @@ Translate from OpenAI's `/v1/embeddings` to Sagemaker's `/invoke`
 In the Huggingface TGI format. 
 """
 
-import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllEmbeddingInputValues
