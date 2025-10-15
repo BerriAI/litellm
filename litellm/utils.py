@@ -7096,6 +7096,8 @@ class ProviderConfigManager:
             return litellm.FeatherlessAIConfig()
         elif litellm.LlmProviders.NOVITA == provider:
             return litellm.NovitaConfig()
+        elif litellm.LlmProviders.SILICONFLOW == provider:
+            return litellm.SiliconFlowConfig()
         elif litellm.LlmProviders.NEBIUS == provider:
             return litellm.NebiusConfig()
         elif litellm.LlmProviders.WANDB == provider:

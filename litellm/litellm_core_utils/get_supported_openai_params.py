@@ -174,6 +174,8 @@ def get_supported_openai_params(  # noqa: PLR0915
         )
     elif custom_llm_provider == "novita":
         return litellm.NovitaConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "siliconflow":
+        return litellm.SiliconFlowConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         if request_type == "chat_completion":
             if model.startswith("mistral"):

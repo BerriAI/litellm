@@ -244,6 +244,7 @@ llama_api_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 novita_api_key: Optional[str] = None
+siliconflow_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
 gradient_ai_api_key: Optional[str] = None
 nebius_key: Optional[str] = None
@@ -501,6 +502,7 @@ nvidia_nim_models: Set = set()
 sambanova_models: Set = set()
 sambanova_embedding_models: Set = set()
 novita_models: Set = set()
+siliconflow_models: Set = set()
 assemblyai_models: Set = set()
 snowflake_models: Set = set()
 gradient_ai_models: Set = set()
@@ -700,6 +702,8 @@ def add_known_models():
             sambanova_embedding_models.add(key)
         elif value.get("litellm_provider") == "novita":
             novita_models.add(key)
+        elif value.get("litellm_provider") == "siliconflow":
+            siliconflow_models.add(key)
         elif value.get("litellm_provider") == "nebius-chat-models":
             nebius_models.add(key)
         elif value.get("litellm_provider") == "nebius-embedding-models":
@@ -825,6 +829,7 @@ model_list = list(
     | sambanova_models
     | azure_text_models
     | novita_models
+    | siliconflow_models
     | assemblyai_models
     | jina_ai_models
     | snowflake_models
@@ -908,6 +913,7 @@ models_by_provider: dict = {
     "nvidia_nim": nvidia_nim_models,
     "sambanova": sambanova_models | sambanova_embedding_models,
     "novita": novita_models,
+    "siliconflow": siliconflow_models,
     "nebius": nebius_models | nebius_embedding_models,
     "aiml": aiml_models,
     "assemblyai": assemblyai_models,
@@ -1080,6 +1086,7 @@ from .llms.together_ai.chat import TogetherAIConfig
 from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
 from .llms.cloudflare.chat.transformation import CloudflareChatConfig
 from .llms.novita.chat.transformation import NovitaConfig
+from .llms.siliconflow.chat.transformation import SiliconFlowConfig
 from .llms.deprecated_providers.palm import (
     PalmConfig,
 )  # here to prevent breaking changes
