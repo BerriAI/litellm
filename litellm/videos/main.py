@@ -10,17 +10,15 @@ from litellm.types.videos.main import (
     VideoCreateOptionalRequestParams,
     VideoObject,
     VideoResponse,
-    VideoUsage,
 )
 from litellm.videos.utils import VideoGenerationRequestUtils
 from litellm.constants import DEFAULT_VIDEO_ENDPOINT_MODEL, request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.main import base_llm_http_handler
 from litellm.utils import client, ProviderConfigManager
-from litellm.types.utils import FileTypes
+from litellm.types.utils import FileTypes, CallTypes
 from litellm.types.router import GenericLiteLLMParams
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.videos_generation.transformation import BaseVideoGenerationConfig
-from litellm.llms.base_llm.video_retrieval.transformation import BaseVideoRetrievalConfig
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
 #################### Initialize provider clients ####################
@@ -43,7 +41,7 @@ async def avideo_generation(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> VideoResponse:
+) -> VideoObject:
     """
     Asynchronously calls the `video_generation` function with the given arguments and keyword arguments.
 
@@ -129,7 +127,7 @@ def video_generation(
     *,
     avideo_generation: Literal[True],
     **kwargs,
-) -> Coroutine[Any, Any, VideoResponse]: 
+) -> Coroutine[Any, Any, VideoObject]:
     ...
 
 
@@ -149,7 +147,7 @@ def video_generation(
     *,
     avideo_generation: Literal[False] = False,
     **kwargs,
-) -> VideoResponse: 
+) -> VideoObject:
     ...
 
 # fmt: on
@@ -172,8 +170,8 @@ def video_generation(  # noqa: PLR0915
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Union[
-    VideoResponse,
-    Coroutine[Any, Any, VideoResponse],
+    VideoObject,
+    Coroutine[Any, Any, VideoObject],
 ]:
     """
     Maps the https://api.openai.com/v1/videos endpoint.
@@ -191,12 +189,8 @@ def video_generation(  # noqa: PLR0915
         if mock_response is not None:
             if isinstance(mock_response, str):
                 mock_response = json.loads(mock_response)
-            
-            response = VideoResponse(
-                data=[VideoObject(**video_data) for video_data in mock_response.get("data", [])],
-                usage=VideoUsage(**mock_response.get("usage", {})),
-                hidden_params=kwargs.get("hidden_params", {}),
-            )
+
+            response = VideoObject(**mock_response)
             return response
 
         # get llm provider logic
@@ -207,8 +201,8 @@ def video_generation(  # noqa: PLR0915
         )
 
         # get provider config
-        video_generation_provider_config: Optional[BaseVideoGenerationConfig] = (
-            ProviderConfigManager.get_provider_video_generation_config(
+        video_generation_provider_config: Optional[BaseVideoConfig] = (
+            ProviderConfigManager.get_provider_video_config(
                 model=model,
                 provider=litellm.LlmProviders(custom_llm_provider),
             )
@@ -243,6 +237,9 @@ def video_generation(  # noqa: PLR0915
             },
             custom_llm_provider=custom_llm_provider,
         )
+
+        # Set the correct call type for video generation
+        litellm_logging_obj.call_type = CallTypes.create_video.value
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.video_generation_handler(
@@ -334,15 +331,15 @@ def video_content(
         )
 
         # get provider config
-        video_content_provider_config: Optional[BaseVideoRetrievalConfig] = (
-            ProviderConfigManager.get_provider_video_content_config(
+        video_provider_config: Optional[BaseVideoConfig] = (
+            ProviderConfigManager.get_provider_video_config(
                 model=model,
                 provider=litellm.LlmProviders(custom_llm_provider),
             )
         )
 
-        if video_content_provider_config is None:
-            raise ValueError(f"video content download is not supported for {custom_llm_provider}")
+        if video_provider_config is None:
+            raise ValueError(f"video support download is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
         # For video content download, we don't need complex optional parameter handling
@@ -367,7 +364,7 @@ def video_content(
         return base_llm_http_handler.video_content_handler(
             video_id=video_id,
             model=model,
-            video_content_provider_config=video_content_provider_config,
+            video_content_provider_config=video_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,

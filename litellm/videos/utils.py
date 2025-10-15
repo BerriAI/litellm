@@ -1,7 +1,7 @@
 from typing import Any, Dict, cast, get_type_hints
 
 import litellm
-from litellm.llms.base_llm.videos_generation.transformation import BaseVideoGenerationConfig
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
 
 
@@ -11,7 +11,7 @@ class VideoGenerationRequestUtils:
     @staticmethod
     def get_optional_params_video_generation(
         model: str,
-        video_generation_provider_config: BaseVideoGenerationConfig,
+        video_generation_provider_config: BaseVideoConfig,
         video_generation_optional_params: VideoCreateOptionalRequestParams,
     ) -> Dict:
         """
@@ -38,7 +38,10 @@ class VideoGenerationRequestUtils:
         if unsupported_params:
             raise litellm.UnsupportedParamsError(
                 model=model,
-                message=f"The following parameters are not supported for model {model}: {', '.join(unsupported_params)}",
+                message=(
+                    f"The following parameters are not supported for model {model}: "
+                    f"{', '.join(unsupported_params)}"
+                ),
             )
 
         # Map parameters to provider-specific format
