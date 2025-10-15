@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Card, Title, Text, Subtitle, Grid, Col, Button } from "@tremor/react";
+import { Card, Title, Text, Subtitle, Grid, Col, Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { Modal, Form } from "antd";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -203,47 +203,59 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
         </Button>
       </div>
 
-      {/* Main Content Card */}
-      <div className="bg-white rounded-lg shadow w-full max-w-full mb-6">
-        {isFetching ? (
-          <div className="py-12 text-center">
-            <Text className="text-gray-500">Loading configuration...</Text>
-          </div>
-        ) : Object.keys(discountConfig).length > 0 ? (
-          <div className="p-6">
-            <ProviderDiscountTable
-              discountConfig={discountConfig}
-              onDiscountChange={handleDiscountChange}
-              onRemoveProvider={handleRemoveProvider}
-            />
-          </div>
-        ) : (
-          <div className="py-16 px-6 text-center">
-            <svg
-              className="mx-auto h-12 w-12 text-gray-400 mb-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.5}
-                d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-            <Text className="text-gray-700 font-medium mb-2">
-              No provider discounts configured
-            </Text>
-            <Text className="text-gray-500 text-sm">
-              Click "Add Provider Discount" to get started
-            </Text>
-          </div>
-        )}
+      {/* Main Content Card with Tabs */}
+      <div className="bg-white rounded-lg shadow w-full max-w-full">
+        <TabGroup>
+          <TabList className="px-6 pt-4">
+            <Tab>Provider Discounts</Tab>
+            <Tab>Test It</Tab>
+          </TabList>
+          <TabPanels>
+            <TabPanel>
+              {isFetching ? (
+                <div className="py-12 text-center">
+                  <Text className="text-gray-500">Loading configuration...</Text>
+                </div>
+              ) : Object.keys(discountConfig).length > 0 ? (
+                <div className="p-6">
+                  <ProviderDiscountTable
+                    discountConfig={discountConfig}
+                    onDiscountChange={handleDiscountChange}
+                    onRemoveProvider={handleRemoveProvider}
+                  />
+                </div>
+              ) : (
+                <div className="py-16 px-6 text-center">
+                  <svg
+                    className="mx-auto h-12 w-12 text-gray-400 mb-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={1.5}
+                      d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
+                  </svg>
+                  <Text className="text-gray-700 font-medium mb-2">
+                    No provider discounts configured
+                  </Text>
+                  <Text className="text-gray-500 text-sm">
+                    Click "Add Provider Discount" to get started
+                  </Text>
+                </div>
+              )}
+            </TabPanel>
+            <TabPanel>
+              <div className="px-6 pb-4">
+                <HowItWorks />
+              </div>
+            </TabPanel>
+          </TabPanels>
+        </TabGroup>
       </div>
-
-      {/* How It Works Section */}
-      <HowItWorks />
 
       <Modal
         title={

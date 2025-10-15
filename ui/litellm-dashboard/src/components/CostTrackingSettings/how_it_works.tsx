@@ -26,10 +26,7 @@ const HowItWorks: React.FC = () => {
   }, [responseCost, discountAmount]);
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full">
-      <div className="px-6 py-4">
-        <Title className="mb-4">How It Works</Title>
-        <div className="space-y-4">
+    <div className="space-y-4 pt-2">
           <div>
             <Text className="font-medium text-gray-900 text-sm mb-1">Cost Calculation</Text>
             <Text className="text-xs text-gray-600">
@@ -143,8 +140,6 @@ const HowItWorks: React.FC = () => {
               </div>
             )}
           </div>
-        </div>
-      </div>
     </div>
   );
 };
