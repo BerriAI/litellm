@@ -10,6 +10,7 @@ import ProviderDiscountTable from "./provider_discount_table";
 import AddProviderForm from "./add_provider_form";
 import { ExclamationCircleOutlined } from "@ant-design/icons";
 import { DocsMenu } from "../HelpLink";
+import HowItWorks from "./how_it_works";
 
 const DOCS_LINKS = [
   { label: "Custom pricing for models", href: "https://docs.litellm.ai/docs/proxy/custom_pricing" },
@@ -203,7 +204,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
       </div>
 
       {/* Main Content Card */}
-      <div className="bg-white rounded-lg shadow w-full max-w-full">
+      <div className="bg-white rounded-lg shadow w-full max-w-full mb-6">
         {isFetching ? (
           <div className="py-12 text-center">
             <Text className="text-gray-500">Loading configuration...</Text>
@@ -239,31 +240,10 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
             </Text>
           </div>
         )}
-
-        <div className="border-t px-6 py-4 bg-gray-50">
-          <Title className="mb-3">How It Works</Title>
-          <div className="space-y-2">
-            <div>
-              <Text className="font-medium text-gray-900 text-sm">Cost Calculation</Text>
-              <Text className="text-xs text-gray-600">
-                Discounts are applied to provider costs: <code className="bg-gray-200 px-1.5 py-0.5 rounded text-xs">final_cost = base_cost × (1 - discount%/100)</code>
-              </Text>
-            </div>
-            <div>
-              <Text className="font-medium text-gray-900 text-sm">Example</Text>
-              <Text className="text-xs text-gray-600">
-                A 5% discount on a $10.00 request results in: $10.00 × (1 - 0.05) = $9.50
-              </Text>
-            </div>
-            <div>
-              <Text className="font-medium text-gray-900 text-sm">Valid Range</Text>
-              <Text className="text-xs text-gray-600">
-                Discount percentages must be between 0% and 100%
-              </Text>
-            </div>
-          </div>
-        </div>
       </div>
+
+      {/* How It Works Section */}
+      <HowItWorks />
 
       <Modal
         title={
