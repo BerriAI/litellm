@@ -18,7 +18,7 @@ from litellm.types.utils import (
     ImageResponse,
     ModelResponse,
     TextCompletionResponse,
-    Choice,
+    Choices,
 )
 from litellm.types.utils import SpecialEnums
 
@@ -519,7 +519,7 @@ class VertexPassthroughLoggingHandler:
                 litellm_model_response.created = int(start_time.timestamp())
                 
                 # Add batch-specific metadata to indicate this is a pending batch job
-                litellm_model_response.choices = [Choice(
+                litellm_model_response.choices = [Choices(
                     finish_reason="batch_pending",
                     index=0,
                     message={
@@ -552,6 +552,38 @@ class VertexPassthroughLoggingHandler:
                     "result": litellm_model_response,
                     "kwargs": kwargs,
                 }
+            else:
+                # Handle non-successful responses
+                litellm_model_response = ModelResponse()
+                litellm_model_response.id = str(uuid.uuid4())
+                litellm_model_response.model = "vertex_ai_batch"
+                litellm_model_response.object = "batch_prediction_job"
+                litellm_model_response.created = int(start_time.timestamp())
+                
+                # Add error-specific metadata
+                litellm_model_response.choices = [Choices(
+                    finish_reason="batch_error",
+                    index=0,
+                    message={
+                        "role": "assistant",
+                        "content": f"Batch prediction job creation failed. Status: {httpx_response.status_code}",
+                        "tool_calls": None,
+                        "function_call": None,
+                        "provider_specific_fields": {
+                            "batch_job_state": "JOB_STATE_FAILED",
+                            "status_code": httpx_response.status_code
+                        }
+                    }
+                )]
+                
+                kwargs["response_cost"] = 0.0
+                kwargs["model"] = "vertex_ai_batch"
+                kwargs["batch_job_state"] = "JOB_STATE_FAILED"
+                
+                return {
+                    "result": litellm_model_response,
+                    "kwargs": kwargs,
+                }
                 
         except Exception as e:
             verbose_proxy_logger.error(f"Error in batch_prediction_jobs_handler: {e}")
@@ -563,7 +595,7 @@ class VertexPassthroughLoggingHandler:
             litellm_model_response.created = int(start_time.timestamp())
             
             # Add error-specific metadata
-            litellm_model_response.choices = [Choice(
+            litellm_model_response.choices = [Choices(
                 finish_reason="batch_error",
                 index=0,
                 message={
