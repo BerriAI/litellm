@@ -35,7 +35,7 @@ class CheckBatchCost:
         - if not, return False
         - if so, return True
         """
-        from enterprise.litellm_enterprise.proxy.hooks.managed_files import (
+        from litellm_enterprise.proxy.hooks.managed_files import (
             _PROXY_LiteLLMManagedFiles,
         )
 
@@ -57,7 +57,6 @@ class CheckBatchCost:
                 "file_purpose": "batch",
             }
         )
-        verbose_proxy_logger.info(f"Found {len(jobs)} jobs to check for cost and usage")
         completed_jobs = []
 
         for job in jobs:
