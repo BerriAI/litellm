@@ -19,6 +19,7 @@ class VideoObject(BaseModel):
     seconds: Optional[str] = None
     size: Optional[str] = None
     model: Optional[str] = None
+    usage: Optional[Dict[str, Any]] = None
     _hidden_params: Dict[str, Any] = {}
 
     def __contains__(self, key):
@@ -41,35 +42,11 @@ class VideoObject(BaseModel):
             return self.dict()
 
 
-class VideoUsage(BaseModel):
-    """Usage information for video generation."""
-    input_tokens: Optional[int] = None
-    output_tokens: Optional[int] = None
-    total_tokens: Optional[int] = None
-    duration_seconds: Optional[float] = None
-    resolution: Optional[str] = None
-    _hidden_params: Dict[str, Any] = {}
-
-    def __contains__(self, key):
-        return hasattr(self, key)
-
-    def get(self, key, default=None):
-        return getattr(self, key, default)
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def json(self, **kwargs):  # type: ignore
-        try:
-            return self.model_dump(**kwargs)
-        except Exception:
-            return self.dict()
 
 
 class VideoResponse(BaseModel):
     """Response object for video generation requests."""
     data: List[VideoObject]
-    usage: VideoUsage
     hidden_params: Dict[str, Any] = {}
 
     def __contains__(self, key):

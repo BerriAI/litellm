@@ -23724,5 +23724,21 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
+    },
+    "openai/sora-2": {
+        "litellm_provider": "openai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.10,
+        "source": "https://platform.openai.com/docs/api-reference/videos",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "720x1280",
+            "1280x720"
+        ]
     }
 }
