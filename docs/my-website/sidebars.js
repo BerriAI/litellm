@@ -347,6 +347,7 @@ const sidebars = {
           ]
         },
         "moderation",
+        "ocr",
         {
           type: "category",
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
