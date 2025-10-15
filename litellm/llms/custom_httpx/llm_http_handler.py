@@ -44,8 +44,7 @@ from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
-from litellm.llms.base_llm.videos_generation.transformation import BaseVideoGenerationConfig
-from litellm.llms.base_llm.video_retrieval.transformation import BaseVideoRetrievalConfig
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -83,7 +82,7 @@ from litellm.types.vector_stores import (
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
 )
-from litellm.types.videos.main import VideoResponse
+from litellm.types.videos.main import VideoObject
 from litellm.utils import (
     CustomStreamWrapper,
     ImageResponse,
@@ -3285,6 +3284,7 @@ class BaseLLMHTTPHandler:
             BaseOCRConfig,
             BaseVideoGenerationConfig,
             "BaseVideoRetrievalConfig",
+            BaseVideoConfig,
             "BasePassthroughConfig",
         ],
     ):
@@ -3792,7 +3792,7 @@ class BaseLLMHTTPHandler:
         self,
         model: str,
         prompt: str,
-        video_generation_provider_config: "BaseVideoGenerationConfig",
+        video_generation_provider_config: BaseVideoConfig,
         video_generation_optional_request_params: Dict,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -3806,8 +3806,8 @@ class BaseLLMHTTPHandler:
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
     ) -> Union[
-        VideoResponse,
-        Coroutine[Any, Any, VideoResponse],
+        VideoObject,
+        Coroutine[Any, Any, VideoObject],
     ]:
         """
         Handles video generation requests.
@@ -3876,36 +3876,7 @@ class BaseLLMHTTPHandler:
 
         try:
             # Use JSON when no files, otherwise use form data with files
-            # if files is None or len(files) == 0:
-                # # --- BEGIN MOCK VIDEO RESPONSE ---
-                # mock_video_response = {
-                #     "data": [
-                #         {
-                #             "id": "video_123",
-                #             "object": "video",
-                #             "model": "sora-2",
-                #             "status": "queued",
-                #             "progress": 0,
-                #             "created_at": 1712697600,
-                #             "size": "1024x1808",
-                #             "seconds": "8",
-                #             "quality": "standard",
-                #         }
-                #     ],
-                #     "usage": {},
-                #     "hidden_params": {},
-                # }
-
-                # import types
-                # class MockHTTPXResponse:
-                #     def __init__(self, json_data):
-                #         self._json_data = json_data
-                #         self.status_code = 200
-                #         self.text = str(json_data)
-                #     def json(self):
-                #         return self._json_data
-                # response = MockHTTPXResponse(mock_video_response)
-            if files:
+            if files and len(files) > 0:
                     # Use multipart/form-data when files are present
                     response = sync_httpx_client.post(
                         url=api_base,
@@ -3920,8 +3891,7 @@ class BaseLLMHTTPHandler:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=data,
-                    files=files,
+                    json=data,
                     timeout=timeout,
                 )
 
@@ -3941,7 +3911,7 @@ class BaseLLMHTTPHandler:
         self,
         model: str,
         prompt: str,
-        video_generation_provider_config: "BaseVideoGenerationConfig",
+        video_generation_provider_config: "BaseVideoConfig",
         video_generation_optional_request_params: Dict,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -3953,7 +3923,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> VideoResponse:
+    ) -> VideoObject:
         """
         Async version of the video generation handler.
         Uses async HTTP client to make requests.
@@ -4036,7 +4006,7 @@ class BaseLLMHTTPHandler:
         self,
         video_id: str,
         model: str,
-        video_content_provider_config: "BaseVideoRetrievalConfig",
+        video_content_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -4062,7 +4032,7 @@ class BaseLLMHTTPHandler:
                 api_key=api_key,
                 client=client,
             )
-        
+
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client(
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)}
@@ -4087,10 +4057,10 @@ class BaseLLMHTTPHandler:
 
         # Construct the URL for video content download
         url = f"{api_base.rstrip('/')}/{video_id}/content"
-        
+
         # Add variant query parameter if provided
         params = { "video_id": video_id }
-        
+
         try:
             # Make the GET request to download content
             response = sync_httpx_client.get(
@@ -4098,14 +4068,14 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params,
             )
-            
+
             # Transform the response using the provider config
-            return video_content_provider_config.transform_video_retrieve_response(
+            return video_content_provider_config.transform_video_content_response(
                 model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
             )
-            
+
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -4116,7 +4086,7 @@ class BaseLLMHTTPHandler:
         self,
         video_id: str,
         model: str,
-        video_content_provider_config: "BaseVideoRetrievalConfig",
+        video_content_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -4153,7 +4123,7 @@ class BaseLLMHTTPHandler:
 
         # Construct the URL for video content download
         url = f"{api_base.rstrip('/')}/{video_id}/content"
-        
+
         params = {
             "video_id": video_id,
         }
@@ -4165,14 +4135,14 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 params=params,
             )
-            
+
             # Transform the response using the provider config
-            return video_content_provider_config.transform_video_retrieve_response(
+            return video_content_provider_config.transform_video_content_response(
                 model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
             )
-            
+
         except Exception as e:
             raise self._handle_error(
                 e=e,
