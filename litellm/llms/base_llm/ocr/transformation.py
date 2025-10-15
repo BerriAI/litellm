@@ -7,12 +7,15 @@ import httpx
 from pydantic import BaseModel
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.utils import FileTypes
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+# DocumentType for OCR - Mistral format document dict
+DocumentType = Dict[str, str]
 
 
 class OCRPageDimensions(BaseModel):
@@ -123,7 +126,7 @@ class BaseOCRConfig:
     def transform_ocr_request(
         self,
         model: str,
-        image: FileTypes,
+        document: DocumentType,
         optional_params: dict,
         headers: dict,
         **kwargs,
@@ -134,7 +137,7 @@ class BaseOCRConfig:
         
         Args:
             model: Model name
-            image: Image file to process (can be file path, bytes, file object, etc.)
+            document: Document to process (Mistral format dict, or file path, bytes, etc.)
             optional_params: Optional parameters for the request
             headers: Request headers
             
