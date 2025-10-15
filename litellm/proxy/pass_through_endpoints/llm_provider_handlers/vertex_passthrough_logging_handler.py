@@ -640,12 +640,13 @@ class VertexPassthroughLoggingHandler:
             if managed_files_hook is not None and hasattr(managed_files_hook, 'store_unified_object_id'):
                 # Create a mock user API key dict for the managed object storage
                 from litellm.proxy._types import UserAPIKeyAuth
+                from litellm.proxy._types import LitellmUserRoles
                 user_api_key_dict = UserAPIKeyAuth(
                     user_id=kwargs.get("user_id", "default-user"),
                     api_key="",
                     team_id=None,
                     team_alias=None,
-                    user_role="customer",  # Set a valid enum value
+                    user_role=LitellmUserRoles.CUSTOMER,  # Use proper enum value
                     user_email=None,
                     max_budget=None,
                     spend=0.0,  # Set to 0.0 instead of None
@@ -657,13 +658,10 @@ class VertexPassthroughLoggingHandler:
                     max_parallel_requests=None,
                     allowed_model_region=None,
                     metadata={},  # Set to empty dict instead of None
-                    user_info=None,
                     key_alias=None,
                     permissions={},  # Set to empty dict instead of None
                     model_max_budget={},  # Set to empty dict instead of None
                     model_spend={},  # Set to empty dict instead of None
-                    model_budget_duration=None,
-                    model_budget_reset_at=None,
                 )
                 
                 # Store the unified object for batch cost tracking
