@@ -18,7 +18,9 @@ from litellm.types.utils import (
     ImageResponse,
     ModelResponse,
     TextCompletionResponse,
+    Choice,
 )
+from litellm.types.utils import SpecialEnums
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
@@ -339,6 +341,38 @@ class VertexPassthroughLoggingHandler:
         return "unknown"
 
     @staticmethod
+    def extract_model_name_from_vertex_path(vertex_model_path: str) -> str:
+        """
+        Extract the actual model name from a Vertex AI model path.
+        
+        Examples:
+        - publishers/google/models/gemini-2.5-flash -> gemini-2.5-flash
+        - projects/PROJECT_ID/locations/LOCATION/models/MODEL_ID -> MODEL_ID
+        
+        Args:
+            vertex_model_path: The full Vertex AI model path
+            
+        Returns:
+            The extracted model name for use with LiteLLM
+        """
+        # Handle publishers/google/models/ format
+        if "publishers/" in vertex_model_path and "models/" in vertex_model_path:
+            # Extract everything after the last models/
+            parts = vertex_model_path.split("models/")
+            if len(parts) > 1:
+                return parts[-1]
+        
+        # Handle projects/PROJECT_ID/locations/LOCATION/models/MODEL_ID format
+        elif "projects/" in vertex_model_path and "models/" in vertex_model_path:
+            # Extract everything after the last models/
+            parts = vertex_model_path.split("models/")
+            if len(parts) > 1:
+                return parts[-1]
+        
+        # If no recognized pattern, return the original path
+        return vertex_model_path
+
+    @staticmethod
     def _get_vertex_publisher_or_api_spec_from_url(url: str) -> Optional[str]:
         # Check for specific Vertex AI partner publishers
         if "/publishers/mistralai/" in url:
@@ -402,7 +436,7 @@ class VertexPassthroughLoggingHandler:
         end_time: datetime,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str,
-    ):
+    ) -> dict:
         """
         Create the standard logging object for Vertex passthrough generateContent (streaming and non-streaming)
 
@@ -442,13 +476,7 @@ class VertexPassthroughLoggingHandler:
         Handle batch prediction jobs passthrough logging.
         Creates a managed object for cost tracking when batch job is successfully created.
         """
-        from litellm.types.utils import LiteLLMBatch
         from litellm.llms.vertex_ai.batches.transformation import VertexAIBatchTransformation
-        from litellm.proxy.openai_files_endpoints.common_utils import (
-            _is_base64_encoded_unified_file_id,
-            get_batch_id_from_unified_batch_id,
-            get_model_id_from_unified_batch_id,
-        )
         from litellm._uuid import uuid
         import base64
 
@@ -467,8 +495,11 @@ class VertexPassthroughLoggingHandler:
                 model_name = _json_response.get("model", "unknown")
                 
                 # Create unified object ID for tracking
-                # Format: base64(model_id:batch_id)
-                unified_object_id = base64.b64encode(f"{model_name}:{batch_id}".encode()).decode()
+                # Format: base64(litellm_proxy;model_id:{};llm_batch_id:{})
+                actual_model_id = VertexPassthroughLoggingHandler.get_actual_model_id_from_router(model_name)
+
+                unified_id_string = SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format(actual_model_id, batch_id)
+                unified_object_id = base64.urlsafe_b64encode(unified_id_string.encode()).decode().rstrip("=")
                 
                 # Store the managed object for cost tracking
                 # This will be picked up by check_batch_cost polling mechanism
@@ -480,12 +511,29 @@ class VertexPassthroughLoggingHandler:
                     **kwargs,
                 )
                 
-                # Create a simple model response for logging
+                # Create a batch job response for logging
                 litellm_model_response = ModelResponse()
                 litellm_model_response.id = str(uuid.uuid4())
                 litellm_model_response.model = model_name
                 litellm_model_response.object = "batch_prediction_job"
                 litellm_model_response.created = int(start_time.timestamp())
+                
+                # Add batch-specific metadata to indicate this is a pending batch job
+                litellm_model_response.choices = [Choice(
+                    finish_reason="batch_pending",
+                    index=0,
+                    message={
+                        "role": "assistant",
+                        "content": f"Batch prediction job {batch_id} created and is pending. Status will be updated when the batch completes.",
+                        "tool_calls": None,
+                        "function_call": None,
+                        "provider_specific_fields": {
+                            "batch_job_id": batch_id,
+                            "batch_job_state": "JOB_STATE_PENDING",
+                            "unified_object_id": unified_object_id
+                        }
+                    }
+                )]
                 
                 # Set response cost to 0 initially (will be updated when batch completes)
                 response_cost = 0.0
@@ -493,6 +541,7 @@ class VertexPassthroughLoggingHandler:
                 kwargs["model"] = model_name
                 kwargs["batch_id"] = batch_id
                 kwargs["unified_object_id"] = unified_object_id
+                kwargs["batch_job_state"] = "JOB_STATE_PENDING"
                 
                 logging_obj.model = model_name
                 logging_obj.model_call_details["model"] = logging_obj.model
@@ -513,8 +562,25 @@ class VertexPassthroughLoggingHandler:
             litellm_model_response.object = "batch_prediction_job"
             litellm_model_response.created = int(start_time.timestamp())
             
+            # Add error-specific metadata
+            litellm_model_response.choices = [Choice(
+                finish_reason="batch_error",
+                index=0,
+                message={
+                    "role": "assistant",
+                    "content": f"Error creating batch prediction job: {str(e)}",
+                    "tool_calls": None,
+                    "function_call": None,
+                    "provider_specific_fields": {
+                        "batch_job_state": "JOB_STATE_FAILED",
+                        "error": str(e)
+                    }
+                }
+            )]
+            
             kwargs["response_cost"] = 0.0
             kwargs["model"] = "vertex_ai_batch"
+            kwargs["batch_job_state"] = "JOB_STATE_FAILED"
             
             return {
                 "result": litellm_model_response,
@@ -533,13 +599,13 @@ class VertexPassthroughLoggingHandler:
         Store batch managed object for cost tracking.
         This will be picked up by the check_batch_cost polling mechanism.
         """
-        try:
+        try:           
             # Get the managed files hook from the logging object
             # This is a bit of a hack, but we need access to the proxy logging system
             from litellm.proxy.proxy_server import proxy_logging_obj
             
             managed_files_hook = proxy_logging_obj.get_proxy_hook("managed_files")
-            if managed_files_hook is not None:
+            if managed_files_hook is not None and hasattr(managed_files_hook, 'store_unified_object_id'):
                 # Create a mock user API key dict for the managed object storage
                 from litellm.proxy._types import UserAPIKeyAuth
                 user_api_key_dict = UserAPIKeyAuth(
@@ -547,23 +613,23 @@ class VertexPassthroughLoggingHandler:
                     api_key="",
                     team_id=None,
                     team_alias=None,
-                    user_role="",
+                    user_role="customer",  # Set a valid enum value
                     user_email=None,
                     max_budget=None,
-                    spend=None,
-                    models=None,
+                    spend=0.0,  # Set to 0.0 instead of None
+                    models=[],  # Set to empty list instead of None
                     tpm_limit=None,
                     rpm_limit=None,
                     budget_duration=None,
                     budget_reset_at=None,
                     max_parallel_requests=None,
                     allowed_model_region=None,
-                    metadata=None,
+                    metadata={},  # Set to empty dict instead of None
                     user_info=None,
                     key_alias=None,
-                    permissions=None,
-                    model_max_budget=None,
-                    model_spend=None,
+                    permissions={},  # Set to empty dict instead of None
+                    model_max_budget={},  # Set to empty dict instead of None
+                    model_spend={},  # Set to empty dict instead of None
                     model_budget_duration=None,
                     model_budget_reset_at=None,
                 )
@@ -589,4 +655,30 @@ class VertexPassthroughLoggingHandler:
                 
         except Exception as e:
             verbose_proxy_logger.error(f"Error storing batch managed object: {e}")
+
+    @staticmethod
+    def get_actual_model_id_from_router(model_name: str) -> str:
+        from litellm.proxy.proxy_server import llm_router
+        
+        if llm_router is not None:
+            # Try to find the model in the router by the extracted model name
+            extracted_model_name = VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path(model_name)
+            
+            # Use the existing get_model_ids method from router
+            model_ids = llm_router.get_model_ids(model_name=extracted_model_name)
+            if model_ids and len(model_ids) > 0:
+                # Use the first model ID found
+                actual_model_id = model_ids[0]
+                verbose_proxy_logger.info(f"Found model ID in router: {actual_model_id}")
+                return actual_model_id
+            else:
+                # Fallback to constructed model name
+                actual_model_id = extracted_model_name
+                verbose_proxy_logger.warning(f"Model not found in router, using constructed name: {actual_model_id}")
+                return actual_model_id
+        else:
+            # Fallback if router is not available
+            extracted_model_name = VertexPassthroughLoggingHandler.extract_model_name_from_vertex_path(model_name)
+            verbose_proxy_logger.warning(f"Router not available, using constructed model name: {extracted_model_name}")
+            return extracted_model_name
 

@@ -4065,7 +4065,7 @@ class ProxyStartupEvent:
         ### CHECK BATCH COST ###
         if llm_router is not None:
             try:
-                from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+                from enterprise.litellm_enterprise.proxy.common_utils.check_batch_cost import (
                     CheckBatchCost,
                 )
 
@@ -4079,8 +4079,12 @@ class ProxyStartupEvent:
                     "interval",
                     seconds=proxy_batch_polling_interval,  # these can run infrequently, as batch jobs take time to complete
                 )
+                verbose_proxy_logger.info("Batch cost check job scheduled successfully")
 
-            except Exception:
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Failed to setup batch cost checking: {e}"
+                )
                 verbose_proxy_logger.debug(
                     "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
