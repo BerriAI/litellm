@@ -384,7 +384,7 @@ async def make_async_calls():
     for _ in range(5):
         task = asyncio.create_task(
             litellm.acompletion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-nano",
                 messages=[{"role": "user", "content": "This is a test"}],
                 max_tokens=5,
                 temperature=0.7,
@@ -476,3 +476,18 @@ def test_s3_logging_r2():
         # post, close log file and verify
         # Reset stdout to the original value
         print("Passed! Testing async s3 logging")
+
+from litellm.integrations.s3_v2 import S3Logger
+
+class TestS3Logger(S3Logger):
+    def __init__(self, *args, **kwargs):
+        self.recorded_requests = {}
+        self.logged_standard_logging_payload: Optional[StandardLoggingPayload] = None
+        super().__init__(*args, **kwargs)
+    
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.recorded_requests[response_obj["id"]] = start_time
+        print("recorded request", self.recorded_requests)
+        self.logged_standard_logging_payload = kwargs["standard_logging_object"]
+        return await super().async_log_success_event(kwargs, response_obj, start_time, end_time)
+

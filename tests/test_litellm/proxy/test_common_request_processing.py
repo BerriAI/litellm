@@ -1,5 +1,5 @@
 import copy
-import uuid
+from litellm._uuid import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -73,6 +73,96 @@ class TestProxyBaseLLMRequestProcessing:
         except ValueError:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
+
+    @pytest.mark.asyncio
+    async def test_stream_timeout_header_processing(self):
+        """
+        Test that x-litellm-stream-timeout header gets processed and added to request data as stream_timeout.
+        """
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+        # Test with stream timeout header
+        headers_with_timeout = {"x-litellm-stream-timeout": "30.5"}
+        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_with_timeout)
+        assert result == 30.5
+        
+        # Test without stream timeout header
+        headers_without_timeout = {}
+        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_without_timeout)
+        assert result is None
+        
+        # Test with invalid header value (should raise ValueError when converting to float)
+        headers_with_invalid = {"x-litellm-stream-timeout": "invalid"}
+        with pytest.raises(ValueError):
+            LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_with_invalid)
+
+    @pytest.mark.asyncio
+    async def test_add_litellm_data_to_request_with_stream_timeout_header(self):
+        """
+        Test that x-litellm-stream-timeout header gets processed and added to request data 
+        when calling add_litellm_data_to_request.
+        """
+        from litellm.integrations.opentelemetry import UserAPIKeyAuth
+        from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+        # Create test data with a basic completion request
+        test_data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Hello"}]
+        }
+        
+        # Mock request with stream timeout header
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {"x-litellm-stream-timeout": "45.0"}
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.method = "POST"
+        mock_request.query_params = {}
+        mock_request.client = None
+        
+        # Create a minimal mock with just the required attributes
+        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.api_key = "test_api_key_hash"
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+        mock_user_api_key_dict.allowed_model_region = None
+        mock_user_api_key_dict.key_alias = None
+        mock_user_api_key_dict.user_id = None
+        mock_user_api_key_dict.team_id = None
+        mock_user_api_key_dict.metadata = {}  # Prevent enterprise feature check
+        mock_user_api_key_dict.team_metadata = None
+        mock_user_api_key_dict.org_id = None
+        mock_user_api_key_dict.team_alias = None
+        mock_user_api_key_dict.end_user_id = None
+        mock_user_api_key_dict.user_email = None
+        mock_user_api_key_dict.request_route = None
+        mock_user_api_key_dict.team_max_budget = None
+        mock_user_api_key_dict.team_spend = None
+        mock_user_api_key_dict.model_max_budget = None
+        mock_user_api_key_dict.parent_otel_span = None
+        mock_user_api_key_dict.team_model_aliases = None
+        
+        general_settings = {}
+        mock_proxy_config = MagicMock()
+        
+        # Call the actual function that processes headers and adds data
+        result_data = await add_litellm_data_to_request(
+            data=test_data,
+            request=mock_request,
+            general_settings=general_settings,
+            user_api_key_dict=mock_user_api_key_dict,
+            version=None,
+            proxy_config=mock_proxy_config,
+        )
+        
+        # Verify that stream_timeout was extracted from header and added to request data
+        assert "stream_timeout" in result_data
+        assert result_data["stream_timeout"] == 45.0
+        
+        # Verify that the original test data is preserved
+        assert result_data["model"] == "gpt-3.5-turbo"
+        assert result_data["messages"] == [{"role": "user", "content": "Hello"}]
 
 
 @pytest.mark.asyncio

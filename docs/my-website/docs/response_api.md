@@ -3,7 +3,10 @@ import TabItem from '@theme/TabItem';
 
 # /responses [Beta]
 
+
 LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](https://platform.openai.com/docs/api-reference/responses)
+
+Requests to /chat/completions may be bridged here automatically when the provider lacks support for that endpoint. The model’s default `mode` determines how bridging works.(see `model_prices_and_context_window`) 
 
 | Feature | Supported | Notes |
 |---------|-----------|--------|
@@ -11,6 +14,7 @@ LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](http
 | Logging | ✅ | Works across all integrations |
 | End-user Tracking | ✅ | |
 | Streaming | ✅ | |
+| Image Generation Streaming | ✅ | Progressive image generation with partial images (1-3) |
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
 | Supported operations | Create a response, Get a response, Delete a response | |
@@ -53,6 +57,29 @@ for event in response:
     print(event)
 ```
 
+#### Image Generation with Streaming
+```python showLineNumbers title="OpenAI Streaming Image Generation"
+import litellm
+import base64
+
+# Streaming image generation with partial images
+stream = litellm.responses(
+    model="gpt-4.1",  # Use an actual image generation model
+    input="Generate a gorgeous image of a river made of white owl feathers",
+    stream=True,
+    tools=[{"type": "image_generation", "partial_images": 2}],
+
+)
+
+for event in stream:
+    if event.type == "response.image_generation_call.partial_image":
+        idx = event.partial_image_index
+        image_base64 = event.partial_image_b64
+        image_bytes = base64.b64decode(image_base64)
+        with open(f"river{idx}.png", "wb") as f:
+            f.write(image_bytes)
+```
+
 #### GET a Response
 ```python showLineNumbers title="Get Response by ID"
 import litellm
@@ -77,6 +104,43 @@ print(retrieved_response)
 # For async usage
 # retrieved_response = await litellm.aget_responses(response_id=response_id)
 ```
+
+#### CANCEL a Response
+You can cancel an in-progress response (if supported by the provider):
+
+```python showLineNumbers title="Cancel Response by ID"
+import litellm
+
+# First, create a response
+response = litellm.responses(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+# Get the response ID
+response_id = response.id
+
+# Cancel the response by ID
+cancel_response = litellm.cancel_responses(
+    response_id=response_id
+)
+
+print(cancel_response)
+
+# For async usage
+# cancel_response = await litellm.acancel_responses(response_id=response_id)
+```
+
+
+**REST API:**
+```bash
+curl -X POST http://localhost:4000/v1/responses/response_id/cancel \
+    -H "Authorization: Bearer sk-1234"
+```
+
+This will attempt to cancel the in-progress response with the given ID.
+**Note:** Not all providers support response cancellation. If unsupported, an error will be raised.
 
 #### DELETE a Response
 ```python showLineNumbers title="Delete Response by ID"
@@ -338,6 +402,32 @@ response = client.responses.create(
 
 for event in response:
     print(event)
+```
+
+#### Image Generation with Streaming
+```python showLineNumbers title="OpenAI Proxy Streaming Image Generation"
+from openai import OpenAI
+import base64
+
+client = OpenAI(api_key="sk-1234", base_url="http://localhost:4000")
+
+stream = client.responses.create(
+    model="gpt-4.1",
+    input="Draw a gorgeous image of a river made of white owl feathers, snaking its way through a serene winter landscape",
+    stream=True,
+    tools=[{"type": "image_generation", "partial_images": 2}],
+)
+
+
+for event in stream:
+    print(f"event: {event}")
+    if event.type == "response.image_generation_call.partial_image":
+        idx = event.partial_image_index
+        image_base64 = event.partial_image_b64
+        image_bytes = base64.b64decode(image_base64)
+        with open(f"river{idx}.png", "wb") as f:
+            f.write(image_bytes)
+
 ```
 
 #### GET a Response
@@ -795,18 +885,26 @@ curl http://localhost:4000/v1/responses \
 
 
 
-## Session Management - Non-OpenAI Models
+## Session Management
 
-LiteLLM Proxy supports session management for non-OpenAI models. This allows you to store and fetch conversation history (state) in LiteLLM Proxy. 
+LiteLLM Proxy supports session management for all supported models. This allows you to store and fetch conversation history (state) in LiteLLM Proxy. 
 
 #### Usage
 
 1. Enable storing request / response content in the database
 
-Set `store_prompts_in_spend_logs: true` in your proxy config.yaml. When this is enabled, LiteLLM will store the request and response content in the database.
+Set `store_prompts_in_cold_storage: true` in your proxy config.yaml. When this is enabled, LiteLLM will store the request and response content in the s3 bucket you specify.
 
-```yaml
+```yaml showLineNumbers title="config.yaml with Session Continuity"
+litellm_settings:
+  callbacks: ["s3_v2"]
+  cold_storage_custom_logger: s3_v2
+  s3_callback_params: # learn more https://docs.litellm.ai/docs/proxy/logging#s3-buckets
+    s3_bucket_name: litellm-logs   # AWS Bucket Name for S3
+    s3_region_name: us-west-2      
+
 general_settings:
+  store_prompts_in_cold_storage: true
   store_prompts_in_spend_logs: true
 ```
 

@@ -49,6 +49,7 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.oauth2_check import check_oauth2_token
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -255,12 +256,17 @@ def get_api_key(
     Returns:
         Tuple[Optional[str], Optional[str]]: Tuple of the api_key and the passed_in_key
     """
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        _safe_get_request_query_params,
+    )
+
     api_key = api_key
     passed_in_key: Optional[str] = None
     if isinstance(custom_litellm_key_header, str):
         passed_in_key = custom_litellm_key_header
         api_key = _get_bearer_token_or_received_api_key(custom_litellm_key_header)
-    elif isinstance(api_key, str):
+    elif isinstance(api_key, str) and len(api_key) > 0:
         passed_in_key = api_key
         api_key = _get_bearer_token(api_key=api_key)
     elif isinstance(azure_api_key_header, str):
@@ -275,14 +281,22 @@ def get_api_key(
     elif isinstance(azure_apim_header, str):
         passed_in_key = azure_apim_header
         api_key = azure_apim_header
+    elif (
+        RouteChecks.is_generate_content_route(route=route)
+        and request is not None
+        and _safe_get_request_query_params(request).get("key")
+    ):
+        google_auth_key: str = _safe_get_request_query_params(request).get("key") or ""
+        passed_in_key = google_auth_key
+        api_key = google_auth_key
     elif pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if endpoint.get("path", "") == route:
                 headers: Optional[dict] = endpoint.get("headers", None)
                 if headers is not None:
                     header_key: str = headers.get("litellm_user_api_key", "")
-                    if request.headers.get(key=header_key) is not None:
-                        api_key = request.headers.get(key=header_key)
+                    if request.headers.get(header_key) is not None:
+                        api_key = request.headers.get(header_key) or ""
                         passed_in_key = api_key
     return api_key, passed_in_key
 
@@ -376,7 +390,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
         )
-        passed_in_key: Optional[str] = None
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
         api_key, passed_in_key = get_api_key(
             custom_litellm_key_header=custom_litellm_key_header,
@@ -488,6 +501,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 end_user_object = result["end_user_object"]
                 org_id = result["org_id"]
                 token = result["token"]
+                team_membership: Optional[LiteLLM_TeamMembership] = result.get(
+                    "team_membership", None
+                )
 
                 global_proxy_spend = await get_global_proxy_spend(
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
@@ -522,6 +538,22 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     org_id=org_id,
                     parent_otel_span=parent_otel_span,
                     end_user_id=end_user_id,
+                    user_tpm_limit=(
+                        user_object.tpm_limit if user_object is not None else None
+                    ),
+                    user_rpm_limit=(
+                        user_object.rpm_limit if user_object is not None else None
+                    ),
+                    team_member_rpm_limit=(
+                        team_membership.safe_get_team_member_rpm_limit()
+                        if team_membership is not None
+                        else None
+                    ),
+                    team_member_tpm_limit=(
+                        team_membership.safe_get_team_member_tpm_limit()
+                        if team_membership is not None
+                        else None
+                    ),
                 )
                 # run through common checks
                 _ = await common_checks(
@@ -571,7 +603,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         elif api_key == "":
             # missing 'Bearer ' prefix
             raise Exception(
-                f"Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: {passed_in_key}"
+                "Malformed API Key passed in. Ensure Key has `Bearer ` prefix."
             )
 
         if route == "/user/auth":
@@ -601,6 +633,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
+                    route=route,
                 )
                 if _end_user_object is not None:
                     end_user_params["allowed_model_region"] = (
@@ -1133,6 +1166,8 @@ async def user_api_key_auth(
     request_data = await _read_request_body(request=request)
     route: str = get_request_route(request=request)
 
+    ## CHECK IF ROUTE IS ALLOWED
+
     user_api_key_auth_obj = await _user_api_key_auth_builder(
         request=request,
         api_key=api_key,
@@ -1143,6 +1178,9 @@ async def user_api_key_auth(
         request_data=request_data,
         custom_litellm_key_header=custom_litellm_key_header,
     )
+
+    ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
+    RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj)
 
     end_user_id = get_end_user_id_from_request_body(
         request_data, _safe_get_request_headers(request)
@@ -1229,7 +1267,7 @@ def get_api_key_from_custom_header(
         api_key = _get_bearer_token(api_key=custom_api_key)
         verbose_proxy_logger.debug(
             "Found custom API key using header: {}, setting api_key={}".format(
-                custom_litellm_key_header_name, api_key
+                custom_litellm_key_header_name, abbreviate_api_key(api_key)
             )
         )
     else:

@@ -4,7 +4,7 @@
 import asyncio
 import base64
 import json
-import uuid
+from litellm._uuid import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import HTTPException
@@ -290,6 +290,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "aretrieve_fine_tuning_job",
             "alist_fine_tuning_jobs",
             "acancel_fine_tuning_job",
+            "mcp_call",
         ],
     ) -> Union[Exception, str, Dict, None]:
         """

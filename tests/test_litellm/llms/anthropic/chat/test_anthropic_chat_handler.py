@@ -1,11 +1,4 @@
-import os
-import sys
 from unittest.mock import MagicMock
-
-
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 from litellm.types.llms.openai import (
@@ -267,3 +260,203 @@ def test_regular_tool_finish_reason():
     # Verify that finish_reason remains "tool_calls" for regular tools
     assert model_response_iterator.converted_response_format_tool is False
     assert model_response.choices[0].finish_reason == "tool_calls"
+
+
+def test_text_only_streaming_has_index_zero():
+    """Test that text-only streaming responses have choice index=0"""
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": " world"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 2},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    # Check all chunks have choice index=0
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if parsed.choices:
+            assert (
+                parsed.choices[0].index == 0
+            ), f"Expected index=0, got {parsed.choices[0].index}"
+
+
+def test_text_and_tool_streaming_has_index_zero():
+    """Test that mixed text and tool streaming responses have choice index=0"""
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        # Reasoning content at index 0
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "I need to search..."},
+        },
+        {"type": "content_block_stop", "index": 0},
+        # Regular content at index 1
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "text_delta", "text": "Let me help you"},
+        },
+        {"type": "content_block_stop", "index": 1},
+        # Tool call at index 2
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "tool_use",
+                "id": "tool_123",
+                "name": "search",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 2,
+            "delta": {"type": "input_json_delta", "partial_json": '{"query"'},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 2,
+            "delta": {"type": "input_json_delta", "partial_json": ': "test"}'},
+        },
+        {"type": "content_block_stop", "index": 2},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+            "usage": {"output_tokens": 10},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    # Check all chunks have choice index=0 despite different Anthropic indices
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if parsed.choices:
+            assert (
+                parsed.choices[0].index == 0
+            ), f"Expected index=0 for chunk type {chunk.get('type')}, got {parsed.choices[0].index}"
+
+
+def test_multiple_tools_streaming_has_index_zero():
+    """Test that multiple tool calls all have choice index=0"""
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        # First tool at index 0
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "tool_1",
+                "name": "search",
+                "input": {},
+            },
+        },
+        {"type": "content_block_stop", "index": 0},
+        # Second tool at index 1
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "tool_use",
+                "id": "tool_2",
+                "name": "get",
+                "input": {},
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+            "usage": {"output_tokens": 5},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    # All tool chunks should have choice index=0
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if parsed.choices:
+            assert (
+                parsed.choices[0].index == 0
+            ), f"Expected index=0, got {parsed.choices[0].index}"
+
+
+def test_streaming_chunks_have_stable_ids():
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    first_chunk = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hello"},
+    }
+    second_chunk = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " world"},
+    }
+
+    response_one = iterator.chunk_parser(chunk=first_chunk)
+    response_two = iterator.chunk_parser(chunk=second_chunk)
+
+    assert response_one.id == response_two.id == iterator.response_id

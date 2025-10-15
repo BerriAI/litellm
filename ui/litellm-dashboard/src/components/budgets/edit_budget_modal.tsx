@@ -1,32 +1,17 @@
 import React, { useEffect } from "react";
-import {
-  Button,
-  TextInput,
-  Grid,
-  Col,
-  Accordion,
-  AccordionHeader,
-  AccordionBody,
-} from "@tremor/react";
-import {
-  Button as Button2,
-  Modal,
-  Form,
-  Input,
-  InputNumber,
-  Select,
-  message,
-} from "antd";
+import { TextInput, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
+import { Button as Button2, Modal, Form, InputNumber, Select } from "antd";
 import { budgetUpdateCall } from "../networking";
 import { budgetItem } from "./budget_panel";
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface BudgetModalProps {
   isModalVisible: boolean;
   accessToken: string | null;
   setIsModalVisible: React.Dispatch<React.SetStateAction<boolean>>;
   setBudgetList: React.Dispatch<React.SetStateAction<any[]>>;
-  existingBudget: budgetItem
-  handleUpdateCall: () => void
+  existingBudget: budgetItem;
+  handleUpdateCall: () => void;
 }
 const EditBudgetModal: React.FC<BudgetModalProps> = ({
   isModalVisible,
@@ -34,9 +19,9 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
   setIsModalVisible,
   setBudgetList,
   existingBudget,
-  handleUpdateCall
+  handleUpdateCall,
 }) => {
-  console.log("existingBudget", existingBudget)
+  console.log("existingBudget", existingBudget);
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -58,18 +43,16 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
       return;
     }
     try {
-      message.info("Making API Call");
+      NotificationsManager.info("Making API Call");
       setIsModalVisible(true);
       const response = await budgetUpdateCall(accessToken, formValues);
-      setBudgetList((prevData) =>
-        prevData ? [...prevData, response] : [response]
-      ); // Check if prevData is null
-      message.success("Budget Updated");
+      setBudgetList((prevData) => (prevData ? [...prevData, response] : [response])); // Check if prevData is null
+      NotificationsManager.success("Budget Updated");
       form.resetFields();
       handleUpdateCall();
     } catch (error) {
       console.error("Error creating the key:", error);
-      message.error(`Error creating the key: ${error}`, 20);
+      NotificationsManager.fromBackend(`Error creating the key: ${error}`);
     }
   };
 
@@ -104,18 +87,10 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
           >
             <TextInput placeholder="" />
           </Form.Item>
-          <Form.Item
-            label="Max Tokens per minute"
-            name="tpm_limit"
-            help="Default is model limit."
-          >
+          <Form.Item label="Max Tokens per minute" name="tpm_limit" help="Default is model limit.">
             <InputNumber step={1} precision={2} width={200} />
           </Form.Item>
-          <Form.Item
-            label="Max Requests per minute"
-            name="rpm_limit"
-            help="Default is model limit."
-          >
+          <Form.Item label="Max Requests per minute" name="rpm_limit" help="Default is model limit.">
             <InputNumber step={1} precision={2} width={200} />
           </Form.Item>
 
@@ -127,11 +102,7 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
               <Form.Item label="Max Budget (USD)" name="max_budget">
                 <InputNumber step={0.01} precision={2} width={200} />
               </Form.Item>
-              <Form.Item
-                className="mt-8"
-                label="Reset Budget"
-                name="budget_duration"
-              >
+              <Form.Item className="mt-8" label="Reset Budget" name="budget_duration">
                 <Select defaultValue={null} placeholder="n/a">
                   <Select.Option value="24h">daily</Select.Option>
                   <Select.Option value="7d">weekly</Select.Option>

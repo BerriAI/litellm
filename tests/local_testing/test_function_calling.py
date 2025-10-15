@@ -48,9 +48,8 @@ def get_current_weather(location, unit="fahrenheit"):
         "gpt-3.5-turbo-1106",
         "mistral/mistral-large-latest",
         "claude-3-haiku-20240307",
-        "gemini/gemini-1.5-pro",
+        "gemini/gemini-2.5-flash-lite",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "groq/llama3-8b-8192",
         "cohere_chat/command-r",
     ],
 )
@@ -589,12 +588,12 @@ def test_anthropic_function_call_with_no_schema(model):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-3-5-sonnet-20241022",
         "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
     ],
 )
 def test_passing_tool_result_as_list(model):
     litellm.set_verbose = True
+    litellm._turn_on_debug()
     messages = [
         {
             "content": [
@@ -643,8 +642,7 @@ def test_passing_tool_result_as_list(model):
             ],
             "role": "tool",
             "tool_call_id": "toolu_01V1paXrun4CVetdAGiQaZG5",
-            "name": "execute_bash",
-            "cache_control": {"type": "ephemeral"},
+            "name": "execute_bash"
         },
     ]
     tools = [

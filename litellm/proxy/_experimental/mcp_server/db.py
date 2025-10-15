@@ -1,6 +1,7 @@
-import uuid
 from typing import Any, Dict, Iterable, List, Optional, Set, Union
 
+from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LiteLLM_ObjectPermissionTable,
@@ -29,7 +30,7 @@ def _prepare_mcp_server_data(
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
     # Convert model to dict
-    data_dict = data.model_dump()
+    data_dict = data.model_dump(exclude_none=True)
     # Ensure alias is always present in the dict (even if None)
     if "alias" not in data_dict:
         data_dict["alias"] = getattr(data, "alias", None)
@@ -53,11 +54,20 @@ async def get_all_mcp_servers(
     """
     Returns all of the mcp servers from the db
     """
-    mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
+    try:
+        mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
 
-    return [
-        LiteLLM_MCPServerTable(**mcp_server.model_dump()) for mcp_server in mcp_servers
-    ]
+        return [
+            LiteLLM_MCPServerTable(**mcp_server.model_dump())
+            for mcp_server in mcp_servers
+        ]
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "litellm.proxy._experimental.mcp_server.db.py::get_all_mcp_servers - {}".format(
+                str(e)
+            )
+        )
+        return []
 
 
 async def get_mcp_server(
@@ -82,14 +92,18 @@ async def get_mcp_servers(
     """
     Returns the matching mcp servers from the db with the server_ids
     """
-    mcp_servers: List[LiteLLM_MCPServerTable] = (
+    _mcp_servers: List[LiteLLM_MCPServerTable] = (
         await prisma_client.db.litellm_mcpservertable.find_many(
             where={
                 "server_id": {"in": server_ids},
             }
         )
     )
-    return mcp_servers
+    final_mcp_servers: List[LiteLLM_MCPServerTable] = []
+    for _mcp_server in _mcp_servers:
+        final_mcp_servers.append(LiteLLM_MCPServerTable(**_mcp_server.model_dump()))
+
+    return final_mcp_servers
 
 
 async def get_mcp_servers_by_verificationtoken(

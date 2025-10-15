@@ -41,7 +41,7 @@ def test_weighted_selection_router():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -54,7 +54,7 @@ def test_weighted_selection_router():
         )
         selection_counts = defaultdict(int)
 
-        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-3 about 90% of the time
+        # call get_available_deployment 1k times, it should pick azure/gpt-4.1-nano about 90% of the time
         for _ in range(1000):
             selected_model = router.get_available_deployment("gpt-3.5-turbo")
             selected_model_id = selected_model["litellm_params"]["model"]
@@ -64,10 +64,10 @@ def test_weighted_selection_router():
 
         total_requests = sum(selection_counts.values())
 
-        # Assert that 'azure/chatgpt-v-3' has about 90% of the total requests
+        # Assert that 'azure/gpt-4.1-nano' has about 90% of the total requests
         assert (
-            selection_counts["azure/chatgpt-v-3"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/chatgpt-v-3' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+            selection_counts["azure/gpt-4.1-nano"] / total_requests > 0.89
+        ), f"Assertion failed: 'azure/gpt-4.1-nano' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
 
         router.reset()
     except Exception as e:
@@ -97,7 +97,7 @@ def test_weighted_selection_router_tpm():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -110,7 +110,7 @@ def test_weighted_selection_router_tpm():
         )
         selection_counts = defaultdict(int)
 
-        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-3 about 90% of the time
+        # call get_available_deployment 1k times, it should pick azure/gpt-4.1-nano about 90% of the time
         for _ in range(1000):
             selected_model = router.get_available_deployment("gpt-3.5-turbo")
             selected_model_id = selected_model["litellm_params"]["model"]
@@ -120,10 +120,10 @@ def test_weighted_selection_router_tpm():
 
         total_requests = sum(selection_counts.values())
 
-        # Assert that 'azure/chatgpt-v-3' has about 90% of the total requests
+        # Assert that 'azure/gpt-4.1-nano' has about 90% of the total requests
         assert (
-            selection_counts["azure/chatgpt-v-3"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/chatgpt-v-3' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+            selection_counts["azure/gpt-4.1-nano"] / total_requests > 0.89
+        ), f"Assertion failed: 'azure/gpt-4.1-nano' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
 
         router.reset()
     except Exception as e:
@@ -153,7 +153,7 @@ def test_weighted_selection_router_tpm_as_router_param():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -166,7 +166,7 @@ def test_weighted_selection_router_tpm_as_router_param():
         )
         selection_counts = defaultdict(int)
 
-        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-3 about 90% of the time
+        # call get_available_deployment 1k times, it should pick azure/gpt-4.1-nano about 90% of the time
         for _ in range(1000):
             selected_model = router.get_available_deployment("gpt-3.5-turbo")
             selected_model_id = selected_model["litellm_params"]["model"]
@@ -176,10 +176,10 @@ def test_weighted_selection_router_tpm_as_router_param():
 
         total_requests = sum(selection_counts.values())
 
-        # Assert that 'azure/chatgpt-v-3' has about 90% of the total requests
+        # Assert that 'azure/gpt-4.1-nano' has about 90% of the total requests
         assert (
-            selection_counts["azure/chatgpt-v-3"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/chatgpt-v-3' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+            selection_counts["azure/gpt-4.1-nano"] / total_requests > 0.89
+        ), f"Assertion failed: 'azure/gpt-4.1-nano' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
 
         router.reset()
     except Exception as e:
@@ -210,7 +210,7 @@ def test_weighted_selection_router_rpm_as_router_param():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -224,7 +224,7 @@ def test_weighted_selection_router_rpm_as_router_param():
         )
         selection_counts = defaultdict(int)
 
-        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-3 about 90% of the time
+        # call get_available_deployment 1k times, it should pick azure/gpt-4.1-nano about 90% of the time
         for _ in range(1000):
             selected_model = router.get_available_deployment("gpt-3.5-turbo")
             selected_model_id = selected_model["litellm_params"]["model"]
@@ -234,10 +234,10 @@ def test_weighted_selection_router_rpm_as_router_param():
 
         total_requests = sum(selection_counts.values())
 
-        # Assert that 'azure/chatgpt-v-3' has about 90% of the total requests
+        # Assert that 'azure/gpt-4.1-nano' has about 90% of the total requests
         assert (
-            selection_counts["azure/chatgpt-v-3"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/chatgpt-v-3' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+            selection_counts["azure/gpt-4.1-nano"] / total_requests > 0.89
+        ), f"Assertion failed: 'azure/gpt-4.1-nano' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
 
         router.reset()
     except Exception as e:
@@ -266,7 +266,7 @@ def test_weighted_selection_router_no_rpm_set():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -286,7 +286,7 @@ def test_weighted_selection_router_no_rpm_set():
         )
         selection_counts = defaultdict(int)
 
-        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-3 about 90% of the time
+        # call get_available_deployment 1k times, it should pick azure/gpt-4.1-nano about 90% of the time
         for _ in range(1000):
             selected_model = router.get_available_deployment("claude-1")
             selected_model_id = selected_model["litellm_params"]["model"]
@@ -296,7 +296,7 @@ def test_weighted_selection_router_no_rpm_set():
 
         total_requests = sum(selection_counts.values())
 
-        # Assert that 'azure/chatgpt-v-3' has about 90% of the total requests
+        # Assert that 'azure/gpt-4.1-nano' has about 90% of the total requests
         assert (
             selection_counts["bedrock/claude1.2"] / total_requests == 1
         ), f"Assertion failed: Selection counts {selection_counts}"
@@ -325,7 +325,7 @@ def test_model_group_aliases():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -358,7 +358,7 @@ def test_model_group_aliases():
                 )
 
         # test that
-        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-3 about 90% of the time
+        # call get_available_deployment 1k times, it should pick azure/gpt-4.1-nano about 90% of the time
         selection_counts = defaultdict(int)
         for _ in range(1000):
             selected_model = router.get_available_deployment("gpt-3.5-turbo")
@@ -369,10 +369,10 @@ def test_model_group_aliases():
 
         total_requests = sum(selection_counts.values())
 
-        # Assert that 'azure/chatgpt-v-3' has about 90% of the total requests
+        # Assert that 'azure/gpt-4.1-nano' has about 90% of the total requests
         assert (
-            selection_counts["azure/chatgpt-v-3"] / total_requests > 0.89
-        ), f"Assertion failed: 'azure/chatgpt-v-3' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+            selection_counts["azure/gpt-4.1-nano"] / total_requests > 0.89
+        ), f"Assertion failed: 'azure/gpt-4.1-nano' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
 
         router.reset()
     except Exception as e:
@@ -397,7 +397,7 @@ def test_usage_based_routing():
                 "model": f"azure/{deployment_name}",
                 "api_key": os.environ["AZURE_API_KEY"],
                 "api_version": os.environ["AZURE_API_VERSION"],
-                "api_base": os.environ["AZURE_API_BASE"],
+                "api_base": "https://fake-api.openai.com/v1",
             }
             return params
 
@@ -553,7 +553,7 @@ async def test_weighted_selection_router_async(rpm_list, tpm_list):
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -567,7 +567,7 @@ async def test_weighted_selection_router_async(rpm_list, tpm_list):
         )
         selection_counts = defaultdict(int)
 
-        # call get_available_deployment 1k times, it should pick azure/chatgpt-v-3 about 90% of the time
+        # call get_available_deployment 1k times, it should pick azure/gpt-4.1-nano about 90% of the time
         for _ in range(1000):
             selected_model = await router.async_get_available_deployment(
                 "gpt-3.5-turbo", request_kwargs={}
@@ -580,13 +580,13 @@ async def test_weighted_selection_router_async(rpm_list, tpm_list):
         total_requests = sum(selection_counts.values())
 
         if rpm_list[0] is not None or tpm_list[0] is not None:
-            # Assert that 'azure/chatgpt-v-3' has about 90% of the total requests
+            # Assert that 'azure/gpt-4.1-nano' has about 90% of the total requests
             assert (
-                selection_counts["azure/chatgpt-v-3"] / total_requests > 0.89
-            ), f"Assertion failed: 'azure/chatgpt-v-3' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+                selection_counts["azure/gpt-4.1-nano"] / total_requests > 0.89
+            ), f"Assertion failed: 'azure/gpt-4.1-nano' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
         else:
             # Assert both are used
-            assert selection_counts["azure/chatgpt-v-3"] > 0
+            assert selection_counts["azure/gpt-4.1-nano"] > 0
             assert selection_counts["gpt-3.5-turbo"] > 0
         router.reset()
     except Exception as e:

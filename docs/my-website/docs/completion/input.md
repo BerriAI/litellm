@@ -65,6 +65,7 @@ Use `litellm.get_supported_openai_params()` for an updated list of params for ea
 | Github | ✅| ✅ | ✅ | ✅| ✅ | ✅ | ✅ | ✅| ✅ | ✅| ✅|| || ✅ | ✅ (model dependent) | ✅ (model dependent) || ||
 | Novita AI| ✅| ✅ || ✅| ✅ | ✅ | ✅ | ✅| ✅ | ✅| || ✅||| |||| ||
 | Bytez | ✅| ✅ || ✅| ✅ | | | ✅|| || || || || || ||
+| OVHCloud AI Endpoints | ✅ | | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | | | | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | |
 
 :::note
 
@@ -106,6 +107,7 @@ def completion(
     parallel_tool_calls: Optional[bool] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
+    safety_identifier: Optional[str] = None,
     deployment_id=None,
     # soon to be deprecated params by OpenAI
     functions: Optional[List] = None,
@@ -178,11 +180,11 @@ def completion(
 
     - `function`: *object* - Required.
 
-- `tool_choice`: *string or object (optional)* - Controls which (if any) function is called by the model. none means the model will not call a function and instead generates a message. auto means the model can pick between generating a message or calling a function. Specifying a particular function via `{"type: "function", "function": {"name": "my_function"}}` forces the model to call that function.
+- `tool_choice`: *string or object (optional)* - Controls which (if any) function is called by the model. none means the model will not call a function and instead generates a message. auto means the model can pick between generating a message or calling a function. Specifying a particular function via `{"type": "function", "function": {"name": "my_function"}}` forces the model to call that function.
 
     - `none` is the default when no functions are present. `auto` is the default if functions are present.
 
-- `parallel_tool_calls`: *boolean (optional)* - Whether to enable parallel function calling during tool use.. OpenAI default is true.
+- `parallel_tool_calls`: *boolean (optional)* - Whether to enable parallel function calling during tool use. OpenAI default is true.
 
 - `frequency_penalty`: *number or null (optional)* - It is used to penalize new tokens based on their frequency in the text so far.
 
@@ -195,6 +197,8 @@ def completion(
 - `logprobs`: * bool (optional)* - Whether to return log probabilities of the output tokens or not. If true returns the log probabilities of each output token returned in the content of message
         
 - `top_logprobs`: *int (optional)* - An integer between 0 and 5 specifying the number of most likely tokens to return at each token position, each with an associated log probability. `logprobs` must be set to true if this parameter is used.
+
+- `safety_identifier`: *string (optional)* - A unique identifier for tracking and managing safety-related requests. This parameter helps with safety monitoring and compliance tracking.
 
 - `headers`: *dict (optional)* - A dictionary of headers to be sent with the request.
 

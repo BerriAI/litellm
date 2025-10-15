@@ -5,7 +5,7 @@ from unittest.mock import patch, AsyncMock
 sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 import json
-
+from base_responses_api import BaseResponsesAPITest
 @pytest.mark.asyncio
 async def test_basic_google_ai_studio_responses_api_with_tools():
     litellm._turn_on_debug()
@@ -85,10 +85,29 @@ async def test_mock_basic_google_ai_studio_responses_api_with_tools():
         assert call_kwargs["messages"][0]["content"] == "what is the latest version of supabase python package and when was it released?"
         assert call_kwargs["tools"] == []  # web search tools are converted to web_search_options, not kept as tools
 
+class TestGoogleAIStudioResponsesAPITest(BaseResponsesAPITest):
+    def get_base_completion_call_args(self):
+        #litellm._turn_on_debug()
+        return {
+            "model": "gemini/gemini-2.5-flash-lite"
+        }
+    
+    async def test_basic_openai_responses_delete_endpoint(self, sync_mode=False):
+        pytest.skip("DELETE responses is not supported for Google AI Studio")
+    
+    async def test_basic_openai_responses_streaming_delete_endpoint(self, sync_mode=False):
+        pytest.skip("DELETE responses is not supported for Google AI Studio")
+
+    async def test_basic_openai_responses_get_endpoint(self, sync_mode=False):
+        pytest.skip("GET responses is not supported for Google AI Studio")
+
+    async def test_basic_openai_responses_cancel_endpoint(self, sync_mode=False):
+        pytest.skip("CANCEL responses is not supported for Google AI Studio")
+
+    async def test_cancel_responses_invalid_response_id(self, sync_mode=False):
+        pytest.skip("CANCEL responses is not supported for Google AI Studio")
 
     
-
-
     
 
 

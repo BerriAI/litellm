@@ -124,8 +124,6 @@ Any non-openai params, will be treated as provider-specific params, and sent in 
 
 - `size`: *string (optional)* The size of the generated images. Must be one of `1024x1024`, `1536x1024` (landscape), `1024x1536` (portrait), or `auto` (default value) for `gpt-image-1`, one of `256x256`, `512x512`, or `1024x1024` for `dall-e-2`, and one of `1024x1024`, `1792x1024`, or `1024x1792` for `dall-e-3`.
 
-- `input_fidelity`: *string (optional)* Controls how closely the model follows the input prompt. Supported for `gpt-image-1` model. Higher fidelity may improve prompt adherence but could affect generation speed.
-
 - `timeout`: *integer* - The maximum time, in seconds, to wait for the API to respond. Defaults to 600 seconds (10 minutes).
 
 - `user`: *string (optional)* A unique identifier representing your end-user, 
@@ -280,6 +278,8 @@ print(f"response: {response}")
 ```
 
 ## Supported Providers
+
+#### ⚡️See all supported models and providers at [models.litellm.ai](https://models.litellm.ai/)
 
 | Provider | Documentation Link |
 |----------|-------------------|

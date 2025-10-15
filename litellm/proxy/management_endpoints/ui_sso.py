@@ -10,7 +10,6 @@ Has all /sso/* routes
 
 import asyncio
 import os
-import uuid
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
@@ -19,6 +18,7 @@ from fastapi.responses import RedirectResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.caching import DualCache
 from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY
 from litellm.llms.custom_httpx.http_handler import (
@@ -51,13 +51,14 @@ from litellm.proxy.common_utils.admin_ui_utils import (
 from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
+from litellm.proxy.common_utils.html_forms.ui_login import html_form
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso_helper_utils import (
     check_is_admin_only_access,
     has_admin_ui_access,
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
-from litellm.proxy.management_endpoints.types import CustomOpenID
+from litellm.proxy.management_endpoints.types import CustomOpenID, get_litellm_user_role
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -66,6 +67,7 @@ from litellm.proxy.utils import (
 )
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *
+from litellm.types.proxy.ui_sso import ParsedOpenIDResult
 
 if TYPE_CHECKING:
     from fastapi_sso.sso.base import OpenID
@@ -75,21 +77,59 @@ else:
 router = APIRouter()
 
 
+def process_sso_jwt_access_token(
+    access_token_str: Optional[str],
+    sso_jwt_handler: Optional[JWTHandler],
+    result: Union[OpenID, dict, None],
+) -> None:
+    """
+    Process SSO JWT access token and extract team IDs if available.
+
+    This function decodes the JWT access token and extracts team IDs using the
+    sso_jwt_handler, then sets the team_ids attribute on the result object.
+
+    Args:
+        access_token_str: The JWT access token string
+        sso_jwt_handler: SSO-specific JWT handler for team ID extraction
+        result: The SSO result object to update with team IDs
+    """
+    if access_token_str and sso_jwt_handler and result:
+        import jwt
+
+        access_token_payload = jwt.decode(
+            access_token_str, options={"verify_signature": False}
+        )
+
+        # Handle both dict and object result types
+        if isinstance(result, dict):
+            result_team_ids: Optional[List[str]] = result.get("team_ids", [])
+            if not result_team_ids:
+                team_ids = sso_jwt_handler.get_team_ids_from_jwt(access_token_payload)
+                result["team_ids"] = team_ids
+        else:
+            result_team_ids = getattr(result, "team_ids", []) if result else []
+            if not result_team_ids:
+                team_ids = sso_jwt_handler.get_team_ids_from_jwt(access_token_payload)
+                setattr(result, "team_ids", team_ids)
+
+
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
-async def serve_login_page(
+async def google_login(
     request: Request,
     source: Optional[str] = None,
     key: Optional[str] = None,
-    error: Optional[str] = None,
-):
+    existing_key: Optional[str] = None,
+):  # noqa: PLR0915
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
     Example:
-    Serves a unified login page with options for both normal
-    username/password login and SSO.
     """
-    from litellm.proxy.proxy_server import premium_user
+    from litellm.proxy.proxy_server import (
+        premium_user,
+        prisma_client,
+        user_custom_ui_sso_sign_in_handler,
+    )
 
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
@@ -102,318 +142,6 @@ async def serve_login_page(
         if is_disabled:
             return admin_ui_disabled()
 
-    ####### Check if user is a Enterprise / Premium User for SSO #######
-    sso_available = False
-    if (
-        microsoft_client_id is not None
-        or google_client_id is not None
-        or generic_client_id is not None
-    ):
-        if premium_user is True:
-            sso_available = True
-
-    ####### Detect DB + MASTER KEY in .env #######
-    missing_env_vars = show_missing_vars_in_env()
-    if missing_env_vars is not None:
-        return missing_env_vars
-
-    # Build the unified login page HTML
-    error_message = ""
-    if error == "1":
-        error_message = """
-        <div style="
-            background-color: #fef2f2;
-            border-left: 4px solid #dc2626;
-            border-radius: 6px;
-            padding: 16px;
-            margin-bottom: 20px;
-            color: #dc2626;
-            font-size: 14px;
-            font-weight: 500;
-        ">
-            ⚠️ Invalid username or password. Please try again.
-        </div>
-        """
-
-    sso_button = ""
-    if sso_available:
-        sso_button = """
-        <div style="
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 1px solid #e2e8f0;
-            text-align: center;
-        ">
-            <p style="
-                color: #64748b;
-                font-size: 14px;
-                margin-bottom: 16px;
-            ">or</p>
-            <a href="/sso/login" style="
-                display: inline-block;
-                background-color: #f8fafc;
-                border: 1px solid #e2e8f0;
-                color: #374151;
-                padding: 10px 20px;
-                border-radius: 6px;
-                text-decoration: none;
-                font-weight: 500;
-                transition: all 0.2s;
-                font-size: 14px;
-            " onmouseover="this.style.backgroundColor='#f1f5f9'; this.style.borderColor='#cbd5e1';" 
-               onmouseout="this.style.backgroundColor='#f8fafc'; this.style.borderColor='#e2e8f0';">
-                🔐 Login with SSO
-            </a>
-        </div>
-        """
-
-    # Get the base URL for form action using proper URL construction
-    form_action = get_custom_url(request_base_url=str(request.base_url), route="login")
-
-    unified_login_html = f"""
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>LiteLLM Login</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background-color: #f8fafc;
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            color: #333;
-        }}
-
-        form {{
-            background-color: #fff;
-            padding: 40px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-            width: 450px;
-            max-width: 100%;
-        }}
-        
-        .logo-container {{
-            text-align: center;
-            margin-bottom: 30px;
-        }}
-        
-        .logo {{
-            font-size: 24px;
-            font-weight: 600;
-            color: #1e293b;
-        }}
-        
-        h2 {{
-            margin: 0 0 10px;
-            color: #1e293b;
-            font-size: 28px;
-            font-weight: 600;
-            text-align: center;
-        }}
-        
-        .subtitle {{
-            color: #64748b;
-            margin: 0 0 20px;
-            font-size: 16px;
-            text-align: center;
-        }}
-
-        .info-box {{
-            background-color: #f1f5f9;
-            border-radius: 6px;
-            padding: 20px;
-            margin-bottom: 30px;
-            border-left: 4px solid #2563eb;
-        }}
-        
-        .info-header {{
-            display: flex;
-            align-items: center;
-            margin-bottom: 12px;
-            color: #1e40af;
-            font-weight: 600;
-            font-size: 16px;
-        }}
-        
-        .info-header svg {{
-            margin-right: 8px;
-        }}
-        
-        .info-box p {{
-            color: #475569;
-            margin: 8px 0;
-            line-height: 1.5;
-            font-size: 14px;
-        }}
-
-        label {{
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 500;
-            color: #334155;
-            font-size: 14px;
-        }}
-        
-        .required {{
-            color: #dc2626;
-            margin-left: 2px;
-        }}
-
-        input[type="text"],
-        input[type="password"] {{
-            width: 100%;
-            padding: 10px 14px;
-            margin-bottom: 20px;
-            box-sizing: border-box;
-            border: 1px solid #e2e8f0;
-            border-radius: 6px;
-            font-size: 15px;
-            color: #1e293b;
-            background-color: #fff;
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }}
-        
-        input[type="text"]:focus,
-        input[type="password"]:focus {{
-            outline: none;
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
-        }}
-
-        .toggle-password {{
-            display: flex;
-            align-items: center;
-            margin-top: -15px;
-            margin-bottom: 20px;
-        }}
-        
-        .toggle-password input[type="checkbox"] {{
-            margin-right: 8px;
-            vertical-align: middle;
-            width: 16px;
-            height: 16px;
-        }}
-        
-        .toggle-password label {{
-            margin-bottom: 0;
-            font-size: 14px;
-            cursor: pointer;
-            line-height: 1;
-        }}
-
-        input[type="submit"] {{
-            background-color: #6466E9;
-            color: #fff;
-            cursor: pointer;
-            font-weight: 500;
-            border: none;
-            padding: 10px 16px;
-            transition: background-color 0.2s;
-            border-radius: 6px;
-            margin-top: 10px;
-            font-size: 14px;
-            width: 100%;
-        }}
-
-        input[type="submit"]:hover {{
-            background-color: #4138C2;
-        }}
-        
-        a {{
-            color: #3b82f6;
-            text-decoration: none;
-        }}
-
-        a:hover {{
-            text-decoration: underline;
-        }}
-        
-        code {{
-            background-color: #f1f5f9;
-            padding: 2px 4px;
-            border-radius: 4px;
-            font-family: monospace;
-            font-size: 13px;
-            color: #334155;
-        }}
-    </style>
-</head>
-<body>
-    <form action="{form_action}" method="post">
-        <div class="logo-container">
-            <div class="logo">
-                🚅 LiteLLM
-            </div>
-        </div>
-        <h2>Login</h2>
-        <p class="subtitle">Access your LiteLLM Admin UI.</p>
-        
-        {error_message}
-        
-        <div class="info-box">
-            <div class="info-header">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <line x1="12" y1="16" x2="12" y2="12"></line>
-                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                </svg>
-                Default Credentials
-            </div>
-            <p>By default, Username is <code>admin</code> and Password is your set LiteLLM Proxy <code>MASTER_KEY</code>.</p>
-            <p>Need to set UI credentials or SSO? <a href="https://docs.litellm.ai/docs/proxy/ui" target="_blank">Check the documentation</a>.</p>
-        </div>
-        
-        <label for="username">Username<span class="required">*</span></label>
-        <input type="text" id="username" name="username" required placeholder="Enter your username" autocomplete="username">
-        
-        <label for="password">Password<span class="required">*</span></label>
-        <input type="password" id="password" name="password" required placeholder="Enter your password" autocomplete="current-password">
-        <div class="toggle-password">
-            <input type="checkbox" id="show-password" onclick="togglePasswordVisibility()">
-            <label for="show-password">Show password</label>
-        </div>
-        <input type="submit" value="Login">
-        
-        {sso_button}
-    </form>
-    <script>
-        function togglePasswordVisibility() {{
-            var passwordField = document.getElementById("password");
-            passwordField.type = passwordField.type === "password" ? "text" : "password";
-        }}
-    </script>
-</body>
-</html>
-    """
-
-    from fastapi.responses import HTMLResponse
-
-    return HTMLResponse(content=unified_login_html, status_code=200)
-
-
-@router.get("/sso/login", tags=["experimental"], include_in_schema=False)
-async def sso_login_redirect(
-    request: Request, source: Optional[str] = None, key: Optional[str] = None
-):
-    """
-    Handles SSO login redirect - this is what the "Login with SSO" button points to
-    """
-    from litellm.proxy.proxy_server import (
-        premium_user,
-        user_custom_ui_sso_sign_in_handler,
-    )
-
-    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
-    google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
-    generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
-
     ####### Check if user is a Enterprise / Premium User #######
     if (
         microsoft_client_id is not None
@@ -421,23 +149,42 @@ async def sso_login_redirect(
         or generic_client_id is not None
     ):
         if premium_user is not True:
-            raise ProxyException(
-                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
-                type=ProxyErrorTypes.auth_error,
-                param="premium_user",
-                code=status.HTTP_403_FORBIDDEN,
-            )
+            # Check if under 'free SSO user' limit
+            if prisma_client is not None:
+                total_users = await prisma_client.db.litellm_usertable.count()
+                if total_users and total_users > 5:
+                    raise ProxyException(
+                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                        type=ProxyErrorTypes.auth_error,
+                        param="premium_user",
+                        code=status.HTTP_403_FORBIDDEN,
+                    )
+            else:
+                raise ProxyException(
+                    message=CommonProxyErrors.db_not_connected_error.value,
+                    type=ProxyErrorTypes.auth_error,
+                    param="premium_user",
+                    code=status.HTTP_403_FORBIDDEN,
+                )
+
+    ####### Detect DB + MASTER KEY in .env #######
+    missing_env_vars = show_missing_vars_in_env()
+    if missing_env_vars is not None:
+        return missing_env_vars
+    ui_username = os.getenv("UI_USERNAME")
 
     # get url from request - always use regular callback, but set state for CLI
     redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
         request=request,
         sso_callback_route="sso/callback",
+        existing_key=existing_key,
     )
 
     # Store CLI key in state for OAuth flow
     cli_state: Optional[str] = SSOAuthenticationHandler._get_cli_state(
         source=source,
         key=key,
+        existing_key=existing_key,
     )
 
     # check if user defined a custom auth sso sign in handler, if yes, use it
@@ -472,16 +219,23 @@ async def sso_login_redirect(
             generic_client_id=generic_client_id,
             state=cli_state,
         )
+    elif ui_username is not None:
+        # No Google, Microsoft SSO
+        # Use UI Credentials set in .env
+        from fastapi.responses import HTMLResponse
+
+        return HTMLResponse(content=html_form, status_code=200)
     else:
-        # No SSO configured, redirect back to login page
-        return RedirectResponse(url="/sso/key/generate", status_code=303)
+        from fastapi.responses import HTMLResponse
+
+        return HTMLResponse(content=html_form, status_code=200)
 
 
 def generic_response_convertor(
     response,
     jwt_handler: JWTHandler,
     sso_jwt_handler: Optional[JWTHandler] = None,
-):
+) -> CustomOpenID:
     generic_user_id_attribute_name = os.getenv(
         "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
     )
@@ -514,6 +268,7 @@ def generic_response_convertor(
 
     team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
     all_teams.extend(team_ids)
+
     return CustomOpenID(
         id=response.get(generic_user_id_attribute_name),
         display_name=response.get(generic_user_display_name_attribute_name),
@@ -522,6 +277,7 @@ def generic_response_convertor(
         last_name=response.get(generic_user_last_name_attribute_name),
         provider=response.get(generic_provider_attribute_name),
         team_ids=all_teams,
+        user_role=None,
     )
 
 
@@ -628,6 +384,10 @@ async def get_generic_sso_response(
             params={"include_client_id": generic_include_client_id},
             headers=additional_generic_sso_headers_dict,
         )
+
+        access_token_str: Optional[str] = generic_sso.access_token
+        process_sso_jwt_access_token(access_token_str, sso_jwt_handler, result)
+
     except Exception as e:
         verbose_proxy_logger.exception(
             f"Error verifying and processing generic SSO: {e}. Passed in headers: {additional_generic_sso_headers_dict}"
@@ -833,13 +593,6 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
 
     # Check if this is a CLI login (state starts with our CLI prefix)
     from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
-
-    if state and state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
-        # Extract the key ID from the state
-        key_id = state.split(":", 1)[1]
-        verbose_proxy_logger.info(f"CLI SSO callback detected for key: {key_id}")
-        return await cli_sso_callback(request, key=key_id)
-
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.auth.handle_jwt import JWTHandler
     from litellm.proxy.proxy_server import (
@@ -900,6 +653,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
             microsoft_client_id=microsoft_client_id,
             redirect_url=redirect_url,
         )
+
     elif generic_client_id is not None:
         result, received_response = await get_generic_sso_response(
             request=request,
@@ -915,6 +669,20 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
             detail="Result not returned by SSO provider.",
         )
 
+    if state and state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
+        # Extract the key ID and existing_key from the state
+        # State format: {PREFIX}:{key}:{existing_key} or {PREFIX}:{key}
+        state_parts = state.split(":", 2)  # Split into max 3 parts
+        key_id = state_parts[1] if len(state_parts) > 1 else None
+        existing_key = state_parts[2] if len(state_parts) > 2 else None
+
+        verbose_proxy_logger.info(
+            f"CLI SSO callback detected for key: {key_id}, existing_key: {existing_key}"
+        )
+        return await cli_sso_callback(
+            request=request, key=key_id, existing_key=existing_key, result=result
+        )
+
     return await SSOAuthenticationHandler.get_redirect_response_from_openid(
         result=result,
         request=request,
@@ -924,13 +692,70 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     )
 
 
-async def cli_sso_callback(request: Request, key: Optional[str] = None):
-    """CLI SSO callback - generates the key with pre-specified ID"""
-    verbose_proxy_logger.info(f"CLI SSO callback for key: {key}")
+async def _regenerate_cli_key(
+    existing_key: str, new_key: str, user_id: Optional[str] = None
+) -> None:
+    """Regenerate an existing CLI key with a new token"""
+    from litellm.proxy._types import RegenerateKeyRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        regenerate_key_fn,
+    )
 
+    verbose_proxy_logger.info(f"Regenerating existing CLI key: {existing_key}")
+
+    admin_user_dict = UserAPIKeyAuth.get_litellm_cli_user_api_key_auth()
+
+    regenerate_request = RegenerateKeyRequest(
+        key=existing_key,
+        new_key=new_key,
+        duration="24hr",
+        user_id=user_id,
+    )
+
+    await regenerate_key_fn(
+        key=existing_key, data=regenerate_request, user_api_key_dict=admin_user_dict
+    )
+
+    verbose_proxy_logger.info(f"Regenerated CLI key: {new_key}")
+
+
+async def _create_new_cli_key(
+    key: str,
+    user_id: Optional[str] = None,
+) -> None:
+    """Create a new CLI key"""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_helper_fn,
     )
+
+    verbose_proxy_logger.info("Creating new CLI key")
+
+    await generate_key_helper_fn(
+        request_type="key",
+        duration="24hr",
+        key_max_budget=litellm.max_ui_session_budget,
+        aliases={},
+        config={},
+        spend=0,
+        user_id=user_id,
+        table_name="key",
+        token=key,
+    )
+
+    verbose_proxy_logger.info(f"Created new CLI key: {key}")
+
+
+async def cli_sso_callback(
+    request: Request,
+    key: Optional[str] = None,
+    existing_key: Optional[str] = None,
+    result: Optional[Union[OpenID, dict]] = None,
+):
+    """CLI SSO callback - regenerates existing CLI key or creates new one"""
+    verbose_proxy_logger.info(
+        f"CLI SSO callback for key: {key}, existing_key: {existing_key}"
+    )
+
     from litellm.proxy.proxy_server import prisma_client
 
     if not key or not key.startswith("sk-"):
@@ -944,21 +769,23 @@ async def cli_sso_callback(request: Request, key: Optional[str] = None):
             status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
         )
 
-    # Generate a simple key for CLI usage with the pre-specified key ID
-    try:
-        await generate_key_helper_fn(
-            request_type="key",
-            duration="24hr",
-            key_max_budget=litellm.max_ui_session_budget,
-            aliases={},
-            config={},
-            spend=0,
-            team_id="litellm-cli",
-            table_name="key",
-            token=key,  # Use the pre-specified key ID
-        )
+    parsed_openid_result = SSOAuthenticationHandler._get_user_email_and_id_from_result(
+        result=result
+    )
+    verbose_proxy_logger.debug(f"parsed_openid_result: {parsed_openid_result}")
 
-        verbose_proxy_logger.info(f"Generated CLI key: {key}")
+    try:
+        if existing_key:
+            await _regenerate_cli_key(
+                existing_key=existing_key,
+                new_key=key,
+                user_id=parsed_openid_result.get("user_id"),
+            )
+        else:
+            await _create_new_cli_key(
+                key=key,
+                user_id=parsed_openid_result.get("user_id"),
+            )
 
         # Return success page
         from fastapi.responses import HTMLResponse
@@ -971,13 +798,16 @@ async def cli_sso_callback(request: Request, key: Optional[str] = None):
         return HTMLResponse(content=html_content, status_code=200)
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error generating CLI key: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate key: {str(e)}")
+        verbose_proxy_logger.error(f"Error with CLI key: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to process CLI key: {str(e)}"
+        )
 
 
 @router.get("/sso/cli/poll/{key_id}", tags=["experimental"], include_in_schema=False)
 async def cli_poll_key(key_id: str):
     """CLI polling endpoint - checks if key exists in DB"""
+    from litellm.proxy._types import LiteLLM_VerificationToken
     from litellm.proxy.proxy_server import prisma_client
 
     if not key_id.startswith("sk-"):
@@ -997,10 +827,11 @@ async def cli_poll_key(key_id: str):
         key_obj = await prisma_client.db.litellm_verificationtoken.find_unique(
             where={"token": hashed_token}
         )
+        key_obj = cast(LiteLLM_VerificationToken, key_obj)
 
         if key_obj:
             verbose_proxy_logger.info(f"CLI key found: {key_id}")
-            return {"status": "ready", "key": key_id}
+            return {"status": "ready", "key": key_id, "user_id": key_obj.user_id}
         else:
             return {"status": "pending"}
 
@@ -1061,8 +892,10 @@ async def insert_sso_user(
         auto_create_key=False,
     )
 
-    if result_openid:
-        new_user_request.metadata = {"auth_provider": result_openid.provider}
+    if result_openid and hasattr(result_openid, "provider"):
+        new_user_request.metadata = {
+            "auth_provider": getattr(result_openid, "provider")
+        }
 
     response = await new_user(
         data=new_user_request,
@@ -1239,19 +1072,57 @@ class SSOAuthenticationHandler:
                 # or a cryptographicly signed state that we can verify stateless
                 # For simplification we are using a static state, this is not perfect but some
                 # SSO providers do not allow stateless verification
-                redirect_params = {}
-                state = os.getenv("GENERIC_CLIENT_STATE", None)
+                redirect_params = (
+                    SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                        state=state,
+                        generic_authorization_endpoint=generic_authorization_endpoint,
+                    )
+                )
 
-                if state:
-                    redirect_params["state"] = state
-                elif "okta" in generic_authorization_endpoint:
-                    redirect_params["state"] = (
-                        uuid.uuid4().hex
-                    )  # set state param for okta - required
                 return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
         )
+
+    @staticmethod
+    def _get_generic_sso_redirect_params(
+        state: Optional[str] = None,
+        generic_authorization_endpoint: Optional[str] = None,
+    ) -> dict:
+        """
+        Get redirect parameters for Generic SSO with proper state priority handling.
+
+        Priority order:
+        1. CLI state (if provided)
+        2. GENERIC_CLIENT_STATE environment variable
+        3. Generated UUID for Okta (if Okta endpoint detected)
+
+        Args:
+            state: Optional state parameter (e.g., CLI state)
+            generic_authorization_endpoint: Authorization endpoint URL
+
+        Returns:
+            dict: Redirect parameters for SSO login
+        """
+        redirect_params = {}
+
+        if state:
+            # CLI state takes priority
+            # the litellm proxy cli sends the "state" parameter to the proxy server for auth. We should maintain the state parameter for the cli if it is provided
+            redirect_params["state"] = state
+        else:
+            generic_client_state = os.getenv("GENERIC_CLIENT_STATE", None)
+            if generic_client_state:
+                redirect_params["state"] = generic_client_state
+            elif (
+                generic_authorization_endpoint
+                and "okta" in generic_authorization_endpoint
+            ):
+                redirect_params["state"] = (
+                    uuid.uuid4().hex
+                )  # set state param for okta - required
+
+        return redirect_params
 
     @staticmethod
     def should_use_sso_handler(
@@ -1271,9 +1142,13 @@ class SSOAuthenticationHandler:
     def get_redirect_url_for_sso(
         request: Request,
         sso_callback_route: str,
+        existing_key: Optional[str] = None,
     ) -> str:
         """
         Get the redirect URL for SSO
+
+        Note: existing_key is not added to the URL to avoid changing the callback URL.
+        It should be passed via the state parameter instead.
         """
         from litellm.proxy.utils import get_custom_url
 
@@ -1282,6 +1157,7 @@ class SSOAuthenticationHandler:
             redirect_url += sso_callback_route
         else:
             redirect_url += "/" + sso_callback_route
+
         return redirect_url
 
     @staticmethod
@@ -1315,7 +1191,9 @@ class SSOAuthenticationHandler:
                 )
             return user_info
         except Exception as e:
-            verbose_proxy_logger.error(f"Error upserting SSO user into LiteLLM DB: {e}")
+            verbose_proxy_logger.exception(
+                f"Error upserting SSO user into LiteLLM DB: {e}"
+            )
             return user_info
 
     @staticmethod
@@ -1464,56 +1342,44 @@ class SSOAuthenticationHandler:
         return team_request
 
     @staticmethod
-    def _get_cli_state(source: Optional[str], key: Optional[str]) -> Optional[str]:
+    def _get_cli_state(
+        source: Optional[str], key: Optional[str], existing_key: Optional[str] = None
+    ) -> Optional[str]:
         """
         Checks the request 'source' if a cli state token was passed in
 
-        This is used to authenticate through the CLI login flow
+        This is used to authenticate through the CLI login flow.
+
+        The state parameter format is: {PREFIX}:{key}:{existing_key}
+        - If existing_key is provided, it's included in the state
+        - The state parameter is used to pass data through the OAuth flow without changing the callback URL
         """
         from litellm.constants import (
             LITELLM_CLI_SESSION_TOKEN_PREFIX,
             LITELLM_CLI_SOURCE_IDENTIFIER,
         )
 
-        return (
-            f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
-            if source == LITELLM_CLI_SOURCE_IDENTIFIER and key
-            else None
-        )
+        if source == LITELLM_CLI_SOURCE_IDENTIFIER and key:
+            if existing_key:
+                return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}:{existing_key}"
+            else:
+                return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
+        else:
+            return None
 
     @staticmethod
-    async def get_redirect_response_from_openid(  # noqa: PLR0915
-        result: Union[OpenID, dict, CustomOpenID],
-        request: Request,
-        received_response: Optional[dict] = None,
+    def _get_user_email_and_id_from_result(
+        result: Optional[Union[OpenID, dict]],
         generic_client_id: Optional[str] = None,
-        ui_access_mode: Optional[Dict] = None,
-    ) -> RedirectResponse:
-        import jwt
-
-        from litellm.proxy.proxy_server import (
-            general_settings,
-            generate_key_helper_fn,
-            master_key,
-            premium_user,
-            proxy_logging_obj,
-            user_api_key_cache,
-            user_custom_sso,
-        )
-        from litellm.proxy.utils import get_custom_url, get_prisma_client_or_throw
-        from litellm.types.proxy.ui_sso import ReturnedUITokenObject
-
-        prisma_client = get_prisma_client_or_throw(
-            "Prisma client is None, connect a database to your proxy"
-        )
-
-        # User is Authe'd in - generate key for the UI to access Proxy
-        verbose_proxy_logger.info(f"SSO callback result: {result}")
-
+    ) -> ParsedOpenIDResult:
+        """
+        Gets the user email and id from the OpenID result after validating the email domain
+        """
         user_email: Optional[str] = getattr(result, "email", None)
         user_id: Optional[str] = (
             getattr(result, "id", None) if result is not None else None
         )
+        user_role: Optional[str] = None
 
         if user_email is not None and os.getenv("ALLOWED_EMAIL_DOMAINS") is not None:
             email_domain = user_email.split("@")[1]
@@ -1544,6 +1410,49 @@ class SSOAuthenticationHandler:
 
         if user_email is not None and (user_id is None or len(user_id) == 0):
             user_id = user_email
+
+        return ParsedOpenIDResult(
+            user_email=user_email,
+            user_id=user_id,
+            user_role=user_role,
+        )
+
+    @staticmethod
+    async def get_redirect_response_from_openid(  # noqa: PLR0915
+        result: Union[OpenID, dict, CustomOpenID],
+        request: Request,
+        received_response: Optional[dict] = None,
+        generic_client_id: Optional[str] = None,
+        ui_access_mode: Optional[Dict] = None,
+    ) -> RedirectResponse:
+        import jwt
+
+        from litellm.proxy.proxy_server import (
+            general_settings,
+            generate_key_helper_fn,
+            master_key,
+            premium_user,
+            proxy_logging_obj,
+            user_api_key_cache,
+            user_custom_sso,
+        )
+        from litellm.proxy.utils import get_prisma_client_or_throw
+        from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+
+        prisma_client = get_prisma_client_or_throw(
+            "Prisma client is None, connect a database to your proxy"
+        )
+
+        # User is Authe'd in - generate key for the UI to access Proxy
+        parsed_openid_result = (
+            SSOAuthenticationHandler._get_user_email_and_id_from_result(
+                result=result, generic_client_id=generic_client_id
+            )
+        )
+        user_email = parsed_openid_result.get("user_email")
+        user_id = parsed_openid_result.get("user_id")
+        user_role = parsed_openid_result.get("user_role")
+        verbose_proxy_logger.info(f"SSO callback result: {result}")
 
         user_info = None
         user_id_models: List = []
@@ -1632,7 +1541,7 @@ class SSOAuthenticationHandler:
         ## CHECK IF ROLE ALLOWED TO USE PROXY ##
         is_admin_only_access = check_is_admin_only_access(ui_access_mode or {})
         if is_admin_only_access:
-            has_access = has_admin_ui_access(user_role)
+            has_access = has_admin_ui_access(user_role or "")
             if not has_access:
                 raise HTTPException(
                     status_code=401,
@@ -1676,7 +1585,7 @@ class SSOAuthenticationHandler:
             user_id=cast(str, user_id),
             key=key,
             user_email=user_email,
-            user_role=user_role,
+            user_role=user_role or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
             login_method="sso",
             premium_user=premium_user,
             auth_header_name=general_settings.get(
@@ -1691,7 +1600,6 @@ class SSOAuthenticationHandler:
             master_key or "",
             algorithm="HS256",
         )
-        verbose_proxy_logger.info(f"user_id: {user_id}; jwt_token: {jwt_token}")
         if user_id is not None and isinstance(user_id, str):
             litellm_dashboard_ui += "?login=success"
         verbose_proxy_logger.info(f"Redirecting to {litellm_dashboard_ui}")
@@ -1766,22 +1674,49 @@ class MicrosoftSSOHandler:
             access_token=microsoft_sso.access_token
         )
 
+        # Extract app roles from the id_token JWT
+        app_roles = MicrosoftSSOHandler.get_app_roles_from_id_token(
+            id_token=microsoft_sso.id_token
+        )
+        verbose_proxy_logger.debug(f"Extracted app roles from id_token: {app_roles}")
+
+        # Combine groups and app roles
+        user_role: Optional[LitellmUserRoles] = None
+        if app_roles:
+            # Check if any app role is a valid LitellmUserRoles
+            for role_str in app_roles:
+                role = get_litellm_user_role(role_str)
+                if role is not None:
+                    user_role = role
+                    verbose_proxy_logger.debug(
+                        f"Found valid LitellmUserRoles '{role.value}' in app_roles"
+                    )
+                    break
+
+        verbose_proxy_logger.debug(
+            f"Combined team_ids (groups + app roles): {user_team_ids}"
+        )
+
         # if user is trying to get the raw sso response for debugging, return the raw sso response
         if return_raw_sso_response:
             original_msft_result[MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY] = (
                 user_team_ids
             )
+            original_msft_result["app_roles"] = app_roles
             return original_msft_result or {}
 
         result = MicrosoftSSOHandler.openid_from_response(
             response=original_msft_result,
             team_ids=user_team_ids,
+            user_role=user_role,
         )
         return result
 
     @staticmethod
     def openid_from_response(
-        response: Optional[dict], team_ids: List[str]
+        response: Optional[dict],
+        team_ids: List[str],
+        user_role: Optional[LitellmUserRoles],
     ) -> CustomOpenID:
         response = response or {}
         verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
@@ -1793,9 +1728,53 @@ class MicrosoftSSOHandler:
             first_name=response.get("givenName"),
             last_name=response.get("surname"),
             team_ids=team_ids,
+            user_role=user_role,
         )
         verbose_proxy_logger.debug(f"Microsoft SSO OpenID Response: {openid_response}")
         return openid_response
+
+    @staticmethod
+    def get_app_roles_from_id_token(id_token: Optional[str]) -> List[str]:
+        """
+        Extract app roles from the Microsoft Entra ID (Azure AD) id_token JWT.
+
+        App roles are assigned in the Azure AD Enterprise Application and appear
+        in the 'roles' claim of the id_token.
+
+        Args:
+            id_token (Optional[str]): The JWT id_token from Microsoft SSO
+
+        Returns:
+            List[str]: List of app role names assigned to the user
+        """
+        if not id_token:
+            verbose_proxy_logger.debug("No id_token provided for app role extraction")
+            return []
+
+        try:
+            import jwt
+
+            # Decode the JWT without signature verification
+            # (signature is already verified by fastapi_sso)
+            decoded_token = jwt.decode(id_token, options={"verify_signature": False})
+
+            # Extract roles claim from the token
+            roles = decoded_token.get("roles", [])
+
+            if roles and isinstance(roles, list):
+                verbose_proxy_logger.debug(
+                    f"Found {len(roles)} app role(s) in id_token: {roles}"
+                )
+                return roles
+            else:
+                verbose_proxy_logger.debug(
+                    "No app roles found in id_token or roles claim is not a list"
+                )
+                return []
+
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error extracting app roles from id_token: {e}")
+            return []
 
     @staticmethod
     async def get_user_groups_from_graph_api(
@@ -2199,28 +2178,3 @@ async def debug_sso_callback(request: Request):
     )
 
     return HTMLResponse(content=html_content)
-
-
-@router.post("/sso/key/generate", tags=["experimental"], include_in_schema=False)
-async def process_login(request: Request):
-    """
-    Process username/password login from the unified login page
-    """
-    try:
-        # Get form data
-        form_data = await request.form()
-        username = form_data.get("username")
-        password = form_data.get("password")
-
-        if not username or not password:
-            return RedirectResponse(url="/sso/key/generate?error=1", status_code=303)
-
-        # Import the actual login function from proxy_server
-        from litellm.proxy.proxy_server import login
-
-        # Call the real login function that handles all the authentication properly
-        return await login(request)
-
-    except Exception as e:
-        verbose_proxy_logger.error(f"Error processing login: {e}")
-        return RedirectResponse(url="/sso/key/generate?error=1", status_code=303)

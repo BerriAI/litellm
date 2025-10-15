@@ -1,7 +1,7 @@
-from typing import Any, Union, Optional
+from typing import Any, Dict, Optional, Union
 
 from litellm.proxy._types import (
-    GenerateKeyRequest,
+    KeyRequestBase,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_TeamTable,
     LitellmUserRoles,
@@ -30,7 +30,7 @@ def _is_user_team_admin(
 
 
 def _set_object_metadata_field(
-    object_data: Union[LiteLLM_TeamTable, GenerateKeyRequest],
+    object_data: Union[LiteLLM_TeamTable, KeyRequestBase],
     field_name: str,
     value: Any,
 ) -> None:
@@ -43,7 +43,7 @@ def _set_object_metadata_field(
         value: Value to set for the field
     """
     if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        _premium_user_check()
+        _premium_user_check(field_name)
     object_data.metadata = object_data.metadata or {}
     object_data.metadata[field_name] = value
 
@@ -56,6 +56,8 @@ async def _upsert_budget_and_membership(
     max_budget: Optional[float],
     existing_budget_id: Optional[str],
     user_api_key_dict: UserAPIKeyAuth,
+    tpm_limit: Optional[int] = None,
+    rpm_limit: Optional[int] = None,
 ):
     """
     Helper function to Create/Update or Delete the budget within the team membership
@@ -66,33 +68,34 @@ async def _upsert_budget_and_membership(
         max_budget: The maximum budget for the team
         existing_budget_id: The ID of the existing budget, if any
         user_api_key_dict: User API Key dictionary containing user information
+        tpm_limit: Tokens per minute limit for the team member
+        rpm_limit: Requests per minute limit for the team member
 
-    If max_budget is None, the user's budget is removed from the team membership.
-    If max_budget exists, a budget is updated or created and linked to the team membership.
+    If max_budget, tpm_limit, and rpm_limit are all None, the user's budget is removed from the team membership.
+    If any of these values exist, a budget is updated or created and linked to the team membership.
     """
-    if max_budget is None:
-        # disconnect the budget since max_budget is None
+    if max_budget is None and tpm_limit is None and rpm_limit is None:
+        # disconnect the budget since all limits are None
         await tx.litellm_teammembership.update(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
             data={"litellm_budget_table": {"disconnect": True}},
         )
         return
 
-    if existing_budget_id:
-        # update the existing budget
-        await tx.litellm_budgettable.update(
-            where={"budget_id": existing_budget_id},
-            data={"max_budget": max_budget},
-        )
-        return
-
     # create a new budget
+    create_data: Dict[str, Any] = {
+        "created_by": user_api_key_dict.user_id or "",
+        "updated_by": user_api_key_dict.user_id or "",
+    }
+    if max_budget is not None:
+        create_data["max_budget"] = max_budget
+    if tpm_limit is not None:
+        create_data["tpm_limit"] = tpm_limit
+    if rpm_limit is not None:
+        create_data["rpm_limit"] = rpm_limit
+
     new_budget = await tx.litellm_budgettable.create(
-        data={
-            "max_budget": max_budget,
-            "created_by": user_api_key_dict.user_id or "",
-            "updated_by": user_api_key_dict.user_id or "",
-        },
+        data=create_data,
         include={"team_membership": True},
     )
     # upsert the team membership with the new/updated budget

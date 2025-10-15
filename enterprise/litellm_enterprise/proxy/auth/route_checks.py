@@ -20,7 +20,6 @@ class EnterpriseRouteChecks:
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"🚨🚨🚨 DISABLING LLM API ENDPOINTS is an Enterprise feature\n🚨 {CommonProxyErrors.not_premium_user.value}",
                 )
-            return False
 
         return get_secret_bool("DISABLE_LLM_API_ENDPOINTS") is True
 

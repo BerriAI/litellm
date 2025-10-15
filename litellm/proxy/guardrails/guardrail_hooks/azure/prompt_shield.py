@@ -73,7 +73,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         self.api_base = api_base
         self.api_version = kwargs.get("api_version") or "2024-09-01"
 
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             f"Initialized Azure Prompt Shield Guardrail: {guardrail_name}"
         )
 
@@ -123,6 +123,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ) -> Optional[Dict[str, Any]]:
         """
@@ -130,7 +131,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
 
         Raises HTTPException if content should be blocked.
         """
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "Azure Prompt Shield: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
@@ -144,7 +145,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             user_prompt = self.get_user_prompt(new_messages)
 
             if user_prompt:
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.debug(
                     f"Azure Prompt Shield: User prompt: {user_prompt}"
                 )
                 azure_prompt_shield_response = await self.async_make_request(
@@ -179,7 +180,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
 
         Raises HTTPException if response should be blocked.
         """
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "Azure Prompt Shield: Running post-call response scan"
         )
 

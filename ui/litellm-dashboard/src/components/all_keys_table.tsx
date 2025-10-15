@@ -1,49 +1,28 @@
 "use client";
-import React, { useEffect, useState, useCallback, useRef } from "react";
-import { ColumnDef, Row } from "@tanstack/react-table";
-import { DataTable } from "./view_logs/table";
-import { Select, SelectItem } from "@tremor/react"
-import { Button } from "@tremor/react"
-import KeyInfoView from "./key_info_view";
+import React, { useEffect, useState } from "react";
+import { ColumnDef } from "@tanstack/react-table";
+import { Select, SelectItem } from "@tremor/react";
+import { Button } from "@tremor/react";
+import KeyInfoView from "./templates/key_info_view";
 import { Tooltip } from "antd";
 import { Team, KeyResponse } from "./key_team_helpers/key_list";
-import FilterComponent from "./common_components/filter";
-import { FilterOption } from "./common_components/filter";
-import { keyListCall, Organization, userListCall } from "./networking";
-import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn";
-import { createOrgSearchFunction } from "./key_team_helpers/organization_search_fn";
+import FilterComponent from "./molecules/filter";
+import { FilterOption } from "./molecules/filter";
+import { Organization, userListCall } from "./networking";
 import { useFilterLogic } from "./key_team_helpers/filter_logic";
 import { Setter } from "@/types";
 import { updateExistingKeys } from "@/utils/dataUtils";
-import { debounce } from "lodash";
-import { defaultPageSize } from "./constants";
-import { fetchAllTeams } from "./key_team_helpers/filter_helpers";
-import { fetchAllOrganizations } from "./key_team_helpers/filter_helpers";
-import {
-  flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
-  SortingState,
-  useReactTable,
-} from "@tanstack/react-table";
-import {
-  Table,
-  TableHead,
-  TableHeaderCell,
-  TableBody,
-  TableRow,
-  TableCell,
-  Icon,
-} from "@tremor/react";
+import { flexRender, getCoreRowModel, getSortedRowModel, SortingState, useReactTable } from "@tanstack/react-table";
+import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell, Icon } from "@tremor/react";
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { Badge, Text } from "@tremor/react";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface AllKeysTableProps {
-  keys: KeyResponse[]
-  setKeys: (keys: KeyResponse[] | ((prev: KeyResponse[]) => KeyResponse[])) => void
-  isLoading?: boolean
+  keys: KeyResponse[];
+  setKeys: (keys: KeyResponse[] | ((prev: KeyResponse[]) => KeyResponse[])) => void;
+  isLoading?: boolean;
   pagination: {
     currentPage: number;
     totalPages: number;
@@ -62,13 +41,13 @@ interface AllKeysTableProps {
   organizations: Organization[] | null;
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
   refresh?: () => void;
-  onSortChange?: (sortBy: string, sortOrder: 'asc' | 'desc') => void;
+  onSortChange?: (sortBy: string, sortOrder: "asc" | "desc") => void;
   currentSort?: {
-    sortBy: string
-    sortOrder: "asc" | "desc"
-  }
-  premiumUser: boolean
-  setAccessToken?: (token: string) => void
+    sortBy: string;
+    sortOrder: "asc" | "desc";
+  };
+  premiumUser: boolean;
+  setAccessToken?: (token: string) => void;
 }
 
 // Define columns similar to our logs table
@@ -79,52 +58,50 @@ interface UserResponse {
   user_role: string;
 }
 
-const TeamFilter = ({ 
-  teams, 
-  selectedTeam, 
-  setSelectedTeam 
-}: { 
+const TeamFilter = ({
+  teams,
+  selectedTeam,
+  setSelectedTeam,
+}: {
   teams: Team[] | null;
   selectedTeam: Team | null;
   setSelectedTeam: (team: Team | null) => void;
 }) => {
-    const handleTeamChange = (value: string) => {
-      const team = teams?.find(t => t.team_id === value);
-      setSelectedTeam(team || null);
-    };
-  
-    return (
-      <div className="mb-4">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-600">Where Team is</span>
-          <Select
-            value={selectedTeam?.team_id || ""}
-            onValueChange={handleTeamChange}
-            placeholder="Team ID"
-            className="w-[400px]"
-          >
-            <SelectItem value="team_id">Team ID</SelectItem>
-            {teams?.map((team) => (
-              <SelectItem key={team.team_id} value={team.team_id}>
-                <span className="font-medium">{team.team_alias}</span>{" "}
-                <span className="text-gray-500">({team.team_id})</span>
-              </SelectItem>
-            ))}
-          </Select>
-        </div>
-      </div>
-    );
+  const handleTeamChange = (value: string) => {
+    const team = teams?.find((t) => t.team_id === value);
+    setSelectedTeam(team || null);
   };
-  
+
+  return (
+    <div className="mb-4">
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-gray-600">Where Team is</span>
+        <Select
+          value={selectedTeam?.team_id || ""}
+          onValueChange={handleTeamChange}
+          placeholder="Team ID"
+          className="w-[400px]"
+        >
+          <SelectItem value="team_id">Team ID</SelectItem>
+          {teams?.map((team) => (
+            <SelectItem key={team.team_id} value={team.team_id}>
+              <span className="font-medium">{team.team_alias}</span>{" "}
+              <span className="text-gray-500">({team.team_id})</span>
+            </SelectItem>
+          ))}
+        </Select>
+      </div>
+    </div>
+  );
+};
 
 /**
  * AllKeysTable – a new table for keys that mimics the table styling used in view_logs.
  * The team selector and filtering have been removed so that all keys are shown.
  */
 
-
-export function AllKeysTable({ 
-  keys, 
+export function AllKeysTable({
+  keys,
   setKeys,
   isLoading = false,
   pagination,
@@ -150,40 +127,35 @@ export function AllKeysTable({
   const [userList, setUserList] = useState<UserResponse[]>([]);
   const [sorting, setSorting] = React.useState<SortingState>(() => {
     if (currentSort) {
-      return [{
-        id: currentSort.sortBy,
-        desc: currentSort.sortOrder === 'desc'
-      }];
+      return [
+        {
+          id: currentSort.sortBy,
+          desc: currentSort.sortOrder === "desc",
+        },
+      ];
     }
-    return [{
-      id: "created_at",
-      desc: true
-    }];
+    return [
+      {
+        id: "created_at",
+        desc: true,
+      },
+    ];
   });
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   // Use the filter logic hook
 
-  const {
-    filters,
-    filteredKeys,
-    allKeyAliases,
-    allTeams,
-    allOrganizations,
-    handleFilterChange,
-    handleFilterReset
-  } = useFilterLogic({
-    keys,
-    teams,
-    organizations,
-    accessToken,
-  });
-
-  
+  const { filters, filteredKeys, allKeyAliases, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
+    useFilterLogic({
+      keys,
+      teams,
+      organizations,
+      accessToken,
+    });
 
   useEffect(() => {
     if (accessToken) {
-      const user_IDs = keys.map(key => key.user_id).filter(id => id !== null);
+      const user_IDs = keys.map((key) => key.user_id).filter((id) => id !== null);
       const fetchUserList = async () => {
         const userListData = await userListCall(accessToken, user_IDs, 1, 100);
         setUserList(userListData.users);
@@ -198,12 +170,12 @@ export function AllKeysTable({
       const handleStorageChange = () => {
         refresh();
       };
-      
+
       // Listen for storage events that might indicate a key was created
-      window.addEventListener('storage', handleStorageChange);
-      
+      window.addEventListener("storage", handleStorageChange);
+
       return () => {
-        window.removeEventListener('storage', handleStorageChange);
+        window.removeEventListener("storage", handleStorageChange);
       };
     }
   }, [refresh]);
@@ -214,10 +186,7 @@ export function AllKeysTable({
       header: () => null,
       cell: ({ row }) =>
         row.getCanExpand() ? (
-          <button
-            onClick={row.getToggleExpandedHandler()}
-            style={{ cursor: "pointer" }}
-          >
+          <button onClick={row.getToggleExpandedHandler()} style={{ cursor: "pointer" }}>
             {row.getIsExpanded() ? "▼" : "▶"}
           </button>
         ) : null,
@@ -229,7 +198,7 @@ export function AllKeysTable({
       cell: (info) => (
         <div className="overflow-hidden">
           <Tooltip title={info.getValue() as string}>
-            <Button 
+            <Button
               size="xs"
               variant="light"
               className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
@@ -247,8 +216,10 @@ export function AllKeysTable({
       header: "Key Alias",
       cell: (info) => {
         const value = info.getValue() as string;
-        return <Tooltip title={value}>{value ? (value.length > 20 ? `${value.slice(0, 20)}...` : value) : "-"}</Tooltip>
-      }
+        return (
+          <Tooltip title={value}>{value ? (value.length > 20 ? `${value.slice(0, 20)}...` : value) : "-"}</Tooltip>
+        );
+      },
     },
     {
       id: "key_name",
@@ -262,7 +233,7 @@ export function AllKeysTable({
       header: "Team Alias",
       cell: ({ row, getValue }) => {
         const teamId = getValue() as string;
-        const team = teams?.find(t => t.team_id === teamId);
+        const team = teams?.find((t) => t.team_id === teamId);
         return team?.team_alias || "Unknown";
       },
     },
@@ -270,13 +241,17 @@ export function AllKeysTable({
       id: "team_id",
       accessorKey: "team_id",
       header: "Team ID",
-      cell: (info) => <Tooltip title={info.getValue() as string}>{info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}</Tooltip>
+      cell: (info) => (
+        <Tooltip title={info.getValue() as string}>
+          {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}
+        </Tooltip>
+      ),
     },
     {
       id: "organization_id",
       accessorKey: "organization_id",
       header: "Organization ID",
-      cell: (info) => info.getValue() ? info.renderValue() : "-",
+      cell: (info) => (info.getValue() ? info.renderValue() : "-"),
     },
     {
       id: "user_email",
@@ -284,12 +259,14 @@ export function AllKeysTable({
       header: "User Email",
       cell: (info) => {
         const userId = info.getValue() as string;
-        const user = userList.find(u => u.user_id === userId);
+        const user = userList.find((u) => u.user_id === userId);
         return user?.user_email ? (
           <Tooltip title={user?.user_email}>
             <span>{user?.user_email.slice(0, 20)}...</span>
           </Tooltip>
-        ) : "-";
+        ) : (
+          "-"
+        );
       },
     },
     {
@@ -402,68 +379,54 @@ export function AllKeysTable({
                             className="cursor-pointer"
                             size="xs"
                             onClick={() => {
-                              setExpandedAccordions(prev => ({
+                              setExpandedAccordions((prev) => ({
                                 ...prev,
-                                [info.row.id]: !prev[info.row.id]
+                                [info.row.id]: !prev[info.row.id],
                               }));
                             }}
                           />
                         </div>
                       )}
                       <div className="flex flex-wrap gap-1">
-                        {models.slice(0, 3).map((model, index) => (
+                        {models.slice(0, 3).map((model, index) =>
                           model === "all-proxy-models" ? (
-                            <Badge
-                              key={index}
-                              size={"xs"}
-                              color="red"
-                            >
+                            <Badge key={index} size={"xs"} color="red">
                               <Text>All Proxy Models</Text>
                             </Badge>
                           ) : (
-                            <Badge
-                              key={index}
-                              size={"xs"}
-                              color="blue"
-                            >
+                            <Badge key={index} size={"xs"} color="blue">
                               <Text>
                                 {model.length > 30
                                   ? `${getModelDisplayName(model).slice(0, 30)}...`
                                   : getModelDisplayName(model)}
                               </Text>
                             </Badge>
-                          )
-                        ))}
+                          ),
+                        )}
                         {models.length > 3 && !expandedAccordions[info.row.id] && (
                           <Badge size={"xs"} color="gray" className="cursor-pointer">
-                            <Text>+{models.length - 3} {models.length - 3 === 1 ? 'more model' : 'more models'}</Text>
+                            <Text>
+                              +{models.length - 3} {models.length - 3 === 1 ? "more model" : "more models"}
+                            </Text>
                           </Badge>
                         )}
                         {expandedAccordions[info.row.id] && (
                           <div className="flex flex-wrap gap-1">
-                            {models.slice(3).map((model, index) => (
+                            {models.slice(3).map((model, index) =>
                               model === "all-proxy-models" ? (
-                                <Badge
-                                  key={index + 3}
-                                  size={"xs"}
-                                  color="red"
-                                >
+                                <Badge key={index + 3} size={"xs"} color="red">
                                   <Text>All Proxy Models</Text>
                                 </Badge>
                               ) : (
-                                <Badge
-                                  key={index + 3}
-                                  size={"xs"}
-                                  color="blue"
-                                >
+                                <Badge key={index + 3} size={"xs"} color="blue">
                                   <Text>
                                     {model.length > 30
                                       ? `${getModelDisplayName(model).slice(0, 30)}...`
                                       : getModelDisplayName(model)}
                                   </Text>
                                 </Badge>
-                              )
-                            ))}
+                              ),
+                            )}
                           </div>
                         )}
                       </div>
@@ -492,96 +455,94 @@ export function AllKeysTable({
   ];
 
   const filterOptions: FilterOption[] = [
-    { 
-      name: 'Team ID', 
-      label: 'Team ID', 
-      isSearchable: true, 
+    {
+      name: "Team ID",
+      label: "Team ID",
+      isSearchable: true,
       searchFn: async (searchText: string) => {
         if (!allTeams || allTeams.length === 0) return [];
-        
-        const filteredTeams = allTeams.filter(team => 
-          team.team_id.toLowerCase().includes(searchText.toLowerCase()) || 
-          (team.team_alias && team.team_alias.toLowerCase().includes(searchText.toLowerCase()))
+
+        const filteredTeams = allTeams.filter(
+          (team) =>
+            team.team_id.toLowerCase().includes(searchText.toLowerCase()) ||
+            (team.team_alias && team.team_alias.toLowerCase().includes(searchText.toLowerCase())),
         );
-        
-        return filteredTeams.map(team => ({
+
+        return filteredTeams.map((team) => ({
           label: `${team.team_alias || team.team_id} (${team.team_id})`,
-          value: team.team_id
+          value: team.team_id,
         }));
-      }
+      },
     },
-    { 
-      name: 'Organization ID', 
-      label: 'Organization ID', 
-      isSearchable: true, 
+    {
+      name: "Organization ID",
+      label: "Organization ID",
+      isSearchable: true,
       searchFn: async (searchText: string) => {
         if (!allOrganizations || allOrganizations.length === 0) return [];
-        
-        const filteredOrgs = allOrganizations.filter(org => 
-          org.organization_id?.toLowerCase().includes(searchText.toLowerCase()) ?? false
+
+        const filteredOrgs = allOrganizations.filter(
+          (org) => org.organization_id?.toLowerCase().includes(searchText.toLowerCase()) ?? false,
         );
-        
+
         return filteredOrgs
-          .filter(org => org.organization_id !== null && org.organization_id !== undefined)
-          .map(org => ({
-            label: `${org.organization_id || 'Unknown'} (${org.organization_id})`,
-            value: org.organization_id as string
+          .filter((org) => org.organization_id !== null && org.organization_id !== undefined)
+          .map((org) => ({
+            label: `${org.organization_id || "Unknown"} (${org.organization_id})`,
+            value: org.organization_id as string,
           }));
-      }
+      },
     },
     {
       name: "Key Alias",
       label: "Key Alias",
       isSearchable: true,
       searchFn: async (searchText) => {
-        const filteredKeyAliases = allKeyAliases.filter(key => {
-          return key.toLowerCase().includes(searchText.toLowerCase())
+        const filteredKeyAliases = allKeyAliases.filter((key) => {
+          return key.toLowerCase().includes(searchText.toLowerCase());
         });
 
         return filteredKeyAliases.map((key) => {
           return {
             label: key,
-            value: key
-          }
+            value: key,
+          };
         });
-      }
+      },
     },
     {
-      name: 'User ID',
-      label: 'User ID',
+      name: "User ID",
+      label: "User ID",
       isSearchable: false,
     },
     {
-      name: 'Key Hash',
-      label: 'Key Hash',
+      name: "Key Hash",
+      label: "Key Hash",
       isSearchable: false,
-    }
-
+    },
   ];
-  
-  console.log(`keys: ${JSON.stringify(keys)}`)
+
+  console.log(`keys: ${JSON.stringify(keys)}`);
 
   const table = useReactTable({
     data: filteredKeys,
-    columns: columns.filter(col => col.id !== 'expander'),
+    columns: columns.filter((col) => col.id !== "expander"),
     state: {
       sorting,
     },
     onSortingChange: (updaterOrValue) => {
-      const newSorting = typeof updaterOrValue === 'function' 
-        ? updaterOrValue(sorting)
-        : updaterOrValue;
-      console.log(`newSorting: ${JSON.stringify(newSorting)}`)
+      const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
+      console.log(`newSorting: ${JSON.stringify(newSorting)}`);
       setSorting(newSorting);
       if (newSorting && newSorting.length > 0) {
         const sortState = newSorting[0];
         const sortBy = sortState.id;
-        const sortOrder = sortState.desc ? 'desc' : 'asc';
-        console.log(`sortBy: ${sortBy}, sortOrder: ${sortOrder}`)
+        const sortOrder = sortState.desc ? "desc" : "asc";
+        console.log(`sortBy: ${sortBy}, sortOrder: ${sortOrder}`);
         handleFilterChange({
           ...filters,
-          'Sort By': sortBy,
-          'Sort Order': sortOrder
+          "Sort By": sortBy,
+          "Sort Order": sortOrder,
         });
         onSortChange?.(sortBy, sortOrder);
       }
@@ -595,31 +556,35 @@ export function AllKeysTable({
   // Update local sorting state when currentSort prop changes
   React.useEffect(() => {
     if (currentSort) {
-      setSorting([{
-        id: currentSort.sortBy,
-        desc: currentSort.sortOrder === 'desc'
-      }]);
+      setSorting([
+        {
+          id: currentSort.sortBy,
+          desc: currentSort.sortOrder === "desc",
+        },
+      ]);
     }
   }, [currentSort]);
 
   return (
     <div className="w-full h-full overflow-hidden">
       {selectedKeyId ? (
-        <KeyInfoView 
-          keyId={selectedKeyId} 
+        <KeyInfoView
+          keyId={selectedKeyId}
           onClose={() => setSelectedKeyId(null)}
-          keyData={filteredKeys.find(k => k.token === selectedKeyId)}
+          keyData={filteredKeys.find((k) => k.token === selectedKeyId)}
           onKeyDataUpdate={(updatedKeyData) => {
-            setKeys(keys => keys.map(key => {
-              if (key.token === updatedKeyData.token) {
-                return updateExistingKeys(key, updatedKeyData)
-              }
-              return key
-            }))
+            setKeys((keys) =>
+              keys.map((key) => {
+                if (key.token === updatedKeyData.token) {
+                  return updateExistingKeys(key, updatedKeyData);
+                }
+                return key;
+              }),
+            );
             if (refresh) refresh(); // Minimal fix: refresh the full key list after an update
           }}
           onDelete={() => {
-            setKeys(keys => keys.filter(key => key.token !== selectedKeyId))
+            setKeys((keys) => keys.filter((key) => key.token !== selectedKeyId));
             if (refresh) refresh(); // Minimal fix: refresh the full key list after a delete
           }}
           accessToken={accessToken}
@@ -632,19 +597,28 @@ export function AllKeysTable({
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
           <div className="w-full mb-6">
-            <FilterComponent options={filterOptions} onApplyFilters={handleFilterChange} initialValues={filters} onResetFilters={handleFilterReset}/>
+            <FilterComponent
+              options={filterOptions}
+              onApplyFilters={handleFilterChange}
+              initialValues={filters}
+              onResetFilters={handleFilterReset}
+            />
           </div>
 
           <div className="flex items-center justify-between w-full mb-4">
             <span className="inline-flex text-sm text-gray-700">
-              Showing {isLoading ? "..." : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`} of {isLoading ? "..." : pagination.totalCount} results
+              Showing{" "}
+              {isLoading
+                ? "..."
+                : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`}{" "}
+              of {isLoading ? "..." : pagination.totalCount} results
             </span>
-            
+
             <div className="inline-flex items-center gap-2">
               <span className="text-sm text-gray-700">
                 Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
               </span>
-              
+
               <button
                 onClick={() => onPageChange(pagination.currentPage - 1)}
                 disabled={isLoading || pagination.currentPage === 1}
@@ -652,9 +626,9 @@ export function AllKeysTable({
               >
                 Previous
               </button>
-              
+
               <button
-                onClick={() => onPageChange(pagination.currentPage + 1)} 
+                onClick={() => onPageChange(pagination.currentPage + 1)}
                 disabled={isLoading || pagination.currentPage === pagination.totalPages}
                 className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -670,30 +644,27 @@ export function AllKeysTable({
                     {table.getHeaderGroups().map((headerGroup) => (
                       <TableRow key={headerGroup.id}>
                         {headerGroup.headers.map((header) => (
-                          <TableHeaderCell 
-                            key={header.id} 
+                          <TableHeaderCell
+                            key={header.id}
                             className={`py-1 h-8 ${
-                              header.id === 'actions' 
-                                ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]' 
-                                : ''
+                              header.id === "actions"
+                                ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
+                                : ""
                             }`}
                             onClick={header.column.getToggleSortingHandler()}
                           >
                             <div className="flex items-center justify-between gap-2">
                               <div className="flex items-center">
-                                {header.isPlaceholder ? null : (
-                                  flexRender(
-                                    header.column.columnDef.header,
-                                    header.getContext()
-                                  )
-                                )}
+                                {header.isPlaceholder
+                                  ? null
+                                  : flexRender(header.column.columnDef.header, header.getContext())}
                               </div>
-                              {header.id !== 'actions' && (
+                              {header.id !== "actions" && (
                                 <div className="w-4">
                                   {header.column.getIsSorted() ? (
                                     {
                                       asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                                      desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />
+                                      desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
                                     }[header.column.getIsSorted() as string]
                                   ) : (
                                     <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
@@ -726,7 +697,7 @@ export function AllKeysTable({
                                 whiteSpace: "pre-wrap",
                                 overflow: "hidden",
                               }}
-                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${cell.column.id === 'models' && (cell.getValue() as string[]).length > 3 ? "px-0" : ""}`}
+                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${cell.column.id === "models" && (cell.getValue() as string[]).length > 3 ? "px-0" : ""}`}
                             >
                               {flexRender(cell.column.columnDef.cell, cell.getContext())}
                             </TableCell>

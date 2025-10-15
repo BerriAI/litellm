@@ -6,12 +6,14 @@ Provider-specific Pass-Through Endpoints
 Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 """
 
+import json
 import os
 from typing import Optional, cast
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
+from starlette.websockets import WebSocketState
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -27,7 +29,10 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    HttpPassThroughEndpointHelpers,
     create_pass_through_route,
+    create_websocket_passthrough_route,
+    websocket_passthrough_request,
 )
 from litellm.proxy.utils import is_known_model
 from litellm.secret_managers.main import get_secret_str
@@ -108,7 +113,16 @@ async def llm_passthrough_factory_proxy_route(
 
     # Construct the full target URL using httpx
     base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
+    # Join paths correctly by removing trailing/leading slashes as needed
+    if not base_url.path or base_url.path == "/":
+        # If base URL has no path, just use the new path
+        updated_url = base_url.copy_with(path=encoded_endpoint)
+    else:
+        # Otherwise, combine the paths
+        base_path = base_url.path.rstrip("/")
+        clean_path = encoded_endpoint.lstrip("/")
+        full_path = f"{base_path}/{clean_path}"
+        updated_url = base_url.copy_with(path=full_path)
 
     # Add or update query parameters
     provider_api_key = passthrough_endpoint_router.get_credentials(
@@ -130,7 +144,11 @@ async def llm_passthrough_factory_proxy_route(
     is_streaming_request = False
     # anthropic is streaming when 'stream' = True is in the body
     if request.method == "POST":
-        _request_body = await request.json()
+        if "multipart/form-data" not in request.headers.get("content-type", ""):
+            _request_body = await request.json()
+        else:
+            _request_body = await get_form_data(request)
+
         if _request_body.get("stream"):
             is_streaming_request = True
 
@@ -172,7 +190,9 @@ async def gemini_proxy_route(
         request=request, api_key=f"Bearer {google_ai_studio_api_key}"
     )
 
-    base_target_url = "https://generativelanguage.googleapis.com"
+    base_target_url = (
+        os.getenv("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
+    )
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -190,7 +210,7 @@ async def gemini_proxy_route(
     )
     if gemini_api_key is None:
         raise Exception(
-            "Required 'GEMINI_API_KEY' in environment to make pass-through calls to Google AI Studio."
+            "Required 'GEMINI_API_KEY'/'GOOGLE_API_KEY' in environment to make pass-through calls to Google AI Studio."
         )
     # Merge query parameters, giving precedence to those in updated_url
     merged_params = dict(request.query_params)
@@ -205,6 +225,7 @@ async def gemini_proxy_route(
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
+        custom_llm_provider="gemini",
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
@@ -231,7 +252,7 @@ async def cohere_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/cohere)
     """
-    base_target_url = "https://api.cohere.com"
+    base_target_url = os.getenv("COHERE_API_BASE") or "https://api.cohere.com"
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -283,9 +304,6 @@ async def vllm_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/vllm)
     """
-    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-        HttpPassThroughEndpointHelpers,
-    )
     from litellm.proxy.proxy_server import llm_router
 
     request_body = await get_request_body(request)
@@ -427,7 +445,7 @@ async def anthropic_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/anthropic_completion)
     """
-    base_target_url = "https://api.anthropic.com"
+    base_target_url = os.getenv("ANTHROPIC_API_BASE") or "https://api.anthropic.com"
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -464,6 +482,76 @@ async def anthropic_proxy_route(
     return received_value
 
 
+async def handle_bedrock_count_tokens(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_body: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Handle AWS Bedrock CountTokens API requests.
+
+    This function processes count_tokens endpoints like:
+    - /v1/messages/count_tokens
+    - /v1/messages/count-tokens
+    """
+    from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+    from litellm.proxy.proxy_server import llm_router
+
+    try:
+        # Initialize the handler
+        handler = BedrockCountTokensHandler()
+
+        # Extract model from request body
+        model = request_body.get("model")
+        if not model:
+            raise HTTPException(
+                status_code=400, detail={"error": "Model is required in request body"}
+            )
+
+        # Get model parameters from router
+        litellm_params = {"user_api_key_dict": user_api_key_dict}
+        resolved_model = model  # Default fallback
+
+        if llm_router:
+            deployments = llm_router.get_model_list(model_name=model)
+            if deployments and len(deployments) > 0:
+                # Get the first matching deployment
+                deployment = deployments[0]
+                model_litellm_params = deployment.get("litellm_params", {})
+
+                # Get the resolved model ID from the configuration
+                if "model" in model_litellm_params:
+                    resolved_model = model_litellm_params["model"]
+
+                # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
+                for key, value in model_litellm_params.items():
+                    if key != "user_api_key_dict":  # Don't overwrite user_api_key_dict
+                        litellm_params[key] = value  # type: ignore
+
+        verbose_proxy_logger.debug(f"Count tokens litellm_params: {litellm_params}")
+        verbose_proxy_logger.debug(f"Resolved model: {resolved_model}")
+
+        # Handle the count tokens request
+        result = await handler.handle_count_tokens_request(
+            request_data=request_body,
+            litellm_params=litellm_params,
+            resolved_model=resolved_model,
+        )
+
+        return result
+
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error in handle_bedrock_count_tokens: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail={"error": f"CountTokens processing error: {str(e)}"}
+        )
+
+
 async def bedrock_llm_proxy_route(
     endpoint: str,
     request: Request,
@@ -489,10 +577,26 @@ async def bedrock_llm_proxy_route(
     )
 
     request_body = await _read_request_body(request=request)
+
+    # Special handling for count_tokens endpoints
+    if "count_tokens" in endpoint or "count-tokens" in endpoint:
+        return await handle_bedrock_count_tokens(
+            endpoint=endpoint,
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            request_body=request_body,
+        )
+
     data: Dict[str, Any] = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        model = endpoint.split("/")[1]
+        endpoint_parts = endpoint.split("/")
+        if "application-inference-profile" in endpoint:
+            # For application-inference-profile, include the profile ID part as well
+            model = "/".join(endpoint_parts[1:3])
+        else:
+            model = endpoint_parts[1]
     except Exception:
         raise HTTPException(
             status_code=400,
@@ -505,6 +609,7 @@ async def bedrock_llm_proxy_route(
     data["method"] = request.method
     data["endpoint"] = endpoint
     data["data"] = request_body
+    data["custom_llm_provider"] = "bedrock"
 
     try:
         result = await base_llm_response_processor.base_passthrough_process_llm_request(
@@ -584,7 +689,8 @@ async def bedrock_proxy_route(
     # Add or update query parameters
     from litellm.llms.bedrock.chat import BedrockConverseLLM
 
-    credentials: Credentials = BedrockConverseLLM().get_credentials()
+    bedrock_llm = BedrockConverseLLM()
+    credentials: Credentials = bedrock_llm.get_credentials()  # type: ignore
     sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
     headers = {"Content-Type": "application/json"}
     # Assuming the body contains JSON data, parse it
@@ -717,7 +823,77 @@ async def azure_proxy_route(
     Call any azure endpoint using the proxy.
 
     Just use `{PROXY_BASE_URL}/azure/{endpoint:path}`
+
+    Checks if the deployment id in the url is a litellm model name. If so, it will route using the llm_router.allm_passthrough_route.
     """
+    from litellm.proxy.proxy_server import llm_router
+
+    parts = endpoint.split(
+        "/"
+    )  # azure model is in the url - e.g. https://{endpoint}/openai/deployments/{deployment-id}/completions?api-version=2024-10-21
+
+    if len(parts) > 1 and llm_router:
+        for part in parts:
+            is_router_model = is_passthrough_request_using_router_model(
+                request_body={"model": part}, llm_router=llm_router
+            )
+            if is_router_model:
+                request_body = await get_request_body(request)
+                is_streaming_request = is_passthrough_request_streaming(request_body)
+                result = await llm_router.allm_passthrough_route(
+                    model=part,
+                    method=request.method,
+                    endpoint=endpoint,
+                    request_query_params=request.query_params,
+                    request_headers=dict(request.headers),
+                    stream=request_body.get("stream", False),
+                    content=None,
+                    data=None,
+                    files=None,
+                    json=(
+                        request_body
+                        if request.headers.get("content-type") == "application/json"
+                        else None
+                    ),
+                    params=None,
+                    headers=None,
+                    cookies=None,
+                )
+
+                if is_streaming_request:
+                    # Check if result is an async generator (from _async_streaming)
+                    import inspect
+
+                    if inspect.isasyncgen(result):
+                        # Result is already an async generator, use it directly
+                        return StreamingResponse(
+                            content=result,
+                            status_code=200,
+                            headers={"content-type": "text/event-stream"},
+                        )
+                    else:
+                        # Result is an httpx.Response, use aiter_bytes()
+                        result = cast(httpx.Response, result)
+                        return StreamingResponse(
+                            content=result.aiter_bytes(),
+                            status_code=result.status_code,
+                            headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                                headers=result.headers,
+                                custom_headers=None,
+                            ),
+                        )
+
+                # Non-streaming response
+                result = cast(httpx.Response, result)
+                content = await result.aread()
+                return Response(
+                    content=content,
+                    status_code=result.status_code,
+                    headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                        headers=result.headers,
+                        custom_headers=None,
+                    ),
+                )
     base_target_url = get_secret_str(secret_name="AZURE_API_BASE")
     if base_target_url is None:
         raise Exception(
@@ -1017,7 +1193,7 @@ async def openai_proxy_route(
 
 
     """
-    base_target_url = "https://api.openai.com/"
+    base_target_url = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
     # Add or update query parameters
     openai_api_key = passthrough_endpoint_router.get_credentials(
         custom_llm_provider=litellm.LlmProviders.OPENAI.value,
@@ -1138,3 +1314,189 @@ class BaseOpenAIPassThroughHandler:
             )
 
         return joined_path_str
+
+
+async def vertex_ai_live_websocket_passthrough(
+    websocket: WebSocket,
+    model: Optional[str] = None,
+    vertex_project: Optional[str] = None,
+    vertex_location: Optional[str] = None,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+):
+    """
+    Vertex AI Live API WebSocket Pass-through Function
+
+    This function provides WebSocket passthrough functionality for Vertex AI Live API,
+    allowing real-time communication with Google's Live API service.
+
+    Note: This function should be registered in proxy_server.py using:
+    app.websocket("/vertex_ai/live")(vertex_ai_live_websocket_passthrough)
+    """
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    _ = user_api_key_dict  # passthrough route already authenticated; avoid lint warnings
+
+    await websocket.accept()
+
+    incoming_headers = dict(websocket.headers)
+    vertex_credentials_config = passthrough_endpoint_router.get_vertex_credentials(
+        project_id=vertex_project,
+        location=vertex_location,
+    )
+
+    if vertex_credentials_config is None:
+        # Attempt to load defaults from environment/config if not already initialised
+        passthrough_endpoint_router.set_default_vertex_config()
+        vertex_credentials_config = passthrough_endpoint_router.get_vertex_credentials(
+            project_id=vertex_project,
+            location=vertex_location,
+        )
+
+    resolved_project = vertex_project
+    resolved_location: Optional[str] = vertex_location
+    credentials_value: Optional[str] = None
+
+    if vertex_credentials_config is not None:
+        resolved_project = resolved_project or vertex_credentials_config.vertex_project
+        temp_location = resolved_location or vertex_credentials_config.vertex_location
+        # Ensure resolved_location is a string
+        if isinstance(temp_location, dict):
+            resolved_location = str(temp_location)
+        elif temp_location is not None:
+            resolved_location = str(temp_location)
+        else:
+            resolved_location = None
+        credentials_value = (
+            str(vertex_credentials_config.vertex_credentials)
+            if vertex_credentials_config.vertex_credentials is not None
+            else None
+        )
+
+    try:
+        resolved_location = resolved_location or (
+            vertex_llm_base.get_default_vertex_location()
+        )
+        if model:
+            resolved_location = vertex_llm_base.get_vertex_region(
+                vertex_region=resolved_location,
+                model=model,
+            )
+
+        (
+            access_token,
+            resolved_project,
+        ) = await vertex_llm_base._ensure_access_token_async(
+            credentials=credentials_value,
+            project_id=resolved_project,
+            custom_llm_provider="vertex_ai_beta",
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "Failed to prepare Vertex AI credentials for live passthrough"
+        )
+        # Log the authentication failure using proxy_logging_obj
+        if proxy_logging_obj and user_api_key_dict:
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data={},
+            )
+        if websocket.client_state != WebSocketState.DISCONNECTED:
+            await websocket.close(code=1011, reason="Vertex AI authentication failed")
+        return
+
+    host_location = resolved_location or vertex_llm_base.get_default_vertex_location()
+    host = (
+        "aiplatform.googleapis.com"
+        if host_location == "global"
+        else f"{host_location}-aiplatform.googleapis.com"
+    )
+    service_url = (
+        f"wss://{host}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+    )
+
+    upstream_headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+    if resolved_project:
+        upstream_headers["x-goog-user-project"] = resolved_project
+
+    # Forward any custom x-goog-* headers provided by the caller if we haven't overridden them
+    for header_name, header_value in incoming_headers.items():
+        lower_header = header_name.lower()
+        if lower_header.startswith("x-goog-") and header_name not in upstream_headers:
+            upstream_headers[header_name] = header_value
+
+    # Use the new WebSocket passthrough pattern
+    if user_api_key_dict is None:
+        raise ValueError("user_api_key_dict is required for WebSocket passthrough")
+
+    return await websocket_passthrough_request(
+        websocket=websocket,
+        target=service_url,
+        custom_headers=upstream_headers,
+        user_api_key_dict=user_api_key_dict,
+        forward_headers=False,
+        endpoint="/vertex_ai/live",
+        accept_websocket=False,
+    )
+
+
+def create_vertex_ai_live_websocket_endpoint():
+    """
+    Create a Vertex AI Live WebSocket endpoint using the new passthrough pattern.
+
+    This demonstrates how to use the create_websocket_passthrough_route function
+    for a provider-specific WebSocket endpoint.
+    """
+    # This would be used like:
+    # endpoint_func = create_vertex_ai_live_websocket_endpoint()
+    # app.websocket("/vertex_ai/live")(endpoint_func)
+
+    # For now, we'll keep the existing implementation since it has
+    # provider-specific logic for Vertex AI credentials and headers
+    return vertex_ai_live_websocket_passthrough
+
+
+def create_generic_websocket_passthrough_endpoint(
+    provider: str,
+    target_url: str,
+    custom_headers: Optional[dict] = None,
+    forward_headers: bool = False,
+    cost_per_request: Optional[float] = None,
+):
+    """
+    Create a generic WebSocket passthrough endpoint for any provider.
+
+    This demonstrates the new WebSocket passthrough pattern that's similar to
+    the HTTP create_pass_through_route function.
+
+    Args:
+        provider: The provider name (e.g., "anthropic", "cohere")
+        target_url: The target WebSocket URL
+        custom_headers: Custom headers to include
+        forward_headers: Whether to forward incoming headers
+
+    Returns:
+        A WebSocket endpoint function that can be registered with app.websocket()
+
+    Example usage:
+        # Create a WebSocket endpoint for Anthropic
+        anthropic_ws_func = create_generic_websocket_passthrough_endpoint(
+            provider="anthropic",
+            target_url="wss://api.anthropic.com/v1/ws",
+            custom_headers={"x-api-key": "your-api-key"},
+            forward_headers=True
+        )
+
+        # Register it in proxy_server.py
+        app.websocket("/anthropic/ws")(anthropic_ws_func)
+    """
+    return create_websocket_passthrough_route(
+        endpoint=f"/{provider}/ws",
+        target=target_url,
+        custom_headers=custom_headers,
+        _forward_headers=forward_headers,
+        cost_per_request=cost_per_request,
+    )

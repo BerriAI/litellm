@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Type, Union, get_args
+from typing import Any, Dict, List, Optional, Type, Union, get_args
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -14,6 +14,7 @@ from litellm.types.guardrails import (
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
     CallTypes,
+    GuardrailStatus,
     LLMResponseTypes,
     StandardLoggingGuardrailInformation,
 )
@@ -119,11 +120,8 @@ class CustomGuardrail(CustomLogger):
         """
         if "guardrails" in data:
             return data["guardrails"]
-        metadata = data.get("metadata") or {}
-        requested_guardrails = metadata.get("guardrails") or []
-        if requested_guardrails:
-            return requested_guardrails
-        return requested_guardrails
+        metadata = data.get("litellm_metadata") or data.get("metadata", {})
+        return metadata.get("guardrails") or []
 
     def _guardrail_is_in_requested_guardrails(
         self,
@@ -234,7 +232,6 @@ class CustomGuardrail(CustomLogger):
         Returns True if the guardrail should be run on the event_type
         """
         requested_guardrails = self.get_guardrail_from_metadata(data)
-
         verbose_logger.debug(
             "inside should_run_guardrail for guardrail=%s event_type= %s guardrail_supported_event_hooks= %s requested_guardrails= %s self.default_on= %s",
             self.guardrail_name,
@@ -243,7 +240,6 @@ class CustomGuardrail(CustomLogger):
             requested_guardrails,
             self.default_on,
         )
-
         if self.default_on is True:
             if self._event_hook_is_event_type(event_type):
                 if isinstance(self.event_hook, Mode):
@@ -287,7 +283,6 @@ class CustomGuardrail(CustomLogger):
             )
             if result is not None:
                 return result
-
         return True
 
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:
@@ -358,11 +353,12 @@ class CustomGuardrail(CustomLogger):
         self,
         guardrail_json_response: Union[Exception, str, dict, List[dict]],
         request_data: dict,
-        guardrail_status: Literal["success", "failure"],
+        guardrail_status: GuardrailStatus,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         duration: Optional[float] = None,
         masked_entity_count: Optional[Dict[str, int]] = None,
+        guardrail_provider: Optional[str] = None,
     ) -> None:
         """
         Builds `StandardLoggingGuardrailInformation` and adds it to the request metadata so it can be used for logging to DataDog, Langfuse, etc.
@@ -373,6 +369,7 @@ class CustomGuardrail(CustomLogger):
 
         slg = StandardLoggingGuardrailInformation(
             guardrail_name=self.guardrail_name,
+            guardrail_provider=guardrail_provider,
             guardrail_mode=(
                 GuardrailMode(**self.event_hook.model_dump())  # type: ignore
                 if isinstance(self.event_hook, Mode)
@@ -464,7 +461,7 @@ class CustomGuardrail(CustomLogger):
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=e,
             request_data=request_data,
-            guardrail_status="failure",
+            guardrail_status="guardrail_failed_to_respond",
             duration=duration,
             start_time=start_time,
             end_time=end_time,
@@ -493,7 +490,8 @@ class CustomGuardrail(CustomLogger):
         """
         Update the guardrails litellm params in memory
         """
-        pass
+        for key, value in vars(litellm_params).items():
+            setattr(self, key, value)
 
 
 def log_guardrail_information(func):

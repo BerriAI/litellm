@@ -526,6 +526,7 @@ def test_foward_litellm_user_info_to_backend_llm_call():
         "x-litellm-user_api_key_user_id": "test_user_id",
         "x-litellm-user_api_key_org_id": "test_org_id",
         "x-litellm-user_api_key_hash": "test_api_key",
+        "x-litellm-user_api_key_spend": 0.0,
     }
 
     assert json.dumps(data, sort_keys=True) == json.dumps(expected_data, sort_keys=True)
@@ -682,7 +683,7 @@ async def test_prepare_key_update_data():
             {"REDOC_URL": "https://example.com/redoc"},
             "https://example.com/redoc",
         ),  # full URL
-        ({"NO_REDOC": "True"}, None), # Redoc disabled
+        ({"NO_REDOC": "True"}, None),  # Redoc disabled
     ],
 )
 def test_get_redoc_url(env_vars, expected_url):
@@ -1009,18 +1010,21 @@ def test_update_config_fields():
             "num_retries": 5,
             "request_timeout": 600,
             "success_callback": ["langfuse"],
-            "default_team_settings": [],
+            "default_team_settings": None,
             "context_window_fallbacks": [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}],
         },
     }
     updated_config = proxy_config._update_config_fields(**args)
 
+    print("updated_config", updated_config)
     all_team_config = updated_config["litellm_settings"]["default_team_settings"]
 
     # check if team id config returned
+    print("all_team_config", all_team_config)
     team_config = proxy_config._get_team_config(
         team_id="c91e32bb-0f2a-4aa1-86c4-307ca2e03ea3", all_teams_config=all_team_config
     )
+    print("team_config", team_config)
     assert team_config["langfuse_public_key"] == "my-fake-key"
     assert team_config["langfuse_secret"] == "my-fake-secret"
 
@@ -1929,43 +1933,42 @@ async def test_post_call_failure_hook_auth_error_key_info_route():
     from litellm.caching.caching import DualCache
     from fastapi import HTTPException
     from unittest.mock import Mock, patch, AsyncMock
-    
+
     # Setup
     cache = DualCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
-    
+
     # Mock the _handle_logging_proxy_only_error method
-    with patch.object(proxy_logging, '_handle_logging_proxy_only_error', new_callable=AsyncMock) as mock_handle_logging:
+    with patch.object(
+        proxy_logging, "_handle_logging_proxy_only_error", new_callable=AsyncMock
+    ) as mock_handle_logging:
         # Create an auth error (HTTPException)
         auth_error = HTTPException(
-            status_code=401,
-            detail="Authentication Error: invalid user key"
+            status_code=401, detail="Authentication Error: invalid user key"
         )
-        
+
         # Create request data for /key/info route
         request_data = {
             "route": "/key/info",
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "test"}],
-            "litellm_call_id": "test_call_id_123"
+            "litellm_call_id": "test_call_id_123",
         }
-        
+
         # Create user API key dict
         user_api_key_dict = UserAPIKeyAuth(
-            api_key="test_key",
-            user_id="test_user",
-            token="test_token"
+            api_key="test_key", user_id="test_user", token="test_token"
         )
-        
+
         # Call post_call_failure_hook with auth error from /key/info route
         await proxy_logging.post_call_failure_hook(
             request_data=request_data,
             original_exception=auth_error,
             user_api_key_dict=user_api_key_dict,
             error_type=ProxyErrorTypes.auth_error,
-            route="/key/info"
+            route="/key/info",
         )
-        
+
         # Assert that _handle_logging_proxy_only_error was NOT called
         # because /key/info is not an LLM API route
         mock_handle_logging.assert_not_called()
@@ -1982,44 +1985,45 @@ async def test_post_call_failure_hook_auth_error_llm_api_route():
     from litellm.caching.caching import DualCache
     from fastapi import HTTPException
     from unittest.mock import Mock, patch, AsyncMock
-    
+
     # Setup
     cache = DualCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
-    
+
     # Mock the _handle_logging_proxy_only_error method
-    with patch.object(proxy_logging, '_handle_logging_proxy_only_error', new_callable=AsyncMock) as mock_handle_logging:
+    with patch.object(
+        proxy_logging, "_handle_logging_proxy_only_error", new_callable=AsyncMock
+    ) as mock_handle_logging:
         # Create an auth error (HTTPException)
         auth_error = HTTPException(
-            status_code=401,
-            detail="Authentication Error: invalid user key"
+            status_code=401, detail="Authentication Error: invalid user key"
         )
-        
+
         # Create request data for /v1/chat/completions route
         request_data = {
             "route": "/v1/chat/completions",
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "test"}],
-            "litellm_call_id": "test_call_id_123"
+            "litellm_call_id": "test_call_id_123",
         }
-        
+
         # Create user API key dict
         user_api_key_dict = UserAPIKeyAuth(
             api_key="test_key",
             user_id="test_user",
             token="test_token",
-            request_route="/v1/chat/completions"
+            request_route="/v1/chat/completions",
         )
-        
+
         # Call post_call_failure_hook with auth error from /v1/chat/completions route
         await proxy_logging.post_call_failure_hook(
             request_data=request_data,
             original_exception=auth_error,
             user_api_key_dict=user_api_key_dict,
             error_type=ProxyErrorTypes.auth_error,
-            route="/v1/chat/completions"
+            route="/v1/chat/completions",
         )
-        
+
         # Assert that _handle_logging_proxy_only_error WAS called
         # because /v1/chat/completions is an LLM API route
         mock_handle_logging.assert_called_once()

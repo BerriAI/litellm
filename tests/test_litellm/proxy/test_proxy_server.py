@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import sys
+from datetime import datetime
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
@@ -20,6 +21,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system-path
 
 import litellm
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
 
 example_embedding_result = {
@@ -122,6 +124,74 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
             call[0] for call in mock_proxy_config.get_credentials.mock_calls
         ]
         assert len(mock_scheduler_calls) > 0
+
+
+def test_update_config_fields_deep_merge_db_wins():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    current_config = {
+        "router_settings": {
+            "routing_mode": "cost_optimized",
+            "model_group_alias": {
+                # Existing alias with older model + different hidden flag
+                "claude-sonnet-4": {
+                    "model": "claude-sonnet-4-20240219",
+                    "hidden": True,
+                },
+                # An extra alias that should remain untouched unless DB overrides it
+                "legacy-sonnet": {
+                    "model": "claude-2.1",
+                    "hidden": True,
+                },
+            },
+        }
+    }
+
+    db_param_value = {
+        "model_group_alias": {
+            # Conflict: DB should win (both 'model' and 'hidden')
+            "claude-sonnet-4": {
+                "model": "claude-sonnet-4-20250514",
+                "hidden": False,
+            },
+            # New alias to be added by the merge
+            "claude-sonnet-latest": {
+                "model": "claude-sonnet-4-20250514",
+                "hidden": True,
+            },
+            # Demonstrate that None values from DB are skipped (preserve existing)
+            "legacy-sonnet": {
+                "hidden": None  # should not clobber current True
+            },
+        }
+    }
+
+    updated = proxy_config._update_config_fields(
+        current_config=current_config,
+        param_name="router_settings",
+        db_param_value=db_param_value,
+    )
+
+    rs = updated["router_settings"]
+    aliases = rs["model_group_alias"]
+
+    # DB wins on conflicts (deep) for existing alias
+    assert aliases["claude-sonnet-4"]["model"] == "claude-sonnet-4-20250514"
+    assert aliases["claude-sonnet-4"]["hidden"] is False
+
+    # New alias introduced by DB is present with its values
+    assert "claude-sonnet-latest" in aliases
+    assert aliases["claude-sonnet-latest"]["model"] == "claude-sonnet-4-20250514"
+    assert aliases["claude-sonnet-latest"]["hidden"] is True
+
+    # None in DB does not overwrite existing values
+    assert aliases["legacy-sonnet"]["model"] == "claude-2.1"
+    assert aliases["legacy-sonnet"]["hidden"] is True
+
+    # Unrelated router_settings keys are preserved
+    assert rs["routing_mode"] == "cost_optimized"
 
 
 # Mock Prisma
@@ -1043,3 +1113,1178 @@ async def test_async_data_generator_midstream_error():
 
     # Verify that post_call_failure_hook was NOT called (since this is not an exception case)
     mock_proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def _has_nested_none_values(obj, path="root"):
+    """
+    Recursively check if an object contains nested None values.
+
+    Args:
+        obj: The object to check
+        path: Current path in the object tree (for debugging)
+
+    Returns:
+        List of paths where None values were found
+    """
+    none_paths = []
+
+    if obj is None:
+        none_paths.append(path)
+    elif isinstance(obj, dict):
+        for key, value in obj.items():
+            none_paths.extend(_has_nested_none_values(value, f"{path}.{key}"))
+    elif isinstance(obj, (list, tuple)):
+        for i, item in enumerate(obj):
+            none_paths.extend(_has_nested_none_values(item, f"{path}[{i}]"))
+    elif hasattr(obj, "__dict__"):
+        # Handle object attributes
+        for key, value in obj.__dict__.items():
+            if not key.startswith("_"):  # Skip private attributes
+                none_paths.extend(_has_nested_none_values(value, f"{path}.{key}"))
+
+    return none_paths
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_result_no_nested_none_values():
+    """
+    Test that chat_completion result doesn't have nested None values when using exclude_none=True
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from fastapi import Request, Response
+    from pydantic import BaseModel
+
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import chat_completion
+
+    # Create a mock ModelResponse with nested None values
+    mock_model_response = litellm.ModelResponse()
+    mock_model_response.id = "test-id"
+    mock_model_response.model = "gpt-3.5-turbo"
+    mock_model_response.object = "chat.completion"
+    mock_model_response.created = 1234567890
+
+    # Create message with None values that should be excluded
+    mock_message = litellm.Message(
+        content="Hello, world!",
+        role="assistant",
+        function_call=None,  # This should be excluded
+        tool_calls=None,  # This should be excluded
+        audio=None,  # This should be excluded
+        reasoning_content=None,  # This should be excluded
+        thinking_blocks=None,  # This should be excluded
+        annotations=None,  # This should be excluded
+    )
+
+    # Create choice with potential None values
+    mock_choice = litellm.Choices(
+        finish_reason="stop",
+        index=0,
+        message=mock_message,
+        logprobs=None,  # This should be excluded when exclude_none=True
+    )
+
+    mock_model_response.choices = [mock_choice]
+    setattr(
+        mock_model_response,
+        "usage",
+        litellm.Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    # Verify the mock has None values before serialization
+    raw_dict = mock_model_response.model_dump()
+    none_paths_before = _has_nested_none_values(raw_dict)
+    assert (
+        len(none_paths_before) > 0
+    ), "Mock should have None values before exclude_none=True"
+
+    # Mock the request processing to return our mock response
+    mock_base_processor = MagicMock()
+    mock_base_processor.base_process_llm_request = AsyncMock(
+        return_value=mock_model_response
+    )
+
+    # Mock other dependencies
+    mock_request = MagicMock(spec=Request)
+    mock_response = MagicMock(spec=Response)
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+
+    with patch(
+        "litellm.proxy.proxy_server._read_request_body",
+        return_value={"model": "gpt-3.5-turbo", "messages": []},
+    ), patch(
+        "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing",
+        return_value=mock_base_processor,
+    ):
+
+        # Call the chat_completion function
+        result = await chat_completion(
+            request=mock_request,
+            fastapi_response=mock_response,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    # Verify the result is a dict (since isinstance(result, BaseModel) was True)
+    assert isinstance(result, dict), f"Expected dict result, got {type(result)}"
+
+    # Check that there are no nested None values in the result
+    none_paths_after = _has_nested_none_values(result)
+    assert (
+        len(none_paths_after) == 0
+    ), f"Result should not contain nested None values. Found None at: {none_paths_after}"
+
+    # Verify essential fields are present
+    assert "id" in result
+    assert "model" in result
+    assert "object" in result
+    assert "created" in result
+    assert "choices" in result
+    assert "usage" in result
+
+    # Verify that the choices contain the expected message content
+    assert len(result["choices"]) == 1
+    assert result["choices"][0]["message"]["content"] == "Hello, world!"
+    assert result["choices"][0]["message"]["role"] == "assistant"
+
+    # Verify that None fields were excluded (should not be present in the dict)
+    message = result["choices"][0]["message"]
+    excluded_fields = [
+        "function_call",
+        "tool_calls",
+        "audio",
+        "reasoning_content",
+        "thinking_blocks",
+        "annotations",
+    ]
+    for field in excluded_fields:
+        assert (
+            field not in message
+        ), f"Field '{field}' should be excluded when it's None"
+
+
+# ============================================================================
+# Price Data Reload Tests
+# ============================================================================
+
+
+class TestPriceDataReloadAPI:
+    """Test cases for price data reload API endpoints"""
+
+    @pytest.fixture
+    def client_with_auth(self):
+        """Create a test client with authentication"""
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.proxy_server import cleanup_router_config_variables
+
+        cleanup_router_config_variables()
+        filepath = os.path.dirname(os.path.abspath(__file__))
+        config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        asyncio.run(initialize(config=config_fp, debug=True))
+
+        # Mock admin user authentication
+        mock_auth = MagicMock()
+        mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+
+        return TestClient(app)
+
+    def test_reload_model_cost_map_admin_access(self, client_with_auth):
+        """Test that admin users can access the reload endpoint"""
+        with patch(
+            "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
+        ) as mock_get_map:
+            mock_get_map.return_value = {
+                "gpt-3.5-turbo": {"input_cost_per_token": 0.001}
+            }
+            # Mock the database connection
+            with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+                response = client_with_auth.post("/reload/model_cost_map")
+
+                assert response.status_code == 200
+                data = response.json()
+                assert data["status"] == "success"
+                assert "message" in data
+                assert "timestamp" in data
+                assert "models_count" in data
+                # The new implementation immediately reloads and returns the count
+                assert (
+                    "Price data reloaded successfully! 1 models updated."
+                    in data["message"]
+                )
+                assert data["models_count"] == 1
+
+    def test_reload_model_cost_map_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot access the reload endpoint"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+
+        response = client_with_auth.post("/reload/model_cost_map")
+
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+
+    def test_get_model_cost_map_admin_access(self, client_with_auth):
+        """Test that admin users can access the get model cost map endpoint"""
+        with patch(
+            "litellm.model_cost", {"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
+        ):
+            response = client_with_auth.get("/get/litellm_model_cost_map")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert "gpt-3.5-turbo" in data
+
+    def test_get_model_cost_map_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot access the get model cost map endpoint"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+
+        response = client_with_auth.get("/get/litellm_model_cost_map")
+
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+
+    def test_reload_model_cost_map_error_handling(self, client_with_auth):
+        """Test error handling in the reload endpoint"""
+        with patch(
+            "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
+        ) as mock_get_map:
+            mock_get_map.side_effect = Exception("Network error")
+
+            # Mock the database connection
+            with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+                response = client_with_auth.post("/reload/model_cost_map")
+
+                assert (
+                    response.status_code == 500
+                )  # The new implementation immediately reloads and fails on error
+                data = response.json()
+                assert "Failed to reload model cost map" in data["detail"]
+
+    def test_schedule_model_cost_map_reload_admin_access(self, client_with_auth):
+        """Test that admin users can schedule periodic reload"""
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            # Mock database upsert
+            mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+            response = client_with_auth.post("/schedule/model_cost_map_reload?hours=6")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert data["interval_hours"] == 6
+            assert "message" in data
+            assert "timestamp" in data
+
+    def test_schedule_model_cost_map_reload_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot schedule periodic reload"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+
+        response = client_with_auth.post("/schedule/model_cost_map_reload?hours=6")
+
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+
+    def test_schedule_model_cost_map_reload_invalid_hours(self, client_with_auth):
+        """Test that invalid hours parameter is rejected"""
+        response = client_with_auth.post("/schedule/model_cost_map_reload?hours=0")
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "Hours must be greater than 0" in data["detail"]
+
+    def test_cancel_model_cost_map_reload_admin_access(self, client_with_auth):
+        """Test that admin users can cancel periodic reload"""
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            # Mock database delete
+            mock_prisma.db.litellm_config.delete = AsyncMock(return_value=None)
+
+            response = client_with_auth.delete("/schedule/model_cost_map_reload")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert "message" in data
+            assert "timestamp" in data
+
+    def test_cancel_model_cost_map_reload_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot cancel periodic reload"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+
+        response = client_with_auth.delete("/schedule/model_cost_map_reload")
+
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+
+    def test_get_model_cost_map_reload_status_admin_access(self, client_with_auth):
+        """Test that admin users can get reload status"""
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            # Mock database config record
+            mock_config = MagicMock()
+            mock_config.param_value = {"interval_hours": 6, "force_reload": False}
+            mock_prisma.db.litellm_config.find_unique = AsyncMock(
+                return_value=mock_config
+            )
+
+            # Mock the last reload time and current time
+            with patch(
+                "litellm.proxy.proxy_server.last_model_cost_map_reload",
+                "2024-01-01T06:00:00",
+            ):
+                with patch("litellm.proxy.proxy_server.datetime") as mock_datetime:
+                    # Mock current time to be 1 hour after last reload
+                    mock_datetime.utcnow.return_value = datetime(2024, 1, 1, 7, 0, 0)
+                    mock_datetime.fromisoformat = datetime.fromisoformat
+
+                    response = client_with_auth.get(
+                        "/schedule/model_cost_map_reload/status"
+                    )
+
+                    assert response.status_code == 200
+                    data = response.json()
+                    assert data["scheduled"] == True
+                    assert data["interval_hours"] == 6
+                    assert data["last_run"] == "2024-01-01T06:00:00"
+                    assert data["next_run"] == "2024-01-01T12:00:00"
+
+    def test_get_model_cost_map_reload_status_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot get reload status"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+
+        response = client_with_auth.get("/schedule/model_cost_map_reload/status")
+
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+
+    def test_get_model_cost_map_reload_status_no_config(self, client_with_auth):
+        """Test that status returns not scheduled when no config exists"""
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+
+            response = client_with_auth.get("/schedule/model_cost_map_reload/status")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["scheduled"] == False
+            assert data["interval_hours"] == None
+            assert data["last_run"] == None
+            assert data["next_run"] == None
+
+    def test_get_model_cost_map_reload_status_no_interval(self, client_with_auth):
+        """Test that status returns not scheduled when no interval is configured"""
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            # Mock config with no interval
+            mock_config = MagicMock()
+            mock_config.param_value = {"interval_hours": None, "force_reload": False}
+            mock_prisma.db.litellm_config.find_unique = AsyncMock(
+                return_value=mock_config
+            )
+
+            response = client_with_auth.get("/schedule/model_cost_map_reload/status")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["scheduled"] == False
+            assert data["interval_hours"] == None
+            assert data["last_run"] == None
+            assert data["next_run"] == None
+
+
+class TestPriceDataReloadIntegration:
+    """Integration tests for the complete price data reload feature"""
+
+    @pytest.fixture
+    def client_with_auth(self):
+        """Create a test client with authentication"""
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.proxy_server import cleanup_router_config_variables
+
+        cleanup_router_config_variables()
+        filepath = os.path.dirname(os.path.abspath(__file__))
+        config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        asyncio.run(initialize(config=config_fp, debug=True))
+
+        # Mock admin user authentication
+        mock_auth = MagicMock()
+        mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+
+        return TestClient(app)
+
+    def test_complete_reload_flow(self, client_with_auth):
+        """Test the complete reload flow from API to model cost update"""
+        # Mock the model cost map
+        mock_cost_map = {
+            "gpt-3.5-turbo": {
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+            },
+            "gpt-4": {"input_cost_per_token": 0.03, "output_cost_per_token": 0.06},
+        }
+
+        with patch(
+            "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
+        ) as mock_get_map:
+            mock_get_map.return_value = mock_cost_map
+
+            # Mock the database connection
+            with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+                # Test reload endpoint
+                response = client_with_auth.post("/reload/model_cost_map")
+                assert response.status_code == 200
+
+                # Test get endpoint
+                response = client_with_auth.get("/get/litellm_model_cost_map")
+                assert response.status_code == 200
+
+    def test_distributed_reload_check_function(self):
+        """Test the _check_and_reload_model_cost_map function"""
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+
+        # Mock prisma client
+        mock_prisma = MagicMock()
+
+        # Test case 1: No config in database
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+
+        # Should return early without reloading
+        asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+        # Test case 2: Config with interval but not time to reload
+        mock_config = MagicMock()
+        mock_config.param_value = {"interval_hours": 6, "force_reload": False}
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+
+        # Mock current time and last reload time
+        with patch(
+            "litellm.proxy.proxy_server.last_model_cost_map_reload",
+            "2024-01-01T06:00:00",
+        ):
+            with patch("litellm.proxy.proxy_server.datetime") as mock_datetime:
+                mock_datetime.utcnow.return_value = datetime(
+                    2024, 1, 1, 7, 0, 0
+                )  # 1 hour later
+
+                # Should not reload (only 1 hour passed, need 6)
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+        # Test case 3: Config with force reload
+        mock_config.param_value = {"interval_hours": 6, "force_reload": True}
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+        with patch(
+            "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
+        ) as mock_get_map:
+            mock_get_map.return_value = {
+                "gpt-3.5-turbo": {"input_cost_per_token": 0.001}
+            }
+
+            # Should reload due to force flag
+            asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+
+            # Verify force_reload was reset to False
+            mock_prisma.db.litellm_config.upsert.assert_called()
+            call_args = mock_prisma.db.litellm_config.upsert.call_args
+            # The param_value is now a JSON string, so we need to parse it
+            param_value_json = call_args[1]["data"]["update"]["param_value"]
+            param_value_dict = json.loads(param_value_json)
+            assert param_value_dict["force_reload"] == False
+
+    def test_config_file_parsing(self):
+        """Test parsing of config file with reload settings"""
+        config_content = """
+general_settings:
+  master_key: sk-1234
+  model_cost_map_reload_interval: 21600
+
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+"""
+
+        # Parse the config
+        config = yaml.safe_load(config_content)
+
+        # Verify the reload setting is present
+        assert "general_settings" in config
+        assert "model_cost_map_reload_interval" in config["general_settings"]
+        assert config["general_settings"]["model_cost_map_reload_interval"] == 21600
+
+        # Verify models are present
+        assert "model_list" in config
+        assert len(config["model_list"]) == 2
+
+    def test_database_config_storage(self):
+        """Test that configuration is properly stored in database"""
+        # Mock prisma client
+        mock_prisma = MagicMock()
+
+        # Test the database upsert call that would be made by the schedule endpoint
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+        # Simulate the database call that the schedule endpoint would make
+        asyncio.run(
+            mock_prisma.db.litellm_config.upsert(
+                where={"param_name": "model_cost_map_reload_config"},
+                data={
+                    "create": {
+                        "param_name": "model_cost_map_reload_config",
+                        "param_value": {"interval_hours": 6, "force_reload": False},
+                    },
+                    "update": {
+                        "param_value": {"interval_hours": 6, "force_reload": False}
+                    },
+                },
+            )
+        )
+
+        # Verify database upsert was called with correct data
+        mock_prisma.db.litellm_config.upsert.assert_called_once()
+        call_args = mock_prisma.db.litellm_config.upsert.call_args
+        assert call_args[1]["where"]["param_name"] == "model_cost_map_reload_config"
+        assert call_args[1]["data"]["create"]["param_value"]["interval_hours"] == 6
+        assert call_args[1]["data"]["create"]["param_value"]["force_reload"] == False
+
+    def test_manual_reload_force_flag(self):
+        """Test that manual reload sets force flag correctly"""
+        # Mock prisma client
+        mock_prisma = MagicMock()
+
+        # Test the database upsert call that would be made by the manual reload endpoint
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+        # Simulate the database call that the manual reload endpoint would make
+        asyncio.run(
+            mock_prisma.db.litellm_config.upsert(
+                where={"param_name": "model_cost_map_reload_config"},
+                data={
+                    "create": {
+                        "param_name": "model_cost_map_reload_config",
+                        "param_value": {"interval_hours": None, "force_reload": True},
+                    },
+                    "update": {"param_value": {"force_reload": True}},
+                },
+            )
+        )
+
+        # Verify force_reload flag was set
+        mock_prisma.db.litellm_config.upsert.assert_called_once()
+        call_args = mock_prisma.db.litellm_config.upsert.call_args
+        assert call_args[1]["data"]["update"]["param_value"]["force_reload"] == True
+
+
+@pytest.mark.asyncio
+async def test_add_router_settings_from_db_config_merge_logic():
+    """
+    Test the _add_router_settings_from_db_config method's merge logic.
+
+    This tests how router settings from config file and database are combined,
+    including scenarios where nested dictionaries should be properly merged.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    # Create ProxyConfig instance
+    proxy_config = ProxyConfig()
+
+    # Mock router
+    mock_router = MagicMock()
+    mock_router.update_settings = MagicMock()
+
+    # Test Case 1: Both config and DB settings exist - should merge them
+    config_data = {
+        "router_settings": {
+            "routing_strategy": "usage-based-routing",
+            "model_group_alias": {"gpt-4": "openai-gpt-4"},
+            "enable_pre_call_checks": True,
+            "timeout": 30,
+            "nested_config": {"setting1": "config_value1", "setting2": "config_value2"},
+        }
+    }
+
+    # Mock database config record
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {
+        "routing_strategy": "least-busy",  # This should override config value
+        "retry_delay": 2,  # This is new, should be added
+        "nested_config": {
+            "setting2": "db_value2",  # This should override config value
+            "setting3": "db_value3",  # This is new, should be added
+        },
+    }
+
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+        return_value=mock_db_config
+    )
+
+    # Call the method under test
+    await proxy_config._add_router_settings_from_db_config(
+        config_data=config_data,
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    # Verify find_first was called with correct parameters
+    mock_prisma_client.db.litellm_config.find_first.assert_called_once_with(
+        where={"param_name": "router_settings"}
+    )
+
+    # Verify update_settings was called
+    mock_router.update_settings.assert_called_once()
+
+    # Get the actual settings passed to update_settings
+    call_args = mock_router.update_settings.call_args
+    combined_settings = call_args[1]  # kwargs
+
+    # Verify the merge results
+    # DB values should override config values
+    assert combined_settings["routing_strategy"] == "least-busy"
+
+    # Config-only values should be preserved
+    assert combined_settings["model_group_alias"] == {"gpt-4": "openai-gpt-4"}
+    assert combined_settings["enable_pre_call_checks"] == True
+    assert combined_settings["timeout"] == 30
+
+    # DB-only values should be added
+    assert combined_settings["retry_delay"] == 2
+
+    # Nested dictionaries should be merged (but this is shallow merge)
+    expected_nested = {
+        "setting1": "config_value1",
+        "setting2": "db_value2",
+        "setting3": "db_value3",
+    }
+    assert combined_settings["nested_config"] == expected_nested
+
+
+@pytest.mark.asyncio
+async def test_add_router_settings_from_db_config_edge_cases():
+    """
+    Test edge cases for _add_router_settings_from_db_config method.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_router = MagicMock()
+    mock_router.update_settings = MagicMock()
+
+    # Test Case 1: No router provided
+    await proxy_config._add_router_settings_from_db_config(
+        config_data={"router_settings": {"test": "value"}},
+        llm_router=None,
+        prisma_client=MagicMock(),
+    )
+    # Should not call anything when router is None
+    mock_router.update_settings.assert_not_called()
+
+    # Test Case 2: No prisma client provided
+    await proxy_config._add_router_settings_from_db_config(
+        config_data={"router_settings": {"test": "value"}},
+        llm_router=mock_router,
+        prisma_client=None,
+    )
+    # Should not call anything when prisma_client is None
+    mock_router.update_settings.assert_not_called()
+
+    # Test Case 3: DB returns None (no router_settings in DB)
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+
+    config_data = {"router_settings": {"routing_strategy": "usage-based"}}
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data=config_data,
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    # Should use only config settings
+    mock_router.update_settings.assert_called_once_with(routing_strategy="usage-based")
+    mock_router.reset_mock()
+
+    # Test Case 4: Config has no router_settings
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {"db_setting": "db_value"}
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+        return_value=mock_db_config
+    )
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data={},  # No router_settings in config
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    # Should use only DB settings
+    mock_router.update_settings.assert_called_once_with(db_setting="db_value")
+    mock_router.reset_mock()
+
+    # Test Case 5: Both config and DB router_settings are None/empty
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data={}, llm_router=mock_router, prisma_client=mock_prisma_client
+    )
+
+    # Should not call update_settings when no settings exist
+    mock_router.update_settings.assert_not_called()
+
+    # Test Case 6: DB config exists but param_value is not a dict
+    mock_db_config_invalid = MagicMock()
+    mock_db_config_invalid.param_value = "not_a_dict"
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+        return_value=mock_db_config_invalid
+    )
+
+    config_data = {"router_settings": {"config_setting": "config_value"}}
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data=config_data,
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    # Should use only config settings when DB param_value is invalid
+    mock_router.update_settings.assert_called_once_with(config_setting="config_value")
+
+
+@pytest.mark.asyncio
+async def test_add_router_settings_shallow_merge_behavior():
+    """
+    Test that the merge behavior is shallow (nested dicts get replaced, not merged).
+    This documents the current behavior using _update_dictionary.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_router = MagicMock()
+    mock_router.update_settings = MagicMock()
+
+    # Config with nested dictionary
+    config_data = {
+        "router_settings": {
+            "nested_setting": {
+                "key1": "config_value1",
+                "key2": "config_value2",
+                "key3": "config_value3",
+            },
+            "top_level": "config_top",
+        }
+    }
+
+    # DB config that partially overlaps the nested dictionary
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {
+        "nested_setting": {
+            "key2": "db_value2",  # Override existing key
+            "key4": "db_value4",  # Add new key
+            # Note: key1 and key3 from config will be lost due to shallow merge
+        },
+        "top_level": "db_top",  # Override top level
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+        return_value=mock_db_config
+    )
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data=config_data,
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    # Get the merged settings
+    call_args = mock_router.update_settings.call_args
+    merged_settings = call_args[1]
+
+    # Verify shallow merge behavior:
+    # The entire nested_setting dict from config is replaced by the DB version
+    expected_nested = {
+        "key1": "config_value1",
+        "key3": "config_value3",
+        "key2": "db_value2",
+        "key4": "db_value4",
+    }
+
+    assert merged_settings["nested_setting"] == expected_nested
+    assert merged_settings["top_level"] == "db_top"
+
+
+@pytest.mark.asyncio
+async def test_model_info_v1_oci_secrets_not_leaked():
+    """
+    Test that model_info_v1 endpoint properly masks OCI sensitive parameters and does not leak secrets.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import model_info_v1
+
+    # Mock user authentication
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "test-key"
+    mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.models = ["oci-grok-test"]
+    
+    # Mock model data with OCI sensitive information
+    mock_model_data = {
+        "model_name": "oci-grok-test",
+        "litellm_params": {
+            "model": "oci/xai.grok-4",
+            "oci_key": "ocid1.api_key.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "oci_region": "us-phoenix-1",
+            "oci_user": "ocid1.user.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "oci_fingerprint": "aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:77:88:99:00",
+            "oci_tenancy": "ocid1.tenancy.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "oci_key_file": "/path/to/oci_api_key.pem",
+            "oci_compartment_id": "ocid1.compartment.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "drop_params": True
+        },
+        "model_info": {
+            "mode": "completion",
+            "id": "test-model-id"
+        }
+    }
+    
+    # Mock the llm_router to return our test data
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = ["oci-grok-test"]
+    mock_router.get_model_access_groups.return_value = {}
+    mock_router.get_model_list.return_value = [mock_model_data]
+    
+    # Mock global variables
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router), \
+         patch("litellm.proxy.proxy_server.llm_model_list", [mock_model_data]), \
+         patch("litellm.proxy.proxy_server.general_settings", {"infer_model_from_keys": False}), \
+         patch("litellm.proxy.proxy_server.user_model", None):
+        
+        # Call the model_info_v1 endpoint
+        result = await model_info_v1(
+            user_api_key_dict=mock_user_api_key_dict,
+            litellm_model_id=None
+        )
+        
+        # Verify the result structure
+        assert "data" in result
+        assert len(result["data"]) == 1
+        
+        model_info = result["data"][0]
+        litellm_params = model_info["litellm_params"]
+        
+        # Verify that sensitive OCI fields are masked
+        assert "****" in litellm_params["oci_key"], "oci_key should be masked"
+        assert "****" in litellm_params["oci_fingerprint"], "oci_fingerprint should be masked"
+        assert "****" in litellm_params["oci_tenancy"], "oci_tenancy should be masked"
+        assert "****" in litellm_params["oci_key_file"], "oci_key_file should be masked"
+        
+        # Verify that non-sensitive fields are NOT masked
+        assert litellm_params["model"] == "oci/xai.grok-4", "model field should not be masked"
+        assert litellm_params["oci_region"] == "us-phoenix-1", "oci_region should not be masked"
+        assert litellm_params["drop_params"] is True, "drop_params should not be masked"
+        
+        # Verify the model field specifically is not masked (this was the original issue)
+        assert "****" not in litellm_params["model"], "model field should never be masked"
+        assert litellm_params["model"].startswith("oci/"), "model should retain its full value"
+        
+        # Verify that actual secret values are not present in the response
+        result_str = str(result)
+        assert "ocid1.api_key.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk" not in result_str
+        assert "aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:77:88:99:00" not in result_str
+        assert "ocid1.tenancy.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk" not in result_str
+        assert "/path/to/oci_api_key.pem" not in result_str
+
+
+def test_add_callback_from_db_to_in_memory_litellm_callbacks():
+    """
+    Test that _add_callback_from_db_to_in_memory_litellm_callbacks correctly adds callbacks
+    for success, failure, and combined event types.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+    
+    proxy_config = ProxyConfig()
+    
+    # Mock the callback manager
+    mock_callback_manager = MagicMock()
+    
+    with patch("litellm.proxy.proxy_server.litellm") as mock_litellm:
+        # Set up mock litellm attributes
+        mock_litellm._known_custom_logger_compatible_callbacks = []
+        mock_litellm.logging_callback_manager = mock_callback_manager
+        
+        # Test Case 1: Add success callback
+        mock_success_callbacks = []
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="prometheus",
+            event_types=["success"],
+            existing_callbacks=mock_success_callbacks,
+        )
+        mock_callback_manager.add_litellm_success_callback.assert_called_once_with("prometheus")
+        mock_callback_manager.reset_mock()
+        
+        # Test Case 2: Add failure callback
+        mock_failure_callbacks = []
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="langfuse",
+            event_types=["failure"],
+            existing_callbacks=mock_failure_callbacks,
+        )
+        mock_callback_manager.add_litellm_failure_callback.assert_called_once_with("langfuse")
+        mock_callback_manager.reset_mock()
+        
+        # Test Case 3: Add callback for both success and failure
+        mock_callbacks = []
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="s3",
+            event_types=["success", "failure"],
+            existing_callbacks=mock_callbacks,
+        )
+        mock_callback_manager.add_litellm_callback.assert_called_once_with("s3")
+        mock_callback_manager.reset_mock()
+        
+        # Test Case 4: Don't add callback if it already exists
+        existing_callbacks_with_item = ["prometheus"]
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="prometheus",
+            event_types=["success"],
+            existing_callbacks=existing_callbacks_with_item,
+        )
+        mock_callback_manager.add_litellm_success_callback.assert_not_called()
+
+
+def test_should_load_db_object_with_supported_db_objects():
+    """
+    Test _should_load_db_object method with supported_db_objects configuration.
+    
+    Verifies that when supported_db_objects is set, only specified object types
+    are loaded from the database.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Test Case 1: supported_db_objects not set - all objects should be loaded
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+
+    # Test Case 2: supported_db_objects set to only load MCP
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": ["mcp"]},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is False
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is False
+        assert proxy_config._should_load_db_object(object_type="prompts") is False
+
+    # Test Case 3: supported_db_objects set to load multiple types
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": ["mcp", "guardrails", "vector_stores"]},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+        assert proxy_config._should_load_db_object(object_type="prompts") is False
+
+    # Test Case 4: supported_db_objects is not a list (should default to loading all)
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": "invalid_type"},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+
+    # Test Case 5: supported_db_objects is an empty list (nothing should be loaded)
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": []},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is False
+        assert proxy_config._should_load_db_object(object_type="guardrails") is False
+
+    # Test Case 6: Test all available object types
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "supported_db_objects": [
+                "models",
+                "mcp",
+                "guardrails",
+                "vector_stores",
+                "pass_through_endpoints",
+                "prompts",
+                "model_cost_map",
+            ]
+        },
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+        assert (
+            proxy_config._should_load_db_object(object_type="pass_through_endpoints")
+            is True
+        )
+        assert proxy_config._should_load_db_object(object_type="prompts") is True
+        assert proxy_config._should_load_db_object(object_type="model_cost_map") is True
+
+
+@pytest.mark.asyncio
+async def test_tag_cache_update_called():
+    """
+    Test that update_cache updates tag cache when tags are provided.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    cache = DualCache()
+
+    setattr(
+        litellm.proxy.proxy_server,
+        "user_api_key_cache",
+        cache,
+    )
+
+    mock_tag_obj = {
+        "tag_name": "test-tag",
+        "spend": 10.0,
+    }
+
+    with patch.object(cache, "async_get_cache", new=AsyncMock(return_value=mock_tag_obj)) as mock_get_cache:
+        with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+            await litellm.proxy.proxy_server.update_cache(
+                token=None,
+                user_id=None,
+                end_user_id=None,
+                team_id=None,
+                response_cost=5.0,
+                parent_otel_span=None,
+                tags=["test-tag"],
+            )
+
+            await asyncio.sleep(0.1)
+
+            mock_get_cache.assert_awaited_once_with(key="tag:test-tag")
+            mock_set_cache.assert_awaited_once()
+
+            call_args = mock_set_cache.call_args
+            cache_list = call_args.kwargs["cache_list"]
+
+            assert len(cache_list) == 1
+            cache_key, cache_value = cache_list[0]
+            assert cache_key == "tag:test-tag"
+            assert cache_value["spend"] == 15.0
+
+
+@pytest.mark.asyncio
+async def test_tag_cache_update_multiple_tags():
+    """
+    Test that multiple tags are updated in cache.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    cache = DualCache()
+
+    setattr(
+        litellm.proxy.proxy_server,
+        "user_api_key_cache",
+        cache,
+    )
+
+    mock_tag1_obj = {"tag_name": "tag1", "spend": 10.0}
+    mock_tag2_obj = {"tag_name": "tag2", "spend": 20.0}
+
+    async def mock_get_cache_side_effect(key):
+        if key == "tag:tag1":
+            return mock_tag1_obj
+        elif key == "tag:tag2":
+            return mock_tag2_obj
+        return None
+
+    with patch.object(cache, "async_get_cache", new=AsyncMock(side_effect=mock_get_cache_side_effect)) as mock_get_cache:
+        with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+            await litellm.proxy.proxy_server.update_cache(
+                token=None,
+                user_id=None,
+                end_user_id=None,
+                team_id=None,
+                response_cost=5.0,
+                parent_otel_span=None,
+                tags=["tag1", "tag2"],
+            )
+
+            await asyncio.sleep(0.1)
+
+            assert mock_get_cache.call_count == 2
+            mock_set_cache.assert_awaited_once()
+
+            call_args = mock_set_cache.call_args
+            cache_list = call_args.kwargs["cache_list"]
+
+            assert len(cache_list) == 2
+
+            tag_updates = {cache_key: cache_value for cache_key, cache_value in cache_list}
+            assert "tag:tag1" in tag_updates
+            assert "tag:tag2" in tag_updates
+            assert tag_updates["tag:tag1"]["spend"] == 15.0
+            assert tag_updates["tag:tag2"]["spend"] == 25.0
+
+
