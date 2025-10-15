@@ -106,7 +106,7 @@ This release allow you to group requests to LiteLLM proxy into a session. If you
     1. Added support for max_completion_tokens parameter [Get Started](https://docs.litellm.ai/docs/providers/sagemaker), [PR](https://github.com/BerriAI/litellm/pull/10300)
 - **Responses API**
     1. Added support for GET and DELETE operations - `/v1/responses/{response_id}` [Get Started](../../docs/response_api)
-    2. Added session management support for non-OpenAI models [PR](https://github.com/BerriAI/litellm/pull/10321)
+    2. Added session management support for all supported models [PR](https://github.com/BerriAI/litellm/pull/10321)
     3. Added routing affinity to maintain model consistency within sessions [Get Started](https://docs.litellm.ai/docs/response_api#load-balancing-with-routing-affinity), [PR](https://github.com/BerriAI/litellm/pull/10193)
 
 

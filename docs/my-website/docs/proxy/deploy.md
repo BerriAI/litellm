@@ -12,10 +12,8 @@ To start using Litellm, run the following commands in a shell:
 
 ```bash
 # Get the code
-git clone https://github.com/BerriAI/litellm
-
-# Go to folder
-cd litellm
+curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/prometheus.yml
 
 # Add the master key - you can change this after setup
 echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
@@ -29,7 +27,7 @@ echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
 source .env
 
 # Start
-docker-compose up
+docker compose up
 ```
 
 
@@ -127,6 +125,8 @@ CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
 
 Follow these instructions to build a docker container from the litellm pip package. If your company has a strict requirement around security / building images you can follow these steps.
 
+**Note:** You'll need to copy the `schema.prisma` file from the [litellm repository](https://github.com/BerriAI/litellm/blob/main/schema.prisma) to your build directory alongside the Dockerfile and requirements.txt.
+
 Dockerfile 
 
 ```shell
@@ -148,6 +148,12 @@ RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip
 COPY requirements.txt .
 RUN --mount=type=cache,target=${HOME}/.cache/pip \
     ${HOME}/venv/bin/pip install -r requirements.txt
+
+# Copy Prisma schema file
+COPY schema.prisma .
+
+# Generate prisma client
+RUN prisma generate
 
 EXPOSE 4000/tcp
 
@@ -709,6 +715,25 @@ docker run ghcr.io/berriai/litellm:main-stable
 ```
 
 
+### Restart Workers After N Requests
+
+Use this to mitigate memory growth by recycling workers after a fixed number of requests. When set, each worker restarts after completing the specified number of requests. Defaults to disabled when unset.
+
+Usage Examples:
+
+```shell showLineNumbers title="docker run (CLI flag)"
+docker run ghcr.io/berriai/litellm:main-stable \
+    --max_requests_before_restart 10000
+```
+
+Or set via environment variable:
+
+```shell showLineNumbers title="Environment Variable"
+export MAX_REQUESTS_BEFORE_RESTART=10000
+docker run ghcr.io/berriai/litellm:main-stable
+```
+
+
 ### 5. config.yaml file on s3, GCS Bucket Object/url
 
 Use this if you cannot mount a config file on your deployment service (example - AWS Fargate, Railway etc)
@@ -763,6 +788,30 @@ docker run --name litellm-proxy \
 ## Platform-specific Guide
 
 <Tabs>
+<TabItem value="AWS ECS" label="AWS ECS - Elastic Container Service">
+
+### Terraform-based ECS Deployment
+
+LiteLLM maintains a dedicated Terraform tutorial for deploying the proxy on ECS. Follow the step-by-step guide in the [litellm-ecs-deployment repository](https://github.com/BerriAI/litellm-ecs-deployment) to provision the required ECS services, task definitions, and supporting AWS resources.
+
+1. Clone the tutorial repository to review the Terraform modules and variables.
+  ```bash
+  git clone https://github.com/BerriAI/litellm-ecs-deployment.git
+  cd litellm-ecs-deployment
+  ```
+
+2. Initialize and validate the Terraform project before applying it to your chosen workspace/account.
+  ```bash
+  terraform init
+  terraform plan
+  terraform apply
+  ```
+
+3. Once `terraform apply` completes, do `./build.sh` to push the repository on ECR and update the ECS cluster. Use that endpoint (port `4000` by default) for API requests to your LiteLLM proxy.
+
+
+</TabItem>
+
 <TabItem value="AWS EKS" label="AWS EKS - Kubernetes">
 
 ### Kubernetes (AWS EKS)
@@ -1002,5 +1051,13 @@ User-agent: *
 Disallow: /
 ```
 
+## Deployment FAQ
+
+**Q: Is Postgres the only supported database, or do you support other ones (like Mongo)?**
+
+A: We explored MySQL but that was hard to maintain and led to bugs for customers. Currently, PostgreSQL is our primary supported database for production deployments.
 
 
+**Q: If there is Postgres downtime, how does LiteLLM react? Does it fail-open or is there API downtime?**
+
+A: You can gracefully handle DB unavailability if it's on your VPC. See our production guide for more details: [Gracefully Handle DB Unavailability](https://docs.litellm.ai/docs/proxy/prod#6-if-running-litellm-on-vpc-gracefully-handle-db-unavailability)

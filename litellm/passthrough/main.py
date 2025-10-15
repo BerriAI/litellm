@@ -24,6 +24,7 @@ import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.passthrough.utils import CommonUtils
 from litellm.utils import client
 
 base_llm_http_handler = BaseLLMHTTPHandler()
@@ -241,6 +242,14 @@ def llm_passthrough_route(
         request_query_params=request_query_params,
         litellm_params=litellm_params_dict,
     )
+
+    # [TODO: Refactor to bedrockpassthroughconfig] need to encode the id of application-inference-profile for bedrock
+    if custom_llm_provider == "bedrock" and "application-inference-profile" in endpoint:
+        encoded_url_str = CommonUtils.encode_bedrock_runtime_modelid_arn(
+            str(updated_url)
+        )
+        updated_url = httpx.URL(encoded_url_str)
+
     # Add or update query parameters
     provider_api_key = provider_config.get_api_key(api_key)
 

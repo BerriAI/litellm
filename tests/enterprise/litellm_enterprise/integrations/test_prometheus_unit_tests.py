@@ -1,6 +1,6 @@
 from unittest.mock import patch
-import pytest_asyncio
 
+import pytest_asyncio
 from prometheus_client import REGISTRY
 
 try:
@@ -8,7 +8,9 @@ try:
 except Exception:
     PrometheusLogger = None
 
-import sys, asyncio
+import asyncio
+import sys
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,19 +19,17 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system-path
-import pytest
-from litellm import Router
-from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
-
-from litellm.types.utils import GenericBudgetConfigType, BudgetConfig
-from litellm.caching.caching import DualCache
-import litellm
 from unittest.mock import MagicMock, patch
+
+import pytest
+
+import litellm
+from litellm import Router
+from litellm.caching.caching import DualCache
+from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.types.router import ModelInfo
-
-
-
+from litellm.types.utils import BudgetConfig, GenericBudgetConfigType
 
 
 def compare_metrics(func):
@@ -54,14 +54,19 @@ def compare_metrics(func):
     return wrapper
 
 
-@pytest_asyncio.fixture(scope="function")
-async def prometheus_logger():
+@pytest.fixture(scope="function")
+def prometheus_logger():
     collectors = list(REGISTRY._collector_to_names.keys())
     for collector in collectors:
         REGISTRY.unregister(collector)
 
     with patch("litellm.proxy.proxy_server.premium_user", True):
-        yield PrometheusLogger()
+        logger = PrometheusLogger()
+        # Add the missing async_logging_hook method
+        async def async_logging_hook(kwargs, result, call_type):
+            return kwargs, result
+        logger.async_logging_hook = async_logging_hook
+        return logger
 
 
 @pytest.mark.asyncio
@@ -79,6 +84,7 @@ async def test_async_prometheus_success_logging_with_callbacks(prometheus_logger
         )
 
     diff = await op()
+    await asyncio.sleep(2)
     assert diff["litellm_requests_metric_total"] == 1.0
 
 
@@ -129,8 +135,9 @@ async def test_prometheus_metric_tracking():
     Test that the Prometheus metric for provider budget is tracked correctly
     """
     try:
-        from litellm_enterprise.integrations.prometheus import PrometheusLogger
         from unittest.mock import MagicMock
+
+        from litellm_enterprise.integrations.prometheus import PrometheusLogger
     except Exception:
         PrometheusLogger = None
     if PrometheusLogger is None:
@@ -159,7 +166,7 @@ async def test_prometheus_metric_tracking():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),

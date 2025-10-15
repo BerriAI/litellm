@@ -8,4 +8,5 @@ export interface UserInfo {
   created_at: string;
   updated_at: string;
   sso_user_id: string | null;
+  budget_duration: string | null;
 }

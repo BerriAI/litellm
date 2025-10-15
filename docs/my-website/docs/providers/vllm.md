@@ -8,9 +8,9 @@ LiteLLM supports all models on VLLM.
 | Property | Details |
 |-------|-------|
 | Description | vLLM is a fast and easy-to-use library for LLM inference and serving. [Docs](https://docs.vllm.ai/en/latest/index.html) |
-| Provider Route on LiteLLM | `hosted_vllm/` (for OpenAI compatible server), `vllm/` (for vLLM sdk usage) |
+| Provider Route on LiteLLM | `hosted_vllm/` (for OpenAI compatible server), `vllm/` ([DEPRECATED] for vLLM sdk usage) |
 | Provider Doc | [vLLM ↗](https://docs.vllm.ai/en/latest/index.html) |
-| Supported Endpoints | `/chat/completions`, `/embeddings`, `/completions`, `/rerank` |
+| Supported Endpoints | `/chat/completions`, `/embeddings`, `/completions`, `/rerank`, `/audio/transcriptions` |
 
 
 # Quick Start
@@ -102,6 +102,52 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
   ```
   </TabItem>
 
+  </Tabs>
+
+  ## Reasoning Effort
+
+  <Tabs>
+  <TabItem value="sdk" label="SDK">
+
+  ```python
+  from litellm import completion
+
+  response = completion(
+      model="hosted_vllm/gpt-oss-120b",
+      messages=[{"role": "user", "content": "whats 2 + 2"}],
+      reasoning_effort="high",
+      api_base="https://hosted-vllm-api.co",
+  )
+  print(response)
+  ```
+  </TabItem>
+  <TabItem value="proxy" label="PROXY">
+
+  1. Setup config.yaml
+
+  ```yaml
+  model_list:
+    - model_name: gpt-oss-120b
+      litellm_params:
+        model: hosted_vllm/gpt-oss-120b
+        api_base: https://hosted-vllm-api.co
+  ```
+
+  2. Start the proxy
+
+  ```bash
+  litellm --config /path/to/config.yaml
+  ```
+
+  3. Test it!
+
+  ```bash
+  curl http://0.0.0.0:4000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{"model": "gpt-oss-120b", "messages": [{"role": "user", "content": "whats 2 + 2"}], "reasoning_effort": "high"}'
+  ```
+
+  </TabItem>
   </Tabs>
 
 

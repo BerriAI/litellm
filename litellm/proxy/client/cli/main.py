@@ -15,6 +15,7 @@ from .commands.keys import keys
 
 # local imports
 from .commands.models import models
+from .commands.teams import teams
 from .commands.users import users
 from .interface import interactive_shell
 
@@ -98,6 +99,8 @@ cli.add_command(chat)
 cli.add_command(http)
 # Add the keys command group
 cli.add_command(keys)
+# Add the teams command group
+cli.add_command(teams)
 # Add the users command group
 cli.add_command(users)
 

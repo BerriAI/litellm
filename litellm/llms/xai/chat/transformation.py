@@ -31,7 +31,6 @@ class XAIChatConfig(OpenAIGPTConfig):
 
     def get_supported_openai_params(self, model: str) -> list:
         base_openai_params = [
-            "frequency_penalty",
             "logit_bias",
             "logprobs",
             "max_tokens",
@@ -50,8 +49,22 @@ class XAIChatConfig(OpenAIGPTConfig):
             "web_search_options",
         ]
         # for some reason, grok-3-mini does not support stop tokens
+        #########################################################
+        # stop tokens check
+        #########################################################
         if self._supports_stop_reason(model):
             base_openai_params.append("stop")
+        
+
+        #########################################################
+        # frequency penalty check
+        #########################################################
+        if self._supports_frequency_penalty(model):
+            base_openai_params.append("frequency_penalty")
+        
+        #########################################################
+        # reasoning check
+        #########################################################
         try:
             if litellm.supports_reasoning(
                 model=model, custom_llm_provider=self.custom_llm_provider
@@ -66,6 +79,20 @@ class XAIChatConfig(OpenAIGPTConfig):
         if "grok-3-mini" in model:
             return False
         elif "grok-4" in model:
+            return False
+        elif "grok-code-fast" in model:
+            return False
+        return True
+    
+    def _supports_frequency_penalty(self, model: str) -> bool:
+        """
+        From manual testing grok-4 does not support `frequency_penalty`
+
+        When sent the model fails from xAI API
+        """
+        if "grok-4" in model:
+            return False
+        if "grok-code-fast" in model:
             return False
         return True
 

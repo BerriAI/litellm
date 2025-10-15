@@ -452,7 +452,7 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
     try:
         # Your test data
         test_data = {
-            "model": "azure/chatgpt-v-3",
+            "model": "azure/gpt-4.1-nano",
             "messages": [
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -463,7 +463,7 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
         response = client_no_auth.post("/v1/chat/completions", json=test_data)
 
         mock_acompletion.assert_called_once_with(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=[
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -496,19 +496,19 @@ def test_openai_deployments_model_chat_completions_azure(
     try:
         # Your test data
         test_data = {
-            "model": "azure/chatgpt-v-3",
+            "model": "azure/gpt-4.1-nano",
             "messages": [
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
             "max_tokens": 10,
         }
 
-        url = "/openai/deployments/azure/chatgpt-v-3/chat/completions"
+        url = "/openai/deployments/azure/gpt-4.1-nano/chat/completions"
         print(f"testing proxy server with Azure Request {url}")
         response = client_no_auth.post(url, json=test_data)
 
         mock_acompletion.assert_called_once_with(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=[
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -541,14 +541,14 @@ def test_embedding(mock_aembedding, client_no_auth):
 
     try:
         test_data = {
-            "model": "azure/azure-embedding-model",
+            "model": "azure/text-embedding-ada-002",
             "input": ["good morning from litellm"],
         }
 
         response = client_no_auth.post("/v1/embeddings", json=test_data)
 
         mock_aembedding.assert_called_once_with(
-            model="azure/azure-embedding-model",
+            model="azure/text-embedding-ada-002",
             input=["good morning from litellm"],
             specific_deployment=True,
             metadata=mock.ANY,
@@ -928,7 +928,7 @@ async def test_get_team_redis(client_no_auth):
 
 
 import random
-import uuid
+from litellm._uuid import uuid
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 from litellm.proxy._types import (
@@ -1322,7 +1322,7 @@ async def test_add_callback_via_key(prisma_client):
     try:
         # Your test data
         test_data = {
-            "model": "azure/chatgpt-v-3",
+            "model": "azure/gpt-4.1-nano",
             "messages": [
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -1416,7 +1416,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
     request._url = URL(url="/chat/completions")
 
     test_data = {
-        "model": "azure/chatgpt-v-3",
+        "model": "azure/gpt-4.1-nano",
         "messages": [
             {"role": "user", "content": "write 1 sentence poem"},
         ],
@@ -1431,7 +1431,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
 
     data = {
         "data": {
-            "model": "azure/chatgpt-v-3",
+            "model": "azure/gpt-4.1-nano",
             "messages": [{"role": "user", "content": "write 1 sentence poem"}],
             "max_tokens": 10,
             "mock_response": "Hello world",
@@ -1531,7 +1531,7 @@ async def test_disable_fallbacks_by_key(disable_fallbacks_set):
 
     key_metadata = {"disable_fallbacks": disable_fallbacks_set}
     existing_data = {
-        "model": "azure/chatgpt-v-3",
+        "model": "azure/gpt-4.1-nano",
         "messages": [{"role": "user", "content": "write 1 sentence poem"}],
     }
     data = LiteLLMProxyRequestSetup.add_key_level_controls(
@@ -1572,7 +1572,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
     request._url = URL(url="/chat/completions")
 
     test_data = {
-        "model": "azure/chatgpt-v-3",
+        "model": "azure/gpt-4.1-nano",
         "messages": [
             {"role": "user", "content": "write 1 sentence poem"},
         ],
@@ -1587,7 +1587,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
 
     data = {
         "data": {
-            "model": "azure/chatgpt-v-3",
+            "model": "azure/gpt-4.1-nano",
             "messages": [{"role": "user", "content": "write 1 sentence poem"}],
             "max_tokens": 10,
             "mock_response": "Hello world",
@@ -1705,7 +1705,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
     request._url = URL(url="/chat/completions")
 
     test_data = {
-        "model": "azure/chatgpt-v-3",
+        "model": "azure/gpt-4.1-nano",
         "messages": [
             {"role": "user", "content": "write 1 sentence poem"},
         ],
@@ -1720,7 +1720,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
 
     data = {
         "data": {
-            "model": "azure/chatgpt-v-3",
+            "model": "azure/gpt-4.1-nano",
             "messages": [{"role": "user", "content": "write 1 sentence poem"}],
             "max_tokens": 10,
             "mock_response": "Hello world",
@@ -1833,7 +1833,7 @@ async def test_gemini_pass_through_endpoint():
     scope = {
         "type": "http",
         "method": "POST",
-        "path": "/gemini/v1beta/models/gemini-1.5-flash:countTokens",
+        "path": "/gemini/v1beta/models/gemini-2.5-flash:countTokens",
         "query_string": b"key=sk-1234",
         "headers": [
             (b"content-type", b"application/json"),
@@ -1850,7 +1850,7 @@ async def test_gemini_pass_through_endpoint():
     )
 
     resp = await gemini_proxy_route(
-        endpoint="v1beta/models/gemini-1.5-flash:countTokens?key=sk-1234",
+        endpoint="v1beta/models/gemini-2.5-flash:countTokens?key=sk-1234",
         request=request,
         fastapi_response=Response(),
     )
@@ -2248,6 +2248,41 @@ async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
     assert len(called_model_lists) >= 2
     assert called_model_lists[0] == test_model_list_1
     assert called_model_lists[1] == test_model_list_2
+
+
+@pytest.mark.asyncio
+async def test_background_health_check_skip_disabled_models(monkeypatch):
+    """Ensure models with disable_background_health_check are skipped."""
+    import litellm.proxy.proxy_server as proxy_server
+    import copy
+
+    test_model_list = [
+        {"model_name": "model-a"},
+        {"model_name": "model-b", "model_info": {"disable_background_health_check": True}},
+    ]
+    called_model_lists = []
+
+    async def fake_perform_health_check(model_list, details):
+        called_model_lists.append(copy.deepcopy(model_list))
+        return (["healthy"], [])
+
+    monkeypatch.setattr(proxy_server, "health_check_interval", 1)
+    monkeypatch.setattr(proxy_server, "health_check_details", None)
+    monkeypatch.setattr(proxy_server, "llm_model_list", copy.deepcopy(test_model_list))
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    monkeypatch.setattr(proxy_server, "health_check_results", {})
+
+    async def fake_sleep(interval):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    try:
+        await proxy_server._run_background_health_check()
+    except asyncio.CancelledError:
+        pass
+
+    assert called_model_lists == [[{"model_name": "model-a"}]]
 
 
 def test_get_timeout_from_request():

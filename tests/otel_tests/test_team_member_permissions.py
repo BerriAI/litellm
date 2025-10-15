@@ -45,7 +45,7 @@
 import pytest
 import asyncio
 import aiohttp, openai
-import uuid
+from litellm._uuid import uuid
 import json
 from litellm.proxy._types import ProxyErrorTypes
 from typing import Optional

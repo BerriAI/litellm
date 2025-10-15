@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 
+import litellm
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -13,6 +14,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
+    ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
@@ -91,10 +93,35 @@ class BaseResponsesAPIStreamingIterator:
                 # Store the completed response
                 if (
                     openai_responses_api_chunk
-                    and openai_responses_api_chunk.type
+                    and getattr(openai_responses_api_chunk, "type", None)
                     == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
                 ):
                     self.completed_response = openai_responses_api_chunk
+                    # Add cost to usage object if include_cost_in_streaming_usage is True
+                    if (
+                        litellm.include_cost_in_streaming_usage
+                        and self.logging_obj is not None
+                    ):
+                        response_obj: Optional[ResponsesAPIResponse] = getattr(
+                            openai_responses_api_chunk, "response", None
+                        )
+                        if response_obj:
+                            usage_obj: Optional[ResponseAPIUsage] = getattr(
+                                response_obj, "usage", None
+                            )
+                            if usage_obj is not None:
+                                try:
+                                    cost: Optional[float] = (
+                                        self.logging_obj._response_cost_calculator(
+                                            result=response_obj
+                                        )
+                                    )
+                                    if cost is not None:
+                                        setattr(usage_obj, "cost", cost)
+                                except Exception:
+                                    # If cost calculation fails, continue without cost
+                                    pass
+
                     self._handle_logging_completed_response()
 
                 return openai_responses_api_chunk

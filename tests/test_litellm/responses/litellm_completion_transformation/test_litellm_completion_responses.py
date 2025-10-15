@@ -8,7 +8,11 @@ sys.path.insert(
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.types.utils import ModelResponse, Choices, Message
+from litellm.types.llms.openai import (
+    ChatCompletionResponseMessage,
+    ChatCompletionToolMessage,
+)
+from litellm.types.utils import Choices, Message, ModelResponse
 
 
 class TestLiteLLMCompletionResponsesConfig:
@@ -130,9 +134,9 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Assert
-        expected = {"type": "image", "image_url": {"url": image_url, "detail": "high"}}
+        expected = {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}}
         assert result == expected
-        assert result["type"] == "image"
+        assert result["type"] == "image_url"
         assert result["image_url"]["url"] == image_url
         assert result["image_url"]["detail"] == "high"
 
@@ -150,9 +154,9 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Assert
-        expected = {"type": "image", "image_url": {"url": image_url, "detail": "high"}}
+        expected = {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}}
         assert result == expected
-        assert result["type"] == "image"
+        assert result["type"] == "image_url"
         assert result["image_url"]["url"] == image_url
         assert result["image_url"]["detail"] == "high"
 
@@ -170,9 +174,9 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Assert
-        expected = {"type": "image", "image_url": {"url": image_url, "detail": "auto"}}
+        expected = {"type": "image_url", "image_url": {"url": image_url, "detail": "auto"}}
         assert result == expected
-        assert result["type"] == "image"
+        assert result["type"] == "image_url"
         assert result["image_url"]["url"] == image_url
         assert result["image_url"]["detail"] == "auto"
 
@@ -189,9 +193,9 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Assert
-        expected = {"type": "image", "image_url": {"url": "", "detail": "auto"}}
+        expected = {"type": "image_url", "image_url": {"url": "", "detail": "auto"}}
         assert result == expected
-        assert result["type"] == "image"
+        assert result["type"] == "image_url"
         assert result["image_url"]["url"] == ""
         assert result["image_url"]["detail"] == "auto"
 
@@ -213,9 +217,9 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Assert
-        expected = {"type": "image", "image_url": {"url": "https://example.com/image.png", "detail": "auto"}}
+        expected = {"type": "image_url", "image_url": {"url": "https://example.com/image.png", "detail": "auto"}}
         assert result == expected
-        assert result["type"] == "image"
+        assert result["type"] == "image_url"
         assert result["image_url"]["url"] == "https://example.com/image.png"
         assert result["image_url"]["detail"] == "auto"
         assert "extra_field" not in result
@@ -261,7 +265,7 @@ class TestLiteLLMCompletionResponsesConfig:
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
 
         reasoning_item = reasoning_items[0]
-        assert reasoning_item.id == "test-response-id_reasoning"
+        assert reasoning_item.id.startswith("rs_"), f"Expected ID to start with 'rs_', got: {reasoning_item.id}"
         assert reasoning_item.status == "stop"
         assert reasoning_item.role == "assistant"
         assert len(reasoning_item.content) == 1
@@ -364,3 +368,221 @@ class TestLiteLLMCompletionResponsesConfig:
             item for item in responses_api_response.output if item.type == "message"
         ]
         assert len(message_items) == 2, "Should have two message items"
+
+
+
+
+class TestFunctionCallTransformation:
+    """Test cases for function_call input transformation"""
+
+    def test_function_call_detection(self):
+        """Test that function_call items are correctly detected"""
+        function_call_item = {
+            "type": "function_call",
+            "name": "get_weather",
+            "arguments": '{"location": "test"}',
+            "call_id": "test_id"
+        }
+        
+        function_call_output_item = {
+            "type": "function_call_output",
+            "call_id": "test_id",
+            "output": "result"
+        }
+        
+        regular_message = {
+            "type": "message",
+            "role": "user",
+            "content": "Hello"
+        }
+        
+        # Test function_call detection
+        assert LiteLLMCompletionResponsesConfig._is_input_item_function_call(function_call_item)
+        assert not LiteLLMCompletionResponsesConfig._is_input_item_function_call(function_call_output_item)
+        assert not LiteLLMCompletionResponsesConfig._is_input_item_function_call(regular_message)
+        
+        # Test function_call_output detection (should still work)
+        assert LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(function_call_output_item)
+        assert not LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(function_call_item)
+        assert not LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(regular_message)
+
+    def test_function_call_transformation(self):
+        """Test that function_call items are correctly transformed to assistant messages with tool calls"""
+        function_call_item = {
+            "type": "function_call",
+            "name": "get_weather",
+            "arguments": '{"location": "São Paulo, Brazil"}',
+            "call_id": "call_123",
+            "id": "call_123",
+            "status": "completed"
+        }
+        
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call=function_call_item
+        )
+        
+        assert len(result) == 1
+        message = result[0]
+        
+        # Should be an assistant message
+        assert message.get("role") == "assistant"
+        assert message.get("content") is None  # Function calls don't have content
+        
+        # Should have tool calls
+        tool_calls = message.get("tool_calls", [])
+        assert len(tool_calls) == 1
+        
+        tool_call = tool_calls[0]
+        assert tool_call.get("id") == "call_123"
+        assert tool_call.get("type") == "function"
+        
+        function = tool_call.get("function", {})
+        assert function.get("name") == "get_weather"
+        assert function.get("arguments") == '{"location": "São Paulo, Brazil"}'
+
+    def test_complete_input_transformation_with_function_calls(self):
+        """Test the complete transformation with the exact input from the issue"""
+        test_input = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": "How is the weather in São Paulo today ?"
+            },
+            {
+                "type": "function_call",
+                "arguments": '{"location": "São Paulo, Brazil"}',
+                "call_id": "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "name": "get_weather",
+                "id": "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "status": "completed"
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "output": "Rainy"
+            }
+        ]
+        
+        # This should not raise an error (previously would raise "Invalid content type: <class 'NoneType'>")
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=test_input
+        )
+        
+        assert len(messages) == 3
+        
+        # First message: user message
+        user_msg = messages[0]
+        assert user_msg.get("role") == "user"
+        assert user_msg.get("content") == "How is the weather in São Paulo today ?"
+        
+        # Second message: assistant message with tool call
+        assistant_msg = messages[1]
+        assert assistant_msg.get("role") == "assistant"
+        assert assistant_msg.get("tool_calls") is not None
+        assert len(assistant_msg.get("tool_calls", [])) == 1
+        
+        tool_call = assistant_msg.get("tool_calls")[0]
+        assert tool_call.get("function", {}).get("name") == "get_weather"
+        
+        # Third message: tool output
+        tool_msg = messages[2]
+        assert tool_msg.get("role") == "tool"
+        assert tool_msg.get("content") == "Rainy"
+        assert tool_msg.get("tool_call_id") == "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5"
+
+    def test_complete_request_transformation_with_function_calls(self):
+        """Test the complete request transformation that would be used by the responses API"""
+        test_input = [
+            {
+                "type": "message",
+                "role": "user", 
+                "content": "How is the weather in São Paulo today ?"
+            },
+            {
+                "type": "function_call",
+                "arguments": '{"location": "São Paulo, Brazil"}',
+                "call_id": "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "name": "get_weather",
+                "id": "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "status": "completed"
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "output": "Rainy"
+            }
+        ]
+        
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get current temperature for a given location.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "City and country e.g. Bogotá, Colombia"
+                        }
+                    },
+                    "required": ["location"],
+                    "additionalProperties": False
+                }
+            }
+        ]
+        
+        responses_api_request = {
+            "store": False,
+            "tools": tools
+        }
+        
+        # This should work without errors for non-OpenAI models
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="gemini/gemini-2.0-flash",
+            input=test_input,
+            responses_api_request=responses_api_request,
+            extra_headers={"X-Test-Header": "test-value"}
+        )
+        
+        assert "messages" in result
+        assert "model" in result
+        assert "tools" in result
+        
+        messages = result["messages"]
+        assert len(messages) == 3
+        assert result["model"] == "gemini/gemini-2.0-flash"
+        
+        # Verify the structure is correct for chat completion
+        user_msg = messages[0]
+        assert user_msg["role"] == "user"
+        
+        assistant_msg = messages[1]  
+        assert assistant_msg["role"] == "assistant"
+        assert "tool_calls" in assistant_msg
+        
+        tool_msg = messages[2]
+        assert tool_msg["role"] == "tool"
+
+        assert result["extra_headers"] == {"X-Test-Header": "test-value"}
+
+    def test_function_call_without_call_id_fallback_to_id(self):
+        """Test that function_call items can use 'id' field when 'call_id' is missing"""
+        function_call_item = {
+            "type": "function_call",
+            "name": "get_weather",
+            "arguments": '{"location": "test"}',
+            "id": "fallback_id"  # Only has 'id', not 'call_id'
+        }
+        
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call=function_call_item
+        )
+        
+        assert len(result) == 1
+        message = result[0]
+        tool_calls = message.get("tool_calls", [])
+        assert len(tool_calls) == 1
+        
+        tool_call = tool_calls[0]
+        assert tool_call.get("id") == "fallback_id"

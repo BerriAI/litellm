@@ -1,7 +1,7 @@
 """
 Helper utilities for parsing durations - 1s, 1d, 10d, 30d, 1mo, 2mo
 
-duration_in_seconds is used in diff parts of the code base, example 
+duration_in_seconds is used in diff parts of the code base, example
 - Router - Provider budget routing
 - Proxy - Key, Team Generation
 """
@@ -158,6 +158,7 @@ def _setup_timezone(
                 "US/Eastern": timezone(timedelta(hours=-4)),  # EDT
                 "US/Pacific": timezone(timedelta(hours=-7)),  # PDT
                 "Asia/Kolkata": timezone(timedelta(hours=5, minutes=30)),  # IST
+                "Asia/Bangkok": timezone(timedelta(hours=7)),  # ICT (Indochina Time)
                 "Europe/London": timezone(timedelta(hours=1)),  # BST
                 "UTC": timezone.utc,
             }
@@ -192,6 +193,10 @@ def _handle_day_reset(
     current_time: datetime, base_midnight: datetime, value: int, timezone: timezone
 ) -> datetime:
     """Handle day-based reset times."""
+    # Handle zero value - immediate expiration
+    if value == 0:
+        return current_time
+
     if value == 1:  # Daily reset at midnight
         return base_midnight + timedelta(days=1)
     elif value == 7:  # Weekly reset on Monday at midnight
@@ -234,6 +239,10 @@ def _handle_hour_reset(
     current_time: datetime, base_midnight: datetime, value: int
 ) -> datetime:
     """Handle hour-based reset times."""
+    # Handle zero value - immediate expiration
+    if value == 0:
+        return current_time
+
     current_hour = current_time.hour
     current_minute = current_time.minute
     current_second = current_time.second
@@ -266,6 +275,10 @@ def _handle_minute_reset(
     current_time: datetime, base_midnight: datetime, value: int
 ) -> datetime:
     """Handle minute-based reset times."""
+    # Handle zero value - immediate expiration
+    if value == 0:
+        return current_time
+
     current_hour = current_time.hour
     current_minute = current_time.minute
     current_second = current_time.second
@@ -306,6 +319,10 @@ def _handle_second_reset(
     current_time: datetime, base_midnight: datetime, value: int
 ) -> datetime:
     """Handle second-based reset times."""
+    # Handle zero value - immediate expiration
+    if value == 0:
+        return current_time
+
     current_hour = current_time.hour
     current_minute = current_time.minute
     current_second = current_time.second

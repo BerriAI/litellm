@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { Select, SelectItem, Text, Title } from "@tremor/react";
 import { ProxySettings, UserInfo } from "./user_dashboard";
-import { getProxyUISettings } from "./networking"
+import { getProxyUISettings } from "./networking";
 
 interface DashboardTeamProps {
-  teams: Object[] | null;
+  teams: object[] | null;
   setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
   userRole: string | null;
   proxySettings: ProxySettings | null;
@@ -17,9 +17,9 @@ interface DashboardTeamProps {
 type TeamInterface = {
   models: any[];
   team_id: null;
-  team_alias: String;
+  team_alias: string;
   max_budget: number | null;
-}
+};
 
 const DashboardTeam: React.FC<DashboardTeamProps> = ({
   teams,
@@ -29,15 +29,15 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
   setProxySettings,
   userInfo,
   accessToken,
-  setKeys
+  setKeys,
 }) => {
-  console.log(`userInfo: ${JSON.stringify(userInfo)}`)
+  console.log(`userInfo: ${JSON.stringify(userInfo)}`);
   const defaultTeam: TeamInterface = {
     models: userInfo?.models || [],
     team_id: null,
     team_alias: "Default Team",
     max_budget: userInfo?.max_budget || null,
-  }
+  };
 
   const getProxySettings = async () => {
     if (proxySettings === null && accessToken) {
@@ -53,8 +53,8 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
   const [value, setValue] = useState(defaultTeam);
 
   let updatedTeams;
-  console.log(`userRole: ${userRole}`)
-  console.log(`proxySettings: ${JSON.stringify(proxySettings)}`)
+  console.log(`userRole: ${userRole}`);
+  console.log(`proxySettings: ${JSON.stringify(proxySettings)}`);
   if (userRole === "App User") {
     // Non-Admin SSO users should only see their own team - they should not see "Default Team"
     updatedTeams = teams;
@@ -64,11 +64,10 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
     updatedTeams = teams ? [...teams, defaultTeam] : [defaultTeam];
   }
 
-
   return (
     <div className="mt-5 mb-5">
       <Title>Select Team</Title>
-      
+
       <Text>
         If you belong to multiple teams, this setting controls which team is used by default when creating new API Keys.
       </Text>

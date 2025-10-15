@@ -1,7 +1,8 @@
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 
 class LiteLLMCacheType(str, Enum):
@@ -12,6 +13,7 @@ class LiteLLMCacheType(str, Enum):
     DISK = "disk"
     QDRANT_SEMANTIC = "qdrant-semantic"
     AZURE_BLOB = "azure-blob"
+    GCS = "gcs"
 
 
 CachingSupportedCallTypes = Literal[

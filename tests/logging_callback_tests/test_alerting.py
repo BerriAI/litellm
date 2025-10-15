@@ -8,7 +8,7 @@ import os
 import random
 import sys
 import time
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 

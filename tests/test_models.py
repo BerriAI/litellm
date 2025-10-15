@@ -83,10 +83,8 @@ async def add_models(
     data = {
         "model_name": model_name,
         "litellm_params": {
-            "model": "azure/chatgpt-v-3",
-            "api_key": "os.environ/AZURE_API_KEY",
-            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
-            "api_version": "2023-05-15",
+            "model": "openai/gpt-4.1-nano",
+            "api_key": "os.environ/OPENAI_API_KEY",
         },
         "model_info": {"id": model_id},
     }
@@ -119,10 +117,8 @@ async def update_model(
     data = {
         "model_name": model_name,
         "litellm_params": {
-            "model": "azure/chatgpt-v-3",
-            "api_key": "os.environ/AZURE_API_KEY",
-            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
-            "api_version": "2023-05-15",
+            "model": "openai/gpt-4.1-nano",
+            "api_key": "os.environ/OPENAI_API_KEY",
         },
         "model_info": {"id": model_id},
     }
@@ -280,7 +276,7 @@ async def test_add_and_delete_models():
     - Delete model
     - Call model -> expect to fail
     """
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
@@ -311,10 +307,8 @@ async def add_model_for_health_checking(session, model_id="123"):
     data = {
         "model_name": f"azure-model-health-check-{model_id}",
         "litellm_params": {
-            "model": "azure/chatgpt-v-3",
-            "api_key": os.getenv("AZURE_API_KEY"),
-            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
-            "api_version": "2023-05-15",
+            "model": "gpt-4.1-nano",
+            "api_key": os.getenv("OPENAI_API_KEY"),
         },
         "model_info": {"id": model_id},
     }
@@ -404,7 +398,7 @@ async def test_add_model_run_health():
     Call /health
     -> Ensure the health check for the endpoint is working as expected
     """
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
@@ -436,7 +430,7 @@ async def test_add_model_run_health():
 
         assert _health_info["healthy_count"] == 1
         assert (
-            _healthy_endpooint["model"] == "azure/chatgpt-v-3"
+            _healthy_endpooint["model"] == "gpt-4.1-nano"
         )  # this is the model that got added
 
         # assert httpx client is is unchanges
@@ -528,7 +522,7 @@ async def test_team_model_e2e():
     """
     from tests.test_users import new_user
     from tests.test_team import new_team
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         # Creat a user

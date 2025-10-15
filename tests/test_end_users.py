@@ -4,7 +4,7 @@ import pytest
 import asyncio
 import aiohttp
 import time
-import uuid
+from litellm._uuid import uuid
 from openai import AsyncOpenAI
 from typing import Optional
 

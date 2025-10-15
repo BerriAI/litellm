@@ -40,7 +40,7 @@
 #             {
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
-#                     "model": "azure/chatgpt-v-3",
+#                     "model": "azure/gpt-4.1-nano",
 #                     "api_key": os.getenv("AZURE_API_KEY"),
 #                     "api_version": os.getenv("AZURE_API_VERSION"),
 #                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -96,7 +96,7 @@
 #             {
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
-#                     "model": "azure/chatgpt-v-3",
+#                     "model": "azure/gpt-4.1-nano",
 #                     "api_key": os.getenv("AZURE_API_KEY"),
 #                     "api_version": os.getenv("AZURE_API_VERSION"),
 #                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -134,7 +134,7 @@
 #             {
 #                 "model_name": "azure-cloudflare",
 #                 "litellm_params": {
-#                     "model": "azure/chatgpt-v-3",
+#                     "model": "azure/gpt-4.1-nano",
 #                     "api_key": os.getenv("AZURE_API_KEY"),
 #                     "api_version": os.getenv("AZURE_API_VERSION"),
 #                     "api_base": "https://gateway.ai.cloudflare.com/v1/0399b10e77ac6668c80404a5ff49eb37/litellm-test/azure-openai/openai-gpt-4-test-v-1",
@@ -201,7 +201,7 @@
 #             {
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
-#                     "model": "azure/chatgpt-v-3",
+#                     "model": "azure/gpt-4.1-nano",
 #                     "api_key": os.getenv("AZURE_API_KEY"),
 #                     "api_version": os.getenv("AZURE_API_VERSION"),
 #                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -254,7 +254,7 @@
 #             {
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
-#                     "model": "azure/chatgpt-v-3",
+#                     "model": "azure/gpt-4.1-nano",
 #                     "api_key": os.getenv("AZURE_API_KEY"),
 #                     "api_version": os.getenv("AZURE_API_VERSION"),
 #                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -615,7 +615,7 @@
 #             {
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
-#                     "model": "azure/chatgpt-v-3",
+#                     "model": "azure/gpt-4.1-nano",
 #                     "api_key": os.getenv("AZURE_API_KEY"),
 #                     "api_version": os.getenv("AZURE_API_VERSION"),
 #                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -660,7 +660,7 @@
 #         {
 #             "model_name": "gpt-3.5-turbo",
 #             "litellm_params": {
-#                 "model": "azure/chatgpt-v-3",
+#                 "model": "azure/gpt-4.1-nano",
 #                 "api_key": os.getenv("AZURE_API_KEY"),
 #                 "api_version": os.getenv("AZURE_API_VERSION"),
 #                 "api_base": os.getenv("AZURE_API_BASE"),

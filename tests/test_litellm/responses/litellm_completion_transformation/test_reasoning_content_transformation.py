@@ -4,14 +4,20 @@ Test reasoning content preservation in Responses API transformation
 
 from unittest.mock import AsyncMock
 
-from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.types.utils import ModelResponse, Choices, Message
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 
 class TestReasoningContentStreaming:
@@ -41,6 +47,7 @@ class TestReasoningContentStreaming:
         mock_stream = AsyncMock()
 
         iterator = LiteLLMCompletionStreamingIterator(
+            model="test-model",
             litellm_custom_stream_wrapper=mock_stream,
             request_input="Test input",
             responses_api_request={},
@@ -78,6 +85,7 @@ class TestReasoningContentStreaming:
 
         mock_stream = AsyncMock()
         iterator = LiteLLMCompletionStreamingIterator(
+            model="test-model",
             litellm_custom_stream_wrapper=mock_stream,
             request_input="Test input",
             responses_api_request={},
@@ -114,6 +122,7 @@ class TestReasoningContentStreaming:
 
         mock_stream = AsyncMock()
         iterator = LiteLLMCompletionStreamingIterator(
+            model="test-model",
             litellm_custom_stream_wrapper=mock_stream,
             request_input="Test input",
             responses_api_request={},
@@ -253,3 +262,35 @@ class TestReasoningContentFinalResponse:
         ]
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
         assert reasoning_items[0].content[0].text == "Reasoning for first answer"
+
+
+def test_streaming_chunk_id_raw():
+    """Test that streaming chunk IDs are raw (not encoded) to match OpenAI format"""
+    chunk = ModelResponseStream(
+        id="chunk-123",
+        created=1234567890,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Hello", role="assistant"),
+            )
+        ],
+    )
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+        custom_llm_provider="openai",
+        litellm_metadata={"model_info": {"id": "gpt-4"}},
+    )
+
+    result = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+
+    # Streaming chunk IDs should be raw (like OpenAI's msg_xxx format)
+    assert result.item_id == "chunk-123"  # Should be raw, not encoded
+    assert not result.item_id.startswith("resp_")  # Should NOT have resp_ prefix

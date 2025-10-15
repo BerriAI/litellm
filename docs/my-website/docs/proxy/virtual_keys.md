@@ -1,5 +1,6 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
 
 # Virtual Keys
 Track Spend, and control model access via virtual keys for the proxy
@@ -559,6 +560,94 @@ curl 'http://localhost:4000/key/sk-1234/regenerate' \
 
 [**👉 API REFERENCE DOCS**](https://litellm-api.up.railway.app/#/key%20management/regenerate_key_fn_key__key__regenerate_post)
 
+
+### Scheduled Key Rotations
+
+LiteLLM can rotate **virtual keys automatically** based on time intervals you define.
+
+#### Prerequisites
+
+1. **Database connection required** - Key rotation requires a connected database to track rotation schedules
+2. **Enable the rotation worker** - Set environment variable `LITELLM_KEY_ROTATION_ENABLED=true`
+3. **Configure check interval** - Optionally set `LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS` (default: 86400 seconds / 24 hours)
+
+#### How it works
+
+1. When creating a virtual key, set `auto_rotate: true` and `rotation_interval` (duration string)
+2. LiteLLM calculates the next rotation time as `now + rotation_interval` and stores it in the database
+3. A background job periodically checks for keys where the rotation time has passed
+4. When a key is due for rotation, LiteLLM automatically regenerates it and invalidates the old key string
+5. The new rotation time is calculated and the cycle continues
+
+#### Create a key with auto rotation
+
+**API**
+```bash
+curl 'http://0.0.0.0:4000/key/generate' \
+  -H 'Authorization: Bearer <your-master-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "models": ["gpt-4o"],
+        "auto_rotate": true,
+        "rotation_interval": "30d"
+      }'
+```
+
+**LiteLLM UI**
+
+On the LiteLLM UI, Navigate to the Keys page and click on `Generate Key` > `Key Lifecycle` > `Enable Auto Rotation`
+<Image 
+  img={require('../../img/key_r.png')}
+  style={{width: '30%', display: 'block', margin: '0'}}
+/>
+
+**Valid rotation_interval formats:**
+- `"30s"` - 30 seconds
+- `"30m"` - 30 minutes
+- `"30h"` - 30 hours
+- `"30d"` - 30 days
+- `"90d"` - 90 days
+
+#### Update existing key to enable rotation
+
+**API**
+
+```bash
+curl 'http://0.0.0.0:4000/key/update' \
+  -H 'Authorization: Bearer <your-master-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "key": "sk-existing-key",
+        "auto_rotate": true,
+        "rotation_interval": "90d"
+      }'
+```
+
+**LiteLLM UI**
+
+On the LiteLLM UI, Navigate to the Keys page. Select the key you want to update and click on `Edit Settings` > `Auto-Rotation Settings`
+
+<Image 
+  img={require('../../img/key_u.png')}
+  style={{width: '30%', display: 'block', margin: '0'}}
+/>
+
+#### Environment variables
+
+Set these environment variables when starting the proxy:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LITELLM_KEY_ROTATION_ENABLED` | Enable the rotation worker | `false` |
+| `LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS` | How often to scan for keys to rotate (in seconds) | `86400` (24 hours) |
+
+**Example:**
+```bash
+export LITELLM_KEY_ROTATION_ENABLED=true
+export LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS=3600  # Check every hour
+
+litellm --config config.yaml
+```
 
 ### Temporary Budget Increase
 

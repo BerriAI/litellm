@@ -61,7 +61,7 @@ class testCustomCallbackProxy(CustomLogger):
         print("Value of async success: ", self.async_success)
         print("\n kwargs: ", kwargs)
         if (
-            kwargs.get("model") == "azure-embedding-model"
+            kwargs.get("model") == "text-embedding-ada-002"
             or kwargs.get("model") == "ada"
         ):
             print("Got an embedding model", kwargs.get("model"))
@@ -118,4 +118,5 @@ class testCustomCallbackProxy(CustomLogger):
         self.async_completion_kwargs_fail = kwargs
 
 
+# Global instance that can be accessed from tests
 my_custom_logger = testCustomCallbackProxy()

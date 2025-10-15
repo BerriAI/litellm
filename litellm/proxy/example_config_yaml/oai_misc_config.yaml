@@ -18,6 +18,19 @@ model_list:
     litellm_params:
       model: "groq/*"
       api_key: os.environ/GROQ_API_KEY
+  - model_name: bedrock/batch-anthropic.claude-3-5-sonnet-20240620-v1:0
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      #########################################################
+      ########## batch specific params ########################
+      s3_bucket_name: litellm-proxy
+      s3_region_name: us-west-2
+      s3_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      s3_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_batch_role_arn: arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV
+    model_info: 
+      mode: batch
+
 litellm_settings:
   # set_verbose: True  # Uncomment this if you want to see verbose logs; not recommended in production
   drop_params: True

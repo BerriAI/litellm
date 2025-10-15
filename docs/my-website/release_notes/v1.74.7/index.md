@@ -148,7 +148,6 @@ Starting with this release, you can run health endpoints on an isolated process 
     - New provider integration for v0.dev - [PR #12751](https://github.com/BerriAI/litellm/pull/12751), [Get Started](../../docs/providers/v0)
 - **[OpenAI](../../docs/providers/openai)**
     - Use OpenAI DeepResearch models with `litellm.completion` (`/chat/completions`) - [PR #12627](https://github.com/BerriAI/litellm/pull/12627) **DOC NEEDED**
-    - Add `input_fidelity` parameter for OpenAI image generation - [PR #12662](https://github.com/BerriAI/litellm/pull/12662), [Get Started](../../docs/image_generation)
 - **[Azure OpenAI](../../docs/providers/azure_openai)**
     - Use Azure OpenAI DeepResearch models with `litellm.completion` (`/chat/completions`) - [PR #12627](https://github.com/BerriAI/litellm/pull/12627) **DOC NEEDED**
     - Added `response_format` support for openai gpt-4.1 models - [PR #12745](https://github.com/BerriAI/litellm/pull/12745)

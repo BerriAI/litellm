@@ -29,16 +29,17 @@ async def test_ssl_security_level(monkeypatch):
 
         # Get the transport (should be LiteLLMAiohttpTransport)
         transport = client.client._transport
+        assert isinstance(transport, LiteLLMAiohttpTransport)
 
         # Get the aiohttp ClientSession
         client_session = transport._get_valid_client_session()
 
         # Get the connector from the session
         connector = client_session.connector
+        assert isinstance(connector, TCPConnector)
 
         # Get the SSL context from the connector
         ssl_context = connector._ssl
-        print("ssl_context", ssl_context)
 
         # Verify that the SSL context exists and has the correct cipher string
         assert isinstance(ssl_context, ssl.SSLContext)
@@ -108,20 +109,19 @@ async def test_ssl_verification_with_aiohttp_transport():
     # Create a test SSL context
     litellm_async_client = AsyncHTTPHandler(ssl_verify=False)
 
-    transport_connector = (
-        litellm_async_client.client._transport._get_valid_client_session().connector
-    )
-    print("transport_connector", transport_connector)
-    print("transport_connector._ssl", transport_connector._ssl)
+    transport = litellm_async_client.client._transport
+    assert isinstance(transport, LiteLLMAiohttpTransport)
+    transport_connector = transport._get_valid_client_session().connector
+    assert isinstance(transport_connector, TCPConnector)
 
     aiohttp_session = aiohttp.ClientSession(
         connector=aiohttp.TCPConnector(verify_ssl=False)
     )
-    print("aiohttp_session", aiohttp_session)
-    print("aiohttp_session._ssl", aiohttp_session.connector._ssl)
+    aiohttp_connector = aiohttp_session.connector
+    assert isinstance(aiohttp_connector, aiohttp.TCPConnector)
 
     # assert both litellm transport and aiohttp session have ssl_verify=False
-    assert transport_connector._ssl == aiohttp_session.connector._ssl
+    assert transport_connector._ssl == aiohttp_connector._ssl
 
 
 @pytest.mark.asyncio
@@ -183,3 +183,219 @@ def test_get_ssl_configuration_integration():
     # Verify it has basic SSL context properties
     assert ssl_context.protocol is not None
     assert ssl_context.verify_mode is not None
+
+
+# Session Reuse Tests
+class MockClientSession:
+    """Mock ClientSession that is not callable"""
+    def __init__(self):
+        self.closed = False
+
+@pytest.mark.asyncio
+async def test_create_aiohttp_transport_with_shared_session():
+    """Test that _create_aiohttp_transport reuses shared session when provided"""
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    
+    # Create a mock shared session that's not callable
+    mock_session = MockClientSession()
+    
+    # Test with shared session
+    transport = AsyncHTTPHandler._create_aiohttp_transport(
+        shared_session=mock_session  # type: ignore
+    )
+    
+    # Verify the transport uses the shared session directly
+    assert transport.client is mock_session
+    assert not callable(transport.client)  # Should not be callable
+
+
+@pytest.mark.asyncio
+async def test_create_aiohttp_transport_without_shared_session():
+    """Test that _create_aiohttp_transport creates new session when none provided"""
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    
+    # Test without shared session
+    transport = AsyncHTTPHandler._create_aiohttp_transport(shared_session=None)
+    
+    # Verify the transport uses a lambda function (for backward compatibility)
+    assert callable(transport.client)  # Should be a lambda function
+
+
+@pytest.mark.asyncio
+async def test_create_aiohttp_transport_with_closed_session():
+    """Test that _create_aiohttp_transport creates new session when shared session is closed"""
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    
+    # Create a mock closed session
+    mock_session = MockClientSession()
+    mock_session.closed = True
+    
+    # Test with closed session
+    transport = AsyncHTTPHandler._create_aiohttp_transport(
+        shared_session=mock_session  # type: ignore
+    )
+    
+    # Verify the transport creates a new session (lambda function)
+    assert callable(transport.client)  # Should be a lambda function
+
+
+@pytest.mark.asyncio
+async def test_async_handler_with_shared_session():
+    """Test AsyncHTTPHandler initialization with shared session"""
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    
+    # Create a mock shared session
+    mock_session = MockClientSession()
+    
+    # Create handler with shared session
+    handler = AsyncHTTPHandler(shared_session=mock_session)  # type: ignore
+    
+    # Verify the handler was created successfully
+    assert handler is not None
+    assert handler.client is not None
+
+
+@pytest.mark.asyncio
+async def test_get_async_httpx_client_with_shared_session():
+    """Test get_async_httpx_client with shared session"""
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.utils import LlmProviders
+    
+    # Create a mock shared session
+    mock_session = MockClientSession()
+    
+    # Test with shared session
+    client = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC,
+        shared_session=mock_session  # type: ignore
+    )
+    
+    # Verify the client was created successfully
+    assert client is not None
+    assert isinstance(client, AsyncHTTPHandler)
+
+
+@pytest.mark.asyncio
+async def test_get_async_httpx_client_without_shared_session():
+    """Test get_async_httpx_client without shared session (backward compatibility)"""
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.utils import LlmProviders
+    
+    # Test without shared session
+    client = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC,
+        shared_session=None
+    )
+    
+    # Verify the client was created successfully
+    assert client is not None
+    assert isinstance(client, AsyncHTTPHandler)
+
+
+@pytest.mark.asyncio
+async def test_session_reuse_chain():
+    """Test that session is properly passed through the entire call chain"""
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    
+    # Create a mock shared session
+    mock_session = MockClientSession()
+    
+    # Test the entire chain
+    transport = AsyncHTTPHandler._create_async_transport(
+        shared_session=mock_session  # type: ignore
+    )
+    
+    # Verify the transport was created
+    assert transport is not None
+    
+    # Test AsyncHTTPHandler creation
+    handler = AsyncHTTPHandler(shared_session=mock_session)  # type: ignore
+    assert handler is not None
+
+
+def test_shared_session_parameter_in_acompletion():
+    """Test that acompletion function accepts shared_session parameter"""
+    import inspect
+    from litellm.main import acompletion
+    
+    # Get the function signature
+    sig = inspect.signature(acompletion)
+    params = list(sig.parameters.keys())
+    
+    # Verify shared_session parameter exists
+    assert 'shared_session' in params
+    
+    # Verify the parameter type annotation
+    shared_session_param = sig.parameters['shared_session']
+    assert 'ClientSession' in str(shared_session_param.annotation)
+
+
+def test_shared_session_parameter_in_completion():
+    """Test that completion function accepts shared_session parameter"""
+    import inspect
+    from litellm.main import completion
+    
+    # Get the function signature
+    sig = inspect.signature(completion)
+    params = list(sig.parameters.keys())
+    
+    # Verify shared_session parameter exists
+    assert 'shared_session' in params
+    
+    # Verify the parameter type annotation
+    shared_session_param = sig.parameters['shared_session']
+    assert 'ClientSession' in str(shared_session_param.annotation)
+
+
+@pytest.mark.asyncio
+async def test_session_reuse_integration():
+    """Integration test for session reuse functionality"""
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.utils import LlmProviders
+    
+    # Create a mock session
+    mock_session = MockClientSession()
+    
+    # Create two clients with the same session
+    client1 = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC,
+        shared_session=mock_session  # type: ignore
+    )
+    
+    client2 = get_async_httpx_client(
+        llm_provider=LlmProviders.OPENAI,
+        shared_session=mock_session  # type: ignore
+    )
+    
+    # Both clients should be created successfully
+    assert client1 is not None
+    assert client2 is not None
+    
+    # Both should be AsyncHTTPHandler instances
+    assert isinstance(client1, AsyncHTTPHandler)
+    assert isinstance(client2, AsyncHTTPHandler)
+    
+    # Clean up
+    await client1.close()
+    await client2.close()
+
+
+@pytest.mark.asyncio
+async def test_session_validation():
+    """Test that session validation works correctly"""
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    
+    # Test with None session
+    transport1 = AsyncHTTPHandler._create_aiohttp_transport(shared_session=None)
+    assert callable(transport1.client)  # Should create lambda
+    
+    # Test with closed session
+    mock_closed_session = MockClientSession()
+    mock_closed_session.closed = True
+    transport2 = AsyncHTTPHandler._create_aiohttp_transport(shared_session=mock_closed_session)  # type: ignore
+    assert callable(transport2.client)  # Should create lambda
+    
+    # Test with valid session
+    mock_valid_session = MockClientSession()
+    transport3 = AsyncHTTPHandler._create_aiohttp_transport(shared_session=mock_valid_session)  # type: ignore
+    assert transport3.client is mock_valid_session  # Should reuse session

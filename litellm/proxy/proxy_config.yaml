@@ -1,19 +1,16 @@
 model_list:
-  - model_name: anthropic/*
+  - model_name: db-openai-endpoint
     litellm_params:
-      model: anthropic/*
-  - model_name: openai/*
-    litellm_params:
-      model: openai/*
-
-  - model_name: vertex_ai/gemini-2.5-pro # Vertex AI Gemini
-    litellm_params:
-      model: vertex_ai/gemini-2.5-pro
-      thinking: {"type": "enabled", "budget_tokens": 1024}
-      merge_reasoning_content_in_choices: true
+      model: openai/gm
+      api_key: hi
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 
 litellm_settings:
-  callbacks: ["datadog_llm_observability"]
-  cache: true
-
+  callbacks: ["dynamic_rate_limiter_v3"]
+  priority_reservation: 
+    "prod": 0.9  # 90% reserved for production (9 RPM)
+    "dev": 0.1   # 10% reserved for development (1 RPM)
+  priority_reservation_settings:
+    default_priority: 0.2  # Weight (0%) assigned to keys without explicit priority metadata
+    saturation_threshold: 0.50 #  A model is saturated if it has hit 50% of its RPM limit

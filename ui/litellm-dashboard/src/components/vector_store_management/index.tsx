@@ -1,17 +1,6 @@
 import React, { useState, useEffect } from "react";
-import {
-  Card,
-  Icon,
-  Button as TremorButton,
-  Col,
-  Text,
-  Grid,
-} from "@tremor/react";
-import {
-  InformationCircleIcon,
-  RefreshIcon,
-} from "@heroicons/react/outline";
-import { message } from "antd";
+import { Icon, Button as TremorButton, Col, Text, Grid } from "@tremor/react";
+import { RefreshIcon } from "@heroicons/react/outline";
 import { vectorStoreListCall, vectorStoreDeleteCall, credentialListCall, CredentialItem } from "../networking";
 import { VectorStore } from "./types";
 import VectorStoreTable from "./VectorStoreTable";
@@ -19,6 +8,7 @@ import VectorStoreForm from "./VectorStoreForm";
 import DeleteModal from "./DeleteModal";
 import VectorStoreInfoView from "./vector_store_info";
 import { isAdminRole } from "@/utils/roles";
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface VectorStoreProps {
   accessToken: string | null;
@@ -26,11 +16,7 @@ interface VectorStoreProps {
   userRole: string | null;
 }
 
-const VectorStoreManagement: React.FC<VectorStoreProps> = ({
-  accessToken,
-  userID,
-  userRole,
-}) => {
+const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID, userRole }) => {
   const [vectorStores, setVectorStores] = useState<VectorStore[]>([]);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -48,7 +34,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
       setVectorStores(response.data || []);
     } catch (error) {
       console.error("Error fetching vector stores:", error);
-      message.error("Error fetching vector stores: " + error);
+      NotificationsManager.fromBackend("Error fetching vector stores: " + error);
     }
   };
 
@@ -60,7 +46,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
       setCredentials(response.credentials || []);
     } catch (error) {
       console.error("Error fetching credentials:", error);
-      message.error("Error fetching credentials: " + error);
+      NotificationsManager.fromBackend("Error fetching credentials: " + error);
     }
   };
 
@@ -96,11 +82,11 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
     if (!accessToken || !vectorStoreToDelete) return;
     try {
       await vectorStoreDeleteCall(accessToken, vectorStoreToDelete);
-      message.success("Vector store deleted successfully");
+      NotificationsManager.success("Vector store deleted successfully");
       fetchVectorStores();
     } catch (error) {
       console.error("Error deleting vector store:", error);
-      message.error("Error deleting vector store: " + error);
+      NotificationsManager.fromBackend("Error deleting vector store: " + error);
     }
     setIsDeleteModalOpen(false);
     setVectorStoreToDelete(null);
@@ -142,31 +128,23 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
             />
           </div>
         </div>
-        
+
         <Text className="mb-4">
           <p>You can use vector stores to store and retrieve LLM embeddings..</p>
         </Text>
 
-        <TremorButton
-          className="mb-4"
-          onClick={() => setIsCreateModalVisible(true)}
-        >
+        <TremorButton className="mb-4" onClick={() => setIsCreateModalVisible(true)}>
           + Add Vector Store
         </TremorButton>
 
         <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
           <Col numColSpan={1}>
-            <VectorStoreTable
-              data={vectorStores}
-              onView={handleView}
-              onEdit={handleEdit}
-              onDelete={handleDelete}
-            />
+            <VectorStoreTable data={vectorStores} onView={handleView} onEdit={handleEdit} onDelete={handleDelete} />
           </Col>
         </Grid>
 
         {/* Create Vector Store Modal */}
-        <VectorStoreForm 
+        <VectorStoreForm
           isVisible={isCreateModalVisible}
           onCancel={() => setIsCreateModalVisible(false)}
           onSuccess={handleCreateSuccess}
@@ -175,7 +153,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
         />
 
         {/* Delete Confirmation Modal */}
-        <DeleteModal 
+        <DeleteModal
           isVisible={isDeleteModalOpen}
           onCancel={() => setIsDeleteModalOpen(false)}
           onConfirm={confirmDelete}

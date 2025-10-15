@@ -4,24 +4,20 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
-import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
 
 import httpx
-from httpx import AsyncClient, Client
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm._uuid import uuid
 
-from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 from .llms.openai import OpenAIFileObject
 from .llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
-from .utils import ModelResponse, ProviderSpecificModelInfo
+from .utils import CustomPricingLiteLLMParams, ModelResponse
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
@@ -89,6 +85,7 @@ class UpdateRouterConfig(BaseModel):
     retry_after: Optional[float] = None
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
+    model_group_alias: Optional[Dict[str, Union[str, Dict]]] = {}
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -165,14 +162,7 @@ class CredentialLiteLLMParams(BaseModel):
     watsonx_region_name: Optional[str] = None
 
 
-class CustomPricingLiteLLMParams(BaseModel):
-    ## CUSTOM PRICING ##
-    input_cost_per_token: Optional[float] = None
-    output_cost_per_token: Optional[float] = None
-    input_cost_per_second: Optional[float] = None
-    output_cost_per_second: Optional[float] = None
-    input_cost_per_pixel: Optional[float] = None
-    output_cost_per_pixel: Optional[float] = None
+
 
 
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
@@ -209,12 +199,15 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     model_info: Optional[Dict] = None
     mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None
 
-
     # auto-router params
     auto_router_config_path: Optional[str] = None
     auto_router_config: Optional[str] = None
     auto_router_default_model: Optional[str] = None
     auto_router_embedding_model: Optional[str] = None
+
+    # Batch/File API Params
+    s3_bucket_name: Optional[str] = None
+    gcs_bucket_name: Optional[str] = None
 
     def __init__(
         self,
@@ -265,6 +258,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         auto_router_config: Optional[str] = None,
         auto_router_default_model: Optional[str] = None,
         auto_router_embedding_model: Optional[str] = None,
+        # Batch/File API Params
+        s3_bucket_name: Optional[str] = None,
+        gcs_bucket_name: Optional[str] = None,
         **params,
     ):
         args = locals()
@@ -343,7 +339,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
         args["max_retries"] = max_retries
-        super().__init__(**{ **args, **params })
+        super().__init__(**{**args, **params})
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -475,7 +471,7 @@ class Deployment(BaseModel):
     def to_json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)  # noqa
-        except Exception as e:
+        except Exception:
             # if using pydantic v1
             return self.dict(**kwargs)
 
@@ -595,7 +591,7 @@ class ModelGroupInfo(BaseModel):
 
     def __init__(self, **data):
         for field_name, field_type in get_type_hints(self.__class__).items():
-            if field_type == bool and data.get(field_name) is None:
+            if field_type is bool and data.get(field_name) is None:
                 data[field_name] = False
         super().__init__(**data)
 
@@ -776,8 +772,10 @@ class MockRouterTestingParams:
             ),
         )
 
+
 class ModelGroupSettings(BaseModel):
     forward_client_headers_to_llm_api: Optional[List[str]] = None
+
 
 class PreRoutingHookResponse(BaseModel):
     """
@@ -787,5 +785,6 @@ class PreRoutingHookResponse(BaseModel):
 
     Add fields that you expect to be modified by the pre-routing hook.
     """
+
     model: str
     messages: Optional[List[Dict[str, str]]]

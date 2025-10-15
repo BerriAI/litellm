@@ -1,4 +1,4 @@
-import uuid
+from litellm._uuid import uuid
 from typing import Any, Coroutine, Optional, Union
 
 from openai import AsyncAzureOpenAI, AzureOpenAI

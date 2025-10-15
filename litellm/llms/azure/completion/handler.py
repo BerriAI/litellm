@@ -30,11 +30,11 @@ class AzureTextCompletion(BaseAzureLLM):
         model: str,
         messages: list,
         model_response: ModelResponse,
-        api_key: str,
+        api_key: Optional[str],
         api_base: str,
         api_version: str,
         api_type: str,
-        azure_ad_token: str,
+        azure_ad_token: Optional[str],
         azure_ad_token_provider: Optional[Callable],
         print_verbose: Callable,
         timeout,
@@ -59,7 +59,7 @@ class AzureTextCompletion(BaseAzureLLM):
 
             ### CHECK IF CLOUDFLARE AI GATEWAY ###
             ### if so - set the model as part of the base url
-            if "gateway.ai.cloudflare.com" in api_base:
+            if api_base is not None and "gateway.ai.cloudflare.com" in api_base:
                 ## build base url - assume api base includes resource name
                 client = self._init_azure_client_for_cloudflare_ai_gateway(
                     api_key=api_key,
@@ -196,7 +196,7 @@ class AzureTextCompletion(BaseAzureLLM):
 
     async def acompletion(
         self,
-        api_key: str,
+        api_key: Optional[str],
         api_version: str,
         model: str,
         api_base: str,
@@ -263,7 +263,7 @@ class AzureTextCompletion(BaseAzureLLM):
         self,
         logging_obj,
         api_base: str,
-        api_key: str,
+        api_key: Optional[str],
         api_version: str,
         data: dict,
         model: str,
@@ -320,7 +320,7 @@ class AzureTextCompletion(BaseAzureLLM):
         self,
         logging_obj,
         api_base: str,
-        api_key: str,
+        api_key: Optional[str],
         api_version: str,
         data: dict,
         model: str,

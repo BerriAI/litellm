@@ -107,13 +107,13 @@ def test_openai_embedding_3():
 @pytest.mark.parametrize(
     "model, api_base, api_key",
     [
-        # ("azure/azure-embedding-model", None, None),
-        ("together_ai/togethercomputer/m2-bert-80M-8k-retrieval", None, None),
+        # ("azure/text-embedding-ada-002", None, None),
+        ("together_ai/BAAI/bge-base-en-v1.5", None, None),  # Updated to current Together AI embedding model
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_openai_azure_embedding_simple(model, api_base, api_key, sync_mode):
+async def test_together_ai_embedding(model, api_base, api_key, sync_mode):
     try:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -253,7 +253,7 @@ async def test_azure_ai_embedding_image(model, api_base, api_key, sync_mode):
 def test_openai_azure_embedding_timeouts():
     try:
         response = embedding(
-            model="azure/azure-embedding-model",
+            model="azure/text-embedding-ada-002",
             input=["good morning from litellm"],
             timeout=0.00001,
         )
@@ -301,7 +301,7 @@ def test_openai_azure_embedding():
         os.environ["AZURE_API_KEY"] = ""
 
         response = embedding(
-            model="azure/azure-embedding-model",
+            model="azure/text-embedding-ada-002",
             input=["good morning from litellm", "this is another item"],
             api_key=api_key,
             api_base=api_base,
@@ -380,8 +380,16 @@ def test_openai_azure_embedding_optional_arg():
             azure_ad_token="test",
         )
 
-        assert mock_client.called_once_with(model="test", input=["test"], timeout=600)
+        mock_client.assert_called_once_with(
+            model="test", 
+            input=["test"], 
+            extra_body={"azure_ad_token": "test"}, 
+            timeout=600, 
+            extra_headers={"X-Stainless-Raw-Response": "true"}
+        )
+        # Verify azure_ad_token is passed in extra_body, not as a direct parameter
         assert "azure_ad_token" not in mock_client.call_args.kwargs
+        assert mock_client.call_args.kwargs["extra_body"]["azure_ad_token"] == "test"
 
 
 # test_openai_azure_embedding()
@@ -726,7 +734,7 @@ def test_aembedding_azure():
         async def embedding_call():
             try:
                 response = await litellm.aembedding(
-                    model="azure/azure-embedding-model",
+                    model="azure/text-embedding-ada-002",
                     input=["good morning from litellm", "this is another item"],
                 )
                 print(response)
@@ -1099,7 +1107,7 @@ async def test_lm_studio_embedding(monkeypatch, sync_mode):
     "model",
     [
         "text-embedding-ada-002",
-        "azure/azure-embedding-model",
+        "azure/text-embedding-ada-002",
     ],
 )
 def test_embedding_response_ratelimit_headers(model):
@@ -1187,3 +1195,93 @@ async def test_embedding_with_extra_headers(sync_mode):
 
         mock_post.assert_called_once()
         assert "my-test-param" in mock_post.call_args.kwargs["headers"]
+
+
+@pytest.mark.parametrize(
+    "input_data, expected_payload_input",
+    [
+        # Case 1: Input with only text strings
+        (
+            ["hello world", "foo bar"],
+            ["hello world", "foo bar"],
+        ),
+        # Case 2: Input with a mix of text and a base64 encoded image
+        (
+            [
+                "A picture of a cat",
+                "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+            ],
+            [
+                {"text": "A picture of a cat"},
+                {
+                    "image": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+                },
+            ],
+        ),
+        # Case 3: Input with only a base64 encoded image
+        (
+            [
+                "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+            ],
+            [
+                {
+                    "image": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+                }
+            ],
+        ),
+    ],
+)
+def test_jina_ai_img_embeddings(input_data, expected_payload_input):
+    """
+    Tests the input transformation logic for Jina AI embeddings using mocks.
+
+    This test verifies that when litellm.embedding is called with a jina_ai model,
+    the 'input' field in the request payload is formatted correctly based on whether
+    the input contains text or base64 encoded images.
+    """
+    # We patch the `post` method of the HTTPHandler. This intercepts the network
+    # request before it's actually sent.
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+        # Configure the mock to return a successful, minimal valid response.
+        # This prevents litellm from raising an error when processing the response.
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "object": "list",
+            "data": [
+                {
+                    "object": "embedding",
+                    "index": 0,
+                    "embedding": [0.1] * 768,  # Dummy embedding vector
+                }
+            ],
+            "model": "jina-embeddings-v4",
+        }
+        mock_post.return_value = mock_response
+
+        # Call the function we want to test
+        try:
+            litellm.embedding(
+                model="jina_ai/jina-embeddings-v4", input=input_data
+            )
+        except Exception as e:
+            pytest.fail(
+                f"litellm.embedding call failed with an unexpected exception: {e}"
+            )
+
+        # --- Assertions ---
+        # 1. Check that our mock `post` method was called exactly once.
+        mock_post.assert_called_once()
+
+        # 2. Extract the keyword arguments passed to the mock call.
+        #    The request payload is in the 'data' keyword argument.
+        kwargs = mock_post.call_args.kwargs
+        assert "data" in kwargs
+
+        # 3. Parse the JSON payload string into a Python dictionary.
+        sent_data = json.loads(kwargs["data"])
+
+        # 4. This is the core of our test:
+        #    Assert that the 'input' field in the payload matches our expectation.
+        assert "input" in sent_data
+        assert sent_data["input"] == expected_payload_input

@@ -131,7 +131,9 @@ class ProxyExtrasDBManager:
         )
 
     @staticmethod
-    def _resolve_all_migrations(migrations_dir: str, schema_path: str):
+    def _resolve_all_migrations(
+        migrations_dir: str, schema_path: str, mark_all_applied: bool = True
+    ):
         """
         1. Compare the current database state to schema.prisma and generate a migration for the diff.
         2. Run prisma migrate deploy to apply any pending migrations.
@@ -210,6 +212,8 @@ class ProxyExtrasDBManager:
             logger.warning("Migration diff application timed out.")
 
         # 3. Mark all migrations as applied
+        if not mark_all_applied:
+            return
         migration_names = ProxyExtrasDBManager._get_migration_names(migrations_dir)
         logger.info(f"Resolving {len(migration_names)} migrations")
         for migration_name in migration_names:
@@ -243,7 +247,6 @@ class ProxyExtrasDBManager:
             bool: True if setup was successful, False otherwise
         """
         schema_path = ProxyExtrasDBManager._get_prisma_dir() + "/schema.prisma"
-        use_migrate = str_to_bool(os.getenv("USE_PRISMA_MIGRATE")) or use_migrate
         for attempt in range(4):
             original_dir = os.getcwd()
             migrations_dir = ProxyExtrasDBManager._get_prisma_dir()
@@ -264,6 +267,13 @@ class ProxyExtrasDBManager:
                         logger.info(f"prisma migrate deploy stdout: {result.stdout}")
 
                         logger.info("prisma migrate deploy completed")
+
+                        # Run sanity check to ensure DB matches schema
+                        logger.info("Running post-migration sanity check...")
+                        ProxyExtrasDBManager._resolve_all_migrations(
+                            migrations_dir, schema_path, mark_all_applied=False
+                        )
+                        logger.info("✅ Post-migration sanity check completed")
                         return True
                     except subprocess.CalledProcessError as e:
                         logger.info(f"prisma db error: {e.stderr}, e: {e.stdout}")
@@ -299,7 +309,7 @@ class ProxyExtrasDBManager:
                             and "database schema is not empty" in e.stderr
                         ):
                             logger.info(
-                                "Database schema is not empty, creating baseline migration"
+                                "Database schema is not empty, creating baseline migration. In read-only file system, please set an environment variable `LITELLM_MIGRATION_DIR` to a writable directory to enable migrations. Learn more - https://docs.litellm.ai/docs/proxy/prod#read-only-file-system"
                             )
                             ProxyExtrasDBManager._create_baseline_migration(schema_path)
                             logger.info(

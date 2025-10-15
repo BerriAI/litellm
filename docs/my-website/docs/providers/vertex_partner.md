@@ -14,7 +14,8 @@ import TabItem from '@theme/TabItem';
 | Meta/Llama | `vertex_ai/meta/{MODEL}` | [Vertex AI - Meta Models](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/llama) |
 | Mistral | `vertex_ai/mistral-*` | [Vertex AI - Mistral Models](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/mistral) |
 | AI21 (Jamba) | `vertex_ai/jamba-*` | [Vertex AI - AI21 Models](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/ai21) |
-| Model Garden | `vertex_ai/openai/{MODEL_ID}` or `vertex_ai/{MODEL_ID}` | [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
+| Qwen | `vertex_ai/qwen/*` | [Vertex AI - Qwen Models](https://cloud.google.com/vertex-ai/generative-ai/docs/maas/qwen) |
+| OpenAI (GPT-OSS) | `vertex_ai/openai/gpt-oss-*` | [Vertex AI - GPT-OSS Models](https://console.cloud.google.com/vertex-ai/publishers/openai/model-garden/) |
 
 ## Vertex AI - Anthropic (Claude)
 
@@ -571,27 +572,21 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </Tabs>
 
 
-## Model Garden
-
-:::tip
-
-All OpenAI compatible models from Vertex Model Garden are supported. 
-
-:::
-
-#### Using Model Garden
-
-**Almost all Vertex Model Garden models are OpenAI compatible.**
-
-<Tabs>
-
-<TabItem value="openai" label="OpenAI Compatible Models">
+## VertexAI Qwen API
 
 | Property | Details |
 |----------|---------|
-| Provider Route | `vertex_ai/openai/{MODEL_ID}` |
-| Vertex Documentation | [Model Garden LiteLLM Inference](https://github.com/GoogleCloudPlatform/generative-ai/blob/main/open-models/use-cases/model_garden_litellm_inference.ipynb), [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
-| Supported Operations | `/chat/completions`, `/embeddings` |
+| Provider Route | `vertex_ai/qwen/{MODEL}` |
+| Vertex Documentation | [Vertex AI - Qwen Models](https://cloud.google.com/vertex-ai/generative-ai/docs/maas/qwen) |
+
+**LiteLLM Supports all Vertex AI Qwen Models.** Ensure you use the `vertex_ai/qwen/` prefix for all Vertex AI Qwen models.
+
+| Model Name       | Usage                        |
+|------------------|------------------------------|
+| vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas | `completion('vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas', messages)` |
+| vertex_ai/qwen/qwen3-235b-a22b-instruct-2507-maas | `completion('vertex_ai/qwen/qwen3-235b-a22b-instruct-2507-maas', messages)` |
+
+#### Usage
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -600,30 +595,38 @@ All OpenAI compatible models from Vertex Model Garden are supported.
 from litellm import completion
 import os
 
-## set ENV variables
-os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
-os.environ["VERTEXAI_LOCATION"] = "us-central1"
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
+
+model = "qwen/qwen3-coder-480b-a35b-instruct-maas"
+
+vertex_ai_project = "your-vertex-project" # can also set this as os.environ["VERTEXAI_PROJECT"]
+vertex_ai_location = "your-vertex-location" # can also set this as os.environ["VERTEXAI_LOCATION"]
 
 response = completion(
-  model="vertex_ai/openai/<your-endpoint-id>", 
-  messages=[{ "content": "Hello, how are you?","role": "user"}]
+    model="vertex_ai/" + model,
+    messages=[{"role": "user", "content": "hi"}],
+    vertex_ai_project=vertex_ai_project,
+    vertex_ai_location=vertex_ai_location,
 )
+print("\nModel Response", response)
 ```
-
 </TabItem>
-
 <TabItem value="proxy" label="Proxy">
-
 
 **1. Add to config**
 
 ```yaml
 model_list:
-    - model_name: llama3-1-8b-instruct
+    - model_name: vertex-qwen
       litellm_params:
-        model: vertex_ai/openai/5464397967697903616
+        model: vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas
         vertex_ai_project: "my-test-project"
         vertex_ai_location: "us-east-1"
+    - model_name: vertex-qwen
+      litellm_params:
+        model: vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas
+        vertex_ai_project: "my-test-project"
+        vertex_ai_location: "us-west-1"
 ```
 
 **2. Start proxy**
@@ -641,7 +644,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
       --header 'Authorization: Bearer sk-1234' \
       --header 'Content-Type: application/json' \
       --data '{
-            "model": "llama3-1-8b-instruct", # 👈 the 'model_name' in config
+            "model": "vertex-qwen", # 👈 the 'model_name' in config
             "messages": [
                 {
                 "role": "user",
@@ -651,31 +654,141 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
         }'
 ```
 
-
-
-
 </TabItem>
-
 </Tabs>
 
-</TabItem>
 
-<TabItem value="non-openai" label="Non-OpenAI Compatible Models">
+## VertexAI GPT-OSS Models
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `vertex_ai/openai/{MODEL}` |
+| Vertex Documentation | [Vertex AI - GPT-OSS Models](https://console.cloud.google.com/vertex-ai/publishers/openai/model-garden/) |
+
+**LiteLLM Supports all Vertex AI GPT-OSS Models.** Ensure you use the `vertex_ai/openai/` prefix for all Vertex AI GPT-OSS models.
+
+| Model Name       | Usage                        |
+|------------------|------------------------------|
+| vertex_ai/openai/gpt-oss-20b-maas | `completion('vertex_ai/openai/gpt-oss-20b-maas', messages)` |
+
+#### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
 ```python
 from litellm import completion
 import os
 
-## set ENV variables
-os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
-os.environ["VERTEXAI_LOCATION"] = "us-central1"
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
+
+model = "openai/gpt-oss-20b-maas"
+
+vertex_ai_project = "your-vertex-project" # can also set this as os.environ["VERTEXAI_PROJECT"]
+vertex_ai_location = "your-vertex-location" # can also set this as os.environ["VERTEXAI_LOCATION"]
 
 response = completion(
-  model="vertex_ai/<your-endpoint-id>", 
-  messages=[{ "content": "Hello, how are you?","role": "user"}]
+    model="vertex_ai/" + model,
+    messages=[{"role": "user", "content": "hi"}],
+    vertex_ai_project=vertex_ai_project,
+    vertex_ai_location=vertex_ai_location,
+)
+print("\nModel Response", response)
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: gpt-oss
+      litellm_params:
+        model: vertex_ai/openai/gpt-oss-20b-maas
+        vertex_ai_project: "my-test-project"
+        vertex_ai_location: "us-central1"
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "gpt-oss", # 👈 the 'model_name' in config
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+</TabItem>
+</Tabs>
+
+#### Usage - `reasoning_effort`
+
+GPT-OSS models support the `reasoning_effort` parameter for enhanced reasoning capabilities.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/openai/gpt-oss-20b-maas",
+    messages=[{"role": "user", "content": "Solve this complex problem step by step"}],
+    reasoning_effort="low",  # Options: "minimal", "low", "medium", "high"
+    vertex_ai_project="your-vertex-project",
+    vertex_ai_location="us-central1",
 )
 ```
 
 </TabItem>
 
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+- model_name: gpt-oss
+  litellm_params:
+    model: vertex_ai/openai/gpt-oss-20b-maas
+    vertex_ai_project: "my-test-project"
+    vertex_ai_location: "us-central1"
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gpt-oss",
+    "messages": [{"role": "user", "content": "Solve this complex problem step by step"}],
+    "reasoning_effort": "low"
+  }'
+```
+
+</TabItem>
 </Tabs>

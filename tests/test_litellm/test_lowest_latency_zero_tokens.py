@@ -23,16 +23,9 @@ def test_zero_completion_tokens_no_division_error():
     (e.g., from Gemini with long contexts) caused ZeroDivisionError
     """
     test_cache = DualCache()
-    model_list = [
-        {
-            "model_name": "gemini-2.5-flash",
-            "litellm_params": {"model": "gemini/gemini-2.5-flash"},
-            "model_info": {"id": "1234"},
-        }
-    ]
-    
+
     lowest_latency_logger = LowestLatencyLoggingHandler(
-        router_cache=test_cache, model_list=model_list
+        router_cache=test_cache
     )
     
     deployment_id = "1234"
@@ -98,16 +91,9 @@ def test_zero_completion_tokens_with_time_to_first_token():
     Test that time_to_first_token calculation also handles zero completion tokens
     """
     test_cache = DualCache()
-    model_list = [
-        {
-            "model_name": "gemini-2.5-flash",
-            "litellm_params": {"model": "gemini/gemini-2.5-flash"},
-            "model_info": {"id": "1234"},
-        }
-    ]
     
     lowest_latency_logger = LowestLatencyLoggingHandler(
-        router_cache=test_cache, model_list=model_list
+        router_cache=test_cache
     )
     
     deployment_id = "1234"

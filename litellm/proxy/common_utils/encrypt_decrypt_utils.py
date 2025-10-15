@@ -11,10 +11,6 @@ def _get_salt_key():
     salt_key = os.getenv("LITELLM_SALT_KEY", None)
 
     if salt_key is None:
-        verbose_proxy_logger.debug(
-            "LITELLM_SALT_KEY is None using master_key to encrypt/decrypt secrets stored in DB"
-        )
-
         salt_key = master_key
 
     return salt_key
@@ -43,6 +39,7 @@ def decrypt_value_helper(
     value: str,
     key: str,  # this is just for debug purposes, showing the k,v pair that's invalid. not a signing key.
     exception_type: Literal["debug", "error"] = "error",
+    return_original_value: bool = False,
 ):
     signing_key = _get_salt_key()
 
@@ -59,14 +56,14 @@ def decrypt_value_helper(
         error_message = f"Error decrypting value for key: {key}, Did your master_key/salt key change recently? \nError: {str(e)}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
         if exception_type == "debug":
             verbose_proxy_logger.debug(error_message)
-            return None
+            return value if return_original_value else None
 
         verbose_proxy_logger.debug(
             f"Unable to decrypt value={value} for key: {key}, returning None"
         )
         verbose_proxy_logger.exception(error_message)
         # [Non-Blocking Exception. - this should not block decrypting other values]
-        return None
+        return value if return_original_value else None
 
 
 def encrypt_value(value: str, signing_key: str):

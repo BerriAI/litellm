@@ -1,10 +1,13 @@
 from enum import Enum
-from typing import Optional, TypedDict
+from typing import Optional
+
+from typing_extensions import TypedDict
 
 
 class EndpointType(str, Enum):
     VERTEX_AI = "vertex-ai"
     ANTHROPIC = "anthropic"
+    OPENAI = "openai"
     GENERIC = "generic"
 
 

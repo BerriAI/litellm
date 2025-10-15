@@ -71,6 +71,16 @@ Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
 CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
 ```
 
+> Optional: If you observe gradual memory growth under sustained load, consider recycling workers after a fixed number of requests to mitigate leaks. Set this via CLI or environment variable:
+
+```shell
+# CLI
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--max_requests_before_restart", "10000"]
+
+# or ENV (for deployment manifests / containers)
+export MAX_REQUESTS_BEFORE_RESTART=10000
+```
+
 
 ## 4. Use Redis 'port','host', 'password'. NOT 'redis_url'
 
@@ -90,7 +100,7 @@ Recommended to do this for prod:
 
 ```yaml
 router_settings:
-  routing_strategy: usage-based-routing-v2 
+  routing_strategy: simple-shuffle # (default) - recommended for best performance
   # redis_url: "os.environ/REDIS_URL"
   redis_host: os.environ/REDIS_HOST
   redis_port: os.environ/REDIS_PORT
@@ -104,6 +114,9 @@ litellm_settings:
     port: os.environ/REDIS_PORT
     password: os.environ/REDIS_PASSWORD
 ```
+
+> **WARNING**
+**Usage-based routing is not recommended for production due to performance impacts.** Use `simple-shuffle` (default) for optimal performance in high-traffic scenarios.
 
 ## 5. Disable 'load_dotenv'
 
@@ -199,7 +212,7 @@ USE_PRISMA_MIGRATE="True"
 <TabItem value="cli" label="CLI">
 
 ```bash
-litellm --use_prisma_migrate
+litellm
 ```
 
 </TabItem>
@@ -271,16 +284,7 @@ Or [watch on Loom](https://www.loom.com/share/b08be303331246b88fdc053940d03281?s
 ## Extras
 ### Expected Performance in Production
 
-1 LiteLLM Uvicorn Worker on Kubernetes
-
-| Description | Value |
-|--------------|-------|
-| Avg latency | `50ms` |
-| Median latency | `51ms` |
-| `/chat/completions` Requests/second | `100` |
-| `/chat/completions` Requests/minute | `6000` |
-| `/chat/completions` Requests/hour | `360K` |
-
+See benchmarks [here](../benchmarks#performance-metrics)
 
 ### Verifying Debugging logs are off
 
