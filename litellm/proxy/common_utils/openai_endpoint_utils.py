@@ -28,7 +28,9 @@ def remove_sensitive_info_from_deployment(deployment_dict: dict) -> dict:
     deployment_dict["litellm_params"].pop("aws_access_key_id", None)
     deployment_dict["litellm_params"].pop("aws_secret_access_key", None)
 
-    deployment_dict["litellm_params"] = SENSITIVE_DATA_MASKER.mask_dict(deployment_dict["litellm_params"])
+    deployment_dict["litellm_params"] = SENSITIVE_DATA_MASKER.mask_dict(
+        deployment_dict["litellm_params"]
+    )
 
     return deployment_dict
 

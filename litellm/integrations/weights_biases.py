@@ -44,7 +44,9 @@ try:
                         request, response, time_elapsed
                     )
                 else:
-                    logger.debug(f"Unknown OpenAI response object: {response['object']}")
+                    logger.debug(
+                        f"Unknown OpenAI response object: {response['object']}"
+                    )
             except Exception as e:
                 logger.warning(f"Failed to resolve request/response: {e}")
             return None

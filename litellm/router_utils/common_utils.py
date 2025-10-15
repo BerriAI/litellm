@@ -31,9 +31,9 @@ def add_model_file_id_mappings(
     model_file_id_mapping = {}
     if isinstance(healthy_deployments, list):
         for deployment, response in zip(healthy_deployments, responses):
-            model_file_id_mapping[deployment.get("model_info", {}).get("id")] = (
-                response.id
-            )
+            model_file_id_mapping[
+                deployment.get("model_info", {}).get("id")
+            ] = response.id
     elif isinstance(healthy_deployments, dict):
         for model_id, file_id in healthy_deployments.items():
             model_file_id_mapping[model_id] = file_id

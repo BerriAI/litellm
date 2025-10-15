@@ -351,6 +351,7 @@ class Router:
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
         from litellm._service_logger import ServiceLogging
+
         self.service_logger_obj: ServiceLogging = ServiceLogging()
         litellm.suppress_debug_info = True  # prevents 'Give Feedback/Get help' message from being emitted on Router - Relevant Issue: https://github.com/BerriAI/litellm/issues/5942
         if self.set_verbose is True:
@@ -702,9 +703,7 @@ class Router:
             routing_strategy == RoutingStrategy.LEAST_BUSY.value
             or routing_strategy == RoutingStrategy.LEAST_BUSY
         ):
-            self.leastbusy_logger = LeastBusyLoggingHandler(
-                router_cache=self.cache
-            )
+            self.leastbusy_logger = LeastBusyLoggingHandler(router_cache=self.cache)
             ## add callback
             if isinstance(litellm.input_callback, list):
                 litellm.input_callback.append(self.leastbusy_logger)  # type: ignore
@@ -4509,7 +4508,7 @@ class Router:
         try:
             exception = kwargs.get("exception", None)
             exception_status = getattr(exception, "status_code", "")
-            
+
             # Cache litellm_params to avoid repeated dict lookups
             litellm_params = kwargs.get("litellm_params", {})
             _model_info = litellm_params.get("model_info", {})
@@ -5155,7 +5154,7 @@ class Router:
             f"\nInitialized Model List {self.get_model_names()}"
         )
         self.model_names = [m["model_name"] for m in model_list]
-        
+
         # Build model_name index for O(1) lookups
         self._build_model_name_index(self.model_list)
 
@@ -5393,13 +5392,13 @@ class Router:
         """
         idx = len(self.model_list)
         self.model_list.append(model)
-        
+
         # Update model_id index for O(1) lookup
         if model_id is not None:
             self.model_id_to_deployment_index_map[model_id] = idx
         elif model.get("model_info", {}).get("id") is not None:
             self.model_id_to_deployment_index_map[model["model_info"]["id"]] = idx
-        
+
         # Update model_name index for O(1) lookup
         model_name = model.get("model_name")
         if model_name:
@@ -5744,11 +5743,11 @@ class Router:
             configurable_clientside_auth_params = (
                 litellm_params.configurable_clientside_auth_params
             )
-            
+
             # Cache nested dict access to avoid repeated temporary dict allocations
             model_litellm_params = model.get("litellm_params", {})
             model_info_dict = model.get("model_info", {})
-            
+
             # get model tpm
             _deployment_tpm: Optional[int] = None
             if _deployment_tpm is None:
@@ -6124,12 +6123,12 @@ class Router:
     def _build_model_name_index(self, model_list: list) -> None:
         """
         Build model_name -> deployment indices mapping for O(1) lookups.
-        
+
         This index allows us to find all deployments for a given model_name in O(1) time
         instead of O(n) linear scan through the entire model_list.
         """
         self.model_name_to_deployment_indices.clear()
-        
+
         for idx, model in enumerate(model_list):
             model_name = model.get("model_name")
             if model_name:
@@ -6169,7 +6168,7 @@ class Router:
         if 'model_name' is none, returns all.
 
         Returns list of model id's.
-        """        
+        """
         ids = []
         for model in self.model_list:
             if "model_info" in model and "id" in model["model_info"]:
@@ -6241,15 +6240,15 @@ class Router:
         Used for accurate 'get_model_list'.
 
         if team_id specified, only return team-specific models
-        
+
         Optimized with O(1) index lookup instead of O(n) linear scan.
         """
         returned_models: List[DeploymentTypedDict] = []
-        
+
         # O(1) lookup in model_name index
         if model_name in self.model_name_to_deployment_indices:
             indices = self.model_name_to_deployment_indices[model_name]
-            
+
             # O(k) where k = deployments for this model_name (typically 1-10)
             for idx in indices:
                 model = self.model_list[idx]
@@ -6395,9 +6394,7 @@ class Router:
                 potential_team_only_wildcard_models = (
                     self.team_pattern_routers[team_id].route(model_name) or []
                 )
-                potential_wildcard_models.extend(
-                    potential_team_only_wildcard_models
-                )
+                potential_wildcard_models.extend(potential_team_only_wildcard_models)
 
             if model_name is not None and potential_wildcard_models is not None:
                 for m in potential_wildcard_models:
@@ -6658,7 +6655,7 @@ class Router:
             # Cache nested dict access to avoid repeated temporary dict allocations
             _litellm_params = deployment.get("litellm_params", {})
             _model_info = deployment.get("model_info", {})
-            
+
             # see if we have the info for this model
             try:
                 base_model = _model_info.get("base_model", None)
@@ -7338,7 +7335,8 @@ class Router:
         # Convert to set for O(1) lookup and use list comprehension for O(n) filtering
         cooldown_set = set(cooldown_deployments)
         return [
-            deployment for deployment in healthy_deployments
+            deployment
+            for deployment in healthy_deployments
             if deployment["model_info"]["id"] not in cooldown_set
         ]
 

@@ -1120,9 +1120,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if api_key is None and azure_ad_token_provider is not None:
                 azure_ad_token = azure_ad_token_provider()
                 if azure_ad_token:
-                    headers.pop(
-                        "api-key", None
-                    )
+                    headers.pop("api-key", None)
                     headers["Authorization"] = f"Bearer {azure_ad_token}"
 
             # init AzureOpenAI Client

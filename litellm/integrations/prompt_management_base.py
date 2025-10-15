@@ -56,7 +56,6 @@ class PromptManagementBase(ABC):
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
-
         compiled_prompt_client = self._compile_prompt_helper(
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
@@ -94,7 +93,6 @@ class PromptManagementBase(ABC):
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
-
         if prompt_id is None:
             raise ValueError("prompt_id is required for Prompt Management Base class")
         if not self.should_run_prompt_management(

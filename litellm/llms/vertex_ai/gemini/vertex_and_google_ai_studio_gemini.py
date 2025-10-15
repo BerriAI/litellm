@@ -282,14 +282,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> Tuple[dict, Optional[dict]]:
         """
         Extract location configuration from googleMaps tool for Vertex AI toolConfig.
-        
+
         Supports two interface styles:
         1. Nested (recommended): {"enableWidget": "...", "retrievalConfig": {"latitude": ..., "longitude": ...}}
         2. Flat (backward compat): {"enableWidget": "...", "latitude": ..., "longitude": ...}
-        
+
         Args:
             google_maps_config: The googleMaps tool configuration from LiteLLM
-        
+
         Returns:
             Tuple of (cleaned_google_maps_config, retrieval_config):
                 - cleaned_google_maps_config: googleMaps config without location fields
@@ -299,7 +299,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         latitude = google_maps_config.get("latitude")
         longitude = google_maps_config.get("longitude")
         language_code = google_maps_config.get("languageCode")
-        
+
         if latitude is not None and longitude is not None:
             retrieval_config = {
                 "latLng": {
@@ -309,21 +309,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             }
             if language_code is not None:
                 retrieval_config["languageCode"] = language_code
-        
+
         # Remove location fields from tool definition
         cleaned_config = {
             k: v
             for k, v in google_maps_config.items()
             if k not in ["latitude", "longitude", "languageCode"]
         }
-    
+
         return cleaned_config, retrieval_config
-    
-    def get_tool_value(
-        self,
-        tool: dict, 
-        tool_name: str
-    ) -> Optional[dict]:
+
+    def get_tool_value(self, tool: dict, tool_name: str) -> Optional[dict]:
         """
         Helper function to get tool value handling both camelCase and underscore_case variants
 
@@ -347,19 +343,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         else:
             return None
 
-    def _map_function( # noqa: PLR0915
+    def _map_function(  # noqa: PLR0915
         self, value: List[dict], optional_params: dict
     ) -> List[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
-        
+
         Args:
             value: List of tool definitions
             optional_params: Request-scoped parameters to store retrieval config
-        
+
         Returns:
             List of mapped tools in Vertex AI format
-            
+
         Side effects:
             May add 'toolConfig' with 'retrievalConfig' to optional_params if
             googleMaps tools contain location data
@@ -406,25 +402,43 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             tool_name = list(tool.keys())[0] if len(tool.keys()) == 1 else None
             if tool_name and (
-                tool_name == "codeExecution" or tool_name == VertexToolName.CODE_EXECUTION.value
+                tool_name == "codeExecution"
+                or tool_name == VertexToolName.CODE_EXECUTION.value
             ):  # code_execution maintained for backwards compatibility
                 code_execution = self.get_tool_value(tool, "codeExecution")
             elif tool_name and tool_name == VertexToolName.GOOGLE_SEARCH.value:
-                googleSearch = self.get_tool_value(tool, VertexToolName.GOOGLE_SEARCH.value)
-            elif tool_name and tool_name == VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value:
-                googleSearchRetrieval = self.get_tool_value(tool, VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value)
+                googleSearch = self.get_tool_value(
+                    tool, VertexToolName.GOOGLE_SEARCH.value
+                )
+            elif (
+                tool_name and tool_name == VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value
+            ):
+                googleSearchRetrieval = self.get_tool_value(
+                    tool, VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value
+                )
             elif tool_name and tool_name == VertexToolName.ENTERPRISE_WEB_SEARCH.value:
-                enterpriseWebSearch = self.get_tool_value(tool, VertexToolName.ENTERPRISE_WEB_SEARCH.value)
-            elif tool_name and (tool_name == VertexToolName.URL_CONTEXT.value or tool_name == "urlContext"):
+                enterpriseWebSearch = self.get_tool_value(
+                    tool, VertexToolName.ENTERPRISE_WEB_SEARCH.value
+                )
+            elif tool_name and (
+                tool_name == VertexToolName.URL_CONTEXT.value
+                or tool_name == "urlContext"
+            ):
                 urlContext = self.get_tool_value(tool, tool_name)
             elif tool_name and (
-                tool_name == VertexToolName.GOOGLE_MAPS.value or tool_name == "google_maps"
+                tool_name == VertexToolName.GOOGLE_MAPS.value
+                or tool_name == "google_maps"
             ):
-                google_maps_value = self.get_tool_value(tool, VertexToolName.GOOGLE_MAPS.value)
-                
+                google_maps_value = self.get_tool_value(
+                    tool, VertexToolName.GOOGLE_MAPS.value
+                )
+
                 # Extract and transform location configuration for toolConfig
                 if google_maps_value is not None:
-                    googleMaps, google_maps_retrieval_config = self._extract_google_maps_retrieval_config(
+                    (
+                        googleMaps,
+                        google_maps_retrieval_config,
+                    ) = self._extract_google_maps_retrieval_config(
                         google_maps_config=google_maps_value
                     )
             elif openai_function_object is not None:
@@ -464,13 +478,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _tools[VertexToolName.URL_CONTEXT.value] = urlContext
         if googleMaps is not None:
             _tools[VertexToolName.GOOGLE_MAPS.value] = googleMaps
-        
+
         # Add retrieval config to toolConfig if googleMaps has location data
         if google_maps_retrieval_config is not None:
             if "toolConfig" not in optional_params:
                 optional_params["toolConfig"] = {}
-            optional_params["toolConfig"]["retrievalConfig"] = google_maps_retrieval_config
-        
+            optional_params["toolConfig"][
+                "retrievalConfig"
+            ] = google_maps_retrieval_config
+
         return [_tools]
 
     def _map_response_schema(self, value: dict) -> dict:
@@ -1690,7 +1706,9 @@ async def make_call(
         )
 
     try:
-        response = await client.post(api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj)
+        response = await client.post(
+            api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj
+        )
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
         exception_string = str(await e.response.aread())
@@ -1737,7 +1755,9 @@ def make_sync_call(
     if client is None:
         client = HTTPHandler()  # Create a new client if none provided
 
-    response = client.post(api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj)
+    response = client.post(
+        api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj
+    )
 
     if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
@@ -1792,7 +1812,6 @@ class VertexLLM(VertexBase):
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ) -> CustomStreamWrapper:
-
         should_use_v1beta1_features = self.is_using_v1beta1_features(
             optional_params=optional_params
         )
@@ -1829,8 +1848,8 @@ class VertexLLM(VertexBase):
             **data,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=auth_header)  # type: ignore
-
+            vertex_auth_header=auth_header,
+        )  # type: ignore
 
         ## LOGGING
         logging_obj.pre_call(
@@ -1923,7 +1942,8 @@ class VertexLLM(VertexBase):
             **data,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=auth_header)  # type: ignore
+            vertex_auth_header=auth_header,
+        )  # type: ignore
 
         _async_client_params = {}
         if timeout:
@@ -1947,7 +1967,10 @@ class VertexLLM(VertexBase):
 
         try:
             response = await client.post(
-                api_base, headers=headers, json=cast(dict, request_body), logging_obj=logging_obj
+                api_base,
+                headers=headers,
+                json=cast(dict, request_body),
+                logging_obj=logging_obj,
             )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -2101,9 +2124,10 @@ class VertexLLM(VertexBase):
         ## TRANSFORMATION ##
         data = sync_transform_request_body(
             **transform_request_params,
-            vertex_project=vertex_project, 
+            vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=auth_header)
+            vertex_auth_header=auth_header,
+        )
 
         ## LOGGING
         logging_obj.pre_call(

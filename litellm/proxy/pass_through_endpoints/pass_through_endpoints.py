@@ -433,10 +433,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         for field_name, field_value in form_data.items():
             if isinstance(field_value, (StarletteUploadFile, UploadFile)):
-                files[field_name] = (
-                    await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
-                        upload_file=field_value
-                    )
+                files[
+                    field_name
+                ] = await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
+                    upload_file=field_value
                 )
             else:
                 form_data_dict[field_name] = field_value
@@ -523,9 +523,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             "passthrough_logging_payload": passthrough_logging_payload,
         }
 
-        logging_obj.model_call_details["passthrough_logging_payload"] = (
-            passthrough_logging_payload
-        )
+        logging_obj.model_call_details[
+            "passthrough_logging_payload"
+        ] = passthrough_logging_payload
 
         return kwargs
 
@@ -1288,9 +1288,9 @@ async def websocket_passthrough_request(  # noqa: PLR0915
                                             )
                                             if extracted_model:
                                                 kwargs["model"] = extracted_model
-                                                kwargs["custom_llm_provider"] = (
-                                                    "vertex_ai-language-models"
-                                                )
+                                                kwargs[
+                                                    "custom_llm_provider"
+                                                ] = "vertex_ai-language-models"
                                                 # Update logging object with correct model
                                                 logging_obj.model = extracted_model
                                                 logging_obj.model_call_details[
@@ -1356,9 +1356,9 @@ async def websocket_passthrough_request(  # noqa: PLR0915
                             # Update logging object with correct model
                             logging_obj.model = extracted_model
                             logging_obj.model_call_details["model"] = extracted_model
-                            logging_obj.model_call_details["custom_llm_provider"] = (
-                                "vertex_ai_language_models"
-                            )
+                            logging_obj.model_call_details[
+                                "custom_llm_provider"
+                            ] = "vertex_ai_language_models"
                             verbose_proxy_logger.debug(
                                 f"WebSocket passthrough ({endpoint}): Successfully extracted model '{extracted_model}' and set provider to 'vertex_ai' from server setup response"
                             )

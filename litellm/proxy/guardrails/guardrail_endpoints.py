@@ -760,7 +760,6 @@ def _extract_fields_recursive(
     model: Type[BaseModel],
     depth: int = 0,
 ) -> Dict[str, Any]:
-
     # Check if we've exceeded the maximum recursion depth
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise HTTPException(

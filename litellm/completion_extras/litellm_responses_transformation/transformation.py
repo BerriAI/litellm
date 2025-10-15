@@ -187,10 +187,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["max_output_tokens"] = value
             elif key == "tools" and value is not None:
                 # Convert chat completion tools to responses API tools format
-                responses_api_request["tools"] = (
-                    self._convert_tools_to_responses_format(
-                        cast(List[Dict[str, Any]], value)
-                    )
+                responses_api_request[
+                    "tools"
+                ] = self._convert_tools_to_responses_format(
+                    cast(List[Dict[str, Any]], value)
                 )
             elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
                 responses_api_request[key] = value  # type: ignore
@@ -289,9 +289,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         reasoning_content: Optional[str] = None
 
         for item in raw_response.output:
-
             if isinstance(item, ResponseReasoningItem):
-
                 for summary_item in item.summary:
                     response_text = getattr(summary_item, "text", "")
                     reasoning_content = response_text if response_text else ""

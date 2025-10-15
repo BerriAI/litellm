@@ -70,7 +70,9 @@ class ArizePhoenixLogger:
             otlp_auth_headers = f"api_key={api_key}"
         elif api_key is not None:
             # api_key/auth is optional for self hosted phoenix
-            otlp_auth_headers = f"Authorization={urllib.parse.quote(f'Bearer {api_key}')}"
+            otlp_auth_headers = (
+                f"Authorization={urllib.parse.quote(f'Bearer {api_key}')}"
+            )
 
         return ArizePhoenixConfig(
             otlp_auth_headers=otlp_auth_headers, protocol=protocol, endpoint=endpoint

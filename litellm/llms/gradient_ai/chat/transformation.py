@@ -12,7 +12,6 @@ GRADIENT_AI_SERVERLESS_ENDPOINT = "https://inference.do-ai.run"
 
 
 class GradientAIConfig(OpenAILikeChatConfig):
-
     k: Optional[int] = None
     kb_filters: Optional[List[Dict]] = None
     filter_kb_content_by_query_metadata: Optional[bool] = None
@@ -21,7 +20,9 @@ class GradientAIConfig(OpenAILikeChatConfig):
     include_retrieval_info: Optional[bool] = None
     include_guardrails_info: Optional[bool] = None
     provide_citations: Optional[bool] = None
-    retrieval_method: Optional[Literal["rewrite", "step_back", "sub_queries", "none"]] = None
+    retrieval_method: Optional[
+        Literal["rewrite", "step_back", "sub_queries", "none"]
+    ] = None
 
     def __init__(
         self,
@@ -76,14 +77,16 @@ class GradientAIConfig(OpenAILikeChatConfig):
         ]
         return supported_params
 
-    def validate_environment(self,
-                             headers: dict,
-                             model: str,
-                             messages: List[AllMessageValues],
-                             optional_params: dict,
-                             litellm_params: dict,
-                             api_key: Optional[str] = None,
-                             api_base: Optional[str] = None):
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ):
         api_key = api_key or get_secret_str("GRADIENT_AI_API_KEY")
         if api_key is None:
             raise ValueError("GradientAI API key not found")
@@ -107,7 +110,10 @@ class GradientAIConfig(OpenAILikeChatConfig):
 
         if api_base and api_base != GRADIENT_AI_SERVERLESS_ENDPOINT:
             complete_url = f"{api_base}/api/v1/chat/completions"
-        elif gradient_ai_endpoint and gradient_ai_endpoint != GRADIENT_AI_SERVERLESS_ENDPOINT:
+        elif (
+            gradient_ai_endpoint
+            and gradient_ai_endpoint != GRADIENT_AI_SERVERLESS_ENDPOINT
+        ):
             complete_url = f"{gradient_ai_endpoint}/api/v1/chat/completions"
 
         return complete_url
@@ -139,9 +145,10 @@ class GradientAIConfig(OpenAILikeChatConfig):
                 optional_params[param] = value
             elif not drop_params:
                 from litellm.utils import UnsupportedParamsError
+
                 raise UnsupportedParamsError(
                     status_code=400,
-                    message=f"GradientAI does not support parameter '{param}'. To drop unsupported params, set `drop_params=True`."
+                    message=f"GradientAI does not support parameter '{param}'. To drop unsupported params, set `drop_params=True`.",
                 )
 
         return optional_params

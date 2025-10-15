@@ -60,9 +60,9 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
     auto_create_key = data_json.pop("auto_create_key", True)
 
     if auto_create_key is False:
-        data_json["table_name"] = (
-            "user"  # only create a user, don't create key if 'auto_create_key' set to False
-        )
+        data_json[
+            "table_name"
+        ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
 
     if litellm.default_internal_user_params and (
         data.user_role != LitellmUserRoles.PROXY_ADMIN.value
@@ -780,9 +780,9 @@ def _update_internal_user_params(
         "budget_duration" not in non_default_values
     ):  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
-            non_default_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            non_default_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
             non_default_values["budget_reset_at"] = get_budget_reset_time(
@@ -1787,13 +1787,13 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users: Optional[List[BaseModel]] = (
-            await prisma_client.db.litellm_usertable.find_many(
-                where=where_conditions,
-                skip=skip,
-                take=page_size,
-                order={"created_at": "desc"},
-            )
+        users: Optional[
+            List[BaseModel]
+        ] = await prisma_client.db.litellm_usertable.find_many(
+            where=where_conditions,
+            skip=skip,
+            take=page_size,
+            order={"created_at": "desc"},
         )
 
         if not users:

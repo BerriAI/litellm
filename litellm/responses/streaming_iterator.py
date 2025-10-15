@@ -111,10 +111,10 @@ class BaseResponsesAPIStreamingIterator:
                             )
                             if usage_obj is not None:
                                 try:
-                                    cost: Optional[float] = (
-                                        self.logging_obj._response_cost_calculator(
-                                            result=response_obj
-                                        )
+                                    cost: Optional[
+                                        float
+                                    ] = self.logging_obj._response_cost_calculator(
+                                        result=response_obj
                                     )
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)

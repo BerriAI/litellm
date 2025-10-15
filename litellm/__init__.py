@@ -1167,7 +1167,9 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
 )
 from .llms.cohere.chat.transformation import CohereChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
-from .llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
+from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
+    TwelveLabsMarengoEmbeddingConfig,
+)
 from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
 from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
 from .llms.deepinfra.chat.transformation import DeepInfraConfig
@@ -1370,8 +1372,10 @@ def set_global_bitbucket_config(config: Dict[str, Any]) -> None:
     global global_bitbucket_config
     global_bitbucket_config = config
 
+
 ### GLOBAL CONFIG ###
 global_gitlab_config: Optional[Dict[str, Any]] = None
+
 
 def set_global_gitlab_config(config: Dict[str, Any]) -> None:
     """Set global BitBucket configuration for prompt management."""

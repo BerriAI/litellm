@@ -1107,7 +1107,6 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_id=prompt_id, non_default_params=non_default_params
         )
     ):
-
         (
             model,
             messages,
@@ -2079,7 +2078,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             try:
                 if use_base_llm_http_handler:
-
                     response = base_llm_http_handler.completion(
                         model=model,
                         messages=messages,
@@ -2881,7 +2879,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 extra_headers=headers,
             )
 
-        elif custom_llm_provider == "vertex_ai":          
+        elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
                 optional_params.pop("vertex_project", None)
                 or optional_params.pop("vertex_ai_project", None)
@@ -2903,8 +2901,10 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = api_base or litellm.api_base or get_secret("VERTEXAI_API_BASE")
 
             new_params = safe_deep_copy(optional_params or {})
-            model_route = get_vertex_ai_model_route(model=model, litellm_params=litellm_params)
-            
+            model_route = get_vertex_ai_model_route(
+                model=model, litellm_params=litellm_params
+            )
+
             if model_route == VertexAIModelRoute.PARTNER_MODELS:
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
@@ -3177,9 +3177,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params["aws_region_name"] = (
-                        aws_bedrock_client.meta.region_name
-                    )
+                    optional_params[
+                        "aws_region_name"
+                    ] = aws_bedrock_client.meta.region_name
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -3527,7 +3527,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 raise e
         elif custom_llm_provider == "gradient_ai":
-
             api_base = litellm.api_base or api_base
             response = base_llm_http_handler.completion(
                 model=model,
@@ -3603,7 +3602,6 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             pass
-
 
         elif custom_llm_provider == "ovhcloud" or model in litellm.ovhcloud_models:
             api_key = (
@@ -5200,6 +5198,7 @@ async def aadapter_completion(
     except Exception as e:
         raise e
 
+
 async def aadapter_generate_content(
     **kwargs,
 ) -> Union[Dict[str, Any], AsyncIterator[bytes]]:
@@ -5234,9 +5233,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
-        None
-    )
+    translated_response: Optional[
+        Union[BaseModel, AdapterCompletionStreamWrapper]
+    ] = None
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -6223,9 +6222,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = (
-                processor.get_combined_content(content_chunks)
-            )
+            response["choices"][0]["message"][
+                "content"
+            ] = processor.get_combined_content(content_chunks)
 
         thinking_blocks = [
             chunk
@@ -6236,9 +6235,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(thinking_blocks) > 0:
-            response["choices"][0]["message"]["thinking_blocks"] = (
-                processor.get_combined_thinking_content(thinking_blocks)
-            )
+            response["choices"][0]["message"][
+                "thinking_blocks"
+            ] = processor.get_combined_thinking_content(thinking_blocks)
 
         reasoning_chunks = [
             chunk
@@ -6249,9 +6248,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"]["reasoning_content"] = (
-                processor.get_combined_reasoning_content(reasoning_chunks)
-            )
+            response["choices"][0]["message"][
+                "reasoning_content"
+            ] = processor.get_combined_reasoning_content(reasoning_chunks)
 
         audio_chunks = [
             chunk

@@ -98,22 +98,21 @@ AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
 DEFAULT_SSL_CIPHERS = os.getenv(
     "LITELLM_SSL_CIPHERS",
     # Priority 1: TLS 1.3 ciphers (fastest, ~50ms handshake)
-    "TLS_AES_256_GCM_SHA384:"           # Fastest observed in testing
-    "TLS_AES_128_GCM_SHA256:"           # Slightly faster than 256-bit
-    "TLS_CHACHA20_POLY1305_SHA256:"     # Fast on ARM/mobile
+    "TLS_AES_256_GCM_SHA384:"  # Fastest observed in testing
+    "TLS_AES_128_GCM_SHA256:"  # Slightly faster than 256-bit
+    "TLS_CHACHA20_POLY1305_SHA256:"  # Fast on ARM/mobile
     # Priority 2: TLS 1.2 ECDHE+GCM (fast, ~100ms handshake, widely supported)
     "ECDHE-RSA-AES256-GCM-SHA384:"
     "ECDHE-RSA-AES128-GCM-SHA256:"
     "ECDHE-ECDSA-AES256-GCM-SHA384:"
     "ECDHE-ECDSA-AES128-GCM-SHA256:"
     # Priority 3: Additional modern ciphers (good balance)
-    "ECDHE-RSA-CHACHA20-POLY1305:"
-    "ECDHE-ECDSA-CHACHA20-POLY1305:"
+    "ECDHE-RSA-CHACHA20-POLY1305:" "ECDHE-ECDSA-CHACHA20-POLY1305:"
     # Priority 4: Widely compatible fallbacks (slower but universally supported)
-    "ECDHE-RSA-AES256-SHA384:"          # Common fallback
-    "ECDHE-RSA-AES128-SHA256:"          # Very widely supported
-    "AES256-GCM-SHA384:"                # Non-PFS fallback (compatibility)
-    "AES128-GCM-SHA256",                # Last resort (maximum compatibility)
+    "ECDHE-RSA-AES256-SHA384:"  # Common fallback
+    "ECDHE-RSA-AES128-SHA256:"  # Very widely supported
+    "AES256-GCM-SHA384:"  # Non-PFS fallback (compatibility)
+    "AES128-GCM-SHA256",  # Last resort (maximum compatibility)
 )
 
 ########### v2 Architecture constants for managing writing updates to the database ###########
@@ -344,7 +343,7 @@ LITELLM_CHAT_PROVIDERS = [
     "vercel_ai_gateway",
     "wandb",
     "ovhcloud",
-    "lemonade"
+    "lemonade",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -796,28 +795,22 @@ WANDB_MODELS: set = set(
         # openai models
         "openai/gpt-oss-120b",
         "openai/gpt-oss-20b",
-
         # zai-org models
         "zai-org/GLM-4.5",
-
         # Qwen models
         "Qwen/Qwen3-235B-A22B-Instruct-2507",
         "Qwen/Qwen3-Coder-480B-A35B-Instruct",
         "Qwen/Qwen3-235B-A22B-Thinking-2507",
-
         # moonshotai
         "moonshotai/Kimi-K2-Instruct",
-
         # meta models
         "meta-llama/Llama-3.1-8B-Instruct",
         "meta-llama/Llama-3.3-70B-Instruct",
         "meta-llama/Llama-4-Scout-17B-16E-Instruct",
-
         # deepseek-ai
         "deepseek-ai/DeepSeek-V3.1",
         "deepseek-ai/DeepSeek-R1-0528",
         "deepseek-ai/DeepSeek-V3-0324",
-
         # microsoft
         "microsoft/Phi-4-mini-instruct",
     ]
@@ -1025,7 +1018,9 @@ LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
 
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
-LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400))  # 24 hours default
+LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(
+    os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400)
+)  # 24 hours default
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 

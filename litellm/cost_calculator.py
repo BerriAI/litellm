@@ -333,7 +333,9 @@ def cost_per_token(  # noqa: PLR0915
     elif custom_llm_provider == "bedrock":
         return bedrock_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "openai":
-        return openai_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
+        return openai_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier
+        )
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "fireworks_ai":
@@ -356,6 +358,7 @@ def cost_per_token(  # noqa: PLR0915
         from litellm.llms.dashscope.cost_calculator import (
             cost_per_token as dashscope_cost_per_token,
         )
+
         return dashscope_cost_per_token(model=model, usage=usage_block)
     else:
         model_info = _cached_get_model_info_helper(
@@ -598,7 +601,7 @@ def _store_cost_breakdown_in_logging_obj(
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
-    
+
     Args:
         litellm_logging_obj: The logging object to store breakdown in
         call_type: Type of call (completion, etc.)
@@ -607,18 +610,18 @@ def _store_cost_breakdown_in_logging_obj(
         cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
         total_cost_usd_dollar: Total cost of request
     """
-    if (litellm_logging_obj is None):
+    if litellm_logging_obj is None:
         return
-    
+
     try:
         # Store the cost breakdown - reasoning cost is 0 since it's already included in completion cost
         litellm_logging_obj.set_cost_breakdown(
             input_cost=prompt_tokens_cost_usd_dollar,
             output_cost=completion_tokens_cost_usd_dollar,
             total_cost=total_cost_usd_dollar,
-            cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools_cost_usd_dollar
+            cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools_cost_usd_dollar,
         )
-        
+
     except Exception as breakdown_error:
         verbose_logger.debug(f"Error storing cost breakdown: {str(breakdown_error)}")
         # Don't fail the main cost calculation if breakdown storage fails
@@ -704,7 +707,7 @@ def completion_cost(  # noqa: PLR0915
             completion_response=completion_response
         )
         rerank_billed_units: Optional[RerankBilledUnits] = None
-        
+
         # Extract service_tier from optional_params if not provided directly
         if service_tier is None and optional_params is not None:
             service_tier = optional_params.get("service_tier")
@@ -974,16 +977,16 @@ def completion_cost(  # noqa: PLR0915
                     )
                 )
                 _final_cost += cost_for_built_in_tools
-                
+
                 # Store cost breakdown in logging object if available
                 _store_cost_breakdown_in_logging_obj(
                     litellm_logging_obj=litellm_logging_obj,
                     prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
                     completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
                     cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
-                    total_cost_usd_dollar=_final_cost
+                    total_cost_usd_dollar=_final_cost,
                 )
-                
+
                 return _final_cost
             except Exception as e:
                 verbose_logger.debug(

@@ -36,6 +36,7 @@ class WatsonXAIEndpoint(str, Enum):
 
 class WatsonXModelPattern(str, Enum):
     """Model identifier patterns for WatsonX models"""
+
     GRANITE_CHAT = "granite-chat"
     IBM_MISTRAL = "ibm-mistral"
     IBM_MISTRALAI = "ibm-mistralai"

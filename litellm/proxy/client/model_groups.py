@@ -27,7 +27,9 @@ class ModelGroupsManagementClient:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
-    def info(self, return_request: bool = False) -> Union[List[Dict[str, Any]], requests.Request]:
+    def info(
+        self, return_request: bool = False
+    ) -> Union[List[Dict[str, Any]], requests.Request]:
         """
         Get detailed information about all model groups from the server.
 

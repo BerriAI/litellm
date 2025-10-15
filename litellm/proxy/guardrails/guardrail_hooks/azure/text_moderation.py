@@ -21,7 +21,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from .base import AzureGuardrailBase
 
 if TYPE_CHECKING:
-
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
@@ -189,7 +188,6 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             and self.severity_threshold_by_category is None
         ):
             for category in response["categoriesAnalysis"]:
-
                 if category["severity"] >= self.default_severity_threshold:
                     raise HTTPException(
                         status_code=400,

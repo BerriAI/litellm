@@ -45,6 +45,7 @@ class SupportedGuardrailIntegrations(Enum):
     JAVELIN = "javelin"
     ENKRYPTAI = "enkryptai"
 
+
 class Role(Enum):
     SYSTEM = "system"
     ASSISTANT = "assistant"

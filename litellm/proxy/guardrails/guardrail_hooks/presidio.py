@@ -68,7 +68,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         output_parse_pii: Optional[bool] = False,
         presidio_ad_hoc_recognizers: Optional[str] = None,
         logging_only: Optional[bool] = None,
-        pii_entities_config: Optional[Dict[Union[PiiEntityType, str], PiiAction]] = None,
+        pii_entities_config: Optional[
+            Dict[Union[PiiEntityType, str], PiiAction]
+        ] = None,
         presidio_language: Optional[str] = None,
         **kwargs,
     ):

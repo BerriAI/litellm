@@ -45,7 +45,7 @@ class GitLabClient:
         self.auth_method = config.get("auth_method", "token")  # 'token' or 'oauth'
         self.branch = config.get("branch", None)
         if not self.branch:
-            self.branch = 'main'
+            self.branch = "main"
         self.tag = config.get("tag")
         self.base_url = config.get("base_url", "https://gitlab.com/api/v4")
 
@@ -86,7 +86,13 @@ class GitLabClient:
         ref_q = quote(ref or self.ref, safe="")
         return f"{self.base_url}/projects/{self._project_enc}/repository/files/{file_enc}?ref={ref_q}"
 
-    def _tree_url(self, directory_path: str = "", recursive: bool = False, *, ref: Optional[str] = None) -> str:
+    def _tree_url(
+        self,
+        directory_path: str = "",
+        recursive: bool = False,
+        *,
+        ref: Optional[str] = None,
+    ) -> str:
         path_q = f"&path={quote(directory_path, safe='')}" if directory_path else ""
         rec_q = "&recursive=true" if recursive else ""
         ref_q = quote(ref or self.ref, safe="")
@@ -102,7 +108,9 @@ class GitLabClient:
             raise ValueError("ref must be a non-empty string")
         self.ref = ref
 
-    def get_file_content(self, file_path: str, *, ref: Optional[str] = None) -> Optional[str]:
+    def get_file_content(
+        self, file_path: str, *, ref: Optional[str] = None
+    ) -> Optional[str]:
         """
         Fetch the content of a file from the GitLab repository at the given ref
         (tag, branch, or commit SHA). If `ref` is None, uses self.ref.
@@ -124,7 +132,11 @@ class GitLabClient:
             resp.raise_for_status()
 
             ctype = (resp.headers.get("content-type") or "").lower()
-            if ctype.startswith("text/") or "charset=" in ctype or ctype.startswith("application/json"):
+            if (
+                ctype.startswith("text/")
+                or "charset=" in ctype
+                or ctype.startswith("application/json")
+            ):
                 return resp.text
             try:
                 return resp.content.decode("utf-8")
@@ -140,10 +152,14 @@ class GitLabClient:
                     f"Access denied to file '{file_path}'. Check your GitLab permissions for project '{self.project}'."
                 )
             if status == 401:
-                raise Exception("Authentication failed. Check your GitLab token and auth_method.")
+                raise Exception(
+                    "Authentication failed. Check your GitLab token and auth_method."
+                )
             raise Exception(f"Failed to fetch file '{file_path}': {e}")
 
-    def _get_file_content_via_json(self, file_path: str, *, ref: Optional[str] = None) -> Optional[str]:
+    def _get_file_content_via_json(
+        self, file_path: str, *, ref: Optional[str] = None
+    ) -> Optional[str]:
         """
         Fallback for get_file_content(): use the JSON file API which returns base64 content.
         """
@@ -171,16 +187,20 @@ class GitLabClient:
                     f"Access denied to file '{file_path}'. Check your GitLab permissions for project '{self.project}'."
                 )
             if status == 401:
-                raise Exception("Authentication failed. Check your GitLab token and auth_method.")
-            raise Exception(f"Failed to fetch file '{file_path}' via JSON endpoint: {e}")
+                raise Exception(
+                    "Authentication failed. Check your GitLab token and auth_method."
+                )
+            raise Exception(
+                f"Failed to fetch file '{file_path}' via JSON endpoint: {e}"
+            )
 
     def list_files(
-            self,
-            directory_path: str = "",
-            file_extension: str = ".prompt",
-            recursive: bool = False,
-            *,
-            ref: Optional[str] = None,
+        self,
+        directory_path: str = "",
+        file_extension: str = ".prompt",
+        recursive: bool = False,
+        *,
+        ref: Optional[str] = None,
     ) -> List[str]:
         """
         List files in a directory with a specific extension using the repository tree API.
@@ -220,7 +240,9 @@ class GitLabClient:
                     f"Access denied to directory '{directory_path}'. Check your GitLab permissions for project '{self.project}'."
                 )
             if status == 401:
-                raise Exception("Authentication failed. Check your GitLab token and auth_method.")
+                raise Exception(
+                    "Authentication failed. Check your GitLab token and auth_method."
+                )
             raise Exception(f"Failed to list files in '{directory_path}': {e}")
 
     def get_repository_info(self) -> Dict[str, Any]:
@@ -252,7 +274,9 @@ class GitLabClient:
         except Exception as e:
             raise Exception(f"Failed to get branches: {e}")
 
-    def get_file_metadata(self, file_path: str, *, ref: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_file_metadata(
+        self, file_path: str, *, ref: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Get minimal metadata about a file via RAW endpoint headers at a given ref.
 

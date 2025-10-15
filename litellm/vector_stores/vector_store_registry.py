@@ -127,21 +127,21 @@ class VectorStoreRegistry:
                 if vector_store.get("vector_store_id") == vector_store_id:
                     return vector_store
         return None
-    
+
     def get_litellm_managed_vector_store_from_registry(
         self, vector_store_id: str
     ) -> Optional[LiteLLM_ManagedVectorStore]:
         """
         Returns the vector store from the registry
         """
-        for vector_store in self.vector_stores: 
+        for vector_store in self.vector_stores:
             if vector_store.get("vector_store_id") == vector_store_id:
                 return vector_store
         return None
-    
+
     def pop_vector_stores_to_run(
         self, non_default_params: Dict, tools: Optional[List[Dict]] = None
-    ) -> List[LiteLLM_ManagedVectorStore]: 
+    ) -> List[LiteLLM_ManagedVectorStore]:
         """
         Pops the vector stores to run
 

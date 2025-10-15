@@ -553,9 +553,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
-            kwargs.pop("callbacks", None)
-        )
+        dynamic_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = kwargs.pop("callbacks", None)
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -732,7 +732,6 @@ def function_setup(  # noqa: PLR0915
                 and isinstance(messages[0], dict)
                 and "content" in messages[0]
             ):
-
                 buffer = StringIO()
                 for m in messages:
                     content = m.get("content", "")
@@ -907,6 +906,7 @@ def _get_wrapper_timeout(
 
     return timeout
 
+
 def check_coroutine(value) -> bool:
     return get_coroutine_checker().is_async_callable(value)
 
@@ -986,9 +986,7 @@ def post_call_processing(
                         ].message.content  # type: ignore
                         if model_response is not None:
                             ### POST-CALL RULES ###
-                            rules_obj.post_call_rules(
-                                input=model_response, model=model
-                            )
+                            rules_obj.post_call_rules(input=model_response, model=model)
                             ### JSON SCHEMA VALIDATION ###
                             if litellm.enable_json_schema_validation is True:
                                 try:
@@ -1004,9 +1002,9 @@ def post_call_processing(
                                                 optional_params["response_format"],
                                                 dict,
                                             )
-                                            and optional_params[
-                                                "response_format"
-                                            ].get("json_schema")
+                                            and optional_params["response_format"].get(
+                                                "json_schema"
+                                            )
                                             is not None
                                         ):
                                             json_response_format = optional_params[
@@ -1034,9 +1032,7 @@ def post_call_processing(
                             if (
                                 optional_params is not None
                                 and "response_format" in optional_params
-                                and isinstance(
-                                    optional_params["response_format"], dict
-                                )
+                                and isinstance(optional_params["response_format"], dict)
                                 and "type" in optional_params["response_format"]
                                 and optional_params["response_format"]["type"]
                                 == "json_object"
@@ -1069,7 +1065,6 @@ def post_call_processing(
 
 def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
-
 
     @wraps(original_function)
     def wrapper(*args, **kwargs):  # noqa: PLR0915
@@ -1320,9 +1315,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs["retry_policy"] = (
-                        reset_retry_policy()
-                    )  # prevent infinite loops
+                    kwargs[
+                        "retry_policy"
+                    ] = reset_retry_policy()  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1411,16 +1406,16 @@ def client(original_function):  # noqa: PLR0915
             print_verbose(
                 f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
             )
-            _caching_handler_response: Optional[CachingHandlerResponse] = (
-                await _llm_caching_handler._async_get_cache(
-                    model=model or "",
-                    original_function=original_function,
-                    logging_obj=logging_obj,
-                    start_time=start_time,
-                    call_type=call_type,
-                    kwargs=kwargs,
-                    args=args,
-                )
+            _caching_handler_response: Optional[
+                CachingHandlerResponse
+            ] = await _llm_caching_handler._async_get_cache(
+                model=model or "",
+                original_function=original_function,
+                logging_obj=logging_obj,
+                start_time=start_time,
+                call_type=call_type,
+                kwargs=kwargs,
+                args=args,
             )
 
             if _caching_handler_response is not None:
@@ -3155,10 +3150,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params["response_format"] = (
-                provider_config.get_json_schema_from_pydantic_object(
-                    response_format=non_default_params["response_format"]
-                )
+            non_default_params[
+                "response_format"
+            ] = provider_config.get_json_schema_from_pydantic_object(
+                response_format=non_default_params["response_format"]
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3287,16 +3282,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("tools")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("tools")
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("functions")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("functions")
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4389,9 +4384,9 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
-    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
-        response_obj.choices
-    )
+    _choices: Union[
+        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
+    ] = response_obj.choices
 
     response_str = ""
     for choice in _choices:

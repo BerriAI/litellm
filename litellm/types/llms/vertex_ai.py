@@ -211,6 +211,7 @@ class GenerationConfig(TypedDict, total=False):
 
 class VertexToolName(str, Enum):
     """Enum for Vertex AI tool field names."""
+
     GOOGLE_SEARCH = "googleSearch"
     GOOGLE_SEARCH_RETRIEVAL = "googleSearchRetrieval"
     ENTERPRISE_WEB_SEARCH = "enterpriseWebSearch"

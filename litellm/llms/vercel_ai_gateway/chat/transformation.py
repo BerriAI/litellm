@@ -33,14 +33,13 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
-
         api_base = (
             api_base
             or get_secret_str("VERCEL_AI_GATEWAY_API_BASE")
             or "https://ai-gateway.vercel.sh/v1"
         )
         user_api_key = (
-            api_key 
+            api_key
             or get_secret_str("VERCEL_AI_GATEWAY_API_KEY")
             or get_secret_str("VERCEL_OIDC_TOKEN")
         )
@@ -60,11 +59,13 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         # Vercel AI Gateway-only parameters
         extra_body = {}
         provider_options = non_default_params.pop("providerOptions", None)
-        
+
         if provider_options is not None:
             extra_body["providerOptions"] = provider_options
-        
-        mapped_openai_params["extra_body"] = extra_body  # openai client supports `extra_body` param
+
+        mapped_openai_params[
+            "extra_body"
+        ] = extra_body  # openai client supports `extra_body` param
         return mapped_openai_params
 
     def transform_request(
@@ -98,10 +99,10 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
     ) -> List[str]:
         api_base, _ = self._get_openai_compatible_provider_info(api_base, api_key)
-        
+
         if api_base is None:
             api_base = "https://ai-gateway.vercel.sh/v1"
-            
+
         models_url = f"{api_base}/models"
         response = litellm.module_level_client.get(url=models_url)
 

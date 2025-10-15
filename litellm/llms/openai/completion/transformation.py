@@ -111,9 +111,9 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
             if "model" in response_object:
                 model_response_object.model = response_object["model"]
 
-            model_response_object._hidden_params["original_response"] = (
-                response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
-            )
+            model_response_object._hidden_params[
+                "original_response"
+            ] = response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
             return model_response_object
         except Exception as e:
             raise e

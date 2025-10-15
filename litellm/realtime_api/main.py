@@ -173,7 +173,8 @@ async def _realtime_health_check(
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(
-            api_base=api_base or "https://api.openai.com/", query_params={"model": model}
+            api_base=api_base or "https://api.openai.com/",
+            query_params={"model": model},
         )
     else:
         raise ValueError(f"Unsupported model: {model}")

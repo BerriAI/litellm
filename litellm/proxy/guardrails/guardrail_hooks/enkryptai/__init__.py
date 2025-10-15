@@ -38,4 +38,3 @@ guardrail_initializer_registry = {
 guardrail_class_registry = {
     SupportedGuardrailIntegrations.ENKRYPTAI.value: EnkryptAIGuardrails,
 }
-

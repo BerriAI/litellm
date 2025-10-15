@@ -28,6 +28,7 @@ class VertexAIError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
+
 class PartnerModelPrefixes(str, Enum):
     META_PREFIX = "meta/"
     DEEPSEEK_PREFIX = "deepseek-ai"
@@ -64,7 +65,7 @@ class VertexAIPartnerModels(VertexBase):
         ):
             return True
         return False
-    
+
     @staticmethod
     def should_use_openai_handler(model: str):
         OPENAI_LIKE_VERTEX_PROVIDERS = [

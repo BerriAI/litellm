@@ -314,10 +314,8 @@ def llm_passthrough_route(
         if (
             hasattr(response, "iter_bytes") and is_streaming_request
         ):  # yield the chunk, so we can store it in the logging object
-
             return _sync_streaming(response, litellm_logging_obj, provider_config)
         else:
-
             # For non-streaming responses, yield the entire response
             return response
     except Exception as e:
@@ -361,7 +359,6 @@ async def _async_streaming(
         raw_bytes: List[bytes] = []
 
         async for chunk in iter_response.aiter_bytes():  # type: ignore
-
             raw_bytes.append(chunk)
             yield chunk
 

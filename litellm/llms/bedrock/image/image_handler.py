@@ -63,7 +63,7 @@ class BedrockImageGeneration(BaseAWSLLM):
             extra_headers=extra_headers,
             logging_obj=logging_obj,
             prompt=prompt,
-            api_key=api_key
+            api_key=api_key,
         )
 
         if aimg_generation is True:
@@ -190,7 +190,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         body = json.dumps(data).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
-            headers = {"Content-Type": "application/json", **extra_headers} 
+            headers = {"Content-Type": "application/json", **extra_headers}
 
         prepped = self.get_request_headers(
             credentials=boto3_credentials_info.credentials,
@@ -201,7 +201,7 @@ class BedrockImageGeneration(BaseAWSLLM):
             headers=headers,
             api_key=api_key,
         )
-            
+
         ## LOGGING
         logging_obj.pre_call(
             input=prompt,

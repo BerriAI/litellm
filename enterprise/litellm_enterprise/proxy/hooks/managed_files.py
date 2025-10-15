@@ -152,7 +152,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "status": file_object.status,
                 },
                 "update": {},  # don't do anything if it already exists
-            }
+            },
         )
 
     async def get_unified_file_id(

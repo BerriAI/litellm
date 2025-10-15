@@ -17,7 +17,9 @@ class VertexAITokenCounter(GoogleAIStudioTokenCounter, VertexBase):
         Returns a Tuple of headers and url for the Vertex AI countTokens endpoint.
         """
         litellm_params = litellm_params or {}
-        vertex_credentials = self.get_vertex_ai_credentials(litellm_params=litellm_params)
+        vertex_credentials = self.get_vertex_ai_credentials(
+            litellm_params=litellm_params
+        )
         vertex_project = self.get_vertex_ai_project(litellm_params=litellm_params)
         vertex_location = self.get_vertex_ai_location(litellm_params=litellm_params)
         should_use_v1beta1_features = self.is_using_v1beta1_features(litellm_params)
