@@ -4915,22 +4915,25 @@ class Router:
         - hash
         - use hash as id
         """
-        concat_str = model_group
+        # Optimized: Use list and join instead of string concatenation in loop
+        # This avoids creating many temporary string objects (O(n) vs O(n²) complexity)
+        parts = [model_group]
         for k, v in litellm_params.items():
             if isinstance(k, str):
-                concat_str += k
+                parts.append(k)
             elif isinstance(k, dict):
-                concat_str += json.dumps(k)
+                parts.append(json.dumps(k))
             else:
-                concat_str += str(k)
+                parts.append(str(k))
 
             if isinstance(v, str):
-                concat_str += v
+                parts.append(v)
             elif isinstance(v, dict):
-                concat_str += json.dumps(v)
+                parts.append(json.dumps(v))
             else:
-                concat_str += str(v)
+                parts.append(str(v))
 
+        concat_str = "".join(parts)
         hash_object = hashlib.sha256(concat_str.encode())
 
         return hash_object.hexdigest()
