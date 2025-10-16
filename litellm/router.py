@@ -974,7 +974,8 @@ class Router:
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
-            data = deployment["litellm_params"].copy()
+            # No copy needed - data is only read and spread into new dict below
+            data = deployment["litellm_params"]
             model_name = data["model"]
             potential_model_client = self._get_client(
                 deployment=deployment, kwargs=kwargs
@@ -1281,7 +1282,8 @@ class Router:
                 deployment=deployment, parent_otel_span=parent_otel_span
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
-            data = deployment["litellm_params"].copy()
+            # No copy needed - data is only read and spread into new dict below
+            data = deployment["litellm_params"]
 
             model_name = data["model"]
 
