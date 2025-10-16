@@ -11,6 +11,9 @@ import sys
 from typing import Dict
 from unittest.mock import Mock, patch
 
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.abspath("../../.."))
+
 # Third-party imports
 import pytest
 from fastapi.exceptions import HTTPException
@@ -26,9 +29,6 @@ from litellm.proxy.guardrails.guardrail_hooks.pillar import (
     PillarGuardrailMissingSecrets,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
-
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.abspath("../.."))
 
 
 # ============================================================================
