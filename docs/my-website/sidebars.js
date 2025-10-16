@@ -347,6 +347,8 @@ const sidebars = {
           ]
         },
         "moderation",
+        "bedrock_invoke",
+        "bedrock_converse",
         "ocr",
         {
           type: "category",
