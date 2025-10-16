@@ -8,7 +8,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 
 import json
 import os
-from typing import Optional, cast
+from typing import Any, AsyncGenerator, Optional, Union, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -482,6 +482,97 @@ async def anthropic_proxy_route(
     return received_value
 
 
+async def handle_bedrock_passthrough_router_model(
+    model: str,
+    endpoint: str,
+    request: Request,
+    request_body: dict,
+    llm_router: litellm.Router,
+) -> Union[Response, StreamingResponse]:
+    """
+    Handle Bedrock passthrough for router models (models defined in config.yaml).
+    
+    This helper delegates to llm_router.allm_passthrough_route for proper credential
+    and configuration management from the router.
+    
+    Args:
+        model: The router model name (e.g., "aws/anthropic/bedrock-claude-3-5-sonnet-v1")
+        endpoint: The Bedrock endpoint path (e.g., "/model/{modelId}/invoke")
+        request: The FastAPI request object
+        request_body: The parsed request body
+        llm_router: The LiteLLM router instance
+        
+    Returns:
+        Response or StreamingResponse depending on endpoint type
+    """
+    # Detect streaming based on endpoint
+    BEDROCK_STREAMING_ENDPOINTS = ["invoke-with-response-stream", "converse-stream"]
+    is_streaming = False
+    if any(route in endpoint for route in BEDROCK_STREAMING_ENDPOINTS):
+        is_streaming = True
+    
+    verbose_proxy_logger.debug(
+        f"Bedrock router passthrough: model='{model}', endpoint='{endpoint}', streaming={is_streaming}"
+    )
+    
+    # Call router passthrough
+    result = await llm_router.allm_passthrough_route(
+        model=model,
+        method=request.method,
+        endpoint=endpoint,
+        request_query_params=request.query_params,
+        request_headers=dict(request.headers),
+        stream=is_streaming,
+        content=None,
+        data=None,
+        files=None,
+        json=(
+            request_body
+            if request.headers.get("content-type") == "application/json"
+            else None
+        ),
+        params=None,
+        headers=None,
+        cookies=None,
+    )
+    
+    # Handle streaming response
+    if is_streaming:
+        import inspect
+        
+        if inspect.isasyncgen(result):
+            # AsyncGenerator case
+            return StreamingResponse(
+                content=result,
+                status_code=200,
+                headers={"content-type": "application/vnd.amazon.eventstream"},
+            )
+        else:
+            # httpx.Response case
+            result = cast(httpx.Response, result)
+            return StreamingResponse(
+                content=result.aiter_bytes(),
+                status_code=result.status_code,
+                headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                    headers=result.headers,
+                    custom_headers=None,
+                ),
+            )
+    
+    # Handle non-streaming response
+    result = cast(httpx.Response, result)
+    content = await result.aread()
+    
+    return Response(
+        content=content,
+        status_code=result.status_code,
+        headers=HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=result.headers,
+            custom_headers=None,
+        ),
+    )
+
+
 async def handle_bedrock_count_tokens(
     endpoint: str,
     request: Request,
@@ -560,6 +651,15 @@ async def bedrock_llm_proxy_route(
 ):
     """
     Handles Bedrock LLM API calls.
+    
+    Supports both direct Bedrock models and router models from config.yaml.
+    
+    Endpoints:
+    - /model/{modelId}/invoke
+    - /model/{modelId}/invoke-with-response-stream
+    - /model/{modelId}/converse
+    - /model/{modelId}/converse-stream
+    - /model/application-inference-profile/{profileId}/{action}
     """
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
     from litellm.proxy.proxy_server import (
@@ -588,24 +688,47 @@ async def bedrock_llm_proxy_route(
             request_body=request_body,
         )
 
-    data: Dict[str, Any] = {}
-    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+    # Extract model from endpoint path
     try:
         endpoint_parts = endpoint.split("/")
         if "application-inference-profile" in endpoint:
-            # For application-inference-profile, include the profile ID part as well
+            # Format: model/application-inference-profile/{profile-id}/{action}
             model = "/".join(endpoint_parts[1:3])
         else:
+            # Format: model/{modelId}/{action}
             model = endpoint_parts[1]
     except Exception:
         raise HTTPException(
             status_code=400,
             detail={
-                "error": "Model missing from endpoint. Expected format: /model/<Model>/<endpoint>. Got: "
+                "error": "Model missing from endpoint. Expected format: /model/{modelId}/{action}. Got: "
                 + endpoint,
             },
         )
 
+    # Check if this is a router model (from config.yaml)
+    is_router_model = is_passthrough_request_using_router_model(
+        request_body={"model": model}, llm_router=llm_router
+    )
+
+    # If router model, use dedicated router passthrough handler
+    if is_router_model and llm_router:
+        return await handle_bedrock_passthrough_router_model(
+            model=model,
+            endpoint=endpoint,
+            request=request,
+            request_body=request_body,
+            llm_router=llm_router,
+        )
+
+    # Fall back to existing implementation for direct Bedrock models
+    verbose_proxy_logger.debug(
+        f"Bedrock passthrough: Using direct Bedrock model '{model}' for endpoint '{endpoint}'"
+    )
+    
+    data: Dict[str, Any] = {}
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+    
     data["method"] = request.method
     data["endpoint"] = endpoint
     data["data"] = request_body
