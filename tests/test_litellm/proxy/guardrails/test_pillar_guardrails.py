@@ -8,7 +8,11 @@ and following LiteLLM testing patterns and best practices.
 # Standard library imports
 import os
 import sys
+from typing import Dict
 from unittest.mock import Mock, patch
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.abspath("../../.."))
 
 # Third-party imports
 import pytest
@@ -25,9 +29,6 @@ from litellm.proxy.guardrails.guardrail_hooks.pillar import (
     PillarGuardrailMissingSecrets,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
-
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.abspath("../.."))
 
 
 # ============================================================================
@@ -219,6 +220,18 @@ def mock_llm_response():
         ]
     }
     return mock_response
+
+
+@pytest.fixture
+def pillar_async_response():
+    """Fixture providing an asynchronous Pillar API queue response."""
+    return Response(
+        json={"status": "queued", "session_id": "async-session", "position": 1},
+        status_code=202,
+        request=Request(
+            method="POST", url="https://api.pillar.security/api/v1/protect"
+        ),
+    )
 
 
 @pytest.fixture
@@ -438,6 +451,55 @@ async def test_post_call_hook_with_tool_calls(
         )
 
     assert result == mock_llm_response_with_tools
+
+
+# =========================================================================
+# HEADER CONFIGURATION TESTS
+# =========================================================================
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_custom_header_overrides(
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_async_response,
+):
+    """Ensure configuration values translate into correct Protect headers."""
+
+    guardrail = PillarGuardrail(
+        guardrail_name="pillar-header-test",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        on_flagged_action="monitor",
+        persist_session=False,
+        async_mode=True,
+        include_scanners=False,
+        include_evidence=False,
+    )
+
+    captured_headers: Dict[str, str] = {}
+
+    async def _mock_post(*args, **kwargs):
+        captured_headers.update(kwargs.get("headers", {}))
+        return pillar_async_response
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=_mock_post,
+    ):
+        result = await guardrail.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+
+    assert result == sample_request_data
+    assert captured_headers.get("plr_persist") == "false"
+    assert captured_headers.get("plr_async") == "true"
+    assert captured_headers.get("plr_scanners") == "false"
+    assert captured_headers.get("plr_evidence") == "false"
 
 
 # ============================================================================
