@@ -55,7 +55,7 @@ from litellm import completion
 os.environ["SILICONFLOW_API_KEY"] = "your-api-key"
 
 response = completion(
-    model="siliconflow/deepseek-ai/DeepSeek-V2-Chat",
+    model="siliconflow/deepseek-ai/DeepSeek-V3",
     messages=[{"role": "user", "content": "List 5 popular cookie recipes."}]
 )
 
@@ -69,7 +69,7 @@ print(content)
 1. Add model to config.yaml
 ```yaml
 model_list:
-  - model_name: deepseek-v2-chat
+  - model_name: deepseek-ai/DeepSeek-V3
     litellm_params:
       model: siliconflow/deepseek-ai/DeepSeek-V3
       api_key: os.environ/SILICONFLOW_API_KEY
@@ -178,7 +178,7 @@ print(json.loads(completion.choices[0].message.content))
 1. Add model to config.yaml
 ```yaml
 model_list:
-  - model_name: deepseek-v2-chat
+  - model_name: deepseek-ai/DeepSeek-V3
     litellm_params:
       model: siliconflow/deepseek-ai/DeepSeek-V3
       api_key: os.environ/SILICONFLOW_API_KEY
