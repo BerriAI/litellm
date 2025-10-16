@@ -6676,7 +6676,7 @@ class Router:
         # We only pop from the list, not modify deployment dicts - 100x+ faster on hot path (every request)
         _returned_deployments = list(healthy_deployments)
 
-        invalid_model_indices = []
+        invalid_model_indices = set()  # Use set for O(1) membership checks
 
         try:
             input_tokens = litellm.token_counter(messages=messages)
@@ -6726,7 +6726,7 @@ class Router:
                         isinstance(model_info["max_input_tokens"], int)
                         and input_tokens > model_info["max_input_tokens"]
                     ):
-                        invalid_model_indices.append(idx)
+                        invalid_model_indices.add(idx)
                         _context_window_error = True
                         _potential_error_str += (
                             "Model={}, Max Input Tokens={}, Got={}".format(
@@ -6765,7 +6765,7 @@ class Router:
                         isinstance(_litellm_params["rpm"], int)
                         and _litellm_params["rpm"] <= current_request
                     ):
-                        invalid_model_indices.append(idx)
+                        invalid_model_indices.add(idx)
                         _rate_limit_error = True
                         continue
 
@@ -6781,7 +6781,7 @@ class Router:
                         litellm_params=LiteLLM_Params(**_litellm_params),
                         allowed_model_region=allowed_model_region,
                     ):
-                        invalid_model_indices.append(idx)
+                        invalid_model_indices.add(idx)
                         continue
 
             ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_format' param
@@ -6810,7 +6810,7 @@ class Router:
                             verbose_router_logger.debug(
                                 f"INVALID MODEL INDEX @ REQUEST KWARG FILTERING, k={k}"
                             )
-                            invalid_model_indices.append(idx)
+                            invalid_model_indices.add(idx)
 
         if len(invalid_model_indices) == len(_returned_deployments):
             """
@@ -6833,8 +6833,10 @@ class Router:
                     llm_provider="",
                 )
         if len(invalid_model_indices) > 0:
-            for idx in reversed(invalid_model_indices):
-                _returned_deployments.pop(idx)
+            # Single-pass filter using set for O(1) lookups (avoids O(n^2) from repeated pops)
+            _returned_deployments = [
+                d for i, d in enumerate(_returned_deployments) if i not in invalid_model_indices
+            ]
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         if len(_returned_deployments) > 0:
