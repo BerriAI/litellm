@@ -113,20 +113,22 @@ The proxy automatically distributes requests across both regions.
 ```python showLineNumbers
 import boto3
 import json
+import os
 
+# Set dummy AWS credentials (required by boto3, but not used by LiteLLM proxy)
+os.environ['AWS_ACCESS_KEY_ID'] = 'dummy'
+os.environ['AWS_SECRET_ACCESS_KEY'] = 'dummy'
+os.environ['AWS_BEARER_TOKEN_BEDROCK'] = "sk-1234"  # your litellm proxy api key
+
+# Point boto3 to the LiteLLM proxy
 bedrock_runtime = boto3.client(
     service_name='bedrock-runtime',
     region_name='us-west-2',
     endpoint_url='http://0.0.0.0:4000/bedrock'
 )
 
-def add_custom_headers(request, **kwargs):
-    request.headers.update({'litellm_user_api_key': 'Bearer sk-1234'})
-
-bedrock_runtime.meta.events.register('before-send.*.*', add_custom_headers)
-
 response = bedrock_runtime.converse(
-    modelId='my-bedrock-model',
+    modelId='my-bedrock-model',  # Your model_name from config.yaml
     messages=[
         {
             "role": "user",
