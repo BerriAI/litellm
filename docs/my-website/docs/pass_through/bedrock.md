@@ -527,42 +527,26 @@ litellm
 
 ```python showLineNumbers
 import os 
-import boto3 
-from botocore.config import Config
+import boto3
 
-# Define your proxy endpoint
-proxy_endpoint = "http://0.0.0.0:4000/bedrock" # 👈 your proxy base url
-
-# Custom headers
-custom_headers = {
-    'litellm_user_api_key': 'Bearer sk-1234', # 👈 your proxy api key
-}
-
-# Use fake credentials in client (proxy handles real auth)
-os.environ["AWS_ACCESS_KEY_ID"] = "my-fake-key-id"
-os.environ["AWS_SECRET_ACCESS_KEY"] = "my-fake-access-key"
+# Set dummy AWS credentials (required by boto3, but not used by LiteLLM proxy)
+os.environ["AWS_ACCESS_KEY_ID"] = "dummy"
+os.environ["AWS_SECRET_ACCESS_KEY"] = "dummy"
+os.environ["AWS_BEARER_TOKEN_BEDROCK"] = "sk-1234"  # your litellm proxy api key
 
 # Create the client
 runtime_client = boto3.client(
     service_name="bedrock-agent-runtime", 
     region_name="us-west-2", 
-    endpoint_url=proxy_endpoint
+    endpoint_url="http://0.0.0.0:4000/bedrock"
 )
 
-# Custom header injection
-def inject_custom_headers(request, **kwargs):
-    request.headers.update(custom_headers)
-
-# Attach the event to inject custom headers before the request is sent
-runtime_client.meta.events.register('before-send.*.*', inject_custom_headers)
-
-
 response = runtime_client.invoke_agent(
-            agentId="L1RT58GYRW",
-            agentAliasId="MFPSBCXYTW",
-            sessionId="12345",
-            inputText="Who do you know?"
-        )
+    agentId="L1RT58GYRW",
+    agentAliasId="MFPSBCXYTW",
+    sessionId="12345",
+    inputText="Who do you know?"
+)
 
 completion = ""
 
@@ -571,5 +555,4 @@ for event in response.get("completion"):
     completion += chunk["bytes"].decode()
 
 print(completion)
-
 ```
