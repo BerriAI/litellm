@@ -4370,7 +4370,7 @@ def test_completion_siliconflow_ai():
             mock_call.assert_called_once()
 
             # Verify model is passed correctly
-            assert mock_call.call_args.kwargs["model"] == "deepseek-ai/DeepSeek-V3.2-Exp"
+            assert mock_call.call_args.kwargs["model"] == "deepseek-ai/DeepSeek-V3"
             # Verify messages are passed correctly
             assert mock_call.call_args.kwargs["messages"] == messages
 

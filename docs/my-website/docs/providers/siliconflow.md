@@ -88,7 +88,7 @@ $ litellm --config /path/to/config.yaml
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -d '{
-  "model": "deepseek-ai/DeepSeek-V3.2-Exp",
+  "model": "deepseek-ai/DeepSeek-V3",
   "messages": [
       {"role": "user", "content": "List 5 popular cookie recipes."}
   ]
@@ -196,7 +196,7 @@ $ litellm --config /path/to/config.yaml
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -d '{
-  "model": "deepseek-ai/DeepSeek-V3.2-Exp",
+  "model": "deepseek-ai/DeepSeek-V3",
   "messages": [
       {"role": "user", "content": "List 5 popular cookie recipes in a JSON array."}
   ],
@@ -214,7 +214,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 | Model Name                | Function Call                                       |
 |---------------------------|-----------------------------------------------------|
-| deepseek-ai/DeepSeek-V3.2-Exp | `completion('siliconflow/deepseek-ai/DeepSeek-V3', messages)` |
+| deepseek-ai/DeepSeek-V3 | `completion('siliconflow/deepseek-ai/DeepSeek-V3', messages)` |
 | deepseek-ai/DeepSeek-R1 | `completion('siliconflow/deepseek-ai/DeepSeek-R1', messages)` |
 | zai-org/GLM-4.6 | `completion('siliconflow/zai-org/GLM-4.6', messages)` |
 | moonshotai/Kimi-K2-Instruct | `completion('siliconflow/moonshotai/Kimi-K2-Instruct', messages)` |
