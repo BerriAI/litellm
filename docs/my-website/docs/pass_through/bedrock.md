@@ -5,7 +5,7 @@ Pass-through endpoints for Bedrock - call provider-specific endpoint, in native 
 | Feature | Supported | Notes | 
 |-------|-------|-------|
 | Cost Tracking | ✅ | For `/invoke` and `/converse` endpoints |
-| Logging | ✅ | works across all integrations |
+| Load Balancing | ✅ | You can load balance `/invoke`, `/converse` routes across multiple deployments| Logging | ✅ | works across all integrations |
 | End-user Tracking | ❌ | [Tell us if you need this](https://github.com/BerriAI/litellm/issues/new) |
 | Streaming | ✅ | |
 
@@ -21,7 +21,7 @@ Define your Bedrock models in `config.yaml` and reference them by name. The prox
 
 **Use for**: `/converse`, `/converse-stream`, `/invoke`, `/invoke-with-response-stream`
 
-```yaml
+```yaml showLineNumbers
 model_list:
   - model_name: my-bedrock-model
     litellm_params:
@@ -30,7 +30,7 @@ model_list:
       custom_llm_provider: bedrock
 ```
 
-```bash
+```bash showLineNumbers
 curl -X POST 'http://0.0.0.0:4000/bedrock/model/my-bedrock-model/converse' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
@@ -43,13 +43,13 @@ Set AWS credentials via environment variables and call Bedrock endpoints directl
 
 **Use for**: Guardrails, Knowledge Bases, Agents, and other non-model endpoints
 
-```bash
+```bash showLineNumbers
 export AWS_ACCESS_KEY_ID=""
 export AWS_SECRET_ACCESS_KEY=""
 export AWS_REGION_NAME="us-west-2"
 ```
 
-```bash
+```bash showLineNumbers
 curl "http://0.0.0.0:4000/bedrock/guardrail/my-guardrail-id/version/1/apply" \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
@@ -196,6 +196,103 @@ When using models from config.yaml, you can call any Bedrock endpoint:
 | `/model/{model_name}/invoke-with-response-stream` | Legacy Streaming | `http://0.0.0.0:4000/bedrock/model/my-claude-model/invoke-with-response-stream` |
 
 The proxy automatically resolves the `model_name` to the actual Bedrock model ID and region configured in your `config.yaml`.
+
+### Load Balancing Across Multiple Deployments
+
+Define multiple Bedrock deployments with the same `model_name` to enable automatic load balancing.
+
+#### 1. Define multiple deployments in config.yaml
+
+```yaml showLineNumbers
+model_list:
+  # First deployment - us-west-2
+  - model_name: my-claude-model
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_region_name: us-west-2
+      custom_llm_provider: bedrock
+  
+  # Second deployment - us-east-1 (load balanced)
+  - model_name: my-claude-model
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_region_name: us-east-1
+      custom_llm_provider: bedrock
+```
+
+#### 2. Start proxy with config
+
+```bash showLineNumbers
+litellm --config config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+#### 3. Call the endpoint - requests are automatically load balanced
+
+```bash showLineNumbers
+curl -X POST 'http://0.0.0.0:4000/bedrock/model/my-claude-model/invoke' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "max_tokens": 100,
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hello, how are you?"
+        }
+    ],
+    "anthropic_version": "bedrock-2023-05-31"
+}'
+```
+
+The proxy will automatically distribute requests across both `us-west-2` and `us-east-1` deployments. This works for all Bedrock endpoints: `/invoke`, `/invoke-with-response-stream`, `/converse`, and `/converse-stream`.
+
+#### Using boto3 SDK with load balancing
+
+You can also call the load-balanced endpoint using the boto3 SDK:
+
+```python showLineNumbers
+import boto3
+import json
+
+# Point boto3 to the LiteLLM proxy
+bedrock_runtime = boto3.client(
+    service_name='bedrock-runtime',
+    region_name='us-west-2',  # Can be any region
+    endpoint_url='http://0.0.0.0:4000/bedrock'
+)
+
+# Custom header for authentication
+def add_custom_headers(request, **kwargs):
+    request.headers.update({'litellm_user_api_key': 'Bearer sk-1234'})
+
+# Register the event to inject headers before sending request
+bedrock_runtime.meta.events.register('before-send.*.*', add_custom_headers)
+
+# Call the load-balanced model
+response = bedrock_runtime.invoke_model(
+    modelId='my-claude-model',  # Your model_name from config.yaml
+    contentType='application/json',
+    accept='application/json',
+    body=json.dumps({
+        "max_tokens": 100,
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hello, how are you?"
+            }
+        ],
+        "anthropic_version": "bedrock-2023-05-31"
+    })
+)
+
+# Parse response
+response_body = json.loads(response['body'].read())
+print(response_body['content'][0]['text'])
+```
+
+The proxy will automatically load balance your boto3 requests across all configured deployments.
 
 
 ## Examples
