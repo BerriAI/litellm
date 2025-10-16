@@ -411,24 +411,40 @@ curl -X POST 'http://0.0.0.0:4000/bedrock/model/cohere.command-r-v1:0/converse' 
 
 Call Bedrock Agents via LiteLLM proxy
 
+**Setup**: Set AWS credentials on your LiteLLM proxy server
+
+```bash
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export AWS_REGION_NAME="us-west-2"
+```
+
+Start proxy:
+
+```bash
+litellm
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**Usage from Python**:
+
 ```python
 import os 
 import boto3 
 from botocore.config import Config
 
-# # Define your proxy endpoint
+# Define your proxy endpoint
 proxy_endpoint = "http://0.0.0.0:4000/bedrock" # 👈 your proxy base url
 
-# # Create a Config object with the proxy
 # Custom headers
 custom_headers = {
     'litellm_user_api_key': 'Bearer sk-1234', # 👈 your proxy api key
 }
 
-
+# Use fake credentials in client (proxy handles real auth)
 os.environ["AWS_ACCESS_KEY_ID"] = "my-fake-key-id"
 os.environ["AWS_SECRET_ACCESS_KEY"] = "my-fake-access-key"
-
 
 # Create the client
 runtime_client = boto3.client(
