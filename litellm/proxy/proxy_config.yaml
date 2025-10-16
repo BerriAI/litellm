@@ -4,6 +4,6 @@ model_list:
       model: mistral/*
   - model_name: special-bedrock-model
     litellm_params:
-          model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
-          aws_region_name: us-west-2
-          custom_llm_provider: bedrock
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_region_name: us-west-2
+      custom_llm_provider: bedrock

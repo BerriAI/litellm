@@ -482,6 +482,63 @@ async def anthropic_proxy_route(
     return received_value
 
 
+# Bedrock endpoint actions - consolidated list used for model extraction and streaming detection
+BEDROCK_ENDPOINT_ACTIONS = {
+    "invoke",
+    "invoke-with-response-stream",
+    "converse",
+    "converse-stream",
+    "count_tokens",
+    "count-tokens",
+}
+
+BEDROCK_STREAMING_ACTIONS = {"invoke-with-response-stream", "converse-stream"}
+
+
+def _extract_model_from_bedrock_endpoint(endpoint: str) -> str:
+    """
+    Extract model name from Bedrock endpoint path.
+    
+    Handles model names with slashes (e.g., aws/anthropic/bedrock-claude-3-5-sonnet-v1)
+    by finding the action in the endpoint and extracting everything between "model" and the action.
+    
+    Args:
+        endpoint: The endpoint path (e.g., "/model/aws/anthropic/model-name/invoke")
+        
+    Returns:
+        The extracted model name (e.g., "aws/anthropic/model-name")
+        
+    Raises:
+        ValueError: If model cannot be extracted from endpoint
+    """
+    try:
+        endpoint_parts = endpoint.split("/")
+        
+        if "application-inference-profile" in endpoint:
+            # Format: model/application-inference-profile/{profile-id}/{action}
+            return "/".join(endpoint_parts[1:3])
+        
+        # Format: model/{modelId}/{action}
+        # Find the index of the action in the endpoint parts
+        action_index = None
+        for idx, part in enumerate(endpoint_parts):
+            if part in BEDROCK_ENDPOINT_ACTIONS:
+                action_index = idx
+                break
+        
+        if action_index is not None and action_index > 1:
+            # Join all parts between "model" and the action
+            return "/".join(endpoint_parts[1:action_index])
+        
+        # Fallback to taking everything after "model" if no action found
+        return "/".join(endpoint_parts[1:])
+        
+    except Exception as e:
+        raise ValueError(
+            f"Model missing from endpoint. Expected format: /model/{{modelId}}/{{action}}. Got: {endpoint}"
+        ) from e
+
+
 async def handle_bedrock_passthrough_router_model(
     model: str,
     endpoint: str,
@@ -506,10 +563,7 @@ async def handle_bedrock_passthrough_router_model(
         Response or StreamingResponse depending on endpoint type
     """
     # Detect streaming based on endpoint
-    BEDROCK_STREAMING_ENDPOINTS = ["invoke-with-response-stream", "converse-stream"]
-    is_streaming = False
-    if any(route in endpoint for route in BEDROCK_STREAMING_ENDPOINTS):
-        is_streaming = True
+    is_streaming = any(action in endpoint for action in BEDROCK_STREAMING_ACTIONS)
     
     verbose_proxy_logger.debug(
         f"Bedrock router passthrough: model='{model}', endpoint='{endpoint}', streaming={is_streaming}"
@@ -688,22 +742,13 @@ async def bedrock_llm_proxy_route(
             request_body=request_body,
         )
 
-    # Extract model from endpoint path
+    # Extract model from endpoint path using helper
     try:
-        endpoint_parts = endpoint.split("/")
-        if "application-inference-profile" in endpoint:
-            # Format: model/application-inference-profile/{profile-id}/{action}
-            model = "/".join(endpoint_parts[1:3])
-        else:
-            # Format: model/{modelId}/{action}
-            model = endpoint_parts[1]
-    except Exception:
+        model = _extract_model_from_bedrock_endpoint(endpoint=endpoint)
+    except ValueError as e:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "Model missing from endpoint. Expected format: /model/{modelId}/{action}. Got: "
-                + endpoint,
-            },
+            detail={"error": str(e)},
         )
 
     # Check if this is a router model (from config.yaml)
