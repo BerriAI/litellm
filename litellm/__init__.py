@@ -225,6 +225,7 @@ replicate_key: Optional[str] = None
 bytez_key: Optional[str] = None
 cohere_key: Optional[str] = None
 infinity_key: Optional[str] = None
+cloudrift_key: Optional[str] = None
 clarifai_key: Optional[str] = None
 maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
@@ -525,6 +526,7 @@ volcengine_models: Set = set()
 wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
+cloudrift_models: Set = set()
 lemonade_models: Set = set()
 
 
@@ -748,6 +750,8 @@ def add_known_models():
             ovhcloud_models.add(key)
         elif value.get("litellm_provider") == "ovhcloud-embedding-models":
             ovhcloud_embedding_models.add(key)
+        elif value.get("litellm_provider") == "cloudrift":
+            clodrift_models.add(key)
         elif value.get("litellm_provider") == "lemonade":
             lemonade_models.add(key)
 
@@ -848,6 +852,7 @@ model_list = list(
     | wandb_models
     | ovhcloud_models
     | lemonade_models
+    | cloudrift_models
 )
 
 model_list_set = set(model_list)
@@ -1256,6 +1261,7 @@ from .llms.azure.azure import (
     AzureOpenAIError,
     AzureOpenAIAssistantsAPIConfig,
 )
+from .llms.cloudrift.chat.transformation import CloudRiftChatConfig
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.cometapi.chat.transformation import CometAPIConfig
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
