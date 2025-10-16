@@ -66,7 +66,7 @@ Let's call the Bedrock [`/converse` endpoint](https://docs.aws.amazon.com/bedroc
 
 1. Create a `config.yaml` file with your Bedrock model
 
-```yaml
+```yaml showLineNumbers
 model_list:
   - model_name: my-bedrock-model
     litellm_params:
@@ -77,14 +77,14 @@ model_list:
 
 Set your AWS credentials:
 
-```bash
+```bash showLineNumbers
 export AWS_ACCESS_KEY_ID=""  # Access key
 export AWS_SECRET_ACCESS_KEY="" # Secret access key
 ```
 
 2. Start LiteLLM Proxy 
 
-```bash
+```bash showLineNumbers
 litellm --config config.yaml
 
 # RUNNING on http://0.0.0.0:4000
@@ -94,7 +94,7 @@ litellm --config config.yaml
 
 Let's call the Bedrock converse endpoint using the model name from config:
 
-```bash
+```bash showLineNumbers
 curl -X POST 'http://0.0.0.0:4000/bedrock/model/my-bedrock-model/converse' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
@@ -117,7 +117,7 @@ Use config.yaml to define Bedrock models and use them via passthrough endpoints.
 
 ### 1. Define models in config.yaml
 
-```yaml
+```yaml showLineNumbers
 model_list:
   - model_name: my-claude-model
     litellm_params:
@@ -134,7 +134,7 @@ model_list:
 
 ### 2. Start proxy with config
 
-```bash
+```bash showLineNumbers
 litellm --config config.yaml
 
 # RUNNING on http://0.0.0.0:4000
@@ -144,7 +144,7 @@ litellm --config config.yaml
 
 Use the `model_name` from config in the URL path:
 
-```bash
+```bash showLineNumbers
 curl -X POST 'http://0.0.0.0:4000/bedrock/model/my-claude-model/converse' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
@@ -166,7 +166,7 @@ curl -X POST 'http://0.0.0.0:4000/bedrock/model/my-claude-model/converse' \
 
 For streaming responses, use the `/converse-stream` endpoint:
 
-```bash
+```bash showLineNumbers
 curl -X POST 'http://0.0.0.0:4000/bedrock/model/my-claude-model/converse-stream' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
@@ -312,7 +312,7 @@ Key Changes:
 
 #### LiteLLM Proxy Call 
 
-```bash
+```bash showLineNumbers
 curl -X POST 'http://0.0.0.0:4000/bedrock/model/cohere.command-r-v1:0/converse' \
 -H 'Authorization: Bearer sk-anything' \
 -H 'Content-Type: application/json' \
@@ -327,7 +327,7 @@ curl -X POST 'http://0.0.0.0:4000/bedrock/model/cohere.command-r-v1:0/converse' 
 
 #### Direct Bedrock API Call 
 
-```bash
+```bash showLineNumbers
 curl -X POST 'https://bedrock-runtime.us-west-2.amazonaws.com/model/cohere.command-r-v1:0/converse' \
 -H 'Authorization: AWS4-HMAC-SHA256..' \
 -H 'Content-Type: application/json' \
@@ -344,7 +344,7 @@ curl -X POST 'https://bedrock-runtime.us-west-2.amazonaws.com/model/cohere.comma
 
 **Setup**: Set AWS credentials for direct passthrough
 
-```bash
+```bash showLineNumbers
 export AWS_ACCESS_KEY_ID="your-access-key"
 export AWS_SECRET_ACCESS_KEY="your-secret-key"
 export AWS_REGION_NAME="us-west-2"
@@ -352,7 +352,7 @@ export AWS_REGION_NAME="us-west-2"
 
 Start proxy:
 
-```bash
+```bash showLineNumbers
 litellm
 
 # RUNNING on http://0.0.0.0:4000
@@ -360,7 +360,7 @@ litellm
 
 #### LiteLLM Proxy Call 
 
-```bash
+```bash showLineNumbers
 curl "http://0.0.0.0:4000/bedrock/guardrail/guardrailIdentifier/version/guardrailVersion/apply" \
     -H 'Authorization: Bearer sk-anything' \
     -H 'Content-Type: application/json' \
@@ -373,7 +373,7 @@ curl "http://0.0.0.0:4000/bedrock/guardrail/guardrailIdentifier/version/guardrai
 
 #### Direct Bedrock API Call
 
-```bash
+```bash showLineNumbers
 curl "https://bedrock-runtime.us-west-2.amazonaws.com/guardrail/guardrailIdentifier/version/guardrailVersion/apply" \
     -H 'Authorization: AWS4-HMAC-SHA256..' \
     -H 'Content-Type: application/json' \
@@ -388,7 +388,7 @@ curl "https://bedrock-runtime.us-west-2.amazonaws.com/guardrail/guardrailIdentif
 
 **Setup**: Set AWS credentials for direct passthrough
 
-```bash
+```bash showLineNumbers
 export AWS_ACCESS_KEY_ID="your-access-key"
 export AWS_SECRET_ACCESS_KEY="your-secret-key"
 export AWS_REGION_NAME="us-west-2"
@@ -396,7 +396,7 @@ export AWS_REGION_NAME="us-west-2"
 
 Start proxy:
 
-```bash
+```bash showLineNumbers
 litellm
 
 # RUNNING on http://0.0.0.0:4000
@@ -404,7 +404,7 @@ litellm
 
 #### LiteLLM Proxy Call
 
-```bash
+```bash showLineNumbers
 curl -X POST "http://0.0.0.0:4000/bedrock/knowledgebases/{knowledgeBaseId}/retrieve" \
 -H 'Authorization: Bearer sk-anything' \
 -H 'Content-Type: application/json' \
@@ -425,7 +425,7 @@ curl -X POST "http://0.0.0.0:4000/bedrock/knowledgebases/{knowledgeBaseId}/retri
 
 #### Direct Bedrock API Call 
 
-```bash
+```bash showLineNumbers
 curl -X POST "https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases/{knowledgeBaseId}/retrieve" \
 -H 'Authorization: AWS4-HMAC-SHA256..' \
 -H 'Content-Type: application/json' \
@@ -456,7 +456,7 @@ Use this, to avoid giving developers the raw AWS Keys, but still letting them us
 
 1. Setup environment
 
-```bash
+```bash showLineNumbers
 export DATABASE_URL=""
 export LITELLM_MASTER_KEY=""
 export AWS_ACCESS_KEY_ID=""  # Access key
@@ -464,7 +464,7 @@ export AWS_SECRET_ACCESS_KEY="" # Secret access key
 export AWS_REGION_NAME="" # us-east-1, us-east-2, us-west-1, us-west-2
 ```
 
-```bash
+```bash showLineNumbers
 litellm
 
 # RUNNING on http://0.0.0.0:4000
@@ -472,7 +472,7 @@ litellm
 
 2. Generate virtual key 
 
-```bash
+```bash showLineNumbers
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
@@ -481,7 +481,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 
 Expected Response 
 
-```bash
+```bash showLineNumbers
 {
     ...
     "key": "sk-1234ewknldferwedojwojw"
@@ -491,7 +491,7 @@ Expected Response
 3. Test it! 
 
 
-```bash
+```bash showLineNumbers
 curl -X POST 'http://0.0.0.0:4000/bedrock/model/cohere.command-r-v1:0/converse' \
 -H 'Authorization: Bearer sk-1234ewknldferwedojwojw' \
 -H 'Content-Type: application/json' \
@@ -510,7 +510,7 @@ Call Bedrock Agents via LiteLLM proxy
 
 **Setup**: Set AWS credentials on your LiteLLM proxy server
 
-```bash
+```bash showLineNumbers
 export AWS_ACCESS_KEY_ID="your-access-key"
 export AWS_SECRET_ACCESS_KEY="your-secret-key"
 export AWS_REGION_NAME="us-west-2"
@@ -518,7 +518,7 @@ export AWS_REGION_NAME="us-west-2"
 
 Start proxy:
 
-```bash
+```bash showLineNumbers
 litellm
 
 # RUNNING on http://0.0.0.0:4000
@@ -526,7 +526,7 @@ litellm
 
 **Usage from Python**:
 
-```python
+```python showLineNumbers
 import os 
 import boto3 
 from botocore.config import Config
