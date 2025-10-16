@@ -2,5 +2,24 @@ model_list:
   - model_name: mistral/*
     litellm_params:
       model: mistral/*
-
-
+  - model_name: special-bedrock-model
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_region_name: us-west-2
+      custom_llm_provider: bedrock
+  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_region_name: us-west-2
+      custom_llm_provider: bedrock
+  # Load balancing test - multiple deployments with same model_name
+  - model_name: load-balanced-claude
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_region_name: us-west-2
+      custom_llm_provider: bedrock
+  - model_name: load-balanced-claude
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_region_name: us-east-1
+      custom_llm_provider: bedrock

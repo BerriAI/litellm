@@ -2740,6 +2740,37 @@ class Router:
                 )
             )
             raise e
+    
+    def _add_deployment_model_to_endpoint_for_llm_passthrough_route(
+        self, kwargs: Dict[str, Any], 
+        model: str, 
+        model_name: str
+    ) -> Dict[str, Any]:
+        """
+        Add the deployment model to the endpoint for LLM passthrough route.
+
+        e.g for bedrock invoke users can pass endpoint as /model/special-bedrock-model/invoke
+          it should be actually sent as /model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke
+        """
+        if "endpoint" in kwargs and kwargs["endpoint"]:
+            # For provider-specific endpoints, strip the provider prefix from model_name
+            # e.g., "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0" -> "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+            from litellm import get_llm_provider
+            
+            try:
+                # get_llm_provider returns (model_without_prefix, provider, api_key, api_base)
+                stripped_model_name, _, _, _ = get_llm_provider(
+                    model=model_name,
+                    custom_llm_provider=kwargs.get("custom_llm_provider"),
+                    api_base=kwargs.get("api_base"),
+                )
+                replacement_model_name = stripped_model_name
+            except Exception:
+                # If get_llm_provider fails, fall back to using model_name as-is
+                replacement_model_name = model_name
+            
+            kwargs["endpoint"] = kwargs["endpoint"].replace(model, replacement_model_name)
+        return kwargs
 
     async def _ageneric_api_call_with_fallbacks_helper(
         self, model: str, original_generic_function: Callable, **kwargs
@@ -2772,6 +2803,7 @@ class Router:
             model_name = data["model"]
             self.total_calls[model_name] += 1
 
+            self._add_deployment_model_to_endpoint_for_llm_passthrough_route(kwargs=kwargs, model=model, model_name=model_name)
             ### get custom
             response = original_generic_function(
                 **{
@@ -2849,6 +2881,12 @@ class Router:
             model_name = data["model"]
 
             self.total_calls[model_name] += 1
+
+            # For passthrough routes, use the actual model from deployment
+            # and swap model name in endpoint if present
+            if "endpoint" in kwargs and kwargs["endpoint"]:
+                kwargs["endpoint"] = kwargs["endpoint"].replace(model, model_name)
+            kwargs["model"] = model_name
 
             # Perform pre-call checks for routing strategy
             self.routing_strategy_pre_call_checks(deployment=deployment)
