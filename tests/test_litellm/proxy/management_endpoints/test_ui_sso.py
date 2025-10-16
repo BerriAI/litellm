@@ -1139,7 +1139,7 @@ class TestCustomUISSO:
                             )
                             return "success"
                         except ImportError:
-                            raise ValueError("Enterprise features are not available. Custom UI SSO sign-in requires LiteLLM Enterprise.")
+                            raise ValueError("Enterprise features are not available. Custom UI SSO sign-in requires Synapse Gateway Enterprise.")
                     
                     # Test that the ValueError is raised with the correct message
                     import pytest
@@ -1771,4 +1771,3 @@ class TestProcessSSOJWTAccessToken:
             
             # Even empty team IDs should be set
             assert result.team_ids == []
-

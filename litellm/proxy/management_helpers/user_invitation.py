@@ -41,7 +41,7 @@ async def create_invitation_for_user(
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": "User id does not exist in 'LiteLLM_UserTable'. Fix this by creating user via `/user/new`."
+                    "error": "User id does not exist in the Synapse Gateway user table. Fix this by creating the user via `/user/new`."
                 },
             )
         raise HTTPException(status_code=500, detail={"error": str(e)})

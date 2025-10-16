@@ -23,7 +23,7 @@ def litellm_to_list(embeds: litellm.EmbeddingResponse) -> list[list[float]]:
         or not isinstance(embeds, litellm.EmbeddingResponse)
         or not embeds.data
     ):
-        raise ValueError("No embeddings found in LiteLLM embedding response.")
+        raise ValueError("No embeddings found in Synapse Gateway embedding response.")
     return [x["embedding"] for x in embeds.data]
 
 

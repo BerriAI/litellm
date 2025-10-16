@@ -804,7 +804,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             ):  # if generated token, make sure it starts with sk-.
                 assert api_key.startswith(
                     "sk-"
-                ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
+                ), "Synapse Gateway virtual key expected. Received={}, expected to start with 'sk-'.".format(
                     api_key
                 )  # prevent token hashes from being used
             else:
@@ -827,9 +827,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 )
             except ProxyException as e:
                 if e.code == 401 or e.code == "401":
-                    e.message = "Authentication Error, Invalid proxy server token passed. Received API Key = {}, Key Hash (Token) ={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
-                        abbreviated_api_key, api_key
-                    )
+                    e.message = (
+                        "Authentication Error, Invalid proxy server token passed. "
+                        "Received API Key = {}, Key Hash (Token) ={}. Unable to find token in cache or verification table."
+                    ).format(abbreviated_api_key, api_key)
                 raise e
             # update end-user params on valid token
             # These can change per request - it's important to update them here
@@ -1272,7 +1273,7 @@ def get_api_key_from_custom_header(
         )
     else:
         verbose_proxy_logger.exception(
-            f"No LiteLLM Virtual Key pass. Please set header={custom_litellm_key_header_name}: Bearer <api_key>"
+            f"No Synapse Gateway virtual key provided. Please set header={custom_litellm_key_header_name}: Bearer <api_key>"
         )
     return api_key
 

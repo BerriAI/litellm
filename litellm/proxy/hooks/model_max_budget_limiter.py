@@ -76,7 +76,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 and _current_spend > _current_model_budget_info.max_budget
             ):
                 raise litellm.BudgetExceededError(
-                    message=f"LiteLLM Virtual Key: {user_api_key_dict.token}, key_alias: {user_api_key_dict.key_alias}, exceeded budget for model={model}",
+                    message=f"Synapse Gateway virtual key: {user_api_key_dict.token}, key_alias: {user_api_key_dict.key_alias}, exceeded budget for model={model}",
                     current_cost=_current_spend,
                     max_budget=_current_model_budget_info.max_budget,
                 )

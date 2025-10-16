@@ -2293,7 +2293,7 @@ class PrismaClient:
                         raise HTTPException(
                             status_code=400,
                             detail={
-                                "error": f"Foreign Key Constraint failed. Organization ID={db_data['organization_id']} does not exist in LiteLLM_OrganizationTable. Create via `/organization/new`."
+                                "error": f"Foreign Key Constraint failed. Organization ID={db_data['organization_id']} does not exist in the Synapse Gateway organization table. Create via `/organization/new`."
                             },
                         )
                     raise e
@@ -3582,9 +3582,9 @@ def _premium_user_check(feature: Optional[str] = None):
     from litellm.proxy.proxy_server import premium_user
 
     if feature:
-        detail_msg = f"This feature is only available for LiteLLM Enterprise users: {feature}. {CommonProxyErrors.not_premium_user.value}"
+        detail_msg = f"This feature is only available for Synapse Gateway Enterprise users: {feature}. {CommonProxyErrors.not_premium_user.value}"
     else:
-        detail_msg = f"This feature is only available for LiteLLM Enterprise users. {CommonProxyErrors.not_premium_user.value}"
+        detail_msg = f"This feature is only available for Synapse Gateway Enterprise users. {CommonProxyErrors.not_premium_user.value}"
 
     if not premium_user:
         raise HTTPException(

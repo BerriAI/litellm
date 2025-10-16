@@ -6646,7 +6646,7 @@ async def model_info_v2(
         raise HTTPException(
             status_code=500,
             detail={
-                "error": f"No model list passed, models router={llm_router}. You can add a model through the config.yaml or on the LiteLLM Admin UI."
+                "error": f"No model list passed, models router={llm_router}. You can add a model through the config.yaml or on the Synapse Gateway Admin UI."
             },
         )
 
@@ -7276,7 +7276,7 @@ async def model_info_v1(  # noqa: PLR0915
         raise HTTPException(
             status_code=500,
             detail={
-                "error": "LLM Model List not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
+                "error": "LLM Model List not loaded in. Make sure you passed models in your config.yaml or on the Synapse Gateway Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
             },
         )
 
@@ -7284,7 +7284,7 @@ async def model_info_v1(  # noqa: PLR0915
         raise HTTPException(
             status_code=500,
             detail={
-                "error": "LLM Router is not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
+                "error": "LLM Router is not loaded in. Make sure you passed models in your config.yaml or on the Synapse Gateway Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
             },
         )
 
@@ -7295,7 +7295,7 @@ async def model_info_v1(  # noqa: PLR0915
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"Model id = {litellm_model_id} not found on litellm proxy"
+                    "error": f"Model id = {litellm_model_id} not found on Synapse Gateway proxy"
                 },
             )
         _deployment_info_dict = _get_proxy_model_info(

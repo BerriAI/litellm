@@ -688,7 +688,7 @@ async def find_member_if_email(
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"Unique user not found for user_email={user_email}. Potential duplicate OR non-existent user_email in LiteLLM_UserTable. Use 'user_id' instead."
+                "error": f"Unique user not found for user_email={user_email}. Potential duplicate OR non-existent user_email in the Synapse Gateway user table. Use 'user_id' instead."
             },
         )
     existing_user_email_row_pydantic = LiteLLM_UserTable(
@@ -910,7 +910,7 @@ async def add_member_to_organization(
                 )
             except Exception as e:
                 raise ValueError(
-                    f"Potential NON-Existent or Duplicate user email in DB: Error finding a unique instance of user_email={member.user_email} in LiteLLM_UserTable.: {e}"
+                    f"Potential NON-Existent or Duplicate user email in DB: Error finding a unique instance of user_email={member.user_email} in the Synapse Gateway user table: {e}"
                 )
 
         ## If user does not exist, create a new user
@@ -946,7 +946,7 @@ async def add_member_to_organization(
 
         if user_object is None:
             raise ValueError(
-                f"User does not exist in LiteLLM_UserTable. user_id={member.user_id} and user_email={member.user_email}"
+                f"User does not exist in the Synapse Gateway user table. user_id={member.user_id} and user_email={member.user_email}"
             )
 
         # Add user to organization

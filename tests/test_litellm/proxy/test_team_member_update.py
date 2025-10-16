@@ -33,7 +33,7 @@ async def test_ateam_member_update_admin_requires_premium(monkeypatch):
 
     assert exc_info.value.status_code == 400
     expected_msg = (
-        "Assigning team admins is a premium feature. You must be a LiteLLM Enterprise user to use this feature. "
+        "Assigning team admins is a premium feature. You must be a Synapse Gateway Enterprise user to use this feature. "
         "If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. "
         "Pricing: https://www.litellm.ai/#pricing"
     )

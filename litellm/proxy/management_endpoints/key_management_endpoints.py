@@ -609,7 +609,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {data.key}"
+                "error": f"Invalid key format. Synapse Gateway virtual keys must start with 'sk-'. Received: {data.key}"
             },
         )
 
@@ -1801,7 +1801,7 @@ def _check_model_access_group(
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={
-                        "error": "Setting a model access group on a wildcard model is only available for LiteLLM Enterprise users.{}".format(
+                        "error": "Setting a model access group on a wildcard model is only available for Synapse Gateway Enterprise users.{}".format(
                             CommonProxyErrors.not_premium_user.value
                         )
                     },
@@ -1999,7 +1999,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
                 and premium_user is not True
             ):
                 raise ValueError(
-                    "get_spend_routes permission is only available for LiteLLM Enterprise users"
+                    "get_spend_routes permission is only available for Synapse Gateway Enterprise users"
                 )
 
             saved_token["permissions"] = json.loads(saved_token["permissions"])
