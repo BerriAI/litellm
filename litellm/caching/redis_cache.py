@@ -709,7 +709,31 @@ class RedisCache(BaseCache):
                 cached_response
             )  # Convert string to dictionary
         except Exception:
-            cached_response = ast.literal_eval(cached_response)
+            try:
+                cached_response = ast.literal_eval(cached_response)
+                # Validate queue data structure if this looks like scheduler queue data
+                if isinstance(cached_response, list):
+                    validated_queue = []
+                    for item in cached_response:
+                        # Check if this is a scheduler queue item (priority, request_id tuple)
+                        if isinstance(item, (tuple, list)) and len(item) == 2:
+                            try:
+                                # Normalize to (int, str) tuple format
+                                priority = int(item[0]) if item[0] is not None else 0
+                                request_id = str(item[1]) if item[1] is not None else ""
+                                validated_queue.append((priority, request_id))
+                            except (ValueError, TypeError):
+                                # Skip items that can't be converted
+                                print_verbose(f"Skipping invalid queue item during Redis deserialization: {item}")
+                                continue
+                        else:
+                            # Keep non-queue items as-is
+                            validated_queue.append(item)
+                    cached_response = validated_queue
+            except Exception as e:
+                # If all deserialization attempts fail, log warning and return None
+                print_verbose(f"Failed to deserialize cached response from Redis: {e}")
+                cached_response = None
         return cached_response
 
     def get_cache(self, key, parent_otel_span: Optional[Span] = None, **kwargs):
