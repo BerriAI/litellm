@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Collection, Dict, List, Optional
 
 import orjson
 from fastapi import Request, UploadFile, status
@@ -149,7 +149,7 @@ def _safe_get_request_headers(request: Optional[Request]) -> dict:
 def check_file_size_under_limit(
     request_data: dict,
     file: UploadFile,
-    router_model_names: List[str],
+    router_model_names: Collection[str],
 ) -> bool:
     """
     Check if any files passed in request are under max_file_size_mb
