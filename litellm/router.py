@@ -872,6 +872,14 @@ class Router:
             generate_content_stream, call_type="generate_content_stream"
         )
 
+        #########################################################
+        # OCR routes
+        #########################################################
+        from litellm.ocr import aocr, ocr
+
+        self.aocr = self.factory_function(aocr, call_type="aocr")
+        self.ocr = self.factory_function(ocr, call_type="ocr")
+
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
         Validate the fallbacks parameter.
@@ -3537,6 +3545,9 @@ class Router:
             "avector_store_create",
             "vector_store_search",
             "vector_store_create",
+            "aocr",
+            "ocr",
+            "aadapter_generate_content"
         ] = "assistants",
     ):
         """
@@ -3553,6 +3564,7 @@ class Router:
             "generate_content_stream",
             "vector_store_search",
             "vector_store_create",
+            "ocr",
         ):
 
             def sync_wrapper(
@@ -3595,6 +3607,8 @@ class Router:
                 "aimage_edit",
                 "agenerate_content",
                 "agenerate_content_stream",
+                "aocr",
+                "ocr",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

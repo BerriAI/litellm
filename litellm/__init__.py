@@ -1324,6 +1324,7 @@ from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
+from .ocr.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *

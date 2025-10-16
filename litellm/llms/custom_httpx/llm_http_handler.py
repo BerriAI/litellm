@@ -39,6 +39,7 @@ from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
+from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -1254,6 +1255,289 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             optional_params=optional_params,
             api_key=api_key,
+        )
+
+    def _prepare_ocr_request(
+        self,
+        model: str,
+        document: Dict[str, str],
+        optional_params: dict,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        headers: Optional[Dict[str, Any]],
+        provider_config: BaseOCRConfig,
+        litellm_params: dict,
+    ) -> Tuple[Dict[str, Any], str, Dict[str, Any], None]:
+        """
+        Shared logic for preparing OCR requests.
+        Returns: (headers, complete_url, data, files)
+        """
+        from litellm.llms.base_llm.ocr.transformation import OCRRequestData
+
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers or {},
+            model=model,
+        )
+
+        complete_url = provider_config.get_complete_url(
+            api_base=api_base,
+            model=model,
+            optional_params=optional_params,
+        )
+
+        # Transform the request to get data and files
+        transformed_result = provider_config.transform_ocr_request(
+            model=model,
+            document=document,
+            optional_params=optional_params,
+            headers=headers,
+        )
+
+        # All providers return OCRRequestData
+        if not isinstance(transformed_result, OCRRequestData):
+            raise ValueError(
+                f"Provider {provider_config.__class__.__name__} must return OCRRequestData"
+            )
+
+        # Data is always a dict for Mistral OCR format
+        if not isinstance(transformed_result.data, dict):
+            raise ValueError(f"Expected dict data for OCR request, got {type(transformed_result.data)}")
+        
+        data = transformed_result.data
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input="OCR document processing",
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": complete_url,
+                "headers": headers,
+            },
+        )
+
+        return headers, complete_url, data, None
+
+    async def _async_prepare_ocr_request(
+        self,
+        model: str,
+        document: Dict[str, str],
+        optional_params: dict,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        headers: Optional[Dict[str, Any]],
+        provider_config: BaseOCRConfig,
+        litellm_params: dict,
+    ) -> Tuple[Dict[str, Any], str, Dict[str, Any], None]:
+        """
+        Async version of _prepare_ocr_request for providers that need async transforms.
+        Returns: (headers, complete_url, data, files)
+        """
+        from litellm.llms.base_llm.ocr.transformation import OCRRequestData
+
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers or {},
+            model=model,
+        )
+
+        complete_url = provider_config.get_complete_url(
+            api_base=api_base,
+            model=model,
+            optional_params=optional_params,
+        )
+
+        # Use async transform (providers can override this method if they need async operations)
+        transformed_result = await provider_config.async_transform_ocr_request(
+            model=model,
+            document=document,
+            optional_params=optional_params,
+            headers=headers,
+        )
+
+        # All providers return OCRRequestData
+        if not isinstance(transformed_result, OCRRequestData):
+            raise ValueError(
+                f"Provider {provider_config.__class__.__name__} must return OCRRequestData"
+            )
+
+        # Data is always a dict for Mistral OCR format
+        if not isinstance(transformed_result.data, dict):
+            raise ValueError(f"Expected dict data for OCR request, got {type(transformed_result.data)}")
+        
+        data = transformed_result.data
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input="OCR document processing",
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": complete_url,
+                "headers": headers,
+            },
+        )
+
+        return headers, complete_url, data, None
+
+    def _transform_ocr_response(
+        self,
+        provider_config: BaseOCRConfig,
+        model: str,
+        response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> OCRResponse:
+        """Shared logic for transforming OCR responses."""
+        return provider_config.transform_ocr_response(
+            model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def ocr(
+        self,
+        model: str,
+        document: Dict[str, str],
+        optional_params: dict,
+        timeout: Union[float, httpx.Timeout],
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        custom_llm_provider: str,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        aocr: bool = False,
+        headers: Optional[Dict[str, Any]] = None,
+        provider_config: Optional[BaseOCRConfig] = None,
+        litellm_params: Optional[dict] = None,
+    ) -> Union[OCRResponse, Coroutine[Any, Any, OCRResponse]]:
+        """
+        Sync OCR handler.
+        """
+        if provider_config is None:
+            raise ValueError(
+                f"No provider config found for model: {model} and provider: {custom_llm_provider}"
+            )
+
+        if litellm_params is None:
+            litellm_params = {}
+
+        if aocr is True:
+            return self.async_ocr(
+                model=model,
+                document=document,
+                optional_params=optional_params,
+                timeout=timeout,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                client=client,
+                headers=headers,
+                provider_config=provider_config,
+                litellm_params=litellm_params,
+            )
+
+        # Prepare the request
+        headers, complete_url, data, files = self._prepare_ocr_request(
+            model=model,
+            document=document,
+            optional_params=optional_params,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers,
+            provider_config=provider_config,
+            litellm_params=litellm_params,
+        )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            client = _get_httpx_client()
+
+        try:
+            # Make the POST request with JSON data (Mistral format)
+            response = client.post(
+                url=complete_url,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return self._transform_ocr_response(
+            provider_config=provider_config,
+            model=model,
+            response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_ocr(
+        self,
+        model: str,
+        document: Dict[str, str],
+        optional_params: dict,
+        timeout: Union[float, httpx.Timeout],
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        custom_llm_provider: str,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        headers: Optional[Dict[str, Any]] = None,
+        provider_config: Optional[BaseOCRConfig] = None,
+        litellm_params: Optional[dict] = None,
+    ) -> OCRResponse:
+        """
+        Async OCR handler.
+        """
+        if provider_config is None:
+            raise ValueError(
+                f"No provider config found for model: {model} and provider: {custom_llm_provider}"
+            )
+
+        if litellm_params is None:
+            litellm_params = {}
+
+        # Prepare the request using async prepare method
+        headers, complete_url, data, files = await self._async_prepare_ocr_request(
+            model=model,
+            document=document,
+            optional_params=optional_params,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers,
+            provider_config=provider_config,
+            litellm_params=litellm_params,
+        )
+
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        else:
+            async_httpx_client = client
+
+        try:
+            # Make the async POST request with JSON data (Mistral format)
+            response = await async_httpx_client.post(
+                url=complete_url,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return self._transform_ocr_response(
+            provider_config=provider_config,
+            model=model,
+            response=response,
+            logging_obj=logging_obj,
         )
 
     async def async_anthropic_messages_handler(
@@ -2995,6 +3279,7 @@ class BaseLLMHTTPHandler:
             BaseGoogleGenAIGenerateContentConfig,
             BaseAnthropicMessagesConfig,
             BaseBatchesConfig,
+            BaseOCRConfig,
             "BasePassthroughConfig",
         ],
     ):
