@@ -2,7 +2,7 @@ import os
 import sys
 import types
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 
 def test_langfuse_get_prompt_caching(monkeypatch):
