@@ -1772,3 +1772,107 @@ class TestProcessSSOJWTAccessToken:
             # Even empty team IDs should be set
             assert result.team_ids == []
 
+
+class TestPKCEFunctionality:
+    """Test PKCE (Proof Key for Code Exchange) functionality"""
+
+    def test_generate_pkce_params(self):
+        """
+        Test that generate_pkce_params generates valid PKCE parameters
+        """
+        import base64
+        import hashlib
+
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Act
+        code_verifier, code_challenge = SSOAuthenticationHandler.generate_pkce_params()
+
+        # Assert
+        assert len(code_verifier) == 43
+        assert isinstance(code_verifier, str)
+        
+        # Verify code_challenge is correctly generated from code_verifier
+        expected_challenge_bytes = hashlib.sha256(code_verifier.encode('utf-8')).digest()
+        expected_challenge = base64.urlsafe_b64encode(expected_challenge_bytes).decode('utf-8').rstrip('=')
+        assert code_challenge == expected_challenge
+        
+        # Verify both are base64url encoded (no padding)
+        assert '=' not in code_verifier
+        assert '=' not in code_challenge
+
+    @pytest.mark.asyncio
+    async def test_prepare_token_exchange_parameters_with_pkce(self):
+        """
+        Test prepare_token_exchange_parameters retrieves PKCE code_verifier from cache
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Mock request with state parameter
+        mock_request = MagicMock(spec=Request)
+        test_state = "test_oauth_state_123"
+        mock_request.query_params = {"state": test_state}
+
+        # Mock cache
+        mock_cache = MagicMock()
+        test_code_verifier = "test_code_verifier_abc123xyz"
+        mock_cache.get_cache.return_value = test_code_verifier
+
+        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
+            # Act
+            token_params = SSOAuthenticationHandler.prepare_token_exchange_parameters(
+                request=mock_request,
+                generic_include_client_id=False
+            )
+
+            # Assert
+            assert token_params["include_client_id"] is False
+            assert token_params["code_verifier"] == test_code_verifier
+            
+            # Verify cache was accessed and deleted
+            mock_cache.get_cache.assert_called_once_with(key=f"pkce_verifier:{test_state}")
+            mock_cache.delete_cache.assert_called_once_with(key=f"pkce_verifier:{test_state}")
+
+    @pytest.mark.asyncio
+    async def test_get_generic_sso_redirect_response_with_pkce(self):
+        """
+        Test get_generic_sso_redirect_response with PKCE enabled stores verifier and adds challenge to URL
+        """
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Mock SSO provider
+        mock_sso = MagicMock()
+        mock_redirect_response = MagicMock()
+        original_location = "https://auth.example.com/authorize?state=test456&client_id=abc"
+        mock_redirect_response.headers = {"location": original_location}
+        mock_sso.get_login_redirect = AsyncMock(return_value=mock_redirect_response)
+        mock_sso.__enter__ = MagicMock(return_value=mock_sso)
+        mock_sso.__exit__ = MagicMock(return_value=False)
+
+        test_state = "test456"
+        mock_cache = MagicMock()
+
+        with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
+            with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
+                # Act
+                result = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
+                    generic_sso=mock_sso,
+                    state=test_state,
+                    generic_authorization_endpoint="https://auth.example.com/authorize"
+                )
+
+                # Assert
+                # Verify cache was called to store code_verifier
+                mock_cache.set_cache.assert_called_once()
+                cache_call = mock_cache.set_cache.call_args
+                assert cache_call.kwargs["key"] == f"pkce_verifier:{test_state}"
+                assert cache_call.kwargs["ttl"] == 600
+                assert len(cache_call.kwargs["value"]) == 43
+
+                # Verify PKCE parameters were added to the redirect URL
+                assert result is not None
+                updated_location = str(result.headers["location"])
+                assert "code_challenge=" in updated_location
+                assert "code_challenge_method=S256" in updated_location
+                assert f"state={test_state}" in updated_location
+
