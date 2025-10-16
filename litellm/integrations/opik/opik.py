@@ -17,6 +17,11 @@ from litellm.llms.custom_httpx.http_handler import (
 
 from . import opik_payload_builder, utils
 
+try:
+    from opik.api_objects import opik_client
+except Exception:
+    opik_client = None
+
 
 def _should_skip_event(kwargs: Dict[str, Any]) -> bool:
     """Check if event should be skipped due to missing standard_logging_object."""
@@ -84,6 +89,12 @@ class OpikLogger(CustomBatchLogger):
             )
             self.flush_lock = None
 
+        # Initialize _opik_client attribute
+        if opik_client is not None:
+            self._opik_client = opik_client.get_client_cached()
+        else:
+            self._opik_client = None
+
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     async def async_log_success_event(
@@ -106,18 +117,51 @@ class OpikLogger(CustomBatchLogger):
                 project_name=self.opik_project_name,
             )
 
-            # Add payloads to queue
-            if trace_payload is not None:
-                self.log_queue.append(trace_payload)
-            self.log_queue.append(span_payload)
+            if self._opik_client is not None:
+                # Opik native client is available, use it to send data
+                if trace_payload is not None:
+                    self._opik_client.trace(
+                        id=trace_payload.id,
+                        name=trace_payload.name,
+                        start_time=datetime.fromisoformat(trace_payload.start_time),
+                        end_time=datetime.fromisoformat(trace_payload.end_time),
+                        input=trace_payload.input,
+                        output=trace_payload.output,
+                        metadata=trace_payload.metadata,
+                        tags=trace_payload.tags,
+                        thread_id=trace_payload.thread_id,
+                        project_name=trace_payload.project_name,
+                    )
 
-            verbose_logger.debug(
-                f"OpikLogger added event to log_queue - Will flush in {self.flush_interval} seconds..."
-            )
+                self._opik_client.span(
+                    id=span_payload.id,
+                    trace_id=span_payload.trace_id,
+                    parent_span_id=span_payload.parent_span_id,
+                    name=span_payload.name,
+                    type=span_payload.type,
+                    model=span_payload.model,
+                    start_time=datetime.fromisoformat(span_payload.start_time),
+                    end_time=datetime.fromisoformat(span_payload.end_time),
+                    input=span_payload.input,
+                    output=span_payload.output,
+                    metadata=span_payload.metadata,
+                    tags=span_payload.tags,
+                    usage=span_payload.usage,
+                    project_name=span_payload.project_name,
+                )
+            else:
+                # Add payloads to LiteLLM queue
+                if trace_payload is not None:
+                    self.log_queue.append(trace_payload.__dict__)
+                self.log_queue.append(span_payload.__dict__)
 
-            if len(self.log_queue) >= self.batch_size:
-                verbose_logger.debug("OpikLogger - Flushing batch")
-                await self.flush_queue()
+                verbose_logger.debug(
+                    f"OpikLogger added event to log_queue - Will flush in {self.flush_interval} seconds..."
+                )
+
+                if len(self.log_queue) >= self.batch_size:
+                    verbose_logger.debug("OpikLogger - Flushing batch")
+                    await self.flush_queue()
         except Exception as e:
             verbose_logger.exception(
                 f"OpikLogger failed to log success event - {str(e)}\n{traceback.format_exc()}"
@@ -159,19 +203,53 @@ class OpikLogger(CustomBatchLogger):
                 end_time=end_time,
                 project_name=self.opik_project_name,
             )
+            if self._opik_client is not None:
+                # Opik native client is available, use it to send data
+                if trace_payload is not None:
+                    self._opik_client.trace(
+                        id=trace_payload.id,
+                        name=trace_payload.name,
+                        start_time=datetime.fromisoformat(trace_payload.start_time),
+                        end_time=datetime.fromisoformat(trace_payload.end_time),
+                        input=trace_payload.input,
+                        output=trace_payload.output,
+                        metadata=trace_payload.metadata,
+                        tags=trace_payload.tags,
+                        thread_id=trace_payload.thread_id,
+                        project_name=trace_payload.project_name,
+                    )
 
-            # Send trace if present
-            if trace_payload is not None:
-                self._sync_send(
-                    url=self.trace_url,
-                    headers=self.headers,
-                    batch={"traces": [trace_payload]},
+                self._opik_client.span(
+                    id=span_payload.id,
+                    trace_id=span_payload.trace_id,
+                    parent_span_id=span_payload.parent_span_id,
+                    name=span_payload.name,
+                    type=span_payload.type,
+                    model=span_payload.model,
+                    start_time=datetime.fromisoformat(span_payload.start_time),
+                    end_time=datetime.fromisoformat(span_payload.end_time),
+                    input=span_payload.input,
+                    output=span_payload.output,
+                    metadata=span_payload.metadata,
+                    tags=span_payload.tags,
+                    usage=span_payload.usage,
+                    project_name=span_payload.project_name,
                 )
+            else:
+                # Opik native client is not available, use LiteLLM queue to send data
+                if trace_payload is not None:
+                    self._sync_send(
+                        url=self.trace_url,
+                        headers=self.headers,
+                        batch={"traces": [trace_payload.__dict__]},
+                    )
 
-            # Always send span
-            self._sync_send(
-                url=self.span_url, headers=self.headers, batch={"spans": [span_payload]}
-            )
+                # Always send span
+                self._sync_send(
+                    url=self.span_url,
+                    headers=self.headers,
+                    batch={"spans": [span_payload.__dict__]},
+                )
         except Exception as e:
             verbose_logger.exception(
                 f"OpikLogger failed to log success event - {str(e)}\n{traceback.format_exc()}"

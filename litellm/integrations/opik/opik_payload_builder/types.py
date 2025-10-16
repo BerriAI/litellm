@@ -1,9 +1,11 @@
 """Type definitions for Opik payload building."""
 
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from dataclasses import dataclass
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 
-class TracePayload(TypedDict, total=False):
+@dataclass
+class TracePayload:
     """Opik trace payload structure"""
 
     project_name: str
@@ -15,16 +17,16 @@ class TracePayload(TypedDict, total=False):
     output: Any
     metadata: Dict[str, Any]
     tags: List[str]
-    thread_id: Optional[str]
+    thread_id: Optional[str] = None
 
 
-class SpanPayload(TypedDict, total=False):
+@dataclass
+class SpanPayload:
     """Opik span payload structure"""
 
     id: str
     project_name: str
     trace_id: str
-    parent_span_id: Optional[str]
     name: str
     type: Literal["llm"]
     model: str
@@ -35,7 +37,8 @@ class SpanPayload(TypedDict, total=False):
     metadata: Dict[str, Any]
     tags: List[str]
     usage: Dict[str, int]
+    parent_span_id: Optional[str] = None
 
 
 PayloadItem = Union[TracePayload, SpanPayload]
-OpikPayloadList = List[PayloadItem]
+TraceSpanPayloadTuple = Tuple[Optional[TracePayload], SpanPayload]
