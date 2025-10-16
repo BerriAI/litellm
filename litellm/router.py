@@ -189,7 +189,7 @@ class RoutingArgs(enum.Enum):
 
 
 class Router:
-    model_names: List = []
+    model_names: set = set()
     cache_responses: Optional[bool] = False
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
     tenacity = None
@@ -1065,7 +1065,7 @@ class Router:
 
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             request_priority = kwargs.get("priority") or self.default_priority
-            start_time = time.time()
+            start_time = time.perf_counter()
             _is_prompt_management_model = self._is_prompt_management_model(model)
 
             if _is_prompt_management_model:
@@ -1078,7 +1078,7 @@ class Router:
                 response = await self.schedule_acompletion(**kwargs)
             else:
                 response = await self.async_function_with_fallbacks(**kwargs)
-            end_time = time.time()
+            end_time = time.perf_counter()
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
@@ -1253,7 +1253,7 @@ class Router:
             input_kwargs_for_streaming_fallback["model"] = model
 
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
-            start_time = time.time()
+            start_time = time.perf_counter()
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=messages,
@@ -1262,7 +1262,7 @@ class Router:
             )
 
             _timeout_debug_deployment_dict = deployment
-            end_time = time.time()
+            end_time = time.perf_counter()
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
@@ -1842,8 +1842,8 @@ class Router:
         await self.scheduler.add_request(request=item)
 
         ## POLL QUEUE
-        end_time = time.time() + self.timeout
-        curr_time = time.time()
+        end_time = time.monotonic() + self.timeout
+        curr_time = time.monotonic()
         poll_interval = self.scheduler.polling_interval  # poll every 3ms
         make_request = False
 
@@ -1860,7 +1860,7 @@ class Router:
                 break
             else:  ## ELSE -> loop till default_timeout
                 await asyncio.sleep(poll_interval)
-                curr_time = time.time()
+                curr_time = time.monotonic()
 
         if make_request:
             try:
@@ -1904,8 +1904,8 @@ class Router:
         await self.scheduler.add_request(request=item)
 
         ## POLL QUEUE
-        end_time = time.time() + self.timeout
-        curr_time = time.time()
+        end_time = time.monotonic() + self.timeout
+        curr_time = time.monotonic()
         poll_interval = self.scheduler.polling_interval  # poll every 3ms
         make_request = False
 
@@ -1922,7 +1922,7 @@ class Router:
                 break
             else:  ## ELSE -> loop till default_timeout
                 await asyncio.sleep(poll_interval)
-                curr_time = time.time()
+                curr_time = time.monotonic()
 
         if make_request:
             try:
@@ -4929,22 +4929,25 @@ class Router:
         - hash
         - use hash as id
         """
-        concat_str = model_group
+        # Optimized: Use list and join instead of string concatenation in loop
+        # This avoids creating many temporary string objects (O(n) vs O(n²) complexity)
+        parts = [model_group]
         for k, v in litellm_params.items():
             if isinstance(k, str):
-                concat_str += k
+                parts.append(k)
             elif isinstance(k, dict):
-                concat_str += json.dumps(k)
+                parts.append(json.dumps(k))
             else:
-                concat_str += str(k)
+                parts.append(str(k))
 
             if isinstance(v, str):
-                concat_str += v
+                parts.append(v)
             elif isinstance(v, dict):
-                concat_str += json.dumps(v)
+                parts.append(json.dumps(v))
             else:
-                concat_str += str(v)
+                parts.append(str(v))
 
+        concat_str = "".join(parts)
         hash_object = hashlib.sha256(concat_str.encode())
 
         return hash_object.hexdigest()
@@ -5168,7 +5171,7 @@ class Router:
         verbose_router_logger.debug(
             f"\nInitialized Model List {self.get_model_names()}"
         )
-        self.model_names = [m["model_name"] for m in model_list]
+        self.model_names = {m["model_name"] for m in model_list}
         
         # Build model_name index for O(1) lookups
         self._build_model_name_index(self.model_list)
@@ -5374,7 +5377,7 @@ class Router:
         self._add_model_to_list_and_index_map(
             model=_deployment, model_id=deployment.model_info.id
         )
-        self.model_names.append(deployment.model_name)
+        self.model_names.add(deployment.model_name)
         return deployment
 
     def _update_deployment_indices_after_removal(
@@ -5533,9 +5536,15 @@ class Router:
         Returns -> Deployment or None
 
         Raise Exception -> if model found in invalid format
+        
+        Optimized with O(1) index lookup instead of O(n) linear scan.
         """
-        for model in self.model_list:
-            if model["model_name"] == model_group_name:
+        # O(1) lookup in model_name index
+        if model_group_name in self.model_name_to_deployment_indices:
+            indices = self.model_name_to_deployment_indices[model_group_name]
+            if indices:
+                # Return first deployment for this model_name
+                model = self.model_list[indices[0]]
                 if isinstance(model, dict):
                     return Deployment(**model)
                 elif isinstance(model, Deployment):
@@ -5645,11 +5654,13 @@ class Router:
         Returns
         - dict: the model in list with 'model_name', 'litellm_params', Optional['model_info']
         - None: could not find deployment in list
+        
+        Optimized with O(1) index lookup instead of O(n) linear scan.
         """
-        for model in self.model_list:
-            if "model_info" in model and "id" in model["model_info"]:
-                if id == model["model_info"]["id"]:
-                    return model
+        # O(1) lookup via model_id_to_deployment_index_map
+        if id in self.model_id_to_deployment_index_map:
+            idx = self.model_id_to_deployment_index_map[id]
+            return self.model_list[idx]
         return None
 
     def get_model_group(self, id: str) -> Optional[List]:
@@ -6183,17 +6194,33 @@ class Router:
         if 'model_name' is none, returns all.
 
         Returns list of model id's.
+        
+        Optimized with O(1) or O(k) index lookup when model_name provided,
+        instead of O(n) linear scan.
         """        
         ids = []
-        for model in self.model_list:
-            if "model_info" in model and "id" in model["model_info"]:
-                id = model["model_info"]["id"]
-                if exclude_team_models and model["model_info"].get("team_id"):
-                    continue
-                if model_name is not None and model["model_name"] == model_name:
-                    ids.append(id)
-                elif model_name is None:
-                    ids.append(id)
+        
+        if model_name is not None:
+            # O(1) lookup in model_name index, then O(k) iteration where k = deployments for this model_name
+            if model_name in self.model_name_to_deployment_indices:
+                indices = self.model_name_to_deployment_indices[model_name]
+                for idx in indices:
+                    model = self.model_list[idx]
+                    if "model_info" in model and "id" in model["model_info"]:
+                        if exclude_team_models and model["model_info"].get("team_id"):
+                            continue
+                        ids.append(model["model_info"]["id"])
+        else:
+            # When model_name is None, return all model IDs
+            # Use the index map keys for O(n) where n = total deployments
+            for model_id in self.model_id_to_deployment_index_map.keys():
+                idx = self.model_id_to_deployment_index_map[model_id]
+                model = self.model_list[idx]
+                if "model_info" in model and "id" in model["model_info"]:
+                    if exclude_team_models and model["model_info"].get("team_id"):
+                        continue
+                    ids.append(model_id)
+        
         return ids
 
     def has_model_id(self, candidate_id: str) -> bool:
@@ -6271,7 +6298,9 @@ class Router:
                     model_name=model_name, model=model, team_id=team_id
                 ):
                     if model_alias is not None:
-                        alias_model = copy.deepcopy(model)
+                        # Optimized: Use shallow copy since we only modify top-level model_name
+                        # This is much faster than deepcopy for nested dict structures
+                        alias_model = model.copy()
                         alias_model["model_name"] = model_alias
                         returned_models.append(alias_model)
                     else:
@@ -6285,7 +6314,8 @@ class Router:
                     model_name=model_name, model=model, team_id=team_id
                 ):
                     if model_alias is not None:
-                        alias_model = copy.deepcopy(model)
+                        # Optimized: Use shallow copy since we only modify top-level model_name
+                        alias_model = model.copy()
                         alias_model["model_name"] = model_alias
                         returned_models.append(alias_model)
                     else:
@@ -7084,7 +7114,7 @@ class Router:
             if isinstance(healthy_deployments, dict):
                 return healthy_deployments
 
-            start_time = time.time()
+            start_time = time.perf_counter()
             if (
                 self.routing_strategy == "usage-based-routing-v2"
                 and self.lowesttpm_logger_v2 is not None
@@ -7151,7 +7181,7 @@ class Router:
                 f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
             )
 
-            end_time = time.time()
+            end_time = time.perf_counter()
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
