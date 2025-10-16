@@ -7360,6 +7360,8 @@ class ProviderConfigManager:
             return VLLMModelInfo()
         elif LlmProviders.LEMONADE == provider:
             return litellm.LemonadeChatConfig()
+        elif LlmProviders.CLARIFAI == provider:
+            return litellm.ClarifaiConfig()
         return None
 
     @staticmethod
