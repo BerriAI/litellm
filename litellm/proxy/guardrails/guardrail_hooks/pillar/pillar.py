@@ -69,6 +69,10 @@ class PillarGuardrail(CustomGuardrail):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         on_flagged_action: Optional[str] = None,
+        async_mode: Optional[bool] = None,
+        persist_session: Optional[bool] = None,
+        include_scanners: Optional[bool] = None,
+        include_evidence: Optional[bool] = None,
         **kwargs,
     ) -> None:
         """
@@ -108,6 +112,31 @@ class PillarGuardrail(CustomGuardrail):
 
         verbose_proxy_logger.debug(
             f"Pillar Guardrail: Initialized with on_flagged_action: {self.on_flagged_action}"
+        )
+
+        self.async_mode = self._resolve_bool_config(
+            provided_value=async_mode,
+            env_var="PILLAR_ASYNC",
+            default=None,
+            setting_name="async_mode",
+        )
+        self.persist_session = self._resolve_bool_config(
+            provided_value=persist_session,
+            env_var="PILLAR_PERSIST",
+            default=None,
+            setting_name="persist_session",
+        )
+        self.include_scanners = self._resolve_bool_config(
+            provided_value=include_scanners,
+            env_var="PILLAR_INCLUDE_SCANNERS",
+            default=True,
+            setting_name="include_scanners",
+        )
+        self.include_evidence = self._resolve_bool_config(
+            provided_value=include_evidence,
+            env_var="PILLAR_INCLUDE_EVIDENCE",
+            default=True,
+            setting_name="include_evidence",
         )
 
         # Define supported event hooks
@@ -347,11 +376,73 @@ class PillarGuardrail(CustomGuardrail):
             "Content-Type": "application/json",
         }
 
-        # Add Pillar-specific headers for enhanced response data
-        headers["plr_evidence"] = "true"
-        headers["plr_scanners"] = "true"
+        # Add Pillar-specific headers based on configuration
+        self._set_bool_header(headers, "plr_scanners", self.include_scanners)
+        self._set_bool_header(headers, "plr_evidence", self.include_evidence)
+        self._set_bool_header(headers, "plr_async", self.async_mode)
+        self._set_bool_header(headers, "plr_persist", self.persist_session)
 
         return headers
+
+    def _set_bool_header(
+        self, headers: Dict[str, str], header_name: str, value: Optional[bool]
+    ) -> None:
+        """Apply a boolean value as a lowercase string HTTP header when provided."""
+
+        if value is None:
+            return
+        headers[header_name] = "true" if value else "false"
+
+    def _resolve_bool_config(
+        self,
+        provided_value: Optional[Union[bool, str, int]],
+        env_var: Optional[str],
+        default: Optional[bool],
+        setting_name: str,
+    ) -> Optional[bool]:
+        """Resolve configuration precedence: explicit value -> environment -> default."""
+
+        if provided_value is not None:
+            try:
+                return self._parse_bool_value(provided_value)
+            except ValueError:
+                verbose_proxy_logger.warning(
+                    "Pillar Guardrail: Invalid boolean value '%s' for %s, falling back to default.",
+                    provided_value,
+                    setting_name,
+                )
+                return default
+
+        if env_var:
+            env_value = os.getenv(env_var)
+            if env_value is not None:
+                try:
+                    return self._parse_bool_value(env_value)
+                except ValueError:
+                    verbose_proxy_logger.warning(
+                        "Pillar Guardrail: Invalid boolean env value '%s' for %s, falling back to default.",
+                        env_value,
+                        env_var,
+                    )
+                    return default
+
+        return default
+
+    @staticmethod
+    def _parse_bool_value(value: Union[bool, str, int]) -> bool:
+        """Normalise various truthy/falsey inputs to a strict boolean."""
+
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return bool(value)
+
+        value_str = str(value).strip().lower()
+        if value_str in {"true", "1", "yes", "y", "on"}:
+            return True
+        if value_str in {"false", "0", "no", "n", "off"}:
+            return False
+        raise ValueError(f"Unrecognised boolean value: {value}")
 
     def _extract_model_and_provider(self, data: dict) -> Tuple[str, str]:
         """
