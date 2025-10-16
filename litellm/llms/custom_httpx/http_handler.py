@@ -12,7 +12,13 @@ from httpx._types import RequestFiles
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+from litellm.constants import (
+    _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    AIOHTTP_CONNECTOR_LIMIT,
+    AIOHTTP_KEEPALIVE_TIMEOUT,
+    AIOHTTP_TTL_DNS_CACHE,
+    DEFAULT_SSL_CIPHERS
+)
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
 
@@ -94,10 +100,19 @@ def get_ssl_configuration(
 
     if ssl_verify is not False:
         custom_ssl_context = ssl.create_default_context(cafile=cafile)
-        # If security level is set, apply it to the SSL context
+        
+        # Optimize SSL handshake performance
+        # Set minimum TLS version to 1.2 for better performance
+        custom_ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        
+        # Configure cipher suites for optimal performance
         if ssl_security_level and isinstance(ssl_security_level, str):
-            # Create a custom SSL context with reduced security level
+            # User provided custom cipher configuration (e.g., via SSL_SECURITY_LEVEL env var)
             custom_ssl_context.set_ciphers(ssl_security_level)
+        else:
+            # Use optimized cipher list that strongly prefers fast ciphers
+            # but falls back to widely compatible ones
+            custom_ssl_context.set_ciphers(DEFAULT_SSL_CIPHERS)
 
         # Use our custom SSL context instead of the original ssl_verify value
         return custom_ssl_context
@@ -164,7 +179,7 @@ class AsyncHTTPHandler:
         self,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]] = None,
-        concurrent_limit=1000,
+        concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
@@ -173,7 +188,6 @@ class AsyncHTTPHandler:
         self.event_hooks = event_hooks
         self.client = self.create_client(
             timeout=timeout,
-            concurrent_limit=concurrent_limit,
             event_hooks=event_hooks,
             ssl_verify=ssl_verify,
             shared_session=shared_session,
@@ -183,7 +197,6 @@ class AsyncHTTPHandler:
     def create_client(
         self,
         timeout: Optional[Union[float, httpx.Timeout]],
-        concurrent_limit: int,
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
@@ -209,10 +222,6 @@ class AsyncHTTPHandler:
             transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
-            limits=httpx.Limits(
-                max_connections=concurrent_limit,
-                max_keepalive_connections=concurrent_limit,
-            ),
             verify=ssl_config,
             cert=cert,
             headers=headers,
@@ -286,7 +295,7 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+                timeout=timeout, event_hooks=self.event_hooks
             )
             try:
                 return await self.single_connection_post_request(
@@ -352,7 +361,7 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+                timeout=timeout, event_hooks=self.event_hooks
             )
             try:
                 return await self.single_connection_post_request(
@@ -412,7 +421,7 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+                timeout=timeout, event_hooks=self.event_hooks
             )
             try:
                 return await self.single_connection_post_request(
@@ -471,7 +480,7 @@ class AsyncHTTPHandler:
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
-                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+                timeout=timeout, event_hooks=self.event_hooks
             )
             try:
                 return await self.single_connection_post_request(
@@ -657,7 +666,13 @@ class AsyncHTTPHandler:
         )
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
-                connector=TCPConnector(**connector_kwargs),
+                connector=TCPConnector(
+                    limit=AIOHTTP_CONNECTOR_LIMIT,
+                    keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
+                    ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
+                    enable_cleanup_closed=True,
+                    **connector_kwargs
+                ),
                 trust_env=trust_env,
             ),
         )
@@ -680,7 +695,7 @@ class HTTPHandler:
     def __init__(
         self,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
-        concurrent_limit=1000,
+        concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
         client: Optional[httpx.Client] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ):
@@ -701,10 +716,6 @@ class HTTPHandler:
             self.client = httpx.Client(
                 transport=transport,
                 timeout=timeout,
-                limits=httpx.Limits(
-                    max_connections=concurrent_limit,
-                    max_keepalive_connections=concurrent_limit,
-                ),
                 verify=ssl_config,
                 cert=cert,
                 headers=headers,

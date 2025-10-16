@@ -148,4 +148,3 @@ export const getCallbackById = (id: string): CallbackConfig | undefined => {
 export const getCallbackByDisplayName = (displayName: string): CallbackConfig | undefined => {
   return CALLBACK_CONFIGS.find(callback => callback.displayName === displayName);
 };
-  

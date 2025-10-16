@@ -1,5 +1,5 @@
-import React from 'react';
-import LoggingSettings from './LoggingSettings';
+import React from "react";
+import LoggingSettings from "./LoggingSettings";
 
 interface EditLoggingSettingsProps {
   value: any[];
@@ -12,15 +12,15 @@ interface EditLoggingSettingsProps {
  * Wrapper component around LoggingSettings used for editing
  * a team's logging integrations.
  */
-const EditLoggingSettings: React.FC<EditLoggingSettingsProps> = ({ 
-  value, 
-  onChange, 
+const EditLoggingSettings: React.FC<EditLoggingSettingsProps> = ({
+  value,
+  onChange,
   disabledCallbacks = [],
-  onDisabledCallbacksChange
+  onDisabledCallbacksChange,
 }) => {
   return (
-    <LoggingSettings 
-      value={value} 
+    <LoggingSettings
+      value={value}
       onChange={onChange}
       disabledCallbacks={disabledCallbacks}
       onDisabledCallbacksChange={onDisabledCallbacksChange}

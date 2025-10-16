@@ -58,7 +58,7 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
     has_admin_ui_access,
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
-from litellm.proxy.management_endpoints.types import CustomOpenID
+from litellm.proxy.management_endpoints.types import CustomOpenID, get_litellm_user_role
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -277,6 +277,7 @@ def generic_response_convertor(
         last_name=response.get(generic_user_last_name_attribute_name),
         provider=response.get(generic_provider_attribute_name),
         team_ids=all_teams,
+        user_role=None,
     )
 
 
@@ -669,11 +670,11 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         )
 
     if state and state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
-        # Extract the key ID from the state
-        key_id = state.split(":", 1)[1]
-
-        # Get existing_key from query parameters if provided
-        existing_key = request.query_params.get("existing_key")
+        # Extract the key ID and existing_key from the state
+        # State format: {PREFIX}:{key}:{existing_key} or {PREFIX}:{key}
+        state_parts = state.split(":", 2)  # Split into max 3 parts
+        key_id = state_parts[1] if len(state_parts) > 1 else None
+        existing_key = state_parts[2] if len(state_parts) > 2 else None
 
         verbose_proxy_logger.info(
             f"CLI SSO callback detected for key: {key_id}, existing_key: {existing_key}"
@@ -874,9 +875,9 @@ async def insert_sso_user(
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            user_defined_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -1117,9 +1118,9 @@ class SSOAuthenticationHandler:
                 generic_authorization_endpoint
                 and "okta" in generic_authorization_endpoint
             ):
-                redirect_params["state"] = (
-                    uuid.uuid4().hex
-                )  # set state param for okta - required
+                redirect_params[
+                    "state"
+                ] = uuid.uuid4().hex  # set state param for okta - required
 
         return redirect_params
 
@@ -1145,6 +1146,9 @@ class SSOAuthenticationHandler:
     ) -> str:
         """
         Get the redirect URL for SSO
+
+        Note: existing_key is not added to the URL to avoid changing the callback URL.
+        It should be passed via the state parameter instead.
         """
         from litellm.proxy.utils import get_custom_url
 
@@ -1153,10 +1157,6 @@ class SSOAuthenticationHandler:
             redirect_url += sso_callback_route
         else:
             redirect_url += "/" + sso_callback_route
-
-        # Append existing_key as query parameter if provided
-        if existing_key:
-            redirect_url += f"?existing_key={existing_key}"
 
         return redirect_url
 
@@ -1348,7 +1348,11 @@ class SSOAuthenticationHandler:
         """
         Checks the request 'source' if a cli state token was passed in
 
-        This is used to authenticate through the CLI login flow
+        This is used to authenticate through the CLI login flow.
+
+        The state parameter format is: {PREFIX}:{key}:{existing_key}
+        - If existing_key is provided, it's included in the state
+        - The state parameter is used to pass data through the OAuth flow without changing the callback URL
         """
         from litellm.constants import (
             LITELLM_CLI_SESSION_TOKEN_PREFIX,
@@ -1356,8 +1360,10 @@ class SSOAuthenticationHandler:
         )
 
         if source == LITELLM_CLI_SOURCE_IDENTIFIER and key:
-            # Just use the key - existing_key will be passed separately via query params
-            return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
+            if existing_key:
+                return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}:{existing_key}"
+            else:
+                return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
         else:
             return None
 
@@ -1668,22 +1674,49 @@ class MicrosoftSSOHandler:
             access_token=microsoft_sso.access_token
         )
 
+        # Extract app roles from the id_token JWT
+        app_roles = MicrosoftSSOHandler.get_app_roles_from_id_token(
+            id_token=microsoft_sso.id_token
+        )
+        verbose_proxy_logger.debug(f"Extracted app roles from id_token: {app_roles}")
+
+        # Combine groups and app roles
+        user_role: Optional[LitellmUserRoles] = None
+        if app_roles:
+            # Check if any app role is a valid LitellmUserRoles
+            for role_str in app_roles:
+                role = get_litellm_user_role(role_str)
+                if role is not None:
+                    user_role = role
+                    verbose_proxy_logger.debug(
+                        f"Found valid LitellmUserRoles '{role.value}' in app_roles"
+                    )
+                    break
+
+        verbose_proxy_logger.debug(
+            f"Combined team_ids (groups + app roles): {user_team_ids}"
+        )
+
         # if user is trying to get the raw sso response for debugging, return the raw sso response
         if return_raw_sso_response:
-            original_msft_result[MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY] = (
-                user_team_ids
-            )
+            original_msft_result[
+                MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY
+            ] = user_team_ids
+            original_msft_result["app_roles"] = app_roles
             return original_msft_result or {}
 
         result = MicrosoftSSOHandler.openid_from_response(
             response=original_msft_result,
             team_ids=user_team_ids,
+            user_role=user_role,
         )
         return result
 
     @staticmethod
     def openid_from_response(
-        response: Optional[dict], team_ids: List[str]
+        response: Optional[dict],
+        team_ids: List[str],
+        user_role: Optional[LitellmUserRoles],
     ) -> CustomOpenID:
         response = response or {}
         verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
@@ -1695,9 +1728,53 @@ class MicrosoftSSOHandler:
             first_name=response.get("givenName"),
             last_name=response.get("surname"),
             team_ids=team_ids,
+            user_role=user_role,
         )
         verbose_proxy_logger.debug(f"Microsoft SSO OpenID Response: {openid_response}")
         return openid_response
+
+    @staticmethod
+    def get_app_roles_from_id_token(id_token: Optional[str]) -> List[str]:
+        """
+        Extract app roles from the Microsoft Entra ID (Azure AD) id_token JWT.
+
+        App roles are assigned in the Azure AD Enterprise Application and appear
+        in the 'app_roles' claim of the id_token.
+
+        Args:
+            id_token (Optional[str]): The JWT id_token from Microsoft SSO
+
+        Returns:
+            List[str]: List of app role names assigned to the user
+        """
+        if not id_token:
+            verbose_proxy_logger.debug("No id_token provided for app role extraction")
+            return []
+
+        try:
+            import jwt
+
+            # Decode the JWT without signature verification
+            # (signature is already verified by fastapi_sso)
+            decoded_token = jwt.decode(id_token, options={"verify_signature": False})
+
+            # Extract app_roles claim from the token
+            roles = decoded_token.get("app_roles", [])
+
+            if roles and isinstance(roles, list):
+                verbose_proxy_logger.debug(
+                    f"Found {len(roles)} app role(s) in id_token: {roles}"
+                )
+                return roles
+            else:
+                verbose_proxy_logger.debug(
+                    "No app roles found in id_token or roles claim is not a list"
+                )
+                return []
+
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error extracting app roles from id_token: {e}")
+            return []
 
     @staticmethod
     async def get_user_groups_from_graph_api(
@@ -1740,9 +1817,9 @@ class MicrosoftSSOHandler:
 
             # Fetch user membership from Microsoft Graph API
             all_group_ids = []
-            next_link: Optional[str] = (
-                MicrosoftSSOHandler.graph_api_user_groups_endpoint
-            )
+            next_link: Optional[
+                str
+            ] = MicrosoftSSOHandler.graph_api_user_groups_endpoint
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 

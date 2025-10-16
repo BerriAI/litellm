@@ -1,5 +1,5 @@
-import React from 'react';
-import { Typography, Collapse } from 'antd';
+import React from "react";
+import { Typography, Collapse } from "antd";
 
 const { Text } = Typography;
 const { Panel } = Collapse;
@@ -37,24 +37,24 @@ interface MCPEventsDisplayProps {
 
 const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }) => {
   console.log("MCPEventsDisplay: Received events:", events);
-  
+
   if (!events || events.length === 0) {
     console.log("MCPEventsDisplay: No events, returning null");
     return null;
   }
 
   // Find the list tools event
-  const toolsEvent = events.find(event => 
-    event.type === 'response.output_item.done' && 
-    event.item?.type === 'mcp_list_tools' && 
-    event.item.tools && 
-    event.item.tools.length > 0
+  const toolsEvent = events.find(
+    (event) =>
+      event.type === "response.output_item.done" &&
+      event.item?.type === "mcp_list_tools" &&
+      event.item.tools &&
+      event.item.tools.length > 0,
   );
 
   // Find MCP call events
-  const mcpCallEvents = events.filter(event => 
-    event.type === 'response.output_item.done' && 
-    event.item?.type === 'mcp_call'
+  const mcpCallEvents = events.filter(
+    (event) => event.type === "response.output_item.done" && event.item?.type === "mcp_call",
   );
 
   console.log("MCPEventsDisplay: toolsEvent:", toolsEvent);
@@ -65,9 +65,8 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
     return null;
   }
 
-
   return (
-    <div className={`mcp-events-display ${className || ''}`}>
+    <div className={`mcp-events-display ${className || ""}`}>
       <style jsx>{`
         .openai-mcp-tools {
           position: relative;
@@ -128,7 +127,8 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
           opacity: 0.8;
         }
         .tool-item {
-          font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+          font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New",
+            monospace;
           font-size: 13px;
           color: #4b5563;
           line-height: 18px;
@@ -161,7 +161,8 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
           font-size: 12px;
         }
         .mcp-json {
-          font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+          font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New",
+            monospace;
           color: #374151;
           margin: 0;
           white-space: pre-wrap;
@@ -183,23 +184,21 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
           color: #374151;
           line-height: 1.5;
           white-space: pre-wrap;
-          font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+          font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New",
+            monospace;
         }
       `}</style>
       <div className="openai-mcp-tools">
         <div className="openai-vertical-line"></div>
-        <Collapse 
-          ghost 
+        <Collapse
+          ghost
           size="small"
           expandIconPosition="start"
-          defaultActiveKey={toolsEvent ? ['list-tools'] : mcpCallEvents.map((_, index) => `mcp-call-${index}`)}
+          defaultActiveKey={toolsEvent ? ["list-tools"] : mcpCallEvents.map((_, index) => `mcp-call-${index}`)}
         >
           {/* List Tools Panel */}
           {toolsEvent && (
-            <Panel 
-              header="List tools" 
-              key="list-tools"
-            >
+            <Panel header="List tools" key="list-tools">
               <div>
                 {toolsEvent.item?.tools?.map((tool, index) => (
                   <div key={index} className="tool-item">
@@ -209,13 +208,10 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
               </div>
             </Panel>
           )}
-          
+
           {/* MCP Call Panels */}
           {mcpCallEvents.map((callEvent, index) => (
-            <Panel 
-              header={callEvent.item?.name || 'Tool call'}
-              key={`mcp-call-${index}`}
-            >
+            <Panel header={callEvent.item?.name || "Tool call"} key={`mcp-call-${index}`}>
               <div>
                 {/* Request section */}
                 <div className="mcp-section">
@@ -234,21 +230,19 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
                     )}
                   </div>
                 </div>
-                
+
                 {/* Approved section */}
                 <div className="mcp-section">
                   <div className="mcp-approved">
                     <span className="mcp-checkmark">✓</span> Approved
                   </div>
                 </div>
-                
+
                 {/* Response section */}
                 {callEvent.item?.output && (
                   <div className="mcp-section">
                     <div className="mcp-section-header">Response</div>
-                    <div className="mcp-response-content">
-                      {callEvent.item.output}
-                    </div>
+                    <div className="mcp-response-content">{callEvent.item.output}</div>
                   </div>
                 )}
               </div>

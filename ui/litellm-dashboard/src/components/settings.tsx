@@ -23,25 +23,13 @@ import {
 
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 
-import {
-  Modal,
-  Typography,
-  Form,
-  Input,
-  Select,
-  Button as Button2,
-} from "antd";
+import { Modal, Typography, Form, Input, Select, Button as Button2 } from "antd";
 import NotificationsManager from "./molecules/notifications_manager";
 import EmailSettings from "./email_settings";
 
 const { Title, Paragraph } = Typography;
 
-import {
-  getCallbacksCall,
-  setCallbacksCall,
-  serviceHealthCheck,
-  deleteCallback,
-} from "./networking";
+import { getCallbacksCall, setCallbacksCall, serviceHealthCheck, deleteCallback } from "./networking";
 import AlertingSettings from "./alerting/alerting_settings";
 import FormItem from "antd/es/form/FormItem";
 import {
@@ -75,12 +63,7 @@ interface AlertingObject {
   variables: AlertingVariables;
 }
 
-const Settings: React.FC<SettingsPageProps> = ({
-  accessToken,
-  userRole,
-  userID,
-  premiumUser,
-}) => {
+const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -88,31 +71,25 @@ const Settings: React.FC<SettingsPageProps> = ({
   const [editForm] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
   const [catchAllWebhookURL, setCatchAllWebhookURL] = useState<string>("");
-  const [alertToWebhooks, setAlertToWebhooks] = useState<
-    Record<string, string>
-  >({});
+  const [alertToWebhooks, setAlertToWebhooks] = useState<Record<string, string>>({});
   const [activeAlerts, setActiveAlerts] = useState<string[]>([]);
 
   const [showAddCallbacksModal, setShowAddCallbacksModal] = useState(false);
   const [allCallbacks, setAllCallbacks] = useState<genericCallbackParams[]>([]);
 
-  const [selectedCallbackParams, setSelectedCallbackParams] = useState<
-    string[]
-  >([]);
+  const [selectedCallbackParams, setSelectedCallbackParams] = useState<string[]>([]);
 
   const [showEditCallback, setShowEditCallback] = useState(false);
-  const [selectedEditCallback, setSelectedEditCallback] = useState<any | null>(
-    null
-  );
+  const [selectedEditCallback, setSelectedEditCallback] = useState<any | null>(null);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [callbackToDelete, setCallbackToDelete] = useState<string | null>(null);
 
   useEffect(() => {
     if (showEditCallback && selectedEditCallback) {
       const normalized = Object.fromEntries(
-        Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [k, v ?? ""])
+        Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [k, v ?? ""]),
       );
-      editForm.setFieldsValue(normalized)
+      editForm.setFieldsValue(normalized);
     }
   }, [showEditCallback, selectedEditCallback, editForm]);
 
@@ -179,10 +156,9 @@ const Settings: React.FC<SettingsPageProps> = ({
     let payload = {
       environment_variables: formValues,
       litellm_settings: {
-        "success_callback": [selectedEditCallback.name]
-      }
-    }
-
+        success_callback: [selectedEditCallback.name],
+      },
+    };
 
     try {
       await setCallbacksCall(accessToken, payload);
@@ -190,7 +166,7 @@ const Settings: React.FC<SettingsPageProps> = ({
       setShowEditCallback(false);
       editForm.resetFields();
       setSelectedEditCallback(null);
-      
+
       // Refresh the callbacks list
       if (userID && userRole) {
         const updatedData = await getCallbacksCall(accessToken, userID, userRole);
@@ -229,7 +205,7 @@ const Settings: React.FC<SettingsPageProps> = ({
       addForm.resetFields();
       setSelectedCallback(null);
       setSelectedCallbackParams([]);
-      
+
       // Refresh the callbacks list
       const updatedData = await getCallbacksCall(accessToken, userID || "", userRole || "");
       setCallbacks(updatedData.callbacks);
@@ -260,9 +236,7 @@ const Settings: React.FC<SettingsPageProps> = ({
 
     const updatedAlertToWebhooks: Record<string, string> = {};
     Object.entries(alerts_to_UI_NAME).forEach(([key, value]) => {
-      const webhookInput = document.querySelector(
-        `input[name="${key}"]`
-      ) as HTMLInputElement;
+      const webhookInput = document.querySelector(`input[name="${key}"]`) as HTMLInputElement;
       const newWebhookValue = webhookInput?.value || "";
       updatedAlertToWebhooks[key] = newWebhookValue;
     });
@@ -289,9 +263,8 @@ const Settings: React.FC<SettingsPageProps> = ({
     const updatedVariables = Object.fromEntries(
       Object.entries(callback.variables).map(([key, value]) => [
         key,
-        (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)
-          ?.value || value,
-      ])
+        (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)?.value || value,
+      ]),
     );
 
     const payload = {
@@ -470,9 +443,7 @@ const Settings: React.FC<SettingsPageProps> = ({
                               <Icon
                                 icon={TrashIcon}
                                 size="sm"
-                                onClick={() =>
-                                  handleDeleteCallback(callback.name)
-                                }
+                                onClick={() => handleDeleteCallback(callback.name)}
                                 className="text-red-500 hover:text-red-700 cursor-pointer"
                               />
                               <Button
@@ -497,23 +468,15 @@ const Settings: React.FC<SettingsPageProps> = ({
                   </Table>
                 </Card>
               </Grid>
-              <Button
-                className="mt-2"
-                onClick={() => setShowAddCallbacksModal(true)}
-              >
+              <Button className="mt-2" onClick={() => setShowAddCallbacksModal(true)}>
                 Add Callback
               </Button>
             </TabPanel>
             <TabPanel>
               <Card>
                 <Text className="my-2">
-                  Alerts are only supported for Slack Webhook URLs. Get your
-                  webhook urls from{" "}
-                  <a
-                    href="https://api.slack.com/messaging/webhooks"
-                    target="_blank"
-                    style={{ color: "blue" }}
-                  >
+                  Alerts are only supported for Slack Webhook URLs. Get your webhook urls from{" "}
+                  <a href="https://api.slack.com/messaging/webhooks" target="_blank" style={{ color: "blue" }}>
                     here
                   </a>
                 </Text>
@@ -527,54 +490,49 @@ const Settings: React.FC<SettingsPageProps> = ({
                   </TableHead>
 
                   <TableBody>
-                    {Object.entries(alerts_to_UI_NAME).map(
-                      ([key, value], index) => (
-                        <TableRow key={index}>
-                          <TableCell>
-                            {key == "region_outage_alerts" ? (
-                              premiumUser ? (
-                                <Switch
-                                  id="switch"
-                                  name="switch"
-                                  checked={isAlertOn(key)}
-                                  onChange={() => handleSwitchChange(key)}
-                                />
-                              ) : (
-                                <Button className="flex items-center justify-center">
-                                  <a
-                                    href="https://forms.gle/W3U4PZpJGFHWtHyA9"
-                                    target="_blank"
-                                  >
-                                    ✨ Enterprise Feature
-                                  </a>
-                                </Button>
-                              )
-                            ) : (
+                    {Object.entries(alerts_to_UI_NAME).map(([key, value], index) => (
+                      <TableRow key={index}>
+                        <TableCell>
+                          {key == "region_outage_alerts" ? (
+                            premiumUser ? (
                               <Switch
                                 id="switch"
                                 name="switch"
                                 checked={isAlertOn(key)}
                                 onChange={() => handleSwitchChange(key)}
                               />
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <Text>{value}</Text>
-                          </TableCell>
-                          <TableCell>
-                            <TextInput
-                              name={key}
-                              type="password"
-                              defaultValue={
-                                alertToWebhooks && alertToWebhooks[key]
-                                  ? alertToWebhooks[key]
-                                  : (catchAllWebhookURL as string)
-                              }
-                            ></TextInput>
-                          </TableCell>
-                        </TableRow>
-                      )
-                    )}
+                            ) : (
+                              <Button className="flex items-center justify-center">
+                                <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                                  ✨ Enterprise Feature
+                                </a>
+                              </Button>
+                            )
+                          ) : (
+                            <Switch
+                              id="switch"
+                              name="switch"
+                              checked={isAlertOn(key)}
+                              onChange={() => handleSwitchChange(key)}
+                            />
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Text>{value}</Text>
+                        </TableCell>
+                        <TableCell>
+                          <TextInput
+                            name={key}
+                            type="password"
+                            defaultValue={
+                              alertToWebhooks && alertToWebhooks[key]
+                                ? alertToWebhooks[key]
+                                : (catchAllWebhookURL as string)
+                            }
+                          ></TextInput>
+                        </TableCell>
+                      </TableRow>
+                    ))}
                   </TableBody>
                 </Table>
                 <Button size="xs" className="mt-2" onClick={handleSaveAlerts}>
@@ -585,7 +543,9 @@ const Settings: React.FC<SettingsPageProps> = ({
                   onClick={async () => {
                     try {
                       await serviceHealthCheck(accessToken, "slack");
-                      NotificationsManager.success("Alert test triggered. Test request to slack made - check logs/alerts on slack to verify");
+                      NotificationsManager.success(
+                        "Alert test triggered. Test request to slack made - check logs/alerts on slack to verify",
+                      );
                     } catch (error) {
                       NotificationsManager.fromBackend(parseErrorMessage(error));
                     }
@@ -597,17 +557,10 @@ const Settings: React.FC<SettingsPageProps> = ({
               </Card>
             </TabPanel>
             <TabPanel>
-              <AlertingSettings
-                accessToken={accessToken}
-                premiumUser={premiumUser}
-              />
+              <AlertingSettings accessToken={accessToken} premiumUser={premiumUser} />
             </TabPanel>
             <TabPanel>
-              <EmailSettings
-                accessToken={accessToken}
-                premiumUser={premiumUser}
-                alerts={alerts}
-              />
+              <EmailSettings accessToken={accessToken} premiumUser={premiumUser} alerts={alerts} />
             </TabPanel>
           </TabPanels>
         </TabGroup>
@@ -617,8 +570,8 @@ const Settings: React.FC<SettingsPageProps> = ({
         title="Add Logging Callback"
         visible={showAddCallbacksModal}
         width={800}
-        onCancel= {() => {
-          setShowAddCallbacksModal(false)
+        onCancel={() => {
+          setShowAddCallbacksModal(false);
           setSelectedCallback(null);
           setSelectedCallbackParams([]);
         }}
@@ -766,10 +719,10 @@ const Settings: React.FC<SettingsPageProps> = ({
         visible={showEditCallback}
         width={800}
         title={`Edit ${selectedEditCallback?.name} Settings`}
-        onCancel={() =>  {
-            setShowEditCallback(false)
-            setSelectedEditCallback(null);
-          }}
+        onCancel={() => {
+          setShowEditCallback(false);
+          setSelectedEditCallback(null);
+        }}
         footer={null}
       >
         <Form
@@ -783,9 +736,9 @@ const Settings: React.FC<SettingsPageProps> = ({
             {selectedEditCallback &&
               selectedEditCallback.variables &&
               Object.entries(selectedEditCallback.variables).map(([param]) => (
-                <FormItem 
-                  label={param} 
-                  name={param} 
+                <FormItem
+                  label={param}
+                  name={param}
                   key={param}
                   rules={[
                     {
@@ -817,10 +770,7 @@ const Settings: React.FC<SettingsPageProps> = ({
         cancelText="Cancel"
         okButtonProps={{ danger: true }}
       >
-        <p>
-          Are you sure you want to delete the callback - {callbackToDelete}?
-          This action cannot be undone.
-        </p>
+        <p>Are you sure you want to delete the callback - {callbackToDelete}? This action cannot be undone.</p>
       </Modal>
     </div>
   );
