@@ -265,3 +265,10 @@ class TestRouterIndexManagement:
                 f"ALLOWED_METHODS in this test method.\n"
                 f"{'='*70}\n"
             )
+    def test_model_names_is_set(self):
+        """Verify that model_names uses a set for O(1) lookups, not a list (O(n))"""
+        router = Router(model_list=[])
+        
+        assert isinstance(router.model_names, set), (
+            f"model_names should be a set for O(1) lookups, but got {type(router.model_names)}"
+        )

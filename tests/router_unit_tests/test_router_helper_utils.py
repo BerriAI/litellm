@@ -1411,7 +1411,8 @@ def test_generate_model_id_with_deployment_model_name(model_list):
             "Expected TypeError when model_group is None - this confirms our fix is needed"
         )
     except TypeError as e:
-        assert "unsupported operand type(s) for +=" in str(e)
+        # After optimization, error message changed but still fails appropriately on None
+        assert "unsupported operand type(s) for +=" in str(e) or "expected str instance, NoneType found" in str(e)
         print(f"✓ Correctly failed with None model_group (as expected): {e}")
     except Exception as e:
         pytest.fail(f"Unexpected error with None model_group: {e}")
