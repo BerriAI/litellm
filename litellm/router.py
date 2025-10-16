@@ -6932,9 +6932,11 @@ class Router:
 
             # check if default deployment is set
             if self.default_deployment is not None:
-                updated_deployment = copy.deepcopy(
-                    self.default_deployment
-                )  # self.default_deployment
+                # Shallow copy with nested litellm_params copy (100x+ faster than deepcopy)
+                updated_deployment = self.default_deployment.copy()
+                updated_deployment["litellm_params"] = self.default_deployment[
+                    "litellm_params"
+                ].copy()
                 updated_deployment["litellm_params"]["model"] = model
                 return model, updated_deployment
 
