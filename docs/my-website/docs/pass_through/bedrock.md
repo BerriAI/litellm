@@ -255,20 +255,19 @@ You can also call the load-balanced endpoint using the boto3 SDK:
 ```python showLineNumbers
 import boto3
 import json
+import os
+
+# Set dummy AWS credentials (required by boto3, but not used by LiteLLM proxy)
+os.environ['AWS_ACCESS_KEY_ID'] = 'dummy'
+os.environ['AWS_SECRET_ACCESS_KEY'] = 'dummy'
+os.environ['AWS_BEARER_TOKEN_BEDROCK'] = "sk-1234"  # your litellm proxy api key
 
 # Point boto3 to the LiteLLM proxy
 bedrock_runtime = boto3.client(
     service_name='bedrock-runtime',
-    region_name='us-west-2',  # Can be any region
+    region_name='us-west-2',
     endpoint_url='http://0.0.0.0:4000/bedrock'
 )
-
-# Custom header for authentication
-def add_custom_headers(request, **kwargs):
-    request.headers.update({'litellm_user_api_key': 'Bearer sk-1234'})
-
-# Register the event to inject headers before sending request
-bedrock_runtime.meta.events.register('before-send.*.*', add_custom_headers)
 
 # Call the load-balanced model
 response = bedrock_runtime.invoke_model(
