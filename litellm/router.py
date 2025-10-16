@@ -1936,22 +1936,21 @@ class Router:
             )
 
     def _is_prompt_management_model(self, model: str) -> bool:
-        model_list = self.get_model_list(model_name=model)
-        if model_list is None:
+        # Early exit: prompt management models must have "/" in name
+        # This avoids expensive get_model_list call for 99% of requests
+        if "/" not in model:
             return False
-        if len(model_list) != 1:
+        
+        model_list = self.get_model_list(model_name=model)
+        if model_list is None or len(model_list) != 1:
             return False
 
         litellm_model = model_list[0]["litellm_params"].get("model", None)
-
-        if litellm_model is None:
+        if litellm_model is None or "/" not in litellm_model:
             return False
 
-        if "/" in litellm_model:
-            split_litellm_model = litellm_model.split("/")[0]
-            if split_litellm_model in litellm._known_custom_logger_compatible_callbacks:
-                return True
-        return False
+        split_litellm_model = litellm_model.split("/")[0]
+        return split_litellm_model in litellm._known_custom_logger_compatible_callbacks
 
     async def _prompt_management_factory(
         self,
