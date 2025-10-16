@@ -112,20 +112,19 @@ async def allm_passthrough_route(
 
             # Only call raise_for_status if it's a Response object (not a generator)
             if isinstance(response, httpx.Response):
-                try:
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    error_text = await e.response.aread()
-                    error_text_str = error_text.decode("utf-8")
-                    raise Exception(error_text_str)
+                response.raise_for_status()
             
             return response
         else:
             # This shouldn't happen when allm_passthrough_route=True, but handle it for type safety
             raise Exception("Expected coroutine from async passthrough route")
 
+    except httpx.HTTPStatusError as e:
+        # For HTTP errors, re-raise as-is to preserve the original error details
+        # The caller (e.g., proxy layer) can handle conversion to appropriate response format
+        raise e
     except Exception as e:
-        # For passthrough routes, we need to get the provider config to properly handle errors
+        # For other exceptions, use provider-specific error handling
         from litellm.types.utils import LlmProviders
         from litellm.utils import ProviderConfigManager
 
