@@ -525,6 +525,7 @@ openai_compatible_providers: List = [
     "vercel_ai_gateway",
     "aiml",
     "wandb",
+    "cometapi",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
