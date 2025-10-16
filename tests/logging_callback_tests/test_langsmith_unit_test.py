@@ -50,7 +50,6 @@ async def test_get_credentials_from_env():
 
 @pytest.mark.asyncio
 async def test_group_batches_by_credentials():
-
     logger = LangsmithLogger(langsmith_api_key="test-key")
 
     # Create test queue objects
@@ -85,7 +84,6 @@ async def test_group_batches_by_credentials():
 
 @pytest.mark.asyncio
 async def test_group_batches_by_credentials_multiple_credentials():
-
     # Test with multiple different credentials
     logger = LangsmithLogger(langsmith_api_key="test-key")
 

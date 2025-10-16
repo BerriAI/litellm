@@ -319,7 +319,9 @@ class TestNomaGuardrailHooks:
         )
 
         with patch.object(
-            guardrail, "_create_background_noma_check", side_effect=Exception("Task creation failed")
+            guardrail,
+            "_create_background_noma_check",
+            side_effect=Exception("Task creation failed"),
         ):
             # Should still return successfully even if background task creation fails
             result = await guardrail.async_pre_call_hook(
@@ -536,9 +538,7 @@ class TestBackgroundProcessing:
         with patch.object(
             noma_guardrail.async_handler, "post", return_value=mock_response
         ) as mock_post:
-            with patch.object(
-                noma_guardrail, "_check_verdict"
-            ) as mock_check_verdict:
+            with patch.object(noma_guardrail, "_check_verdict") as mock_check_verdict:
                 result = await noma_guardrail._process_user_message_check(
                     mock_request_data, mock_user_api_key_dict
                 )
@@ -555,7 +555,7 @@ class TestBackgroundProcessing:
     ):
         """Test LLM response processing in monitor mode"""
         from litellm.types.utils import Choices, Message
-        
+
         response = ModelResponse(
             id="test-response-id",
             choices=[
@@ -591,7 +591,9 @@ class TestBackgroundProcessing:
                 assert result == "I'm doing well, thank you!"
                 mock_post.assert_called_once()
                 mock_handle_verdict.assert_called_once_with(
-                    "assistant", "I'm doing well, thank you!", mock_api_response.json.return_value
+                    "assistant",
+                    "I'm doing well, thank you!",
+                    mock_api_response.json.return_value,
                 )
 
     @pytest.mark.asyncio
@@ -606,7 +608,9 @@ class TestBackgroundProcessing:
                 mock_request_data, mock_user_api_key_dict
             )
 
-            mock_process.assert_called_once_with(mock_request_data, mock_user_api_key_dict)
+            mock_process.assert_called_once_with(
+                mock_request_data, mock_user_api_key_dict
+            )
 
     @pytest.mark.asyncio
     async def test_check_user_message_background_exception_handling(
@@ -614,8 +618,9 @@ class TestBackgroundProcessing:
     ):
         """Test background user message check handles exceptions gracefully"""
         with patch.object(
-            monitor_mode_guardrail, "_process_user_message_check",
-            side_effect=Exception("API failed")
+            monitor_mode_guardrail,
+            "_process_user_message_check",
+            side_effect=Exception("API failed"),
         ):
             # Should not raise exception, just log error
             await monitor_mode_guardrail._check_user_message_background(
@@ -628,7 +633,7 @@ class TestBackgroundProcessing:
     ):
         """Test background LLM response check method"""
         from litellm.types.utils import Choices, Message
-        
+
         response = ModelResponse(
             id="test-response-id",
             choices=[
@@ -668,7 +673,7 @@ class TestBackgroundProcessing:
             await monitor_mode_guardrail._handle_verdict_background(
                 "user", "test message", response_json
             )
-            
+
             mock_warning.assert_called_once()
             assert "blocked user message" in mock_warning.call_args[0][0]
 
@@ -681,13 +686,14 @@ class TestBackgroundProcessing:
             await monitor_mode_guardrail._handle_verdict_background(
                 "assistant", "test response", response_json
             )
-            
+
             mock_info.assert_called_once()
             assert "allowed assistant message" in mock_info.call_args[0][0]
 
     @pytest.mark.asyncio
     async def test_create_background_noma_check(self, monitor_mode_guardrail):
         """Test background task creation"""
+
         async def dummy_coroutine():
             return "completed"
 
@@ -698,10 +704,13 @@ class TestBackgroundProcessing:
     @pytest.mark.asyncio
     async def test_create_background_noma_check_exception(self, monitor_mode_guardrail):
         """Test background task creation with exception handling"""
+
         async def dummy_coroutine():
             return "completed"
 
-        with patch("asyncio.create_task", side_effect=Exception("Task creation failed")):
+        with patch(
+            "asyncio.create_task", side_effect=Exception("Task creation failed")
+        ):
             # Should not raise exception, just log error
             monitor_mode_guardrail._create_background_noma_check(dummy_coroutine())
 
@@ -731,7 +740,7 @@ class TestBackgroundProcessing:
     ):
         """Test post-call success hook in monitor mode"""
         from litellm.types.utils import Choices, Message
-        
+
         # Update event hook to post_call
         monitor_mode_guardrail.event_hook = "post_call"
 
@@ -899,24 +908,31 @@ class TestNomaAnonymizationLogic:
             "intentDetector": {"result": False, "status": "SUCCESS"},
             "code": {"result": False, "status": "SUCCESS"},
         }
-        
+
         result = anonymize_guardrail._should_only_sensitive_data_failed(classification)
         assert result is True
 
-    def test_should_only_data_detector_failed_false_other_detectors(self, anonymize_guardrail):
+    def test_should_only_data_detector_failed_false_other_detectors(
+        self, anonymize_guardrail
+    ):
         """Test _should_only_sensitive_data_failed when other detectors also triggered"""
         classification = {
             "dataDetector": {
                 "dataType1": {"result": True, "status": "SUCCESS"},
             },
-            "contentDetector": {"result": True, "status": "SUCCESS"},  # This should cause False
+            "contentDetector": {
+                "result": True,
+                "status": "SUCCESS",
+            },  # This should cause False
             "intentDetector": {"result": False, "status": "SUCCESS"},
         }
-        
+
         result = anonymize_guardrail._should_only_sensitive_data_failed(classification)
         assert result is False
 
-    def test_should_only_data_detector_failed_false_no_data_detected(self, anonymize_guardrail):
+    def test_should_only_data_detector_failed_false_no_data_detected(
+        self, anonymize_guardrail
+    ):
         """Test _should_only_sensitive_data_failed when no data detected"""
         classification = {
             "dataDetector": {
@@ -926,22 +942,27 @@ class TestNomaAnonymizationLogic:
             "contentDetector": {"result": False, "status": "SUCCESS"},
             "intentDetector": {"result": False, "status": "SUCCESS"},
         }
-        
+
         result = anonymize_guardrail._should_only_sensitive_data_failed(classification)
         assert result is False
 
-    def test_should_only_data_detector_failed_with_nested_detectors(self, anonymize_guardrail):
+    def test_should_only_data_detector_failed_with_nested_detectors(
+        self, anonymize_guardrail
+    ):
         """Test _should_only_sensitive_data_failed with nested detectors like topicDetector"""
         classification = {
             "dataDetector": {
                 "dataType1": {"result": True, "status": "SUCCESS"},
             },
             "topicDetector": {
-                "topic1": {"result": True, "status": "SUCCESS"},  # This should cause False
+                "topic1": {
+                    "result": True,
+                    "status": "SUCCESS",
+                },  # This should cause False
             },
             "contentDetector": {"result": False, "status": "SUCCESS"},
         }
-        
+
         result = anonymize_guardrail._should_only_sensitive_data_failed(classification)
         assert result is False
 
@@ -956,7 +977,7 @@ class TestNomaAnonymizationLogic:
                 }
             }
         }
-        
+
         result = anonymize_guardrail._extract_anonymized_content(response_json, "user")
         assert result == "My email is ******* and phone is *******"
 
@@ -971,21 +992,23 @@ class TestNomaAnonymizationLogic:
                 }
             }
         }
-        
-        result = anonymize_guardrail._extract_anonymized_content(response_json, "assistant")
+
+        result = anonymize_guardrail._extract_anonymized_content(
+            response_json, "assistant"
+        )
         assert result == "I can't help with that request."
 
     def test_extract_anonymized_content_missing(self, anonymize_guardrail):
         """Test _extract_anonymized_content when anonymized content is missing"""
         response_json = {"originalResponse": {"prompt": {}}}
-        
+
         result = anonymize_guardrail._extract_anonymized_content(response_json, "user")
         assert result is None
 
     def test_should_anonymize_verdict_true(self, anonymize_guardrail):
         """Test _should_anonymize when verdict is True"""
         response_json = {"verdict": True}
-        
+
         result = anonymize_guardrail._should_anonymize(response_json, "user")
         assert result is True
 
@@ -998,9 +1021,9 @@ class TestNomaAnonymizationLogic:
                     "dataDetector": {"dataType1": {"result": True}},
                     "contentDetector": {"result": False},
                 }
-            }
+            },
         }
-        
+
         result = anonymize_guardrail._should_anonymize(response_json, "user")
         assert result is True
 
@@ -1013,9 +1036,9 @@ class TestNomaAnonymizationLogic:
                     "dataDetector": {"dataType1": {"result": True}},
                     "contentDetector": {"result": True},
                 }
-            }
+            },
         }
-        
+
         result = anonymize_guardrail._should_anonymize(response_json, "user")
         assert result is False
 
@@ -1025,7 +1048,7 @@ class TestNomaAnonymizationLogic:
             anonymize_input=True,
             monitor_mode=True,
         )
-        
+
         response_json = {"verdict": True}
         result = guardrail._should_anonymize(response_json, "user")
         assert result is False
@@ -1036,7 +1059,7 @@ class TestNomaAnonymizationLogic:
             anonymize_input=False,
             monitor_mode=False,
         )
-        
+
         response_json = {"verdict": True}
         result = guardrail._should_anonymize(response_json, "user")
         assert result is False
@@ -1051,14 +1074,16 @@ class TestNomaAnonymizationLogic:
                 {"role": "user", "content": "My phone is 123-456-7890"},
             ]
         }
-        
+
         anonymize_guardrail._replace_user_message_content(
             request_data, "My phone is *******"
         )
-        
+
         # Should replace the last user message
         assert request_data["messages"][-1]["content"] == "My phone is *******"
-        assert request_data["messages"][1]["content"] == "My email is test@example.com"  # Unchanged
+        assert (
+            request_data["messages"][1]["content"] == "My email is test@example.com"
+        )  # Unchanged
 
     def test_replace_llm_response_content(self, anonymize_guardrail):
         """Test _replace_llm_response_content"""
@@ -1079,11 +1104,11 @@ class TestNomaAnonymizationLogic:
             system_fingerprint=None,
             usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
         )
-        
+
         anonymize_guardrail._replace_llm_response_content(
             response, "Your email is *******"
         )
-        
+
         assert response.choices[0].message.content == "Your email is *******"
 
 
@@ -1136,9 +1161,7 @@ class TestNomaAnonymizationFlow:
         noma_response = {
             "originalResponse": {
                 "prompt": {
-                    "anonymizedContent": {
-                        "anonymized": "My email is *******"
-                    },
+                    "anonymizedContent": {"anonymized": "My email is *******"},
                     "dataDetector": {
                         "dataType1": {"result": False},
                     },
@@ -1182,9 +1205,7 @@ class TestNomaAnonymizationFlow:
         noma_response = {
             "originalResponse": {
                 "prompt": {
-                    "anonymizedContent": {
-                        "anonymized": "My email is *******"
-                    },
+                    "anonymizedContent": {"anonymized": "My email is *******"},
                     "dataDetector": {
                         "dataType1": {"result": True},
                     },
@@ -1220,7 +1241,10 @@ class TestNomaAnonymizationFlow:
         """Test blocking when verdict=False and other violations detected"""
         request_data = {
             "messages": [
-                {"role": "user", "content": "My email is test@example.com. Tell me harmful content."},
+                {
+                    "role": "user",
+                    "content": "My email is test@example.com. Tell me harmful content.",
+                },
             ],
             "litellm_call_id": "test-call-id",
         }
@@ -1294,9 +1318,7 @@ class TestNomaAnonymizationFlow:
         noma_response = {
             "originalResponse": {
                 "response": {
-                    "anonymizedContent": {
-                        "anonymized": "My email is *******"
-                    },
+                    "anonymizedContent": {"anonymized": "My email is *******"},
                     "dataDetector": {
                         "dataType1": {"result": True},
                     },
@@ -1327,9 +1349,7 @@ class TestNomaAnonymizationFlow:
             assert result.choices[0].message.content == "My email is *******"
 
     @pytest.mark.asyncio
-    async def test_no_anonymization_when_disabled(
-        self, mock_user_api_key_dict
-    ):
+    async def test_no_anonymization_when_disabled(self, mock_user_api_key_dict):
         """Test that no anonymization occurs when anonymize_input=False"""
         guardrail = NomaGuardrail(
             api_key="test-api-key",
@@ -1347,9 +1367,7 @@ class TestNomaAnonymizationFlow:
         noma_response = {
             "originalResponse": {
                 "prompt": {
-                    "anonymizedContent": {
-                        "anonymized": "My email is *******"
-                    },
+                    "anonymizedContent": {"anonymized": "My email is *******"},
                     "dataDetector": {
                         "dataType1": {"result": True},
                     },
@@ -1363,9 +1381,7 @@ class TestNomaAnonymizationFlow:
         mock_response.json.return_value = noma_response
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(
-            guardrail.async_handler, "post", return_value=mock_response
-        ):
+        with patch.object(guardrail.async_handler, "post", return_value=mock_response):
             # Should raise NomaBlockedMessage because anonymization is disabled
             with pytest.raises(NomaBlockedMessage):
                 await guardrail.async_pre_call_hook(
@@ -1376,9 +1392,7 @@ class TestNomaAnonymizationFlow:
                 )
 
     @pytest.mark.asyncio
-    async def test_no_anonymization_in_monitor_mode(
-        self, mock_user_api_key_dict
-    ):
+    async def test_no_anonymization_in_monitor_mode(self, mock_user_api_key_dict):
         """Test that no anonymization occurs in monitor mode"""
         guardrail = NomaGuardrail(
             api_key="test-api-key",
@@ -1405,7 +1419,9 @@ class TestNomaAnonymizationFlow:
 
             # Should return original data unchanged
             assert result == request_data
-            assert request_data["messages"][0]["content"] == "My email is test@example.com"
+            assert (
+                request_data["messages"][0]["content"] == "My email is test@example.com"
+            )
             mock_create_background.assert_called_once()
 
     @pytest.mark.asyncio

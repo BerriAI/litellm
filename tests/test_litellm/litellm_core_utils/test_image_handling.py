@@ -34,8 +34,6 @@ def test_completion_with_invalid_image_url(monkeypatch):
         }
     ]
     with pytest.raises(litellm.ImageFetchError) as excinfo:
-        litellm.completion(
-            model="gemini/gemini-pro", messages=messages, api_key="test"
-        )
+        litellm.completion(model="gemini/gemini-pro", messages=messages, api_key="test")
     assert excinfo.value.status_code == 400
     assert "Unable to fetch image" in str(excinfo.value)

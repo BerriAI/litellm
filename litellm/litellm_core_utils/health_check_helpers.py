@@ -9,7 +9,6 @@ if TYPE_CHECKING:
 
 
 class HealthCheckHelpers:
-
     @staticmethod
     async def ahealth_check_wildcard_models(
         model: str,

@@ -341,7 +341,8 @@ def test_create_correct_redis_cache_instance(
         startup_nodes=startup_nodes,
     )
 
-    def _mock_redis_cache_init(*args, **kwargs): ...
+    def _mock_redis_cache_init(*args, **kwargs):
+        ...
 
     with patch.object(RedisCache, "__init__", _mock_redis_cache_init):
         redis_cache = Router._create_redis_cache(cache_config)

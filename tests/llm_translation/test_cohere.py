@@ -239,20 +239,25 @@ async def test_cohere_request_body_with_allowed_params():
     # Define test parameters
     test_response_format = {"type": "json"}
     test_reasoning_effort = "low"
-    test_tools = [{
-        "type": "function", 
-        "function": {
-            "name": "get_current_time", 
-            "description": "Get the current time in a given location.", 
-            "parameters": {
-                "type": "object", 
-                "properties": {
-                    "location": {"type": "string", "description": "The city name, e.g. San Francisco"}
+    test_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_time",
+                "description": "Get the current time in a given location.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city name, e.g. San Francisco",
+                        }
+                    },
+                    "required": ["location"],
                 },
-                "required": ["location"]
-            }
+            },
         }
-    }]
+    ]
 
     # Create a mock response
     mock_response = AsyncMock()
@@ -260,11 +265,14 @@ async def test_cohere_request_body_with_allowed_params():
     mock_response.json.return_value = {
         "text": "I am Command, a language model developed by Cohere.",
         "generation_id": "mock-generation-id",
-        "finish_reason": "COMPLETE"
+        "finish_reason": "COMPLETE",
     }
 
     # Mock the AsyncHTTPHandler.post method at the module level
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post", return_value=mock_response) as mock_post:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
         try:
             await litellm.acompletion(
                 model="cohere/command",
@@ -272,18 +280,18 @@ async def test_cohere_request_body_with_allowed_params():
                 allowed_openai_params=["tools", "response_format", "reasoning_effort"],
                 response_format=test_response_format,
                 reasoning_effort=test_reasoning_effort,
-                tools=test_tools
+                tools=test_tools,
             )
         except Exception:
             pass  # We only care about the request body validation
 
         # Verify the API call was made
         mock_post.assert_called_once()
-        
+
         # Get and parse the request body
         request_data = json.loads(mock_post.call_args.kwargs["data"])
         print(f"request_data: {request_data}")
-        
+
         # Validate request contains our specified parameters
         assert "allowed_openai_params" not in request_data
         assert request_data["response_format"] == test_response_format
@@ -292,7 +300,9 @@ async def test_cohere_request_body_with_allowed_params():
 
 def test_cohere_embedding_outout_dimensions():
     litellm._turn_on_debug()
-    response = embedding(model="cohere/embed-v4.0", input="Hello, world!", dimensions=512)
+    response = embedding(
+        model="cohere/embed-v4.0", input="Hello, world!", dimensions=512
+    )
     print(f"response: {response}\n")
     assert len(response.data[0]["embedding"]) == 512
 
@@ -306,22 +316,22 @@ async def test_cohere_embed_v4_basic_text(sync_mode):
         data = {
             "model": "cohere/embed-v4.0",
             "input": ["Hello world!", "This is a test sentence."],
-            "input_type": "search_document"
+            "input_type": "search_document",
         }
-        
+
         if sync_mode:
             response = embedding(**data)
         else:
             response = await litellm.aembedding(**data)
-        
+
         # Validate response structure
         assert response.model is not None
         assert len(response.data) == 2
-        assert response.data[0]['object'] == 'embedding'
-        assert len(response.data[0]['embedding']) > 0
+        assert response.data[0]["object"] == "embedding"
+        assert len(response.data[0]["embedding"]) > 0
         assert response.usage.prompt_tokens > 0
         assert isinstance(response.usage, litellm.Usage)
-        
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -335,18 +345,18 @@ async def test_cohere_embed_v4_with_dimensions(sync_mode):
             "model": "cohere/embed-v4.0",
             "input": ["Test with custom dimensions"],
             "dimensions": 512,
-            "input_type": "search_query"
+            "input_type": "search_query",
         }
-        
+
         if sync_mode:
             response = embedding(**data)
         else:
             response = await litellm.aembedding(**data)
-        
+
         # Validate dimension
-        assert len(response.data[0]['embedding']) == 512
+        assert len(response.data[0]["embedding"]) == 512
         assert isinstance(response.usage, litellm.Usage)
-        
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -357,34 +367,36 @@ async def test_cohere_embed_v4_image_embedding(sync_mode):
     """Test Cohere Embed v4 image embedding functionality (multimodal)."""
     try:
         import base64
-        
+
         # 1x1 pixel red PNG (base64 encoded)
-        test_image_data = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\tpHYs\x00\x00\x0b\x13\x00\x00\x0b\x13\x01\x00\x9a\x9c\x18\x00\x00\x00\x0cIDATx\x9cc\xf8\x00\x00\x00\x01\x00\x01\x00\x00\x00\x00'
-        test_image_b64 = base64.b64encode(test_image_data).decode('utf-8')
-        
+        test_image_data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\tpHYs\x00\x00\x0b\x13\x00\x00\x0b\x13\x01\x00\x9a\x9c\x18\x00\x00\x00\x0cIDATx\x9cc\xf8\x00\x00\x00\x01\x00\x01\x00\x00\x00\x00"
+        test_image_b64 = base64.b64encode(test_image_data).decode("utf-8")
+
         data = {
             "model": "cohere/embed-v4.0",
             "input": [test_image_b64],
-            "input_type": "image"
+            "input_type": "image",
         }
-        
+
         if sync_mode:
             response = embedding(**data)
         else:
             response = await litellm.aembedding(**data)
-        
+
         # Validate response structure for image embedding
         assert response.model is not None
         assert len(response.data) == 1
-        assert response.data[0]['object'] == 'embedding'
-        assert len(response.data[0]['embedding']) > 0
+        assert response.data[0]["object"] == "embedding"
+        assert len(response.data[0]["embedding"]) > 0
         assert isinstance(response.usage, litellm.Usage)
-        
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize("input_type", ["search_document", "search_query", "classification", "clustering"])
+@pytest.mark.parametrize(
+    "input_type", ["search_document", "search_query", "classification", "clustering"]
+)
 @pytest.mark.asyncio
 async def test_cohere_embed_v4_input_types(input_type):
     """Test Cohere Embed v4 with different input types."""
@@ -392,15 +404,15 @@ async def test_cohere_embed_v4_input_types(input_type):
         response = await litellm.aembedding(
             model="cohere/embed-v4.0",
             input=[f"Test text for {input_type}"],
-            input_type=input_type
+            input_type=input_type,
         )
-        
+
         assert response.model is not None
         assert len(response.data) == 1
-        assert response.data[0]['object'] == 'embedding'
-        assert len(response.data[0]['embedding']) > 0
+        assert response.data[0]["object"] == "embedding"
+        assert len(response.data[0]["embedding"]) > 0
         assert isinstance(response.usage, litellm.Usage)
-        
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -411,17 +423,17 @@ def test_cohere_embed_v4_encoding_format():
         response = embedding(
             model="cohere/embed-v4.0",
             input=["Test encoding format"],
-            encoding_format="float"
+            encoding_format="float",
         )
-        
+
         assert response.model is not None
         assert len(response.data) == 1
-        assert response.data[0]['object'] == 'embedding'
-        assert len(response.data[0]['embedding']) > 0
+        assert response.data[0]["object"] == "embedding"
+        assert len(response.data[0]["embedding"]) > 0
         # Validate that embeddings are floats
-        assert all(isinstance(x, float) for x in response.data[0]['embedding'])
+        assert all(isinstance(x, float) for x in response.data[0]["embedding"])
         assert isinstance(response.usage, litellm.Usage)
-        
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -431,24 +443,18 @@ def test_cohere_embed_v4_error_handling():
     try:
         # Test with empty input - should raise an error
         try:
-            response = embedding(
-                model="cohere/embed-v4.0",
-                input=[]  # Empty input
-            )
+            response = embedding(model="cohere/embed-v4.0", input=[])  # Empty input
             pytest.fail("Should have failed with empty input")
         except Exception:
             pass  # Expected to fail
-        
+
         # Test with None input - should raise an error
         try:
-            response = embedding(
-                model="cohere/embed-v4.0",
-                input=None
-            )
+            response = embedding(model="cohere/embed-v4.0", input=None)
             pytest.fail("Should have failed with None input")
         except Exception:
             pass  # Expected to fail
-            
+
     except Exception as e:
         pytest.fail(f"Error in error handling test: {e}")
 
@@ -462,33 +468,33 @@ async def test_cohere_embed_v4_multiple_texts(sync_mode):
             "The quick brown fox jumps over the lazy dog",
             "Machine learning is transforming the world",
             "Python is a versatile programming language",
-            "Natural language processing enables human-computer interaction"
+            "Natural language processing enables human-computer interaction",
         ]
-        
+
         data = {
             "model": "cohere/embed-v4.0",
             "input": texts,
-            "input_type": "search_document"
+            "input_type": "search_document",
         }
-        
+
         if sync_mode:
             response = embedding(**data)
         else:
             response = await litellm.aembedding(**data)
-        
+
         # Validate response structure
         assert response.model is not None
         assert len(response.data) == len(texts)
-        
+
         for i, data_item in enumerate(response.data):
-            assert data_item['object'] == 'embedding'
-            assert data_item['index'] == i
-            assert len(data_item['embedding']) > 0
-            assert all(isinstance(x, float) for x in data_item['embedding'])
-        
+            assert data_item["object"] == "embedding"
+            assert data_item["index"] == i
+            assert len(data_item["embedding"]) > 0
+            assert all(isinstance(x, float) for x in data_item["embedding"])
+
         assert isinstance(response.usage, litellm.Usage)
         assert response.usage.prompt_tokens > 0
-        
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -501,16 +507,16 @@ def test_cohere_embed_v4_with_optional_params():
             input=["Test with optional parameters"],
             input_type="search_query",
             dimensions=256,
-            encoding_format="float"
+            encoding_format="float",
         )
-        
+
         # Validate response
         assert response.model is not None
         assert len(response.data) == 1
-        assert response.data[0]['object'] == 'embedding'
-        assert len(response.data[0]['embedding']) == 256  # Custom dimensions
-        assert all(isinstance(x, float) for x in response.data[0]['embedding'])
+        assert response.data[0]["object"] == "embedding"
+        assert len(response.data[0]["embedding"]) == 256  # Custom dimensions
+        assert all(isinstance(x, float) for x in response.data[0]["embedding"])
         assert isinstance(response.usage, litellm.Usage)
-        
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

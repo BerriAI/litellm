@@ -60,7 +60,6 @@ async def test_cooldown_badrequest_error():
 
     # Act & Assert
     try:
-
         response = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "gm"}],
@@ -649,7 +648,6 @@ async def test_high_traffic_cooldowns_one_bad_deployment():
                 mock_response = "hi"
             elif bad_deployment_id == model_id:
                 if num_failures / total_requests <= 0.6:
-
                     mock_response = "litellm.InternalServerError"
 
             elif num_failures / total_requests <= 0.25:
@@ -747,7 +745,6 @@ async def test_high_traffic_cooldowns_one_rate_limited_deployment():
                 mock_response = "hi"
             elif bad_deployment_id == model_id:
                 if num_failures / total_requests <= 0.6:
-
                     mock_response = "litellm.RateLimitError"
 
             elif num_failures / total_requests <= 0.25:

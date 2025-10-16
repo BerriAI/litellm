@@ -498,7 +498,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             "guardrail_information": standard_logging_payload.get(
                 "guardrail_information", None
             ),
-            "is_streamed_request": self._get_stream_value_from_payload(standard_logging_payload),
+            "is_streamed_request": self._get_stream_value_from_payload(
+                standard_logging_payload
+            ),
         }
 
         #########################################################
@@ -562,7 +564,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
 
         return latency_metrics
 
-    def _get_stream_value_from_payload(self, standard_logging_payload: StandardLoggingPayload) -> bool:
+    def _get_stream_value_from_payload(
+        self, standard_logging_payload: StandardLoggingPayload
+    ) -> bool:
         """
         Extract the stream value from standard logging payload.
 

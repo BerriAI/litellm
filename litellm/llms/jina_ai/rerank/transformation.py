@@ -51,9 +51,11 @@ class JinaAIRerankConfig(BaseRerankConfig):
         for k, v in non_default_params.items():
             if k in supported_params:
                 optional_params[k] = v
-        return dict(OptionalRerankParams(
-            **optional_params,
-        ))
+        return dict(
+            OptionalRerankParams(
+                **optional_params,
+            )
+        )
 
     def get_complete_url(self, api_base: Optional[str], model: str) -> str:
         base_path = "/v1/rerank"

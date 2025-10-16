@@ -14,7 +14,6 @@ from litellm.types.utils import Choices, Message, ModelResponse
 
 @pytest.mark.asyncio
 async def test_azure_text_moderation_guardrail_pre_call_hook():
-
     azure_text_moderation_guardrail = AzureContentSafetyTextModerationGuardrail(
         guardrail_name="azure_text_moderation",
         api_key="azure_text_moderation_api_key",
@@ -52,7 +51,6 @@ async def test_azure_text_moderation_guardrail_pre_call_hook():
 
 @pytest.mark.asyncio
 async def test_azure_text_moderation_guardrail_post_call_success_hook():
-
     azure_text_moderation_guardrail = AzureContentSafetyTextModerationGuardrail(
         guardrail_name="azure_text_moderation",
         api_key="azure_text_moderation_api_key",

@@ -13,6 +13,7 @@ import litellm
 
 import asyncio
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -32,6 +33,7 @@ def setup_and_teardown(event_loop):  # Add event_loop as a dependency
     from litellm import Router
 
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
     # flush all logs
     asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
 

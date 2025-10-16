@@ -157,14 +157,20 @@ async def test_async_log_cache_hit_on_callbacks():
 
     # Assertions
     mock_logging_obj.async_success_handler.assert_called_once_with(
-        result=cached_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
+        result=cached_result,
+        start_time=start_time,
+        end_time=end_time,
+        cache_hit=cache_hit,
     )
 
     # Wait for the thread to complete
     await asyncio.sleep(0.5)
 
     mock_logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once_with(
-        result=cached_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
+        result=cached_result,
+        start_time=start_time,
+        end_time=end_time,
+        cache_hit=cache_hit,
     )
 
 
@@ -345,7 +351,7 @@ async def test_embedding_cache_model_field_consistency():
     """
     # Setup cache
     setup_cache()
-    
+
     caching_handler = LLMCachingHandler(
         original_function=aembedding, request_kwargs={}, start_time=datetime.now()
     )
@@ -357,7 +363,7 @@ async def test_embedding_cache_model_field_consistency():
         data=[
             Embedding(embedding=[0.1, 0.2, 0.3], index=0, object="embedding"),
             Embedding(embedding=[0.4, 0.5, 0.6], index=1, object="embedding"),
-        ]
+        ],
     )
 
     # Mock logging object
@@ -375,14 +381,12 @@ async def test_embedding_cache_model_field_consistency():
     kwargs = {
         "model": original_model,
         "input": ["test input 1", "test input 2"],
-        "caching": True
+        "caching": True,
     }
 
     # Step 1: Cache the embedding response
     await caching_handler.async_set_cache(
-        result=embedding_response,
-        original_function=aembedding,
-        kwargs=kwargs
+        result=embedding_response, original_function=aembedding, kwargs=kwargs
     )
 
     # Step 2: Retrieve from cache
@@ -399,13 +403,24 @@ async def test_embedding_cache_model_field_consistency():
     assert cached_response.final_embedding_cached_response is not None
     assert cached_response.final_embedding_cached_response.model == original_model
     assert len(cached_response.final_embedding_cached_response.data) == 2
-    assert cached_response.final_embedding_cached_response.data[0].embedding == [0.1, 0.2, 0.3]
+    assert cached_response.final_embedding_cached_response.data[0].embedding == [
+        0.1,
+        0.2,
+        0.3,
+    ]
     assert cached_response.final_embedding_cached_response.data[0].index == 0
-    assert cached_response.final_embedding_cached_response.data[1].embedding == [0.4, 0.5, 0.6]
+    assert cached_response.final_embedding_cached_response.data[1].embedding == [
+        0.4,
+        0.5,
+        0.6,
+    ]
     assert cached_response.final_embedding_cached_response.data[1].index == 1
-    
+
     # Verify cache hit flag is set
-    assert cached_response.final_embedding_cached_response._hidden_params["cache_hit"] == True
+    assert (
+        cached_response.final_embedding_cached_response._hidden_params["cache_hit"]
+        == True
+    )
 
 
 @pytest.mark.asyncio
@@ -416,7 +431,7 @@ async def test_embedding_cache_model_field_with_vendor_prefix():
     """
     # Setup cache
     setup_cache()
-    
+
     caching_handler = LLMCachingHandler(
         original_function=aembedding, request_kwargs={}, start_time=datetime.now()
     )
@@ -424,13 +439,13 @@ async def test_embedding_cache_model_field_with_vendor_prefix():
     # Test with vendor-prefixed model name (like vertex_ai/text-embedding-005)
     vendor_model = "vertex_ai/text-embedding-005"
     actual_model = "text-embedding-005"  # What the provider actually returns
-    
+
     # Create embedding response with the actual model name (as returned by provider)
     embedding_response = EmbeddingResponse(
         model=actual_model,  # Provider returns this
         data=[
             Embedding(embedding=[0.1, 0.2, 0.3], index=0, object="embedding"),
-        ]
+        ],
     )
 
     # Mock logging object
@@ -448,14 +463,12 @@ async def test_embedding_cache_model_field_with_vendor_prefix():
     kwargs = {
         "model": vendor_model,  # Request uses vendor prefix
         "input": ["test input"],
-        "caching": True
+        "caching": True,
     }
 
     # Cache the response
     await caching_handler.async_set_cache(
-        result=embedding_response,
-        original_function=aembedding,
-        kwargs=kwargs
+        result=embedding_response, original_function=aembedding, kwargs=kwargs
     )
 
     # Retrieve from cache
@@ -470,8 +483,12 @@ async def test_embedding_cache_model_field_with_vendor_prefix():
 
     # Verify the model field matches the original provider response, not the request
     assert cached_response.final_embedding_cached_response is not None
-    assert cached_response.final_embedding_cached_response.model == actual_model  # Should be the provider's model name
-    assert cached_response.final_embedding_cached_response.model != vendor_model  # Should NOT be the vendor-prefixed name
+    assert (
+        cached_response.final_embedding_cached_response.model == actual_model
+    )  # Should be the provider's model name
+    assert (
+        cached_response.final_embedding_cached_response.model != vendor_model
+    )  # Should NOT be the vendor-prefixed name
 
 
 def test_extract_model_from_cached_results():
@@ -484,10 +501,26 @@ def test_extract_model_from_cached_results():
 
     # Test with valid cached results
     non_null_list = [
-        (0, {"embedding": [0.1, 0.2], "index": 0, "object": "embedding", "model": "text-embedding-005"}),
-        (1, {"embedding": [0.3, 0.4], "index": 1, "object": "embedding", "model": "text-embedding-005"}),
+        (
+            0,
+            {
+                "embedding": [0.1, 0.2],
+                "index": 0,
+                "object": "embedding",
+                "model": "text-embedding-005",
+            },
+        ),
+        (
+            1,
+            {
+                "embedding": [0.3, 0.4],
+                "index": 1,
+                "object": "embedding",
+                "model": "text-embedding-005",
+            },
+        ),
     ]
-    
+
     model_name = caching_handler._extract_model_from_cached_results(non_null_list)
     assert model_name == "text-embedding-005"
 
@@ -496,8 +529,10 @@ def test_extract_model_from_cached_results():
         (0, {"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}),
         (1, {"embedding": [0.3, 0.4], "index": 1, "object": "embedding"}),
     ]
-    
-    model_name = caching_handler._extract_model_from_cached_results(non_null_list_no_model)
+
+    model_name = caching_handler._extract_model_from_cached_results(
+        non_null_list_no_model
+    )
     assert model_name is None
 
     # Test with empty list

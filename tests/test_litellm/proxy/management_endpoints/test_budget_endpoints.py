@@ -22,13 +22,13 @@ sys.path.insert(
 def client_and_mocks(monkeypatch):
     # Setup MagicMock Prisma
     mock_prisma = MagicMock()
-    mock_table  = MagicMock()
+    mock_table = MagicMock()
     mock_table.create = AsyncMock(side_effect=lambda *, data: data)
     mock_table.update = AsyncMock(side_effect=lambda *, where, data: {**where, **data})
 
     mock_prisma.db = types.SimpleNamespace(
-        litellm_budgettable = mock_table,
-        litellm_dailyspend   = mock_table,
+        litellm_budgettable=mock_table,
+        litellm_dailyspend=mock_table,
     )
 
     # Monkeypatch Mocked Prisma client into the server module
@@ -79,6 +79,7 @@ async def test_new_budget_db_not_connected(client_and_mocks, monkeypatch):
 
     # override the prisma_client that the handler imports at runtime
     import litellm.proxy.proxy_server as ps
+
     monkeypatch.setattr(ps, "prisma_client", None)
 
     # Call /budget/new endpoint
@@ -123,6 +124,7 @@ async def test_update_budget_db_not_connected(client_and_mocks, monkeypatch):
 
     # override the prisma_client that the handler imports at runtime
     import litellm.proxy.proxy_server as ps
+
     monkeypatch.setattr(ps, "prisma_client", None)
 
     payload = {"budget_id": "any", "max_budget": 1.0}

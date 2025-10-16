@@ -25,7 +25,6 @@ def test_get_custom_url(monkeypatch):
     assert custom_url == "http://0.0.0.0:4000/litellm/ui/"
 
 
-
 def test_proxy_only_error_true_for_llm_route():
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     assert proxy_logging_obj._is_proxy_only_llm_api_error(

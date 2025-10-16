@@ -100,4 +100,3 @@ def test_azure_gpt5_codex_series_transform_request(config: AzureOpenAIGPT5Config
         headers={},
     )
     assert request["model"] == "gpt-5-codex"
-

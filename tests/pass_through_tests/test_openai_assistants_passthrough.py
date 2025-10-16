@@ -70,7 +70,6 @@ class EventHandler(AssistantEventHandler):
 
 
 def test_openai_assistants_e2e_operations_stream():
-
     assistant = client.beta.assistants.create(
         name="Math Tutor",
         instructions="You are a personal math tutor. Write and run code to answer math questions.",

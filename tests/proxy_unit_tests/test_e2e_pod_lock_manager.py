@@ -11,6 +11,7 @@ from fastapi.routing import APIRoute
 import httpx
 import json
 from unittest.mock import MagicMock, patch
+
 load_dotenv()
 import io
 import os
@@ -75,7 +76,9 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 from litellm.proxy._types import (
     DynamoDBArgs,
     GenerateKeyRequest,
@@ -100,7 +103,6 @@ request_data = {
         {"role": "user", "content": "this is my new test. respond in 50 lines"}
     ],
 }
-
 
 
 @pytest.fixture
@@ -156,7 +158,6 @@ async def test_pod_lock_acquisition_when_no_active_lock():
     lock_record = await global_redis_cache.async_get_cache(lock_key)
     print("lock_record=", lock_record)
     assert lock_record == lock_manager.pod_id
-
 
 
 @pytest.mark.asyncio
@@ -294,7 +295,6 @@ async def test_concurrent_lock_acquisition():
     ]
 
 
-
 @pytest.mark.asyncio
 async def test_lock_acquisition_with_expired_ttl():
     """Test that a pod can acquire a lock when existing lock has expired TTL"""
@@ -369,6 +369,7 @@ async def test_release_expired_lock():
     lock_record = await global_redis_cache.async_get_cache(lock_key)
     assert lock_record == second_lock_manager.pod_id
 
+
 @pytest.mark.asyncio
 async def test_e2e_size_of_redis_buffer():
     """
@@ -381,14 +382,17 @@ async def test_e2e_size_of_redis_buffer():
     from litellm.caching import RedisCache
     from litellm._uuid import uuid
 
-
-    redis_cache = RedisCache(host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), password=os.getenv("REDIS_PASSWORD"))
+    redis_cache = RedisCache(
+        host=os.getenv("REDIS_HOST"),
+        port=os.getenv("REDIS_PORT"),
+        password=os.getenv("REDIS_PASSWORD"),
+    )
     fake_redis_client = fakeredis.FakeAsyncRedis()
     redis_cache.redis_async_client = fake_redis_client
 
     setattr(litellm.proxy.proxy_server, "use_redis_transaction_buffer", True)
     db_writer = DBSpendUpdateWriter(redis_cache=redis_cache)
-    
+
     # get all the queues
     initialized_queues: List[BaseUpdateQueue] = []
     for attr in dir(db_writer):
@@ -400,30 +404,46 @@ async def test_e2e_size_of_redis_buffer():
     for queue in initialized_queues:
         key = f"test_key_{queue.__class__.__name__}_{uuid.uuid4()}"
         new_keys_added.append(key)
-        await queue.add_update({key: {"spend": 1.0, "entity_id": "test_entity_id", "entity_type": "user", "api_key": "test_api_key", "model": "test_model", "custom_llm_provider": "test_custom_llm_provider", "date": "2025-01-01", "prompt_tokens": 100, "completion_tokens": 100, "total_tokens": 200, "response_cost": 1.0, "api_requests": 1, "successful_requests": 1, "failed_requests": 0}})
-    
+        await queue.add_update(
+            {
+                key: {
+                    "spend": 1.0,
+                    "entity_id": "test_entity_id",
+                    "entity_type": "user",
+                    "api_key": "test_api_key",
+                    "model": "test_model",
+                    "custom_llm_provider": "test_custom_llm_provider",
+                    "date": "2025-01-01",
+                    "prompt_tokens": 100,
+                    "completion_tokens": 100,
+                    "total_tokens": 200,
+                    "response_cost": 1.0,
+                    "api_requests": 1,
+                    "successful_requests": 1,
+                    "failed_requests": 0,
+                }
+            }
+        )
+
     print("initialized_queues=", initialized_queues)
     print("new_keys_added=", new_keys_added)
 
     # get the size of each queue
     for queue in initialized_queues:
-        assert queue.update_queue.qsize() == 1, f"Queue {queue.__class__.__name__} was not initialized with mock data. Expected size 1, got {queue.update_queue.qsize()}"
-
+        assert (
+            queue.update_queue.qsize() == 1
+        ), f"Queue {queue.__class__.__name__} was not initialized with mock data. Expected size 1, got {queue.update_queue.qsize()}"
 
     # flush from in-memory -> redis -> to DB
-    with patch("litellm.proxy.db.db_spend_update_writer.PodLockManager.acquire_lock", return_value=True):
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.PodLockManager.acquire_lock",
+        return_value=True,
+    ):
         await db_writer._commit_spend_updates_to_db_with_redis(
-            prisma_client=MagicMock(),
-            n_retry_times=3,
-            proxy_logging_obj=MagicMock()
+            prisma_client=MagicMock(), n_retry_times=3, proxy_logging_obj=MagicMock()
         )
-    
+
     # Verify all the keys were looked up in Redis
     keys = await fake_redis_client.keys("*")
     print("found keys even after flushing to DB", keys)
     assert len(keys) == 0, f"Expected Redis to be empty, but found keys: {keys}"
-
-
-    
-
-

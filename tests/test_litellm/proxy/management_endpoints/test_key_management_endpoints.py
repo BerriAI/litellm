@@ -425,7 +425,7 @@ async def test_key_generation_with_object_permission(monkeypatch):
 async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
     """
     Test that /key/generate correctly handles mcp_tool_permissions in object_permission.
-    
+
     This test verifies that:
     1. mcp_tool_permissions is accepted in the object_permission field
     2. The field is properly stored in the LiteLLM_ObjectPermissionTable
@@ -490,6 +490,7 @@ async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
     # Verify mcp_tool_permissions was stored (serialized to JSON string for GraphQL compatibility)
     assert "mcp_tool_permissions" in created_permission_data
     import json
+
     assert json.loads(created_permission_data["mcp_tool_permissions"]) == {
         "server_1": ["tool1", "tool2", "tool3"]
     }
@@ -763,7 +764,6 @@ async def test_generate_service_account_works_with_team_id():
     ) as mock_router, patch("litellm.proxy.proxy_server.premium_user", False), patch(
         "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
     ) as mock_generate_key:
-
         # Configure mocks
         mock_prisma.return_value = AsyncMock()
         mock_router.return_value = None
@@ -1167,7 +1167,6 @@ def test_validate_key_team_change_with_member_permissions():
                 with patch(
                     "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint"
                 ) as mock_has_perms:
-
                     mock_get_user.return_value = mock_member_object
                     mock_is_admin.return_value = False
                     mock_has_perms.return_value = True
@@ -1876,9 +1875,7 @@ async def test_generate_key_with_object_permission():
     with patch(
         "litellm.proxy.proxy_server.prisma_client",
         mock_prisma_client,
-    ), patch(
-        "litellm.proxy.proxy_server.llm_router", None
-    ), patch(
+    ), patch("litellm.proxy.proxy_server.llm_router", None), patch(
         "litellm.proxy.proxy_server.premium_user",
         False,
     ), patch(

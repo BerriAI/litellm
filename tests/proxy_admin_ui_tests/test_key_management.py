@@ -91,7 +91,9 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
-from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
