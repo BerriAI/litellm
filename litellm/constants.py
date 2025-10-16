@@ -525,6 +525,7 @@ openai_compatible_providers: List = [
     "vercel_ai_gateway",
     "aiml",
     "wandb",
+    "cometapi",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -849,6 +850,7 @@ BEDROCK_CONVERSE_MODELS = [
     "deepseek.v3-v1:0",
     "openai.gpt-oss-20b-1:0",
     "openai.gpt-oss-120b-1:0",
+    "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",

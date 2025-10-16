@@ -1,16 +1,6 @@
 model_list:
-  - model_name: db-openai-endpoint
+  - model_name: mistral/*
     litellm_params:
-      model: openai/gm
-      api_key: hi
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      model: mistral/*
 
 
-litellm_settings:
-  callbacks: ["dynamic_rate_limiter_v3"]
-  priority_reservation: 
-    "prod": 0.9  # 90% reserved for production (9 RPM)
-    "dev": 0.1   # 10% reserved for development (1 RPM)
-  priority_reservation_settings:
-    default_priority: 0.2  # Weight (0%) assigned to keys without explicit priority metadata
-    saturation_threshold: 0.50 #  A model is saturated if it has hit 50% of its RPM limit
