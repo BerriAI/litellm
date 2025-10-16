@@ -5522,9 +5522,15 @@ class Router:
         Returns -> Deployment or None
 
         Raise Exception -> if model found in invalid format
+        
+        Optimized with O(1) index lookup instead of O(n) linear scan.
         """
-        for model in self.model_list:
-            if model["model_name"] == model_group_name:
+        # O(1) lookup in model_name index
+        if model_group_name in self.model_name_to_deployment_indices:
+            indices = self.model_name_to_deployment_indices[model_group_name]
+            if indices:
+                # Return first deployment for this model_name
+                model = self.model_list[indices[0]]
                 if isinstance(model, dict):
                     return Deployment(**model)
                 elif isinstance(model, Deployment):
@@ -5634,11 +5640,13 @@ class Router:
         Returns
         - dict: the model in list with 'model_name', 'litellm_params', Optional['model_info']
         - None: could not find deployment in list
+        
+        Optimized with O(1) index lookup instead of O(n) linear scan.
         """
-        for model in self.model_list:
-            if "model_info" in model and "id" in model["model_info"]:
-                if id == model["model_info"]["id"]:
-                    return model
+        # O(1) lookup via model_id_to_deployment_index_map
+        if id in self.model_id_to_deployment_index_map:
+            idx = self.model_id_to_deployment_index_map[id]
+            return self.model_list[idx]
         return None
 
     def get_model_group(self, id: str) -> Optional[List]:
@@ -6172,17 +6180,33 @@ class Router:
         if 'model_name' is none, returns all.
 
         Returns list of model id's.
+        
+        Optimized with O(1) or O(k) index lookup when model_name provided,
+        instead of O(n) linear scan.
         """        
         ids = []
-        for model in self.model_list:
-            if "model_info" in model and "id" in model["model_info"]:
-                id = model["model_info"]["id"]
-                if exclude_team_models and model["model_info"].get("team_id"):
-                    continue
-                if model_name is not None and model["model_name"] == model_name:
-                    ids.append(id)
-                elif model_name is None:
-                    ids.append(id)
+        
+        if model_name is not None:
+            # O(1) lookup in model_name index, then O(k) iteration where k = deployments for this model_name
+            if model_name in self.model_name_to_deployment_indices:
+                indices = self.model_name_to_deployment_indices[model_name]
+                for idx in indices:
+                    model = self.model_list[idx]
+                    if "model_info" in model and "id" in model["model_info"]:
+                        if exclude_team_models and model["model_info"].get("team_id"):
+                            continue
+                        ids.append(model["model_info"]["id"])
+        else:
+            # When model_name is None, return all model IDs
+            # Use the index map keys for O(n) where n = total deployments
+            for model_id in self.model_id_to_deployment_index_map.keys():
+                idx = self.model_id_to_deployment_index_map[model_id]
+                model = self.model_list[idx]
+                if "model_info" in model and "id" in model["model_info"]:
+                    if exclude_team_models and model["model_info"].get("team_id"):
+                        continue
+                    ids.append(model_id)
+        
         return ids
 
     def has_model_id(self, candidate_id: str) -> bool:
