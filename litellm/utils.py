@@ -7559,11 +7559,9 @@ class ProviderConfigManager:
         provider: LlmProviders,
     ) -> Optional[BaseImageEditConfig]:
         if LlmProviders.OPENAI == provider:
-            from litellm.llms.openai.image_edit.transformation import (
-                OpenAIImageEditConfig,
-            )
+            from litellm.llms.openai.image_edit import get_openai_image_edit_config
 
-            return OpenAIImageEditConfig()
+            return get_openai_image_edit_config(model=model)
         elif LlmProviders.AZURE == provider:
             from litellm.llms.azure.image_edit.transformation import (
                 AzureImageEditConfig,
