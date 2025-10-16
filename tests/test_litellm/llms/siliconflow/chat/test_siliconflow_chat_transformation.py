@@ -30,7 +30,7 @@ class TestSiliconFlowConfig:
 
         result = config.validate_environment(
             headers=headers,
-            model="siliconflow/deepseek-ai/DeepSeek-V3.2-Exp",
+            model="siliconflow/deepseek-ai/DeepSeek-V3",
             messages=[{"role": "user", "content": "Hello"}],
             optional_params={},
             litellm_params={},
@@ -49,7 +49,7 @@ class TestSiliconFlowConfig:
         with pytest.raises(ValueError) as excinfo:
             config.validate_environment(
                 headers={},
-                model="siliconflow/deepseek-ai/DeepSeek-V3.2-Exp",
+                model="siliconflow/deepseek-ai/DeepSeek-V3",
                 messages=[{"role": "user", "content": "Hello"}],
                 optional_params={},
                 litellm_params={},

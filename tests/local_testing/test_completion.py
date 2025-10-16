@@ -4361,7 +4361,7 @@ def test_completion_siliconflow_ai():
     ) as mock_call:
         try:
             completion(
-                model="siliconflow/deepseek-ai/DeepSeek-V3.2-Exp",
+                model="siliconflow/deepseek-ai/DeepSeek-V3",
                 messages=messages,
                 client=openai_client,
                 api_base="https://api.siliconflow.com/v1",

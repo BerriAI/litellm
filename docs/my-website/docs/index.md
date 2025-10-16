@@ -235,7 +235,7 @@ import os
 os.environ["SILICONFLOW_API_KEY"] = "siliconflow-api-key"
 
 response = completion(
-  model="siliconflow/deepseek-ai/DeepSeek-V3.2-Exp",
+  model="siliconflow/deepseek-ai/DeepSeek-V3",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -487,7 +487,7 @@ import os
 os.environ["SILICONFLOW_API_KEY"] = "siliconflow_api_key"
 
 response = completion(
-  model="siliconflow/deepseek-ai/DeepSeek-V3.2-Exp",
+  model="siliconflow/deepseek-ai/DeepSeek-V3",
   messages = [{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )

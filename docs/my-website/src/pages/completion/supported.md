@@ -103,7 +103,7 @@ All the text models from [OpenRouter](https://openrouter.ai/docs) are supported 
 
 | Model Name       | Function Call                              | Required OS Variables                |
 |------------------|--------------------------------------------|--------------------------------------|
-| siliconflow/deepseek-ai/DeepSeek-V3.2-Exp | `completion('siliconflow/deepseek-ai/DeepSeek-V3.2-Exp', messages)` | `os.environ['SILICONFLOW_API_KEY']` |
+| siliconflow/deepseek-ai/DeepSeek-V3 | `completion('siliconflow/deepseek-ai/DeepSeek-V3', messages)` | `os.environ['SILICONFLOW_API_KEY']` |
 | siliconflow/deepseek-ai/DeepSeek-R1 | `completion('siliconflow/deepseek-ai/DeepSeek-R1', messages)` | `os.environ['SILICONFLOW_API_KEY']` |
 | siliconflow/zai-org/GLM-4.6 | `completion('siliconflow/zai-org/GLM-4.6', messages)` | `os.environ['SILICONFLOW_API_KEY']` |
 | siliconflow/moonshotai/Kimi-K2-Instruct | `completion('siliconflow/moonshotai/Kimi-K2-Instruct', messages)` | `os.environ['SILICONFLOW_API_KEY']` |

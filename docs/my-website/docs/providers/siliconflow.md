@@ -71,7 +71,7 @@ print(content)
 model_list:
   - model_name: deepseek-v2-chat
     litellm_params:
-      model: siliconflow/deepseek-ai/DeepSeek-V3.2-Exp
+      model: siliconflow/deepseek-ai/DeepSeek-V3
       api_key: os.environ/SILICONFLOW_API_KEY
 ```
 
@@ -131,7 +131,7 @@ tools = [
 messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
 
 response = completion(
-    model="siliconflow/deepseek-ai/DeepSeek-V3.2-Exp",
+    model="siliconflow/deepseek-ai/DeepSeek-V3",
     messages=messages,
     tools=tools,
 )
@@ -164,7 +164,7 @@ messages = [
 ]
 
 completion = completion(
-    model="siliconflow/deepseek-ai/DeepSeek-V3.2-Exp",
+    model="siliconflow/deepseek-ai/DeepSeek-V3",
     messages=messages,
     response_format={"type": "json_object"} # 👈 KEY CHANGE
 )
@@ -180,7 +180,7 @@ print(json.loads(completion.choices[0].message.content))
 model_list:
   - model_name: deepseek-v2-chat
     litellm_params:
-      model: siliconflow/deepseek-ai/DeepSeek-V3.2-Exp
+      model: siliconflow/deepseek-ai/DeepSeek-V3
       api_key: os.environ/SILICONFLOW_API_KEY
 ```
 
@@ -214,7 +214,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 | Model Name                | Function Call                                       |
 |---------------------------|-----------------------------------------------------|
-| deepseek-ai/DeepSeek-V3.2-Exp | `completion('siliconflow/deepseek-ai/DeepSeek-V3.2-Exp', messages)` |
+| deepseek-ai/DeepSeek-V3.2-Exp | `completion('siliconflow/deepseek-ai/DeepSeek-V3', messages)` |
 | deepseek-ai/DeepSeek-R1 | `completion('siliconflow/deepseek-ai/DeepSeek-R1', messages)` |
 | zai-org/GLM-4.6 | `completion('siliconflow/zai-org/GLM-4.6', messages)` |
 | moonshotai/Kimi-K2-Instruct | `completion('siliconflow/moonshotai/Kimi-K2-Instruct', messages)` |
