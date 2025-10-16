@@ -99,7 +99,7 @@ All the text models from [OpenRouter](https://openrouter.ai/docs) are supported 
 
 ## SiliconFlow Completion Models
 
-🚨 LiteLLM supports ALL SiliconFlow models, send `model=siliconflow/<your-siliconflow-model>` to send it to SiliconFlow. See all SiliconFlow models [here](https://www.siliconflow.com/models)
+🚨 LiteLLM supports ALL SiliconFlow models, send `model=siliconflow/<your-siliconflow-model>` to send it to SiliconFlow. See all SiliconFlow models [here](https://www.siliconflow.com/models?utm_source=github&utm_medium=referral&utm_term=github_readme&utm_content=github_litellm)
 
 | Model Name       | Function Call                              | Required OS Variables                |
 |------------------|--------------------------------------------|--------------------------------------|

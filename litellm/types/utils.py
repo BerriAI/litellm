@@ -2504,6 +2504,7 @@ class LlmProviders(str, Enum):
     DEEPGRAM = "deepgram"
     ELEVENLABS = "elevenlabs"
     NOVITA = "novita"
+    SILICONFLOW = "siliconflow"
     AIOHTTP_OPENAI = "aiohttp_openai"
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"

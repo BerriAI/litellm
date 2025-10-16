@@ -64,6 +64,7 @@ Use `litellm.get_supported_openai_params()` for an updated list of params for ea
 | ClarifAI | ✅| ✅ | ✅ | | ✅ | ✅ || || | || ||| |||| ||
 | Github | ✅| ✅ | ✅ | ✅| ✅ | ✅ | ✅ | ✅| ✅ | ✅| ✅|| || ✅ | ✅ (model dependent) | ✅ (model dependent) || ||
 | Novita AI| ✅| ✅ || ✅| ✅ | ✅ | ✅ | ✅| ✅ | ✅| || ✅||| |||| ||
+| SiliconFlow| ✅ |✅ (model dependent)| ✅ | ✅ | ✅ | | ✅ | ✅ |✅ (model dependent)| ✅ | | | | | ✅ | | ✅ |✅ (model dependent)| | | |
 | Bytez | ✅| ✅ || ✅| ✅ | | | ✅|| || || || || || ||
 | OVHCloud AI Endpoints | ✅ | | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | | | | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | |
 

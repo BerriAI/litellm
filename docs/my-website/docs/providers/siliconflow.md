@@ -6,7 +6,7 @@ import TabItem from '@theme/TabItem';
 
 | Property | Details |
 |-------|-------|
-| Description | SiliconFlow is an AI cloud platform that helps developers easily deploy AI models through a simple API, backed by affordable and reliable GPU cloud infrastructure. LiteLLM supports all models from [SiliconFlow](https://www.siliconflow.com/models) |
+| Description | SiliconFlow is an AI cloud platform that helps developers easily deploy AI models through a simple API, backed by affordable and reliable GPU cloud infrastructure. LiteLLM supports all models from [SiliconFlow](https://www.siliconflow.com/models?utm_source=github&utm_medium=referral&utm_term=github_readme&utm_content=github_litellm) |
 | Provider Route on LiteLLM | `siliconflow/` |
 | Provider Doc | [SiliconFlow Docs ↗](https://docs.siliconflow.com/) |
 | API Endpoint for Provider | https://api.siliconflow.com/v1 |
@@ -210,7 +210,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 ## Chat Models
 
-🚨 LiteLLM supports ALL SiliconFlow models, send `model=siliconflow/<your-siliconflow-model>` to send it to SiliconFlow. See all SiliconFlow models [here](https://www.siliconflow.com/models).
+🚨 LiteLLM supports ALL SiliconFlow models, send `model=siliconflow/<your-siliconflow-model>` to send it to SiliconFlow. See all SiliconFlow models [here](https://www.siliconflow.com/models?utm_source=github&utm_medium=referral&utm_term=github_readme&utm_content=github_litellm).
 
 | Model Name                | Function Call                                       |
 |---------------------------|-----------------------------------------------------|
