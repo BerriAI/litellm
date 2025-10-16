@@ -2878,6 +2878,8 @@ def get_optional_params_embeddings(  # noqa: PLR0915
                 model=model,
                 drop_params=drop_params if drop_params is not None else False,
             )
+        final_params = {**optional_params, **kwargs}
+        return final_params
     elif custom_llm_provider == "sap":
         supported_params = get_supported_openai_params(
             model=model,
@@ -2886,10 +2888,10 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.GenAIHubEmbeddingConfig().map_openai_params(
-                non_default_params=non_default_params,
-                optional_params={},
-                model=model,
-                drop_params=drop_params if drop_params is not None else False
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False
         )
     elif custom_llm_provider == "infinity":
         supported_params = get_supported_openai_params(
@@ -2904,6 +2906,10 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
+
+        final_params = {**optional_params, **kwargs}
+        return final_params
+
     elif custom_llm_provider == "fireworks_ai":
         supported_params = get_supported_openai_params(
             model=model,
@@ -3786,18 +3792,6 @@ def get_optional_params(  # noqa: PLR0915
 
     elif custom_llm_provider == "petals":
         optional_params = litellm.PetalsConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=(
-                drop_params
-                if drop_params is not None and isinstance(drop_params, bool)
-                else False
-            ),
-        )
-
-    elif custom_llm_provider == "sap":
-        optional_params = litellm.GenAIHubOrchestrationConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
