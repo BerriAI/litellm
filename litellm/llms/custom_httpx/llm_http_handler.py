@@ -3861,6 +3861,351 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=video_content_provider_config,
             )
+            
+    def video_remix_handler(
+        self,
+        video_id: str,
+        prompt: str,
+        model: str,
+        video_remix_provider_config: BaseVideoConfig,
+        custom_llm_provider: str,
+        litellm_params,
+        logging_obj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+        _is_async: bool = False,
+        client=None,
+    ):
+        """
+        Handler for video remix requests.
+        """
+        if _is_async:
+            return self.async_video_remix_handler(
+                video_id=video_id,
+                prompt=prompt,
+                model=model,
+                video_remix_provider_config=video_remix_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout,
+                client=client,
+            )
+        else:
+            # For sync calls, we'll use the async handler in a sync context
+            import asyncio
+            return asyncio.run(
+                self.async_video_remix_handler(
+                    video_id=video_id,
+                    prompt=prompt,
+                    model=model,
+                    video_remix_provider_config=video_remix_provider_config,
+                    custom_llm_provider=custom_llm_provider,
+                    litellm_params=litellm_params,
+                    logging_obj=logging_obj,
+                    extra_headers=extra_headers,
+                    extra_body=extra_body,
+                    timeout=timeout,
+                    client=client,
+                )
+            )
+
+    async def async_video_remix_handler(
+        self,
+        video_id: str,
+        prompt: str,
+        model: str,
+        video_remix_provider_config: BaseVideoConfig,
+        custom_llm_provider: str,
+        litellm_params,
+        logging_obj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+        client=None,
+    ):
+        """
+        Async version of the video remix handler.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = video_remix_provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=extra_headers or {},
+            model=model,
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = video_remix_provider_config.get_complete_url(
+            model=model,
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        # Construct the URL for video remix
+        url = f"{api_base.rstrip('/')}/{video_id}/remix"
+
+        # Prepare the request data
+        data = {
+            "prompt": prompt,
+        }
+
+        # Add any extra body parameters
+        if extra_body:
+            data.update(extra_body)
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=prompt,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": url,
+                "headers": headers,
+                "video_id": video_id,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.post(
+                url=url,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
+
+            return video_remix_provider_config.transform_video_remix_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=video_remix_provider_config,
+            )
+
+    def video_list_handler(
+        self,
+        after: Optional[str],
+        limit: Optional[int],
+        order: Optional[str],
+        model: str,
+        video_list_provider_config,
+        custom_llm_provider: str,
+        litellm_params,
+        logging_obj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+        _is_async: bool = False,
+        client=None,
+    ):
+        """
+        Handler for video list requests.
+        """
+        if _is_async:
+            return self.async_video_list_handler(
+                after=after,
+                limit=limit,
+                order=order,
+                model=model,
+                video_list_provider_config=video_list_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                extra_query=extra_query,
+                timeout=timeout,
+                client=client,
+            )
+        else:
+            # For sync calls, we'll use the async handler in a sync context
+            import asyncio
+            return asyncio.run(
+                self.async_video_list_handler(
+                    after=after,
+                    limit=limit,
+                    order=order,
+                    model=model,
+                    video_list_provider_config=video_list_provider_config,
+                    custom_llm_provider=custom_llm_provider,
+                    litellm_params=litellm_params,
+                    logging_obj=logging_obj,
+                    extra_headers=extra_headers,
+                    extra_query=extra_query,
+                    timeout=timeout,
+                    client=client,
+                )
+            )
+
+    async def async_video_list_handler(
+        self,
+        after: Optional[str],
+        limit: Optional[int],
+        order: Optional[str],
+        model: str,
+        video_list_provider_config: BaseVideoConfig,
+        custom_llm_provider: str,
+        litellm_params,
+        logging_obj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+        client=None,
+    ):
+        """
+        Async version of the video list handler.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = video_list_provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=extra_headers or {},
+            model=model,
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = video_list_provider_config.get_complete_url(
+            model=model,
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        # Prepare query parameters
+        params = {}
+        if after is not None:
+            params["after"] = after
+        if limit is not None:
+            params["limit"] = limit
+        if order is not None:
+            params["order"] = order
+
+        # Add any extra query parameters
+        if extra_query:
+            params.update(extra_query)
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": api_base,
+                "headers": headers,
+                "params": params,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=api_base,
+                headers=headers,
+                params=params,
+                timeout=timeout,
+            )
+
+            return video_list_provider_config.transform_video_list_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=video_list_provider_config,
+            )
+            
+    async def async_video_delete_handler(
+        self,
+        video_id: str,
+        model: str,
+        video_delete_provider_config: BaseVideoConfig,
+        custom_llm_provider: str,
+        litellm_params,
+        logging_obj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+        client=None,
+    ):
+        """
+        Async version of the video delete handler.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = video_delete_provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=extra_headers or {},
+            model=model,
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = video_delete_provider_config.get_complete_url(
+            model=model,
+            api_base=litellm_params.get("api_base", None),
+            litellm_params=dict(litellm_params),
+        )
+
+        # Construct the URL for video delete
+        url = f"{api_base.rstrip('/')}/{video_id}"
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "video_id": video_id,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.delete(
+                url=url,
+                headers=headers,
+                timeout=timeout,
+            )
+
+            return video_delete_provider_config.transform_video_delete_response(
+                model=model,
+                raw_response=response,
+                logging_obj=logging_obj,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=video_delete_provider_config,
+            )
 
     ###### VECTOR STORE HANDLER ######
     async def async_vector_store_search_handler(
