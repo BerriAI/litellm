@@ -11,18 +11,49 @@ Pass-through endpoints for Bedrock - call provider-specific endpoint, in native 
 
 Just replace `https://bedrock-runtime.{aws_region_name}.amazonaws.com` with `LITELLM_PROXY_BASE_URL/bedrock` 🚀
 
-#### **Example Usage**
+## Overview
+
+LiteLLM supports two ways to call Bedrock endpoints:
+
+### 1. **Using config.yaml** (Recommended for model endpoints)
+
+Define your Bedrock models in `config.yaml` and reference them by name. The proxy handles authentication and routing.
+
+**Use for**: `/converse`, `/converse-stream`, `/invoke`, `/invoke-with-response-stream`
+
+```yaml
+model_list:
+  - model_name: my-bedrock-model
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_region_name: us-west-2
+      custom_llm_provider: bedrock
+```
+
 ```bash
-curl -X POST 'http://0.0.0.0:4000/bedrock/model/cohere.command-r-v1:0/converse' \
--H 'Authorization: Bearer anything' \
+curl -X POST 'http://0.0.0.0:4000/bedrock/model/my-bedrock-model/converse' \
+-H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
--d '{
-    "messages": [
-         {"role": "user",
-        "content": [{"text": "Hello"}]
-    }
-    ]
-}'
+-d '{"messages": [{"role": "user", "content": [{"text": "Hello"}]}]}'
+```
+
+### 2. **Direct passthrough** (For non-model endpoints)
+
+Set AWS credentials via environment variables and call Bedrock endpoints directly.
+
+**Use for**: Guardrails, Knowledge Bases, Agents, and other non-model endpoints
+
+```bash
+export AWS_ACCESS_KEY_ID=""
+export AWS_SECRET_ACCESS_KEY=""
+export AWS_REGION_NAME="us-west-2"
+```
+
+```bash
+curl "http://0.0.0.0:4000/bedrock/guardrail/my-guardrail-id/version/1/apply" \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{"contents": [{"text": {"text": "Hello"}}], "source": "INPUT"}'
 ```
 
 Supports **ALL** Bedrock Endpoints (including streaming).
@@ -33,38 +64,138 @@ Supports **ALL** Bedrock Endpoints (including streaming).
 
 Let's call the Bedrock [`/converse` endpoint](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html)
 
-1. Add AWS Keys to your environment 
+1. Create a `config.yaml` file with your Bedrock model
+
+```yaml
+model_list:
+  - model_name: my-bedrock-model
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_region_name: us-west-2
+      custom_llm_provider: bedrock
+```
+
+Set your AWS credentials:
 
 ```bash
 export AWS_ACCESS_KEY_ID=""  # Access key
 export AWS_SECRET_ACCESS_KEY="" # Secret access key
-export AWS_REGION_NAME="" # us-east-1, us-east-2, us-west-1, us-west-2
 ```
 
 2. Start LiteLLM Proxy 
 
 ```bash
-litellm
+litellm --config config.yaml
 
 # RUNNING on http://0.0.0.0:4000
 ```
 
 3. Test it! 
 
-Let's call the Bedrock converse endpoint
+Let's call the Bedrock converse endpoint using the model name from config:
 
 ```bash
-curl -X POST 'http://0.0.0.0:4000/bedrock/model/cohere.command-r-v1:0/converse' \
--H 'Authorization: Bearer anything' \
+curl -X POST 'http://0.0.0.0:4000/bedrock/model/my-bedrock-model/converse' \
+-H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
 -d '{
     "messages": [
-         {"role": "user",
-        "content": [{"text": "Hello"}]
+        {
+            "role": "user",
+            "content": [{"text": "Hello, how are you?"}]
+        }
+    ],
+    "inferenceConfig": {
+        "maxTokens": 100
     }
-    ]
 }'
 ```
+
+## Setup with config.yaml
+
+Use config.yaml to define Bedrock models and use them via passthrough endpoints.
+
+### 1. Define models in config.yaml
+
+```yaml
+model_list:
+  - model_name: my-claude-model
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_region_name: us-west-2
+      custom_llm_provider: bedrock
+  
+  - model_name: my-cohere-model
+    litellm_params:
+      model: bedrock/cohere.command-r-v1:0
+      aws_region_name: us-east-1
+      custom_llm_provider: bedrock
+```
+
+### 2. Start proxy with config
+
+```bash
+litellm --config config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+### 3. Call Bedrock Converse endpoint
+
+Use the `model_name` from config in the URL path:
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/bedrock/model/my-claude-model/converse' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "messages": [
+        {
+            "role": "user",
+            "content": [{"text": "Hello, how are you?"}]
+        }
+    ],
+    "inferenceConfig": {
+        "temperature": 0.5,
+        "maxTokens": 100
+    }
+}'
+```
+
+### 4. Call Bedrock Converse Stream endpoint
+
+For streaming responses, use the `/converse-stream` endpoint:
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/bedrock/model/my-claude-model/converse-stream' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "messages": [
+        {
+            "role": "user",
+            "content": [{"text": "Tell me a short story"}]
+        }
+    ],
+    "inferenceConfig": {
+        "temperature": 0.7,
+        "maxTokens": 200
+    }
+}'
+```
+
+### Supported Bedrock Endpoints with config.yaml
+
+When using models from config.yaml, you can call any Bedrock endpoint:
+
+| Endpoint | Description | Example |
+|----------|-------------|---------|
+| `/model/{model_name}/converse` | Converse API | `http://0.0.0.0:4000/bedrock/model/my-claude-model/converse` |
+| `/model/{model_name}/converse-stream` | Streaming Converse | `http://0.0.0.0:4000/bedrock/model/my-claude-model/converse-stream` |
+| `/model/{model_name}/invoke` | Legacy Invoke API | `http://0.0.0.0:4000/bedrock/model/my-claude-model/invoke` |
+| `/model/{model_name}/invoke-with-response-stream` | Legacy Streaming | `http://0.0.0.0:4000/bedrock/model/my-claude-model/invoke-with-response-stream` |
+
+The proxy automatically resolves the `model_name` to the actual Bedrock model ID and region configured in your `config.yaml`.
 
 
 ## Examples
@@ -114,6 +245,22 @@ curl -X POST 'https://bedrock-runtime.us-west-2.amazonaws.com/model/cohere.comma
 
 ### **Example 2: Apply Guardrail**
 
+**Setup**: Set AWS credentials for direct passthrough
+
+```bash
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export AWS_REGION_NAME="us-west-2"
+```
+
+Start proxy:
+
+```bash
+litellm
+
+# RUNNING on http://0.0.0.0:4000
+```
+
 #### LiteLLM Proxy Call 
 
 ```bash
@@ -141,6 +288,24 @@ curl "https://bedrock-runtime.us-west-2.amazonaws.com/guardrail/guardrailIdentif
 ```
 
 ### **Example 3: Query Knowledge Base**
+
+**Setup**: Set AWS credentials for direct passthrough
+
+```bash
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export AWS_REGION_NAME="us-west-2"
+```
+
+Start proxy:
+
+```bash
+litellm
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+#### LiteLLM Proxy Call
 
 ```bash
 curl -X POST "http://0.0.0.0:4000/bedrock/knowledgebases/{knowledgeBaseId}/retrieve" \
