@@ -8,6 +8,9 @@ from fastapi.responses import ORJSONResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_str_from_messages,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -123,11 +126,7 @@ async def image_generation(
 
         messages = data.get("messages")
         if isinstance(messages, list) and messages:
-            first_message = messages[0]
-            if isinstance(first_message, dict):
-                message_content = first_message.get("content")
-                if message_content is not None:
-                    data["prompt"] = message_content
+            data["prompt"] = get_str_from_messages(messages)
         data.pop("messages", None)
 
         ## ROUTE TO CORRECT ENDPOINT ##
