@@ -195,6 +195,7 @@ async def test_audio_speech_health_check_with_another_voice():
 
     print(response)
 
+
 @pytest.mark.asyncio
 async def test_audio_transcription_health_check():
     litellm.set_verbose = True
@@ -303,6 +304,7 @@ def test_update_litellm_params_for_health_check():
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     assert "voice" not in updated_params
+
 
 @pytest.mark.asyncio
 async def test_perform_health_check_with_health_check_model():

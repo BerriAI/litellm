@@ -182,6 +182,7 @@ async def test_timeout_exception_gets_mapped():
 async def test_handle_async_request_uses_env_proxy(monkeypatch):
     """Aiohttp transport should honor HTTP(S)_PROXY env vars"""
     import asyncio
+
     proxy_url = "http://proxy.local:3128"
     monkeypatch.setenv("HTTP_PROXY", proxy_url)
     monkeypatch.setenv("http_proxy", proxy_url)
@@ -198,7 +199,7 @@ async def test_handle_async_request_uses_env_proxy(monkeypatch):
                 self._loop = asyncio.get_running_loop()
             except RuntimeError:
                 self._loop = None
-        
+
         def request(self, *args, **kwargs):
             captured["proxy"] = kwargs.get("proxy")
 
@@ -231,33 +232,35 @@ async def test_handle_async_request_uses_env_proxy(monkeypatch):
 
 def _make_mock_response(should_fail=False, fail_count={"count": 0}):
     """Helper to create a mock aiohttp response"""
+
     class MockResp:
         status = 200
         headers = {}
-        
+
         async def __aenter__(self):
             if should_fail and fail_count["count"] < 1:
                 fail_count["count"] += 1
                 raise RuntimeError("Session is closed")
             return self
-        
+
         async def __aexit__(self, *args):
             pass
-        
+
         @property
         def content(self):
             class C:
                 async def iter_chunked(self, size):
                     yield b"test"
+
             return C()
-    
+
     return MockResp()
 
 
 def _make_mock_session(closed=False):
     """Helper to create a mock aiohttp session"""
     import asyncio
-    
+
     class MockSession:
         def __init__(self):
             self.closed = closed
@@ -265,10 +268,10 @@ def _make_mock_session(closed=False):
                 self._loop = asyncio.get_running_loop()
             except RuntimeError:
                 self._loop = None
-        
+
         def request(self, *args, **kwargs):
             return _make_mock_response()
-    
+
     return MockSession()
 
 
@@ -276,14 +279,16 @@ def _make_mock_session(closed=False):
 async def test_handle_closed_session_before_request():
     """Test that closed sessions are detected and recreated"""
     counts = {"sessions": 0}
-    
+
     def factory():
         counts["sessions"] += 1
         return _make_mock_session(closed=counts["sessions"] == 1)
-    
+
     transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
-    response = await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
-    
+    response = await transport.handle_async_request(
+        httpx.Request("GET", "http://example.com")
+    )
+
     assert counts["sessions"] == 2  # Created 2 sessions: closed one, then open one
     assert response.status_code == 200
 
@@ -293,7 +298,7 @@ async def test_handle_session_closed_during_request():
     """Test that sessions closed during request are handled with retry"""
     counts = {"sessions": 0, "requests": 0}
     fail_count = {"count": 0}
-    
+
     class MockSession:
         def __init__(self):
             self.closed = False
@@ -301,18 +306,20 @@ async def test_handle_session_closed_during_request():
                 self._loop = __import__("asyncio").get_running_loop()
             except RuntimeError:
                 self._loop = None
-        
+
         def request(self, *args, **kwargs):
             counts["requests"] += 1
             return _make_mock_response(should_fail=True, fail_count=fail_count)
-    
+
     def factory():
         counts["sessions"] += 1
         return MockSession()
-    
+
     transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
-    response = await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
-    
+    response = await transport.handle_async_request(
+        httpx.Request("GET", "http://example.com")
+    )
+
     assert counts["requests"] == 2  # First request failed, second succeeded
     assert counts["sessions"] == 2  # Created 2 sessions for retry
     assert response.status_code == 200

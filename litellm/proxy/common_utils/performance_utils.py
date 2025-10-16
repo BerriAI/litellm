@@ -27,7 +27,7 @@ def _should_sample(profile_sampling_rate: float) -> bool:
         return True  # Always sample
     elif profile_sampling_rate <= 0.0:
         return False  # Never sample
-    
+
     # Use deterministic sampling based on counter for consistent rate
     global _sample_counter
     with _sample_counter_lock:
@@ -44,7 +44,9 @@ def _start_profiling(profile_sampling_rate: float) -> None:
         if _profiler is None:
             _profiler = cProfile.Profile()
             _profiler.enable()
-            verbose_proxy_logger.info(f"Profiling started with sampling rate: {profile_sampling_rate}")
+            verbose_proxy_logger.info(
+                f"Profiling started with sampling rate: {profile_sampling_rate}"
+            )
 
 
 def _start_profiling_for_request(profile_sampling_rate: float) -> bool:
@@ -78,19 +80,21 @@ def _save_stats(profile_file: PathLib) -> None:
 
 def profile_endpoint(sampling_rate: float = 1.0):
     """Decorator to sample endpoint hits and save to a profile file.
-    
+
     Args:
         sampling_rate: Rate of requests to profile (0.0 to 1.0)
                       - 1.0: Profile all requests (100%)
                       - 0.1: Profile 1 in 10 requests (10%)
                       - 0.0: Profile no requests (0%)
     """
+
     def decorator(func):
         def set_last_profile_path(path: PathLib) -> None:
             global _last_profile_file_path
             _last_profile_file_path = path
 
         if asyncio.iscoroutinefunction(func):
+
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
                 is_sampling = _start_profiling_for_request(sampling_rate)
@@ -105,8 +109,10 @@ def profile_endpoint(sampling_rate: float = 1.0):
                     if is_sampling:
                         _save_stats(file_path_obj)
                     raise
+
             return async_wrapper
         else:
+
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
                 is_sampling = _start_profiling_for_request(sampling_rate)
@@ -121,5 +127,7 @@ def profile_endpoint(sampling_rate: float = 1.0):
                     if is_sampling:
                         _save_stats(file_path_obj)
                     raise
+
             return sync_wrapper
+
     return decorator

@@ -333,39 +333,35 @@ def test_get_standard_logging_payload_trace_id():
     """Test _get_standard_logging_payload_trace_id with different input scenarios"""
     # Test case 1: When litellm_trace_id is provided in litellm_params
     from unittest.mock import MagicMock
-    
+
     # Create a mock Logging object
     mock_logging_obj = MagicMock()
     mock_logging_obj.litellm_trace_id = "default-trace-id"
-    
+
     # Test when litellm_trace_id is in litellm_params
     litellm_params = {"litellm_trace_id": "dynamic-trace-id"}
     result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
-        logging_obj=mock_logging_obj,
-        litellm_params=litellm_params
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
     )
     assert result == "dynamic-trace-id"
-    
+
     # Test case 2: When litellm_trace_id is not provided in litellm_params
     litellm_params = {}
     result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
-        logging_obj=mock_logging_obj,
-        litellm_params=litellm_params
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
     )
     assert result == "default-trace-id"
-    
+
     # Test case 3: When litellm_params is None
     result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
-        logging_obj=mock_logging_obj,
-        litellm_params={}
+        logging_obj=mock_logging_obj, litellm_params={}
     )
     assert result == "default-trace-id"
-    
+
     # Test case 4: When litellm_trace_id in params is not a string
     litellm_params = {"litellm_trace_id": 12345}
     result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
-        logging_obj=mock_logging_obj,
-        litellm_params=litellm_params
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
     )
     assert result == "12345"
     assert isinstance(result, str)
@@ -523,11 +519,14 @@ def test_cost_breakdown_in_standard_logging_payload():
     Test that cost breakdown fields are properly included in StandardLoggingPayload.
     Tests input_cost, output_cost, tool_usage_cost, and total_cost fields.
     """
-    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload, Logging
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+        Logging,
+    )
     from litellm.types.utils import Usage
     from datetime import datetime
     import time
-    
+
     # Create a mock logging object with cost breakdown
     logging_obj = Logging(
         model="gpt-4o",
@@ -536,17 +535,17 @@ def test_cost_breakdown_in_standard_logging_payload():
         call_type="completion",
         start_time=datetime.now(),
         litellm_call_id="test-123",
-        function_id="test-function"
+        function_id="test-function",
     )
-    
+
     # Simulate cost breakdown being stored during cost calculation
     logging_obj.set_cost_breakdown(
         input_cost=0.001,
         output_cost=0.002,
         total_cost=0.0035,
-        cost_for_built_in_tools_cost_usd_dollar=0.0005
+        cost_for_built_in_tools_cost_usd_dollar=0.0005,
     )
-    
+
     # Mock response object
     mock_response = {
         "id": "chatcmpl-123",
@@ -562,13 +561,13 @@ def test_cost_breakdown_in_standard_logging_payload():
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": "Hello! How can I help you today?"
+                    "content": "Hello! How can I help you today?",
                 },
-                "finish_reason": "stop"
+                "finish_reason": "stop",
             }
-        ]
+        ],
     }
-    
+
     # Create kwargs
     kwargs = {
         "model": "gpt-4o",
@@ -576,10 +575,10 @@ def test_cost_breakdown_in_standard_logging_payload():
         "response_cost": 0.0035,
         "custom_llm_provider": "openai",
     }
-    
+
     start_time = datetime.now()
     end_time = datetime.now()
-    
+
     # Get the standard logging payload
     payload = get_standard_logging_object_payload(
         kwargs=kwargs,
@@ -587,9 +586,9 @@ def test_cost_breakdown_in_standard_logging_payload():
         start_time=start_time,
         end_time=end_time,
         logging_obj=logging_obj,
-        status="success"
+        status="success",
     )
-    
+
     # Verify the cost breakdown field is present
     assert payload is not None
     assert payload["cost_breakdown"] is not None
@@ -598,7 +597,7 @@ def test_cost_breakdown_in_standard_logging_payload():
     assert payload["cost_breakdown"]["tool_usage_cost"] == 0.0005
     assert payload["cost_breakdown"]["total_cost"] == 0.0035
     assert payload["response_cost"] == 0.0035
-    
+
     print("✅ Cost breakdown test passed!")
 
 
@@ -606,9 +605,12 @@ def test_cost_breakdown_missing_in_standard_logging_payload():
     """
     Test that cost breakdown field is None when not available (e.g., for embedding calls)
     """
-    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload, Logging
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+        Logging,
+    )
     from datetime import datetime
-    
+
     # Create a mock logging object without cost breakdown
     logging_obj = Logging(
         model="gpt-4o",
@@ -617,29 +619,29 @@ def test_cost_breakdown_missing_in_standard_logging_payload():
         call_type="embedding",  # Non-completion call type
         start_time=datetime.now(),
         litellm_call_id="test-123",
-        function_id="test-function"
+        function_id="test-function",
     )
-    
+
     # No cost breakdown stored
-    
+
     # Mock response object
     mock_response = {
         "object": "list",
         "data": [{"embedding": [0.1, 0.2, 0.3]}],
         "model": "text-embedding-ada-002",
-        "usage": {"prompt_tokens": 10, "total_tokens": 10}
+        "usage": {"prompt_tokens": 10, "total_tokens": 10},
     }
-    
+
     kwargs = {
         "model": "text-embedding-ada-002",
         "input": ["Hello"],
         "response_cost": 0.0001,
         "custom_llm_provider": "openai",
     }
-    
+
     start_time = datetime.now()
     end_time = datetime.now()
-    
+
     # Get the standard logging payload
     payload = get_standard_logging_object_payload(
         kwargs=kwargs,
@@ -647,12 +649,12 @@ def test_cost_breakdown_missing_in_standard_logging_payload():
         start_time=start_time,
         end_time=end_time,
         logging_obj=logging_obj,
-        status="success"
+        status="success",
     )
-    
+
     # Verify the cost breakdown field is None for non-completion calls
     assert payload is not None
     assert payload["cost_breakdown"] is None
     assert payload["response_cost"] == 0.0001
-    
+
     print("✅ Cost breakdown missing test passed!")

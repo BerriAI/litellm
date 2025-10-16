@@ -64,7 +64,6 @@ async def test_create_audit_log_for_update_premium_user():
     with patch("litellm.proxy.proxy_server.premium_user", True), patch(
         "litellm.store_audit_logs", True
     ), patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
-
         mock_prisma.db.litellm_auditlog.create = AsyncMock()
 
         request_data = LiteLLM_AuditLogs(

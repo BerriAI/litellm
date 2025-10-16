@@ -118,9 +118,9 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         # 1. anthropic_version is required for all claude models
         if "anthropic_version" not in anthropic_messages_request:
-            anthropic_messages_request["anthropic_version"] = (
-                self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
-            )
+            anthropic_messages_request[
+                "anthropic_version"
+            ] = self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
 
         # 2. `stream` is not allowed in request body for bedrock invoke
         if "stream" in anthropic_messages_request:
@@ -129,12 +129,12 @@ class AmazonAnthropicClaudeMessagesConfig(
         # 3. `model` is not allowed in request body for bedrock invoke
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
-            
+
         # 4. Handle anthropic_beta from user headers
         anthropic_beta_list = get_anthropic_beta_from_headers(headers)
         if anthropic_beta_list:
             anthropic_messages_request["anthropic_beta"] = anthropic_beta_list
-            
+
         return anthropic_messages_request
 
     def get_async_streaming_response_iterator(
@@ -152,7 +152,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
         return self.bedrock_sse_wrapper(
-            completion_stream=completion_stream, 
+            completion_stream=completion_stream,
             litellm_logging_obj=litellm_logging_obj,
             request_body=request_body,
         )
@@ -171,14 +171,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
             BaseAnthropicMessagesStreamingIterator,
         )
+
         handler = BaseAnthropicMessagesStreamingIterator(
             litellm_logging_obj=litellm_logging_obj,
             request_body=request_body,
         )
-        
+
         async for chunk in handler.async_sse_wrapper(completion_stream):
             yield chunk
-        
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):

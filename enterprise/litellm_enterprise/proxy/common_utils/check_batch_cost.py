@@ -144,11 +144,13 @@ class CheckBatchCost:
                     custom_llm_provider=custom_llm_provider,
                 )
 
-                batch_cost, batch_usage, batch_models = (
-                    await calculate_batch_cost_and_usage(
-                        file_content_dictionary=file_content_as_dict,
-                        custom_llm_provider=llm_provider,  # type: ignore
-                    )
+                (
+                    batch_cost,
+                    batch_usage,
+                    batch_models,
+                ) = await calculate_batch_cost_and_usage(
+                    file_content_dictionary=file_content_as_dict,
+                    custom_llm_provider=llm_provider,  # type: ignore
                 )
 
                 logging_obj = LiteLLMLogging(

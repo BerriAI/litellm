@@ -102,6 +102,7 @@ return results
 REDIS_CLUSTER_SLOTS = 16384
 REDIS_NODE_HASHTAG_NAME = "all_keys"
 
+
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
     requests_per_unit: Optional[int]
     tokens_per_unit: Optional[int]
@@ -156,15 +157,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _is_redis_cluster(self) -> bool:
         """
         Check if the dual cache is using Redis cluster.
-        
+
         Returns:
             bool: True if using Redis cluster, False otherwise.
         """
         from litellm.caching.redis_cluster_cache import RedisClusterCache
-        
+
         return (
             self.internal_usage_cache.dual_cache.redis_cache is not None
-            and isinstance(self.internal_usage_cache.dual_cache.redis_cache, RedisClusterCache)
+            and isinstance(
+                self.internal_usage_cache.dual_cache.redis_cache, RedisClusterCache
+            )
         )
 
     async def in_memory_cache_sliding_window(
@@ -309,7 +312,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         return RateLimitResponse(overall_code=overall_code, statuses=statuses)
-    
+
     def keyslot_for_redis_cluster(self, key: str) -> int:
         """
         Compute the Redis Cluster slot for a given key.
@@ -324,34 +327,34 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Returns:
             int: The slot number (0-16383).
 
-            
+
         """
         # Handle hash tags: use substring between { and }
-        start = key.find('{')
+        start = key.find("{")
         if start != -1:
-            end = key.find('}', start + 1)
+            end = key.find("}", start + 1)
             if end != -1 and end != start + 1:
-                key = key[start + 1:end]
+                key = key[start + 1 : end]
 
         # Compute CRC16 and mod 16384
-        crc = binascii.crc_hqx(key.encode('utf-8'), 0)
+        crc = binascii.crc_hqx(key.encode("utf-8"), 0)
         return crc % REDIS_CLUSTER_SLOTS
 
     def _group_keys_by_hash_tag(self, keys: List[str]) -> Dict[str, List[str]]:
         """
         Group keys by their Redis hash tag to ensure cluster compatibility.
-        
+
         For Redis clusters, uses slot calculation to group keys that belong to the same slot.
         For regular Redis, no grouping is needed - all keys can be processed together.
         """
         groups: Dict[str, List[str]] = {}
-        
+
         # Use slot calculation for Redis clusters only
         if self._is_redis_cluster():
             for key in keys:
                 slot = self.keyslot_for_redis_cluster(key)
                 slot_key = f"slot_{slot}"
-                
+
                 if slot_key not in groups:
                     groups[slot_key] = []
                 groups[slot_key].append(key)
@@ -413,7 +416,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Check if any of the rate limit descriptors should be rate limited.
         Returns a RateLimitResponse with the overall code and status for each descriptor.
         Uses batch operations for Redis to improve performance.
-        
+
         Args:
             descriptors: List of rate limit descriptors to check
             parent_otel_span: Optional OpenTelemetry span for tracing
@@ -498,7 +501,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 parent_otel_span=parent_otel_span,
                 local_only=False,  # Check Redis too
             )
-            
+
             # For keys that don't exist yet, set them to 0
             if cache_values is None:
                 cache_values = []
@@ -1014,9 +1017,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         from litellm.types.caching import RedisPipelineIncrementOperation
 
         try:
-            litellm_parent_otel_span: Union[Span, None] = (
-                _get_parent_otel_span_from_kwargs(kwargs)
-            )
+            litellm_parent_otel_span: Union[
+                Span, None
+            ] = _get_parent_otel_span_from_kwargs(kwargs)
             litellm_metadata = kwargs["litellm_params"]["metadata"]
             user_api_key = (
                 litellm_metadata.get("user_api_key") if litellm_metadata else None

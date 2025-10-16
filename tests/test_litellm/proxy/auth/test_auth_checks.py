@@ -194,7 +194,9 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
 
 
 @pytest.mark.asyncio
-@patch("litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock)
+@patch(
+    "litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock
+)
 async def test_get_team_db_check_calls_new_team_on_upsert(mock_new_team, monkeypatch):
     """
     Test that _get_team_db_check correctly calls the `new_team` function
@@ -228,8 +230,12 @@ async def test_get_team_db_check_calls_new_team_on_upsert(mock_new_team, monkeyp
 
 
 @pytest.mark.asyncio
-@patch("litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock)
-async def test_get_team_db_check_does_not_call_new_team_if_exists(mock_new_team, monkeypatch):
+@patch(
+    "litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock
+)
+async def test_get_team_db_check_does_not_call_new_team_if_exists(
+    mock_new_team, monkeypatch
+):
     """
     Test that _get_team_db_check does NOT call the `new_team` function
     if the team already exists in the database.

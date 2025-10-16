@@ -146,7 +146,9 @@ async def _aconvert_watsonx_messages_core(
         model_prompt_dict = custom_prompt_dict[model]
         return ptf.custom_prompt(
             messages=messages,
-            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles")),
+            role_dict=model_prompt_dict.get(
+                "role_dict", model_prompt_dict.get("roles")
+            ),
             initial_prompt_value=model_prompt_dict.get("initial_prompt_value", ""),
             final_prompt_value=model_prompt_dict.get("final_prompt_value", ""),
             bos_token=model_prompt_dict.get("bos_token", ""),
@@ -180,7 +182,9 @@ def _convert_watsonx_messages_core(
         model_prompt_dict = custom_prompt_dict[model]
         return ptf.custom_prompt(
             messages=messages,
-            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles")),
+            role_dict=model_prompt_dict.get(
+                "role_dict", model_prompt_dict.get("roles")
+            ),
             initial_prompt_value=model_prompt_dict.get("initial_prompt_value", ""),
             final_prompt_value=model_prompt_dict.get("final_prompt_value", ""),
             bos_token=model_prompt_dict.get("bos_token", ""),
@@ -200,7 +204,10 @@ def _convert_watsonx_messages_core(
 
 
 async def aconvert_watsonx_messages_to_prompt(
-    model: str, messages: List[AllMessageValues], provider: str, custom_prompt_dict: Dict
+    model: str,
+    messages: List[AllMessageValues],
+    provider: str,
+    custom_prompt_dict: Dict,
 ) -> str:
     """Async version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
@@ -215,7 +222,10 @@ async def aconvert_watsonx_messages_to_prompt(
 
 
 def convert_watsonx_messages_to_prompt(
-    model: str, messages: List[AllMessageValues], provider: str, custom_prompt_dict: Dict
+    model: str,
+    messages: List[AllMessageValues],
+    provider: str,
+    custom_prompt_dict: Dict,
 ) -> str:
     """Sync version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig

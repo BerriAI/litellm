@@ -277,8 +277,10 @@ def validate_redacted_message_span_attributes(span):
 
     # Check that all required attributes are present
     required_set = set(required_attributes)
-    assert required_set.issubset(_all_attributes), f"Missing required attributes: {required_set - _all_attributes}"
-    
+    assert required_set.issubset(
+        _all_attributes
+    ), f"Missing required attributes: {required_set - _all_attributes}"
+
     # Check that any additional attributes are metadata fields (start with "metadata.")
     non_required_attrs = _all_attributes - required_set
     for attr in non_required_attrs:
