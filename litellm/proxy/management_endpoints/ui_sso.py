@@ -1073,7 +1073,7 @@ class SSOAuthenticationHandler:
                 allow_insecure_http=True,
                 scope=generic_scope,
             )
-            return SSOAuthenticationHandler.get_generic_sso_redirect_response(
+            return await SSOAuthenticationHandler.get_generic_sso_redirect_response(
                 generic_sso=generic_sso,
                 state=state,
                 generic_authorization_endpoint=generic_authorization_endpoint,
@@ -1083,7 +1083,7 @@ class SSOAuthenticationHandler:
         )
     
     @staticmethod
-    def get_generic_sso_redirect_response(
+    async def get_generic_sso_redirect_response(
         generic_sso: Any,
         state: Optional[str] = None,
         generic_authorization_endpoint: Optional[str] = None,
