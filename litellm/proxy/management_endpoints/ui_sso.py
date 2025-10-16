@@ -1073,74 +1073,88 @@ class SSOAuthenticationHandler:
                 allow_insecure_http=True,
                 scope=generic_scope,
             )
-            with generic_sso:
-                # TODO: state should be a random string and added to the user session with cookie
-                # or a cryptographicly signed state that we can verify stateless
-                # For simplification we are using a static state, this is not perfect but some
-                # SSO providers do not allow stateless verification
-                redirect_params, code_verifier = (
-                    SSOAuthenticationHandler._get_generic_sso_redirect_params(
-                        state=state,
-                        generic_authorization_endpoint=generic_authorization_endpoint,
-                    )
-                )
-
-                # Separate PKCE params from state params (fastapi-sso doesn't accept code_challenge)
-                pkce_params = {}
-                state_only_params = {}
-                for key, value in redirect_params.items():
-                    if key in ("code_challenge", "code_challenge_method"):
-                        pkce_params[key] = value
-                    else:
-                        state_only_params[key] = value
-
-                # Get the redirect response from fastapi-sso with only state param
-                redirect_response = await generic_sso.get_login_redirect(**state_only_params)  # type: ignore
-
-                # If PKCE is enabled, add PKCE parameters to the redirect URL
-                if code_verifier and "state" in redirect_params:
-                    from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
-
-                    from litellm.proxy.proxy_server import user_api_key_cache
-
-                    # Store code_verifier in cache (10 min TTL)
-                    cache_key = f"pkce_verifier:{redirect_params['state']}"
-                    user_api_key_cache.set_cache(
-                        key=cache_key,
-                        value=code_verifier,
-                        ttl=600,
-                    )
-
-                    # Add PKCE parameters to the authorization URL
-                    if pkce_params:
-                        parsed_url = urlparse(str(redirect_response.headers["location"]))
-                        query_params = parse_qs(parsed_url.query)
-                        
-                        # Add PKCE parameters
-                        for key, value in pkce_params.items():
-                            query_params[key] = [value]
-                        
-                        # Reconstruct the URL with PKCE parameters
-                        new_query = urlencode(query_params, doseq=True)
-                        new_url = urlunparse((
-                            parsed_url.scheme,
-                            parsed_url.netloc,
-                            parsed_url.path,
-                            parsed_url.params,
-                            new_query,
-                            parsed_url.fragment
-                        ))
-                        
-                        # Update the redirect response
-                        redirect_response.headers["location"] = new_url
-                        verbose_proxy_logger.debug(
-                            "PKCE parameters added to authorization URL"
-                        )
-
-                return redirect_response
+            return SSOAuthenticationHandler.get_generic_sso_redirect_response(
+                generic_sso=generic_sso,
+                state=state,
+                generic_authorization_endpoint=generic_authorization_endpoint,
+            )
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
         )
+    
+    @staticmethod
+    def get_generic_sso_redirect_response(
+        generic_sso: Any,
+        state: Optional[str] = None,
+        generic_authorization_endpoint: Optional[str] = None,
+    ) -> Optional[RedirectResponse]:
+        """
+        Get the redirect response for Generic SSO
+        """
+        from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
+        from litellm.proxy.proxy_server import user_api_key_cache
+        with generic_sso:
+            # TODO: state should be a random string and added to the user session with cookie
+            # or a cryptographicly signed state that we can verify stateless
+            # For simplification we are using a static state, this is not perfect but some
+            # SSO providers do not allow stateless verification
+            redirect_params, code_verifier = (
+                SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=state,
+                    generic_authorization_endpoint=generic_authorization_endpoint,
+                )
+            )
+
+            # Separate PKCE params from state params (fastapi-sso doesn't accept code_challenge)
+            pkce_params = {}
+            state_only_params = {}
+            for key, value in redirect_params.items():
+                if key in ("code_challenge", "code_challenge_method"):
+                    pkce_params[key] = value
+                else:
+                    state_only_params[key] = value
+
+            # Get the redirect response from fastapi-sso with only state param
+            redirect_response = await generic_sso.get_login_redirect(**state_only_params)  # type: ignore
+
+            # If PKCE is enabled, add PKCE parameters to the redirect URL
+            if code_verifier and "state" in redirect_params:
+
+                # Store code_verifier in cache (10 min TTL)
+                cache_key = f"pkce_verifier:{redirect_params['state']}"
+                user_api_key_cache.set_cache(
+                    key=cache_key,
+                    value=code_verifier,
+                    ttl=600,
+                )
+
+                # Add PKCE parameters to the authorization URL
+                if pkce_params:
+                    parsed_url = urlparse(str(redirect_response.headers["location"]))
+                    query_params = parse_qs(parsed_url.query)
+                    
+                    # Add PKCE parameters
+                    for key, value in pkce_params.items():
+                        query_params[key] = [value]
+                    
+                    # Reconstruct the URL with PKCE parameters
+                    new_query = urlencode(query_params, doseq=True)
+                    new_url = urlunparse((
+                        parsed_url.scheme,
+                        parsed_url.netloc,
+                        parsed_url.path,
+                        parsed_url.params,
+                        new_query,
+                        parsed_url.fragment
+                    ))
+                    
+                    # Update the redirect response
+                    redirect_response.headers["location"] = new_url
+                    verbose_proxy_logger.debug(
+                        "PKCE parameters added to authorization URL"
+                    )
+            return redirect_response
 
     @staticmethod
     def _get_generic_sso_redirect_params(
