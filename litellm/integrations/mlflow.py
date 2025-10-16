@@ -60,7 +60,10 @@ class MlflowLogger(CustomLogger):
 
         inputs = self._construct_input(kwargs)
         input_messages = inputs.get("messages", [])
-        output_messages = [c.message.model_dump(exclude_none=True) for c in getattr(response_obj, "choices", [])]
+        output_messages = [
+            c.message.model_dump(exclude_none=True)
+            for c in getattr(response_obj, "choices", [])
+        ]
         if messages := [*input_messages, *output_messages]:
             set_span_chat_messages(span, messages)
         if tools := inputs.get("tools"):
@@ -184,7 +187,9 @@ class MlflowLogger(CustomLogger):
             "call_type": kwargs.get("call_type"),
             "model": kwargs.get("model"),
         }
-        standard_obj: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+        standard_obj: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object"
+        )
         if standard_obj:
             attributes.update(
                 {
@@ -257,7 +262,9 @@ class MlflowLogger(CustomLogger):
                 span_type=span_type,
                 inputs=inputs,
                 attributes=attributes,
-                tags=self._transform_tag_list_to_dict(attributes.get("request_tags", [])),
+                tags=self._transform_tag_list_to_dict(
+                    attributes.get("request_tags", [])
+                ),
                 start_time_ns=start_time_ns,
             )
 

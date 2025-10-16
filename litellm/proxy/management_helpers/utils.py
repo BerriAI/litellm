@@ -64,19 +64,19 @@ async def handle_budget_for_entity(
 ) -> Optional[str]:
     """
     Common helper to handle budget creation/updates for entities (organizations, tags, etc).
-    
+
     This function:
     1. Creates a new budget if budget_id is None but budget fields are provided
     2. Updates an existing budget if budget fields are provided and budget_id exists
     3. Returns the budget_id to use (existing or newly created)
-    
+
     Args:
         data: The request object (e.g., TagNewRequest, NewOrganizationRequest, etc.) containing budget fields
         existing_budget_id: The existing budget_id if updating an entity, None if creating new
         user_api_key_dict: User authentication info
         prisma_client: Database client
         litellm_proxy_admin_name: Admin name for audit trail
-        
+
     Returns:
         Optional[str]: The budget_id to use, or None if no budget was created/updated
     """
@@ -88,7 +88,9 @@ async def handle_budget_for_entity(
     budget_params = LiteLLM_BudgetTable.model_fields.keys()
 
     # Extract budget fields from data
-    _json_data = data.model_dump(exclude_none=True) if hasattr(data, "model_dump") else data
+    _json_data = (
+        data.model_dump(exclude_none=True) if hasattr(data, "model_dump") else data
+    )
     _budget_data = {k: v for k, v in _json_data.items() if k in budget_params}
 
     # Check if budget_id is explicitly provided in the data

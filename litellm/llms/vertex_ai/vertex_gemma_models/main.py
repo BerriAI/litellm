@@ -142,4 +142,3 @@ class VertexAIGemmaModels(VertexBase):
             if hasattr(e, "status_code"):
                 raise e
             raise VertexAIError(status_code=500, message=str(e))
-

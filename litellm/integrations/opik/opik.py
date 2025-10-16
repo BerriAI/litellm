@@ -192,7 +192,7 @@ class OpikLogger(CustomBatchLogger):
 
         # Extract opik metadata
         litellm_opik_metadata = litellm_params_metadata.get("opik", {})
-        
+
         # Use standard_logging_object to create metadata and input/output data
         standard_logging_object = kwargs.get("standard_logging_object", None)
         if standard_logging_object is None:
@@ -203,14 +203,16 @@ class OpikLogger(CustomBatchLogger):
 
         # Update litellm_opik_metadata with opik metadata from requester
         standard_logging_metadata = standard_logging_object.get("metadata", {}) or {}
-        requester_metadata = standard_logging_metadata.get("requester_metadata", {}) or {}
+        requester_metadata = (
+            standard_logging_metadata.get("requester_metadata", {}) or {}
+        )
         requester_opik_metadata = requester_metadata.get("opik", {}) or {}
         litellm_opik_metadata.update(requester_opik_metadata)
 
         verbose_logger.debug(
             f"litellm_opik_metadata - {json.dumps(litellm_opik_metadata, default=str)}"
         )
-        
+
         project_name = litellm_opik_metadata.get("project_name", self.opik_project_name)
 
         # Extract trace_id and parent_span_id
@@ -224,12 +226,12 @@ class OpikLogger(CustomBatchLogger):
         else:
             trace_id = None
             parent_span_id = None
-        
+
         # Create Opik tags
         opik_tags = litellm_opik_metadata.get("tags", [])
         if kwargs.get("custom_llm_provider"):
             opik_tags.append(kwargs["custom_llm_provider"])
-        
+
         # Get thread_id if present
         thread_id = litellm_opik_metadata.get("thread_id", None)
 
@@ -250,7 +252,7 @@ class OpikLogger(CustomBatchLogger):
                             opik_tags.extend(parsed_tags)
                     except (json.JSONDecodeError, TypeError):
                         pass
-                    
+
         # Create input and output data
         input_data = standard_logging_object.get("messages", {})
         output_data = standard_logging_object.get("response", {})
@@ -321,8 +323,12 @@ class OpikLogger(CustomBatchLogger):
                 "project_name": project_name,
                 "id": trace_id,
                 "name": trace_name,
-                "start_time": start_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "end_time": end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "start_time": start_time.astimezone(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "end_time": end_time.astimezone(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
                 "input": input_data,
                 "output": output_data,
                 "metadata": metadata,
@@ -343,8 +349,12 @@ class OpikLogger(CustomBatchLogger):
                 "parent_span_id": parent_span_id,
                 "name": span_name,
                 "type": "llm",
-                "start_time": start_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "end_time": end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "start_time": start_time.astimezone(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "end_time": end_time.astimezone(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
                 "input": input_data,
                 "output": output_data,
                 "metadata": metadata,
