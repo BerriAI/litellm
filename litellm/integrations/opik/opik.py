@@ -148,6 +148,8 @@ class OpikLogger(CustomBatchLogger):
                     tags=span_payload.tags,
                     usage=span_payload.usage,
                     project_name=span_payload.project_name,
+                    provider=span_payload.provider,
+                    total_cost=span_payload.total_cost,
                 )
             else:
                 # Add payloads to LiteLLM queue
@@ -234,6 +236,8 @@ class OpikLogger(CustomBatchLogger):
                     tags=span_payload.tags,
                     usage=span_payload.usage,
                     project_name=span_payload.project_name,
+                    provider=span_payload.provider,
+                    total_cost=span_payload.total_cost,
                 )
             else:
                 # Opik native client is not available, use LiteLLM queue to send data

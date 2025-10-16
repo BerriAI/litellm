@@ -38,6 +38,8 @@ class SpanPayload:
     tags: List[str]
     usage: Dict[str, int]
     parent_span_id: Optional[str] = None
+    provider: Optional[str] = None
+    total_cost: Optional[float] = None
 
 
 PayloadItem = Union[TracePayload, SpanPayload]

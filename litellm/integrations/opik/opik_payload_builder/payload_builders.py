@@ -52,6 +52,8 @@ def build_span_payload(
     metadata: Dict[str, Any],
     tags: List[str],
     usage: Dict[str, int],
+    provider: Optional[str] = None,
+    cost: Optional[float] = None,
 ) -> types.SpanPayload:
     """Build a complete span payload."""
     span_id = utils.create_uuid7()
@@ -82,4 +84,6 @@ def build_span_payload(
         metadata=metadata,
         tags=tags,
         usage=usage,
+        provider=provider,
+        total_cost=cost,
     )
