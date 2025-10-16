@@ -1004,7 +1004,6 @@ class TestBedrockLLMProxyRoute:
         """
         from fastapi import HTTPException
 
-        from litellm.llms.base_llm.chat.transformation import BaseLLMException
         from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
             handle_bedrock_passthrough_router_model,
         )
@@ -1025,13 +1024,20 @@ class TestBedrockLLMProxyRoute:
         
         bedrock_error_message = '{"message":"ContentBlock object at messages.0.content.0 must set one of the following keys: text, image, toolUse, toolResult, document, video."}'
         
-        mock_llm_router = Mock()
-        mock_llm_router.allm_passthrough_route = AsyncMock(
-            side_effect=BaseLLMException(
-                status_code=400,
-                message=bedrock_error_message
-            )
+        # Create a mock httpx.Response for the error
+        mock_error_response = Mock(spec=httpx.Response)
+        mock_error_response.status_code = 400
+        mock_error_response.aread = AsyncMock(return_value=bedrock_error_message.encode('utf-8'))
+        
+        # Create the HTTPStatusError
+        mock_http_error = httpx.HTTPStatusError(
+            message="Bad Request",
+            request=Mock(spec=httpx.Request),
+            response=mock_error_response,
         )
+        
+        mock_llm_router = Mock()
+        mock_llm_router.allm_passthrough_route = AsyncMock(side_effect=mock_http_error)
         
         endpoint = "model/test-model/converse"
         model = "test-model"

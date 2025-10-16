@@ -570,25 +570,46 @@ async def handle_bedrock_passthrough_router_model(
     )
     
     # Call router passthrough
-    result = await llm_router.allm_passthrough_route(
-        model=model,
-        method=request.method,
-        endpoint=endpoint,
-        request_query_params=request.query_params,
-        request_headers=dict(request.headers),
-        stream=is_streaming,
-        content=None,
-        data=None,
-        files=None,
-        json=(
-            request_body
-            if request.headers.get("content-type") == "application/json"
-            else None
-        ),
-        params=None,
-        headers=None,
-        cookies=None,
-    )
+    try:
+        result = await llm_router.allm_passthrough_route(
+            model=model,
+            method=request.method,
+            endpoint=endpoint,
+            request_query_params=request.query_params,
+            request_headers=dict(request.headers),
+            stream=is_streaming,
+            content=None,
+            data=None,
+            files=None,
+            json=(
+                request_body
+                if request.headers.get("content-type") == "application/json"
+                else None
+            ),
+            params=None,
+            headers=None,
+            cookies=None,
+        )
+    except httpx.HTTPStatusError as e:
+        # Handle HTTP errors from the provider by converting to HTTPException
+        error_body = await e.response.aread()
+        error_text = error_body.decode("utf-8")
+        
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail={"error": error_text},
+        )
+    except Exception as e:
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        # If it's a BaseLLMException (from non-HTTP errors), convert to HTTPException
+        if isinstance(e, BaseLLMException):
+            raise HTTPException(
+                status_code=e.status_code,
+                detail={"error": e.message},
+            )
+        # Re-raise any other exceptions
+        raise e
     
     # Handle streaming response
     if is_streaming:
