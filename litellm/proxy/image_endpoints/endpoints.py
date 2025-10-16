@@ -12,6 +12,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.route_llm_request import route_request
+from litellm.types.llms.openai import ChatCompletionUserMessage
 
 router = APIRouter()
 
@@ -108,9 +109,26 @@ async def image_generation(
             data["model"] = litellm.model_alias_map[data["model"]]
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+        prompt_value = data.get("prompt")
+        if prompt_value is not None:
+            # Reformat the image prompt as a chat message so guardrails can process it.
+            user_message: ChatCompletionUserMessage = {
+                "role": "user",
+                "content": prompt_value,
+            }
+            data["messages"] = [user_message]
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict, data=data, call_type="image_generation"
         )
+
+        messages = data.get("messages")
+        if isinstance(messages, list) and messages:
+            first_message = messages[0]
+            if isinstance(first_message, dict):
+                message_content = first_message.get("content")
+                if message_content is not None:
+                    data["prompt"] = message_content
+        data.pop("messages", None)
 
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call = await route_request(
