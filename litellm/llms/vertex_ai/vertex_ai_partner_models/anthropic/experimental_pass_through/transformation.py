@@ -5,7 +5,9 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
 )
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.types.router import GenericLiteLLMParams
-from litellm.litellm_core_utils.prompt_templates.image_handling import convert_url_to_base64
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_anthropic_provider_process_image_content,
+)
 from ....vertex_llm_base import VertexBase
 
 
@@ -66,7 +68,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             )
         return api_base  # no transformation is needed - handled in validate_environment
 
-    def transform_anthropic_messages_request(
+    async def transform_anthropic_messages_request(
         self,
         model: str,
         messages: List[Dict],
@@ -74,8 +76,8 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
-        messages = self.process_image_content(messages)
-        anthropic_messages_request = super().transform_anthropic_messages_request(
+        messages = await async_anthropic_provider_process_image_content(messages)
+        anthropic_messages_request = await super().transform_anthropic_messages_request(
             model=model,
             messages=messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
@@ -89,55 +91,3 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             "model", None
         )  # do not pass model in request body to vertex ai
         return anthropic_messages_request
-
-    def process_image_content(self, messages: List[Dict]) -> List[Dict]:
-        for message in messages:
-            if message.get("role") == "user" and isinstance(message.get("content"), list):
-                for content in message["content"]:
-                    if content.get("type") == "image":
-                        source = content.get("source", {})
-                        # Check if source has a URL that needs conversion
-                        if isinstance(source, str) and (source.startswith("http://") or source.startswith("https://")):
-                            try:
-                                base64_data = convert_url_to_base64(source)
-                                # Extract media type from the base64 data URL
-                                if base64_data.startswith("data:"):
-                                    media_type = base64_data.split(";")[0].split(":")[1]
-                                    base64_content = base64_data.split(",")[1]
-                                else:
-                                    media_type = "image/jpeg"  # Default fallback
-                                    base64_content = base64_data
-                                
-                                # Convert to base64 format
-                                content["source"] = {
-                                    "type": "base64",
-                                    "media_type": media_type,
-                                    "data": base64_content
-                                }
-                            except Exception:
-                                # If conversion fails, keep original content
-                                pass
-                        elif isinstance(source, dict) and source.get("type") == "url":
-                            # Handle URL object format
-                            url = source.get("url", "")
-                            if url.startswith("http://") or url.startswith("https://"):
-                                try:
-                                    base64_data = convert_url_to_base64(url)
-                                    # Extract media type from the base64 data URL
-                                    if base64_data.startswith("data:"):
-                                        media_type = base64_data.split(";")[0].split(":")[1]
-                                        base64_content = base64_data.split(",")[1]
-                                    else:
-                                        media_type = "image/jpeg"  # Default fallback
-                                        base64_content = base64_data
-                                    
-                                    # Convert to base64 format
-                                    content["source"] = {
-                                        "type": "base64",
-                                        "media_type": media_type,
-                                        "data": base64_content
-                                    }
-                                except Exception:
-                                    # If conversion fails, keep original content
-                                    pass
-        return messages

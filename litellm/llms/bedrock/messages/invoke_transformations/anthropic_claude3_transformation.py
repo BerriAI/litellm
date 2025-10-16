@@ -12,7 +12,9 @@ from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
-from litellm.litellm_core_utils.prompt_templates.image_handling import convert_url_to_base64
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_anthropic_provider_process_image_content,
+)
 from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk
@@ -96,7 +98,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             stream=stream,
         )
 
-    def transform_anthropic_messages_request(
+    async def transform_anthropic_messages_request(
         self,
         model: str,
         messages: List[Dict],
@@ -105,8 +107,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         headers: dict,
     ) -> Dict:
 
-        messages = self.process_image_content(messages)
-        anthropic_messages_request = AnthropicMessagesConfig.transform_anthropic_messages_request(
+        messages = await async_anthropic_provider_process_image_content(messages)
+        anthropic_messages_request = await AnthropicMessagesConfig.transform_anthropic_messages_request(
             self=self,
             model=model,
             messages=messages,
@@ -139,58 +141,6 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_request["anthropic_beta"] = anthropic_beta_list
             
         return anthropic_messages_request
-    
-    def process_image_content(self, messages: List[Dict]) -> List[Dict]:
-        for message in messages:
-            if message.get("role") == "user" and isinstance(message.get("content"), list):
-                for content in message["content"]:
-                    if content.get("type") == "image":
-                        source = content.get("source", {})
-                        # Check if source has a URL that needs conversion
-                        if isinstance(source, str) and (source.startswith("http://") or source.startswith("https://")):
-                            try:
-                                base64_data = convert_url_to_base64(source)
-                                # Extract media type from the base64 data URL
-                                if base64_data.startswith("data:"):
-                                    media_type = base64_data.split(";")[0].split(":")[1]
-                                    base64_content = base64_data.split(",")[1]
-                                else:
-                                    media_type = "image/jpeg"  # Default fallback
-                                    base64_content = base64_data
-                                
-                                # Convert to base64 format
-                                content["source"] = {
-                                    "type": "base64",
-                                    "media_type": media_type,
-                                    "data": base64_content
-                                }
-                            except Exception:
-                                # If conversion fails, keep original content
-                                pass
-                        elif isinstance(source, dict) and source.get("type") == "url":
-                            # Handle URL object format
-                            url = source.get("url", "")
-                            if url.startswith("http://") or url.startswith("https://"):
-                                try:
-                                    base64_data = convert_url_to_base64(url)
-                                    # Extract media type from the base64 data URL
-                                    if base64_data.startswith("data:"):
-                                        media_type = base64_data.split(";")[0].split(":")[1]
-                                        base64_content = base64_data.split(",")[1]
-                                    else:
-                                        media_type = "image/jpeg"  # Default fallback
-                                        base64_content = base64_data
-                                    
-                                    # Convert to base64 format
-                                    content["source"] = {
-                                        "type": "base64",
-                                        "media_type": media_type,
-                                        "data": base64_content
-                                    }
-                                except Exception:
-                                    # If conversion fails, keep original content
-                                    pass
-        return messages
 
     def get_async_streaming_response_iterator(
         self,
