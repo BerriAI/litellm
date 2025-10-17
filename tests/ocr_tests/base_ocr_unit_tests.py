@@ -104,6 +104,13 @@ class BaseOCRTest(ABC):
             #########################################################
             hidden_params = response._hidden_params
             assert isinstance(hidden_params, dict), "Hidden parameters should be a dictionary"
+
+            print("response usage_info:", response.usage_info)
+
+            response_cost = hidden_params.get("response_cost")
+            assert response_cost is not None, "Response cost should be in hidden parameters"
+            assert response_cost > 0, "Response cost should be greater than 0"
+            print("response_cost=", response_cost)
             
         except Exception as e:
             pytest.fail(f"OCR call failed: {str(e)}")
