@@ -171,7 +171,7 @@ general_settings:
   pass_through_endpoints:
     - path: string                    # Route on LiteLLM Proxy Server
       target: string                  # Target URL for forwarding
-      auth: boolean                   # Enable LiteLLM authentication (Enterprise)
+      auth: boolean                   # Enable LiteLLM authentication (Enterprise Only)
       forward_headers: boolean        # Forward all incoming headers
       headers:                        # Custom headers to add
         Authorization: string         # Auth header for target API
