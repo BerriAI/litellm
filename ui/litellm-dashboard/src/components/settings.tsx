@@ -32,7 +32,10 @@ const { Title, Paragraph } = Typography;
 import { getCallbacksCall, setCallbacksCall, serviceHealthCheck, deleteCallback } from "./networking";
 import AlertingSettings from "./alerting/alerting_settings";
 import FormItem from "antd/es/form/FormItem";
-import { callback_map, callbackInfo, Callbacks } from "./callback_info_helpers";
+import {
+  CALLBACK_CONFIGS,
+  getCallbackById,
+} from "./callback_info_helpers";
 import { parseErrorMessage } from "./shared/errorUtils";
 interface SettingsPageProps {
   accessToken: string | null;
@@ -211,16 +214,21 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     }
   };
 
-  const handleSelectedCallbackChange = (callbackObject: genericCallbackParams) => {
-    setSelectedCallback(callbackObject.litellm_callback_name);
-
-    if (callbackObject && callbackObject.litellm_callback_params) {
-      setSelectedCallbackParams(callbackObject.litellm_callback_params);
+  const handleSelectedCallbackChange = (callbackName: string) => {
+    setSelectedCallback(callbackName);
+    
+    // Get the callback configuration using the new clean structure
+    const callbackConfig = getCallbackById(callbackName);
+    
+    // Get the parameters from the callback configuration
+    if (callbackConfig?.dynamic_params) {
+      const params = Object.keys(callbackConfig.dynamic_params);
+      setSelectedCallbackParams(params);
     } else {
       setSelectedCallbackParams([]);
     }
   };
-
+  
   const handleSaveAlerts = async () => {
     if (!accessToken) {
       return;
@@ -586,67 +594,124 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          <>
             <FormItem
               label="Callback"
               name="callback"
               rules={[{ required: true, message: "Please select a callback" }]}
             >
               <Select
+                placeholder="Choose a logging callback..."
+                size="large"
+                className="w-full"
+                showSearch
+                filterOption={(input, option) =>
+                  (option?.children?.toString() ?? "")
+                    .toLowerCase()
+                    .includes(input.toLowerCase())
+                }
                 onChange={(value) => {
-                  const selectedCallback = allCallbacks[value];
-                  if (selectedCallback) {
-                    handleSelectedCallbackChange(selectedCallback);
-                  }
+                  handleSelectedCallbackChange(value);
                 }}
               >
-                {Object.entries(Callbacks).map(([callbackEnum, callbackDisplayName]) => (
-                  <SelectItem key={callbackDisplayName} value={callback_map[callbackEnum]}>
-                    <div className="flex items-center space-x-2">
-                      {callbackInfo[callbackDisplayName]?.logo ? (
-                        <div className="w-5 h-5 flex items-center justify-center">
-                          <img
-                            src={callbackInfo[callbackDisplayName].logo}
-                            alt={`${callbackEnum} logo`}
-                            className="w-5 h-5"
-                            onError={(e) => {
-                              e.currentTarget.style.display = "none";
-                            }}
-                          />
-                        </div>
-                      ) : (
-                        <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs">
-                          {(callbackDisplayName as string).charAt(0).toUpperCase()}
-                        </div>
-                      )}
-                      <span>{callbackDisplayName}</span>
+                                {CALLBACK_CONFIGS.map((callbackConfig) => (
+                  <SelectItem
+                    key={callbackConfig.id}
+                    value={callbackConfig.id}
+                  >
+                    <div className="flex items-center space-x-3 py-1">
+                      <div className="w-6 h-6 flex items-center justify-center">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={callbackConfig.logo}
+                          alt={`${callbackConfig.displayName} logo`}
+                          className="w-6 h-6 rounded object-contain"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                          }}
+                        />
+                      </div>
+                      <span className="font-medium text-gray-900">
+                        {callbackConfig.displayName}
+                      </span>
                     </div>
                   </SelectItem>
                 ))}
               </Select>
             </FormItem>
 
-            {selectedCallbackParams &&
-              selectedCallbackParams.map((param) => (
-                <FormItem
-                  label={param}
-                  name={param}
-                  key={param}
-                  rules={[
-                    {
-                      required: true,
-                      message: "Please enter the value for " + param,
-                    },
-                  ]}
-                >
-                  <Input.Password />
-                </FormItem>
-              ))}
+            {selectedCallbackParams && selectedCallbackParams.length > 0 && (
+              <div className="space-y-4 mt-6 p-4 bg-gray-50 rounded-lg border">
+                {selectedCallbackParams.map((param) => {
+                  // Get the callback configuration to look up parameter types
+                  const callbackConfig = getCallbackById(selectedCallback || '');
+                  const paramType = callbackConfig?.dynamic_params[param] || "text";
+                  
+                  const fieldLabel = param.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
+                  
+                  return (
+                    <FormItem
+                      label={
+                        <span className="text-sm font-medium text-gray-700">
+                          {fieldLabel}
+                          <span className="text-red-500 ml-1">*</span>
+                        </span>
+                      }
+                      name={param}
+                      key={param}
+                      className="mb-4"
+                      rules={[
+                        {
+                          required: true,
+                          message: `Please enter the ${fieldLabel.toLowerCase()}`,
+                        },
+                      ]}
+                    >
+                      {paramType === "password" ? (
+                        <Input.Password 
+                          size="large"
+                          placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
+                          className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                        />
+                      ) : paramType === "number" ? (
+                        <Input 
+                          type="number" 
+                          size="large"
+                          placeholder={`Enter ${fieldLabel.toLowerCase()}`}
+                          className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                          min={0}
+                          max={1}
+                          step={0.1}
+                        />
+                      ) : (
+                        <Input 
+                          size="large"
+                          placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
+                          className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                        />
+                      )}
+                    </FormItem>
+                  );
+                })}
+              </div>
+            )}
 
-            <div style={{ textAlign: "right", marginTop: "10px" }}>
-              <Button2 htmlType="submit">Save</Button2>
+            <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
+              <Button
+                onClick={() => {
+                  setShowAddCallbacksModal(false);
+                  setSelectedCallback(null);
+                  setSelectedCallbackParams([]);
+                  addForm.resetFields();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button2
+                htmlType="submit"
+              >
+                Add Callback
+              </Button2>
             </div>
-          </>
         </Form>
       </Modal>
 

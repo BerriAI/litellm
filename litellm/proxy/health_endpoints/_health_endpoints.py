@@ -34,7 +34,7 @@ from litellm.proxy.health_check import (
 #### Health ENDPOINTS ####
 
 router = APIRouter()
-
+services = Union[Literal["slack_budget_alerts", "langfuse", "slack", "openmeter", "webhook", "email", "braintrust", "datadog", "generic_api", "arize"], str]
 
 @router.get(
     "/test",
@@ -64,20 +64,7 @@ async def test_endpoint(request: Request):
 )
 async def health_services_endpoint(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    service: Union[
-        Literal[
-            "slack_budget_alerts",
-            "langfuse",
-            "slack",
-            "openmeter",
-            "webhook",
-            "email",
-            "braintrust",
-            "datadog",
-            "generic_api",
-        ],
-        str,
-    ] = fastapi.Query(description="Specify the service being hit."),
+    service: services = fastapi.Query(description="Specify the service being hit."),
 ):
     """
     Use this admin-only endpoint to check if the service is healthy.
@@ -113,11 +100,12 @@ async def health_services_endpoint(  # noqa: PLR0915
             "langsmith",
             "datadog",
             "generic_api",
+            "arize",
         ]:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"Service must be in list. Service={service}. List={['slack_budget_alerts']}"
+                    "error": f"Service must be in list. Service={service} not in {services}"
                 },
             )
 
@@ -148,6 +136,19 @@ async def health_services_endpoint(  # noqa: PLR0915
                     response["error_message"]
                     if response["status"] == "unhealthy"
                     else "Datadog is healthy"
+                ),
+            }
+        elif service == "arize":
+            from litellm.integrations.arize.arize import ArizeLogger
+
+            arize_logger = ArizeLogger()
+            response = await arize_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "Arize is healthy"
                 ),
             }
         elif service == "langfuse":
