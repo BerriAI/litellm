@@ -1171,6 +1171,9 @@ class Logging(LiteLLMLoggingBaseClass):
         output_cost: float,
         total_cost: float,
         cost_for_built_in_tools_cost_usd_dollar: float,
+        original_cost: Optional[float] = None,
+        discount_percent: Optional[float] = None,
+        discount_amount: Optional[float] = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1180,6 +1183,9 @@ class Logging(LiteLLMLoggingBaseClass):
             output_cost: Cost of output/completion tokens
             cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
             total_cost: Total cost of request
+            original_cost: Cost before discount
+            discount_percent: Discount percentage (0.05 = 5%)
+            discount_amount: Discount amount in USD
         """
 
         self.cost_breakdown = CostBreakdown(
@@ -1188,9 +1194,16 @@ class Logging(LiteLLMLoggingBaseClass):
             total_cost=total_cost,
             tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
         )
-        verbose_logger.debug(
-            f"Cost breakdown set - input: {input_cost}, output: {output_cost}, cost_for_built_in_tools_cost_usd_dollar: {cost_for_built_in_tools_cost_usd_dollar}, total: {total_cost}"
-        )
+        
+        # Store discount information if provided
+        if original_cost is not None:
+            self.cost_breakdown["original_cost"] = original_cost
+        if discount_percent is not None:
+            self.cost_breakdown["discount_percent"] = discount_percent
+        if discount_amount is not None:
+            self.cost_breakdown["discount_amount"] = discount_amount
+        
+
 
     def _response_cost_calculator(
         self,

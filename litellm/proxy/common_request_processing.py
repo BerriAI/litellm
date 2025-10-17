@@ -177,6 +177,28 @@ async def create_streaming_response(
     )
 
 
+def _get_cost_breakdown_from_logging_obj(
+    litellm_logging_obj: Optional[LiteLLMLoggingObj],
+) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Extract discount information from logging object's cost breakdown.
+    
+    Returns:
+        Tuple of (original_cost, discount_amount)
+    """
+    if not litellm_logging_obj or not hasattr(litellm_logging_obj, "cost_breakdown"):
+        return None, None
+    
+    cost_breakdown = litellm_logging_obj.cost_breakdown
+    if not cost_breakdown:
+        return None, None
+    
+    original_cost = cost_breakdown.get("original_cost")
+    discount_amount = cost_breakdown.get("discount_amount")
+    
+    return original_cost, discount_amount
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
@@ -196,10 +218,17 @@ class ProxyBaseLLMRequestProcessing:
         fastest_response_batch_completion: Optional[bool] = None,
         request_data: Optional[dict] = {},
         timeout: Optional[Union[float, int, httpx.Timeout]] = None,
+        litellm_logging_obj: Optional[LiteLLMLoggingObj] = None,
         **kwargs,
     ) -> dict:
         exclude_values = {"", None, "None"}
         hidden_params = hidden_params or {}
+        
+        # Extract discount info from cost_breakdown if available
+        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(
+            litellm_logging_obj=litellm_logging_obj
+        )
+        
         headers = {
             "x-litellm-call-id": call_id,
             "x-litellm-model-id": model_id,
@@ -210,6 +239,8 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-version": version,
             "x-litellm-model-region": model_region,
             "x-litellm-response-cost": str(response_cost),
+            "x-litellm-response-cost-original": str(original_cost) if original_cost is not None else None,
+            "x-litellm-response-cost-discount-amount": str(discount_amount) if discount_amount is not None else None,
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
             "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
@@ -480,6 +511,7 @@ class ProxyBaseLLMRequestProcessing:
                 fastest_response_batch_completion=fastest_response_batch_completion,
                 request_data=self.data,
                 hidden_params=hidden_params,
+                litellm_logging_obj=logging_obj,
                 **additional_headers,
             )
             if route_type == "allm_passthrough_route":
@@ -539,6 +571,7 @@ class ProxyBaseLLMRequestProcessing:
                 fastest_response_batch_completion=fastest_response_batch_completion,
                 request_data=self.data,
                 hidden_params=hidden_params,
+                litellm_logging_obj=logging_obj,
                 **additional_headers,
             )
         )
@@ -675,6 +708,7 @@ class ProxyBaseLLMRequestProcessing:
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=self.data,
             timeout=timeout,
+            litellm_logging_obj=_litellm_logging_obj,
         )
         headers = getattr(e, "headers", {}) or {}
         headers.update(custom_headers)

@@ -2094,17 +2094,18 @@ class CachingDetails(TypedDict):
     """
 
 
-class CostBreakdown(TypedDict):
+class CostBreakdown(TypedDict, total=False):
     """
     Detailed cost breakdown for a request
     """
 
     input_cost: float  # Cost of input/prompt tokens
-    output_cost: (
-        float  # Cost of output/completion tokens (includes reasoning if applicable)
-    )
+    output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
+    original_cost: float  # Cost before discount (optional)
+    discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
+    discount_amount: float  # Discount amount in USD (optional)
 
 
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):
