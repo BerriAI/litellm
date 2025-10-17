@@ -611,7 +611,7 @@ async def get_file(
             version=version,
             proxy_logging_obj=proxy_logging_obj,
             proxy_config=proxy_config,
-            route_type="afile_content",
+            route_type="afile_retrieve",
         )
 
         ## check if file_id is a litellm managed file
