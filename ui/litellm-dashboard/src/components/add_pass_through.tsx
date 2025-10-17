@@ -3,7 +3,7 @@
  */
 
 import React, { useState } from "react";
-import { Button, TextInput, Switch } from "@tremor/react";
+import { Button, TextInput, Switch, Text } from "@tremor/react";
 import {
   Card,
   Title,
@@ -33,12 +33,14 @@ interface AddFallbacksProps {
   accessToken: string;
   passThroughItems: passThroughItem[];
   setPassThroughItems: React.Dispatch<React.SetStateAction<passThroughItem[]>>;
+  premiumUser?: boolean;
 }
 
 const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   accessToken,
   setPassThroughItems,
   passThroughItems,
+  premiumUser = false,
 }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -47,7 +49,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   const [pathValue, setPathValue] = useState("");
   const [targetValue, setTargetValue] = useState("");
   const [includeSubpath, setIncludeSubpath] = useState(true);
-
+  const [authEnabled, setAuthEnabled] = useState(false);
   const handleCancel = () => {
     form.resetFields();
     setPathValue("");
@@ -70,6 +72,10 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
     console.log("addPassThrough called with:", formValues);
     setIsLoading(true);
     try {
+      // Remove auth field if not premium user
+      if (!premiumUser && 'auth' in formValues) {
+        delete formValues.auth;
+      }
       console.log(`formValues: ${JSON.stringify(formValues)}`);
 
       const response = await createPassThroughEndpoint(accessToken, formValues);
@@ -233,6 +239,36 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
               </Form.Item>
             </Card>
 
+            {/* Security Section */}
+            <Card className="p-6">
+              <Title className="text-lg font-semibold text-gray-900 mb-2">Security</Title>
+              <Subtitle className="text-gray-600 mb-4">When enabled, requests to this endpoint will require a valid LiteLLM API key</Subtitle>
+              {premiumUser ? (
+                <Form.Item name="auth" valuePropName="checked" className="mb-0">
+                  <Switch checked={authEnabled} onChange={(checked) => {
+                    setAuthEnabled(checked);
+                    form.setFieldsValue({ auth: checked });
+                  }} 
+                  />
+                </Form.Item>
+              ) : (
+                <div>
+                  <div className="flex items-center mb-3">
+                    <Switch disabled checked={false} />
+                    <span className="ml-2 text-sm text-gray-400">Authentication (Premium)</span>
+                  </div>
+                  <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <Text className="text-sm text-yellow-800">
+                      Setting authentication for pass-through endpoints is a LiteLLM Enterprise feature. Get a trial key{" "}
+                      <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer" className="underline">
+                        here
+                      </a>
+                      .
+                    </Text>
+                  </div>
+                </div>
+              )}
+            </Card>
             {/* Billing Section */}
             <Card className="p-6">
               <Title className="text-lg font-semibold text-gray-900 mb-2">Billing</Title>
