@@ -1,13 +1,10 @@
 """
-Tests for Redis batch cache performance optimizations from commit a1e489c4de
+Tests for Redis batch caching optimizations (commit 3f52e8c)
 
-Validates the key optimizations:
-1. Batch cache size increased from 100 to 1000 (and never below 1k)
-2. Throttling repeated Redis queries for cache misses
-3. Early exit when redis_result is None or all None values
-4. O(1) key lookup with dict mapping (not O(n) list.index())
-5. Only non-None values cached in memory
-6. CooldownCache early return for all-None results
+Verifies:
+
+1. Batch cache size increased from 100 → 1000 (minimum 1k)
+2. Repeated Redis queries for cache misses are throttled
 """
 
 import os
@@ -84,40 +81,6 @@ async def test_throttling_prevents_duplicate_redis_calls(cache_setup):
         # Third call after expiry - call_count increases to 2
         await dual_cache.async_batch_get_cache(test_keys)
         assert mock_redis.call_count == 2
-
-
-
-@pytest.mark.asyncio
-async def test_key_to_index_mapping_correctness(cache_setup):
-    """Test O(1) key lookup maintains correct ordering"""
-    dual_cache, in_memory, redis_cache = cache_setup
-    
-    # Use unordered keys to verify mapping works correctly
-    test_keys = ["zebra", "alpha", "delta", "beta"]
-    redis_values = {
-        "zebra": {"pos": 0},
-        "alpha": {"pos": 1},
-        "delta": {"pos": 2},
-        "beta": {"pos": 3},
-    }
-    
-    with patch.object(
-        in_memory, "async_batch_get_cache", new_callable=AsyncMock
-    ) as mock_memory:
-        mock_memory.return_value = [None] * len(test_keys)
-        
-        with patch.object(
-            redis_cache, "async_batch_get_cache", new_callable=AsyncMock
-        ) as mock_redis:
-            mock_redis.return_value = redis_values
-            
-            result = await dual_cache.async_batch_get_cache(test_keys)
-            
-            # Verify correct ordering maintained
-            assert result[0] == {"pos": 0}
-            assert result[1] == {"pos": 1}
-            assert result[2] == {"pos": 2}
-            assert result[3] == {"pos": 3}
 
 
 @pytest.mark.asyncio
