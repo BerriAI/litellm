@@ -420,6 +420,45 @@ if MCP_AVAILABLE:
             )
             global_mcp_server_manager.add_update_server(new_mcp_server)
 
+            # Grant the creator access to the newly created MCP server
+            if (user_api_key_dict.object_permission_id and 
+                new_mcp_server.server_id):
+                
+                try:
+                    # Get current object permissions
+                    current_permissions = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                        where={"object_permission_id": user_api_key_dict.object_permission_id}
+                    )
+                    
+                    if current_permissions:
+                        # Add the new server to the user's allowed MCP servers list
+                        current_mcp_servers = current_permissions.mcp_servers or []
+                        
+                        if new_mcp_server.server_id not in current_mcp_servers:
+                            updated_mcp_servers = current_mcp_servers + [new_mcp_server.server_id]
+                            
+                            # Update the permissions
+                            await prisma_client.db.litellm_objectpermissiontable.update(
+                                where={"object_permission_id": user_api_key_dict.object_permission_id},
+                                data={"mcp_servers": updated_mcp_servers}
+                            )
+                            
+                            # Clear cache to ensure updated permissions are immediately available
+                            from litellm.proxy.proxy_server import user_api_key_cache
+                            if user_api_key_cache and user_api_key_dict.object_permission_id:
+                                user_api_key_cache.delete_cache(user_api_key_dict.object_permission_id)
+                            
+                            verbose_proxy_logger.info(
+                                f"Granted user {user_api_key_dict.user_id} access to MCP server {new_mcp_server.server_id}"
+                            )
+                        
+                except Exception as permission_error:
+                    verbose_proxy_logger.warning(
+                        f"Failed to grant creator access to MCP server {new_mcp_server.server_id}: {permission_error}. "
+                        f"User may need to be manually granted access."
+                    )
+                    # Don't fail the entire request for permission update issues
+
             # Ensure registry is up to date by reloading from database
             await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
