@@ -1,15 +1,14 @@
-const asset_logos_folder = '/ui/assets/logos/';
-
 interface CallbackConfig {
-  id: string;                    // Internal callback name (e.g., "arize", "custom_callback_api")
-  displayName: string;           // User-facing name (e.g., "Arize", "Custom Callback API")
-  logo: string;                  // Logo path
+  id: string;
+  displayName: string;
+  logo: string;
   supports_key_team_logging: boolean;
   dynamic_params: Record<string, "text" | "password" | "select" | "upload" | "number">;
   description: string;
 }
 
-// Single source of truth for ALL callback configurations
+const asset_logos_folder = '/ui/assets/logos/';
+
 export const CALLBACK_CONFIGS: CallbackConfig[] = [
   {
     id: "arize",
@@ -139,6 +138,34 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     description: "S3 Bucket (AWS) Logging Integration"
   }
 ];
+
+// Create callbackInfo object mapping display names to config objects
+export const callbackInfo: Record<string, CallbackConfig> = CALLBACK_CONFIGS.reduce((acc, config) => {
+  acc[config.displayName] = config;
+  return acc;
+}, {} as Record<string, CallbackConfig>);
+
+// Create callback_map mapping display names to internal IDs
+export const callback_map: Record<string, string> = CALLBACK_CONFIGS.reduce((acc, config) => {
+  acc[config.displayName] = config.id;
+  return acc;
+}, {} as Record<string, string>);
+
+// create reverse_callback_map to map internal IDs to display names
+export const reverse_callback_map: Record<string, string> = CALLBACK_CONFIGS.reduce((acc, config) => {
+  acc[config.id] = config.displayName;
+  return acc;
+}, {} as Record<string, string>);
+
+// Function to map display names to internal names
+export const mapDisplayToInternalNames = (displayNames: string[]): string[] => {
+  return displayNames.map(name => callback_map[name] || name);
+};
+
+// Function to map internal names to display names
+export const mapInternalToDisplayNames = (internalNames: string[]): string[] => {
+  return internalNames.map(name => reverse_callback_map[name] || name);
+};
 
 // Utility functions for easy access
 export const getCallbackById = (id: string): CallbackConfig | undefined => {
