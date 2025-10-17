@@ -21,7 +21,18 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class SnowflakeBaseConfig:
+class SnowflakeConfig(OpenAIGPTConfig):
+    """
+    Reference: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-llm-rest-api
+
+    Snowflake Cortex LLM REST API supports function calling with specific models (e.g., Claude 3.5 Sonnet).
+    This config handles transformation between OpenAI format and Snowflake's tool_spec format.
+    """
+
+    @classmethod
+    def get_config(cls):
+        return super().get_config()
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         return [
             "temperature",
@@ -55,82 +66,6 @@ class SnowflakeBaseConfig:
             if param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
-
-    def _get_api_base(self, api_base, optional_params):
-        if not api_base:
-            if "account_id" in optional_params:
-                account_id = optional_params.pop("account_id")
-            else:
-                account_id = get_secret_str("SNOWFLAKE_ACCOUNT_ID")
-            if account_id is None:
-                raise ValueError("Missing snowflake account_id")
-            api_base = f"https://{account_id}.snowflakecomputing.com/api/v2"
-
-        api_base = api_base.rstrip("/")
-        if not api_base.endswith("/api/v2"):
-            api_base += "/api/v2"
-        return api_base
-
-    def validate_environment(
-        self,
-        headers: dict,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> dict:
-        """
-        Return headers to use for Snowflake completion request
-
-        Snowflake REST API Ref: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-llm-rest-api#api-reference
-        Expected headers:
-        {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Authorization": "Bearer " + <JWT>,
-            "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT"
-        }
-        """
-
-        auth_type = "KEYPAIR_JWT"
-
-        if "pat_key" in optional_params:
-            api_key = optional_params.pop("pat_key")
-            auth_type = "PROGRAMMATIC_ACCESS_TOKEN"
-
-        if api_key is None:
-            raise ValueError("Missing Snowflake JWT key")
-
-        headers.update(
-            {
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Authorization": "Bearer " + api_key,
-                "X-Snowflake-Authorization-Token-Type": auth_type,
-            }
-        )
-        return headers
-
-    def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
-        dynamic_api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
-        return api_base, dynamic_api_key
-
-
-class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
-    """
-    Reference: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-llm-rest-api
-
-    Snowflake Cortex LLM REST API supports function calling with specific models (e.g., Claude 3.5 Sonnet).
-    This config handles transformation between OpenAI format and Snowflake's tool_spec format.
-    """
-
-    @classmethod
-    def get_config(cls):
-        return super().get_config()
 
     def _transform_tool_calls_from_snowflake_to_openai(
         self, content_list: List[Dict[str, Any]]
@@ -234,6 +169,53 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             returned_response._hidden_params["model"] = model
         return returned_response
 
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        """
+        Return headers to use for Snowflake completion request
+
+        Snowflake REST API Ref: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-llm-rest-api#api-reference
+        Expected headers:
+        {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Authorization": "Bearer " + <JWT>,
+            "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT"
+        }
+        """
+
+        if api_key is None:
+            raise ValueError("Missing Snowflake JWT key")
+
+        headers.update(
+            {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Authorization": "Bearer " + api_key,
+                "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT",
+            }
+        )
+        return headers
+
+    def _get_openai_compatible_provider_info(
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        api_base = (
+            api_base
+            or f"""https://{get_secret_str("SNOWFLAKE_ACCOUNT_ID")}.snowflakecomputing.com/api/v2/cortex/inference:complete"""
+            or get_secret_str("SNOWFLAKE_API_BASE")
+        )
+        dynamic_api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
+        return api_base, dynamic_api_key
+
     def get_complete_url(
         self,
         api_base: Optional[str],
@@ -246,10 +228,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         """
         If api_base is not provided, use the default DeepSeek /chat/completions endpoint.
         """
+        if not api_base:
+            api_base = f"""https://{get_secret_str("SNOWFLAKE_ACCOUNT_ID")}.snowflakecomputing.com/api/v2/cortex/inference:complete"""
 
-        api_base = self._get_api_base(api_base, optional_params)
-
-        return f"{api_base}/cortex/inference:complete"
+        return api_base
 
     def _transform_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -297,7 +279,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 }
                 # Add description if present
                 if "description" in function:
-                    snowflake_tool["tool_spec"]["description"] = function["description"]
+                    snowflake_tool["tool_spec"]["description"] = function[
+                        "description"
+                    ]
 
                 snowflake_tools.append(snowflake_tool)
 
