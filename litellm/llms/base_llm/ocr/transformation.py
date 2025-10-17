@@ -4,7 +4,7 @@ Base OCR transformation configuration.
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
-from pydantic import BaseModel, PrivateAttr
+from pydantic import PrivateAttr
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
