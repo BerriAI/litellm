@@ -192,7 +192,12 @@ async def get_memory_summary(
     """
     Get simplified memory usage summary for the proxy.
     
-    Returns current memory usage, cache sizes, object counts, and health status.
+    Returns:
+    - worker_pid: Process ID
+    - status: Overall health based on memory usage
+    - memory: Process memory usage and RAM info
+    - caches: Cache item counts and descriptions
+    - garbage_collector: GC status and pending object counts
     
     Example usage:
     curl http://localhost:4000/debug/memory/summary -H "Authorization: Bearer sk-1234"
@@ -310,8 +315,14 @@ async def get_memory_details(
     """
     Get detailed memory diagnostics for deep debugging.
     
-    Returns comprehensive memory information including process memory, garbage collector stats,
-    object counts, cache memory, router memory, callbacks, queue, and global objects.
+    Returns:
+    - worker_pid: Process ID
+    - process_memory: RAM usage, virtual memory, file handles, threads
+    - garbage_collector: GC thresholds, counts, collection history
+    - objects: Total tracked objects and top object types
+    - uncollectable: Objects that can't be garbage collected (potential leaks)
+    - cache_memory: Memory usage of user_api_key, router, and logging caches
+    - router_memory: Memory usage of router components (model_list, deployment_names, etc.)
     
     Query Parameters:
     - top_n: Number of top object types to return (default: 20)
@@ -582,6 +593,13 @@ async def configure_gc_thresholds_endpoint(
     
     Lower thresholds mean more frequent GC cycles (less memory, more CPU overhead).
     Higher thresholds mean less frequent GC cycles (more memory, less CPU overhead).
+    
+    Returns:
+    - message: Confirmation message
+    - previous_thresholds: Old threshold values
+    - new_thresholds: New threshold values
+    - objects_awaiting_collection: Current object count in gen-0
+    - tip: Hint about when next collection will occur
     
     Query Parameters:
     - generation_0: Number of allocations before gen-0 collection (default: 700)
