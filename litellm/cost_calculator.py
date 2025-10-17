@@ -754,14 +754,9 @@ def completion_cost(  # noqa: PLR0915
                         _usage = usage_obj
 
                     if ResponseAPILoggingUtils._is_response_api_usage(_usage):
-                        # Skip token validation for video generation as it doesn't use token-based pricing
-                        if call_type in [CallTypes.create_video.value, CallTypes.acreate_video.value]:
-                            # For video generation, we'll handle cost calculation separately
-                            pass
-                        else:
-                            _usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                                _usage
-                            ).model_dump()
+                        _usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                            _usage
+                        ).model_dump()
 
                     # get input/output tokens from completion_response
                     prompt_tokens = _usage.get("prompt_tokens", 0)
@@ -1335,7 +1330,7 @@ def default_video_cost_calculator(
         return output_cost_per_second * duration_seconds
     
     # If no cost information found, return 0
-    verbose_logger.warning(
+    verbose_logger.info(
         f"No cost information found for video model {model}. Please add pricing to model_prices_and_context_window.json"
     )
     return 0.0
