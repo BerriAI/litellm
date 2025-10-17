@@ -850,6 +850,7 @@ model_list = list(
     | wandb_models
     | ovhcloud_models
     | lemonade_models
+    | set(clarifai_models)
 )
 
 model_list_set = set(model_list)
@@ -935,6 +936,7 @@ models_by_provider: dict = {
     "wandb": wandb_models,
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
     "lemonade": lemonade_models,
+    "clarifai": clarifai_models,
 }
 
 # mapping for those models which have larger equivalents
