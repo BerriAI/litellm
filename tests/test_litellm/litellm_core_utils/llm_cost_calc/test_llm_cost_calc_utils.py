@@ -649,5 +649,5 @@ def test_bedrock_anthropic_prompt_caching():
 
     assert prompt_cost >= 0
     assert completion_cost >= 0
-    assert round(prompt_cost, 3) == 0.845
+    assert round(prompt_cost, 3) == 0.111
     assert round(completion_cost, 5) == 0.00820

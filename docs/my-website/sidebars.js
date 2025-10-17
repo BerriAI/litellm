@@ -347,6 +347,9 @@ const sidebars = {
           ]
         },
         "moderation",
+        "bedrock_invoke",
+        "bedrock_converse",
+        "ocr",
         {
           type: "category",
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
@@ -536,6 +539,7 @@ const sidebars = {
         "providers/datarobot",
         "providers/ovhcloud",  
         "providers/wandb_inference",
+        "providers/cometapi",
       ],
     },
     {

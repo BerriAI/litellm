@@ -533,6 +533,7 @@ router_settings:
 | GENERIC_CLIENT_ID | Client ID for generic OAuth providers
 | GENERIC_CLIENT_SECRET | Client secret for generic OAuth providers
 | GENERIC_CLIENT_STATE | State parameter for generic client authentication
+| GENERIC_CLIENT_USE_PKCE | Enable PKCE (Proof Key for Code Exchange) for generic OAuth providers. Set to "true" when your OAuth provider requires PKCE. **Default is false**
 | GENERIC_SSO_HEADERS | Comma-separated list of additional headers to add to the request - e.g. Authorization=Bearer `<token>`, Content-Type=application/json, etc.
 | GENERIC_INCLUDE_CLIENT_ID | Include client ID in requests for OAuth
 | GENERIC_SCOPE | Scope settings for generic OAuth providers
@@ -752,6 +753,7 @@ router_settings:
 | SPEND_LOGS_URL | URL for retrieving spend logs
 | SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000
 | SSL_CERTIFICATE | Path to the SSL certificate file
+| SSL_ECDH_CURVE | ECDH curve for SSL/TLS key exchange (e.g., 'X25519' to disable PQC).
 | SSL_SECURITY_LEVEL | [BETA] Security level for SSL/TLS connections. E.g. `DEFAULT@SECLEVEL=1`
 | SSL_VERIFY | Flag to enable or disable SSL certificate verification
 | SSL_CERT_FILE | Path to the SSL certificate file for custom CA bundle

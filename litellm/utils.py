@@ -143,8 +143,10 @@ from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
+from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.router_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy,
     reset_retry_policy,
@@ -5119,9 +5121,9 @@ def json_schema_type(python_type_name: str):
     return python_to_json_schema_types.get(python_type_name, "string")
 
 
-def function_to_dict(input_function):  # noqa: C901
+def function_to_dict(input_function) -> dict:  # noqa: C901
     """Using type hints and numpy-styled docstring,
-    produce a dictionnary usable for OpenAI function calling
+    produce a dictionary usable for OpenAI function calling
 
     Parameters
     ----------
@@ -7211,6 +7213,8 @@ class ProviderConfigManager:
             return VolcEngineEmbeddingConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudEmbeddingConfig()
+        elif litellm.LlmProviders.COMETAPI == provider:
+            return litellm.CometAPIEmbeddingConfig()
         return None
 
     @staticmethod
@@ -7518,6 +7522,12 @@ class ProviderConfigManager:
             )
 
             return get_aiml_image_generation_config(model)
+        elif LlmProviders.COMETAPI == provider:
+            from litellm.llms.cometapi.image_generation import (
+                get_cometapi_image_generation_config,
+            )
+
+            return get_cometapi_image_generation_config(model)
         elif LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.image_generation import (
                 get_gemini_image_generation_config,
@@ -7549,11 +7559,9 @@ class ProviderConfigManager:
         provider: LlmProviders,
     ) -> Optional[BaseImageEditConfig]:
         if LlmProviders.OPENAI == provider:
-            from litellm.llms.openai.image_edit.transformation import (
-                OpenAIImageEditConfig,
-            )
+            from litellm.llms.openai.image_edit import get_openai_image_edit_config
 
-            return OpenAIImageEditConfig()
+            return get_openai_image_edit_config(model=model)
         elif LlmProviders.AZURE == provider:
             from litellm.llms.azure.image_edit.transformation import (
                 AzureImageEditConfig,
@@ -7577,6 +7585,25 @@ class ProviderConfigManager:
 
             return LiteLLMProxyImageEditConfig()
         return None
+
+    @staticmethod
+    def get_provider_ocr_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional["BaseOCRConfig"]:
+        """
+        Get OCR configuration for a given provider.
+        """
+        from litellm.llms.azure_ai.ocr.transformation import AzureAIOCRConfig
+
+        PROVIDER_TO_CONFIG_MAP = {
+            litellm.LlmProviders.MISTRAL: MistralOCRConfig,
+            litellm.LlmProviders.AZURE_AI: AzureAIOCRConfig,
+        }
+        config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
+        if config_class is None:
+            return None
+        return config_class()
 
     @staticmethod
     def get_provider_google_genai_generate_content_config(
