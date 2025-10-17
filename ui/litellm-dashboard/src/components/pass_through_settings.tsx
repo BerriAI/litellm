@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Text, Button, Icon, Title } from "@tremor/react";
 import { deletePassThroughEndpointsCall, getPassThroughEndpointsCall } from "./networking";
-import { Tooltip } from "antd";
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import { Badge, Tooltip } from "antd";
+import { PencilAltIcon, TrashIcon, InformationCircleIcon } from "@heroicons/react/outline";
 import AddPassThroughEndpoint from "./add_pass_through";
 import PassThroughInfoView from "./pass_through_info";
 import { DataTable } from "./view_logs/table";
@@ -147,6 +147,18 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
       cell: (info: any) => <Text>{info.getValue()}</Text>,
     },
     {
+      header: () => (
+        <div className="flex items-center gap-1">
+          <span>Authentication</span>
+          <Tooltip title="LiteLLM Virtual Key required to call endpoint">
+            <InformationCircleIcon className="w-4 h-4 text-gray-400 cursor-help" />
+          </Tooltip>
+        </div>
+      ),
+      accessorKey: "auth",
+      cell: (info: any) => <Badge color={info.getValue() ? "green" : "gray"}>{info.getValue() ? "Yes" : "No"}</Badge>,
+    },
+    {
       header: "Headers",
       accessorKey: "headers",
       cell: (info: any) => <PasswordField value={info.getValue() || {}} />,
@@ -194,6 +206,7 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
         onClose={() => setSelectedEndpointId(null)}
         accessToken={accessToken}
         isAdmin={userRole === "Admin" || userRole === "admin"}
+        premiumUser={premiumUser}
         onEndpointUpdated={handleEndpointUpdated}
       />
     );
