@@ -253,6 +253,9 @@ from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.cost_tracking_settings import (
+    router as cost_tracking_settings_router,
+)
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
 )
@@ -9805,6 +9808,7 @@ app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(tag_management_router)
+app.include_router(cost_tracking_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
