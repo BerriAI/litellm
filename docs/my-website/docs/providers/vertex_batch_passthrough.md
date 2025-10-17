@@ -18,7 +18,7 @@ LiteLLM supports Vertex AI batch prediction jobs through passthrough endpoints, 
 |---------|-----------|-------|
 | Cost Tracking | ✅ | Automatic cost calculation for batch operations |
 | Usage Monitoring | ✅ | Track token usage and costs across batch jobs |
-| Logging | ✅ | works across all integrations |
+| Logging | ✅ | Supported |
 
 ## Quick Start
 
