@@ -6,16 +6,40 @@ import os
 import sys
 import tracemalloc
 from collections import Counter
-from typing import Dict, List, Any, Optional
+from typing import Dict,Any
 
 from fastapi import APIRouter, Depends, Query
 
 from litellm import get_secret_str
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import PYTHON_GC_THRESHOLD
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
+
+# Configure garbage collection thresholds from environment variables
+def configure_gc_thresholds():
+    """Configure Python garbage collection thresholds from environment variables."""
+    gc_threshold_env = PYTHON_GC_THRESHOLD
+    if gc_threshold_env:
+        try:
+            # Parse threshold string like "1000,50,50"
+            thresholds = [int(x.strip()) for x in gc_threshold_env.split(",")]
+            if len(thresholds) == 3:
+                gc.set_threshold(*thresholds)
+                verbose_proxy_logger.info(f"GC thresholds set to: {thresholds}")
+            else:
+                verbose_proxy_logger.warning(f"GC threshold not set: {gc_threshold_env}. Expected format: 'gen0,gen1,gen2'")
+        except ValueError as e:
+            verbose_proxy_logger.warning(f"Failed to parse GC threshold: {gc_threshold_env}. Error: {e}")
+    
+    # Log current thresholds
+    current_thresholds = gc.get_threshold()
+    verbose_proxy_logger.info(f"Current GC thresholds: gen0={current_thresholds[0]}, gen1={current_thresholds[1]}, gen2={current_thresholds[2]}")
+
+# Initialize GC configuration
+configure_gc_thresholds()
 
 
 @router.get("/debug/asyncio-tasks")
@@ -207,22 +231,22 @@ async def get_memory_summary(
         memory_percent = process.memory_percent()
         
         process_memory = {
-            "current_usage_mb": round(memory_mb, 2),
-            "percent_of_system": round(memory_percent, 2),
-            "readable": f"{memory_mb:.1f} MB ({memory_percent:.1f}%)",
+            "summary": f"{memory_mb:.1f} MB ({memory_percent:.1f}% of system memory)",
+            "ram_usage_mb": round(memory_mb, 2),
+            "system_memory_percent": round(memory_percent, 2),
         }
         
         # Health assessment
         if memory_percent > 80:
             health_status = "critical"
-            recommendations.append("⚠️ Memory usage is critically high! Run POST /debug/memory/gc/collect immediately")
+            recommendations.append("Memory usage is critically high! Run POST /debug/memory/gc/collect immediately")
             recommendations.append("Consider restarting the proxy or clearing caches")
         elif memory_percent > 60:
             health_status = "warning"
             recommendations.append("Memory usage is elevated. Consider running garbage collection")
         else:
             health_status = "healthy"
-            recommendations.append("✅ Memory usage is normal")
+            recommendations.append("Memory usage is normal")
             
     except ImportError:
         process_memory["error"] = "Install psutil for memory monitoring: pip install psutil"
@@ -239,8 +263,9 @@ async def get_memory_summary(
         user_cache_items = len(user_api_key_cache.in_memory_cache.cache_dict)
         total_cache_items += user_cache_items
         caches["user_api_keys"] = {
-            "items": user_cache_items,
-            "description": "Cached API key validations"
+            "count": user_cache_items,
+            "count_readable": f"{user_cache_items:,}",
+            "what_it_stores": "Validated API keys to speed up authentication"
         }
         
         # Router cache
@@ -248,8 +273,9 @@ async def get_memory_summary(
             router_cache_items = len(llm_router.cache.in_memory_cache.cache_dict)
             total_cache_items += router_cache_items
             caches["llm_responses"] = {
-                "items": router_cache_items,
-                "description": "Cached LLM responses"
+                "count": router_cache_items,
+                "count_readable": f"{router_cache_items:,}",
+                "what_it_stores": "LLM responses for identical requests (semantic caching)"
             }
         
         # Proxy logging cache  
@@ -258,8 +284,9 @@ async def get_memory_summary(
         )
         total_cache_items += logging_cache_items
         caches["usage_tracking"] = {
-            "items": logging_cache_items,
-            "description": "Cached usage metrics"
+            "count": logging_cache_items,
+            "count_readable": f"{logging_cache_items:,}",
+            "what_it_stores": "Usage metrics before writing to database"
         }
         
         if total_cache_items > 10000:
@@ -269,16 +296,27 @@ async def get_memory_summary(
         caches["error"] = str(e)
     
     # Get GC stats
+    gc_counts = gc.get_count()
     gc_info = {
-        "enabled": gc.isenabled(),
-        "object_counts": gc.get_count(),
-        "uncollectable_objects": len(gc.garbage),
+        "summary": f"GC is {'enabled' if gc.isenabled() else 'disabled'} • {gc_counts[0]} objects awaiting collection",
+        "status": "enabled" if gc.isenabled() else "disabled",
+        "objects_awaiting_collection": {
+            "generation_0": gc_counts[0],
+            "generation_1": gc_counts[1],
+            "generation_2": gc_counts[2],
+            "explanation": "Higher numbers = more memory that could be freed with garbage collection"
+        },
+        "memory_leak_indicator": {
+            "uncollectable_objects": len(gc.garbage),
+            "status": "Possible memory leak" if len(gc.garbage) > 0 else "No leaks detected"
+        }
     }
     
-    if gc_info["uncollectable_objects"] > 0:
-        recommendations.append(f"⚠️ {gc_info['uncollectable_objects']} uncollectable objects detected. This may indicate a memory leak")
+    if len(gc.garbage) > 0:
+        recommendations.append(f"{len(gc.garbage)} uncollectable objects detected. This may indicate a memory leak")
     
     return {
+        "worker_pid": os.getpid(),  # Always include PID at top level
         "status": health_status,
         "memory": process_memory,
         "caches": {
@@ -286,7 +324,7 @@ async def get_memory_summary(
             "breakdown": caches,
         },
         "garbage_collector": gc_info,
-        "recommendations": recommendations if recommendations else ["✅ Everything looks good!"],
+        "recommendations": recommendations if recommendations else ["Everything looks good!"],
         "next_steps": {
             "free_memory": "POST /debug/memory/gc/collect",
             "detailed_stats": "GET /debug/memory/details",
@@ -302,14 +340,18 @@ async def get_memory_details(
     include_process_info: bool = Query(True, description="Include process memory info"),
 ) -> Dict[str, Any]:
     """
-    🔍 Detailed memory diagnostics for deep debugging
+    Detailed memory diagnostics for deep debugging
     
-    Returns comprehensive information about:
-    - Garbage collector statistics (collections per generation, thresholds)
-    - Object counts by type (find memory-heavy objects)
-    - Process memory breakdown (RSS, VMS, file descriptors)
-    - Cache memory usage with exact sizes
-    - Uncollectable objects (potential memory leaks)
+    Returns comprehensive memory usage information about:
+    - **Process Memory**: RSS, VMS, file descriptors, threads (requires psutil)
+    - **Garbage Collector**: Collections per generation, thresholds, current counts
+    - **Objects**: Total tracked objects and top object types by count
+    - **Uncollectable Objects**: Potential memory leaks from reference cycles
+    - **Cache Memory**: User API key cache, router cache, logging cache, Redis cache
+    - **Router Memory**: Model list, deployments, latency map, fallbacks
+    - **Callbacks Memory**: Callback lists, success/failure callbacks, logging manager
+    - **Queue Memory**: Request queue size and memory usage
+    - **Global Objects Memory**: Database client, settings, health checks, proxy logging
     
     Query Parameters:
     - top_n: Number of top object types to return (default: 20)
@@ -321,12 +363,15 @@ async def get_memory_details(
       -H "Authorization: Bearer sk-1234"
     ```
     
-    💡 Tip: Call POST /debug/memory/gc/collect first, then check details to see what remains
+    Tip: Call POST /debug/memory/gc/collect first, then check details to see what remains
+    
+    All memory sizes are reported in both bytes and MB for easy analysis.
     """
     from litellm.proxy.proxy_server import (
         llm_router,
         proxy_logging_obj,
         user_api_key_cache,
+        redis_usage_cache,
     )
     
     # Get GC statistics
@@ -421,35 +466,143 @@ async def get_memory_details(
             "ttl_dict_size_bytes": logging_ttl_size,
             "total_size_mb": round((logging_cache_size + logging_ttl_size) / (1024 * 1024), 2),
         }
+        
+        # Redis cache info
+        if redis_usage_cache is not None:
+            cache_stats["redis_usage_cache"] = {
+                "enabled": True,
+                "cache_type": type(redis_usage_cache).__name__,
+            }
+            # Try to get Redis connection pool info if available
+            try:
+                if hasattr(redis_usage_cache, 'redis_client') and redis_usage_cache.redis_client:
+                    if hasattr(redis_usage_cache.redis_client, 'connection_pool'):
+                        pool_info = redis_usage_cache.redis_client.connection_pool  # type: ignore
+                        cache_stats["redis_usage_cache"]["connection_pool"] = {
+                            "max_connections": pool_info.max_connections if hasattr(pool_info, 'max_connections') else None,
+                            "connection_class": pool_info.connection_class.__name__ if hasattr(pool_info, 'connection_class') else None,
+                        }
+            except Exception as e:
+                verbose_proxy_logger.debug(f"Error getting Redis pool info: {e}")
+        else:
+            cache_stats["redis_usage_cache"] = {"enabled": False}
+            
     except Exception as e:
         verbose_proxy_logger.debug(f"Error calculating cache stats: {e}")
         cache_stats["error"] = str(e)
     
+    # LiteLLM Router memory usage
+    litellm_router_memory = {}
+    try:
+        if llm_router is not None:
+            # Model list memory size
+            if hasattr(llm_router, 'model_list') and llm_router.model_list:
+                model_list_size = sys.getsizeof(llm_router.model_list)
+                litellm_router_memory["model_list"] = {
+                    "num_models": len(llm_router.model_list),
+                    "size_bytes": model_list_size,
+                    "size_mb": round(model_list_size / (1024 * 1024), 4),
+                }
+                
+            # Model names set
+            if hasattr(llm_router, 'model_names') and llm_router.model_names:
+                model_names_size = sys.getsizeof(llm_router.model_names)
+                litellm_router_memory["model_names_set"] = {
+                    "num_model_groups": len(llm_router.model_names),
+                    "size_bytes": model_names_size,
+                    "size_mb": round(model_names_size / (1024 * 1024), 4),
+                }
+                
+            # Deployment names list
+            if hasattr(llm_router, 'deployment_names') and llm_router.deployment_names:
+                deployment_names_size = sys.getsizeof(llm_router.deployment_names)
+                litellm_router_memory["deployment_names"] = {
+                    "num_deployments": len(llm_router.deployment_names),
+                    "size_bytes": deployment_names_size,
+                    "size_mb": round(deployment_names_size / (1024 * 1024), 4),
+                }
+                
+            # Deployment latency map
+            if hasattr(llm_router, 'deployment_latency_map') and llm_router.deployment_latency_map:
+                latency_map_size = sys.getsizeof(llm_router.deployment_latency_map)
+                litellm_router_memory["deployment_latency_map"] = {
+                    "num_tracked_deployments": len(llm_router.deployment_latency_map),
+                    "size_bytes": latency_map_size,
+                    "size_mb": round(latency_map_size / (1024 * 1024), 4),
+                }
+                
+            # Fallback configuration
+            if hasattr(llm_router, 'fallbacks') and llm_router.fallbacks:
+                fallbacks_size = sys.getsizeof(llm_router.fallbacks)
+                litellm_router_memory["fallbacks"] = {
+                    "num_fallback_configs": len(llm_router.fallbacks),
+                    "size_bytes": fallbacks_size,
+                    "size_mb": round(fallbacks_size / (1024 * 1024), 4),
+                }
+                
+            # Total router object size
+            router_obj_size = sys.getsizeof(llm_router)
+            litellm_router_memory["router_object"] = {
+                "size_bytes": router_obj_size,
+                "size_mb": round(router_obj_size / (1024 * 1024), 4),
+            }
+                
+        else:
+            litellm_router_memory = {"note": "Router not initialized"}
+    except Exception as e:
+        verbose_proxy_logger.debug(f"Error getting router memory info: {e}")
+        litellm_router_memory = {"error": str(e)}
+    
     # Process memory info (requires psutil)
     process_info = None
+    worker_pid = os.getpid()  # Always get PID, even without psutil
+    
     if include_process_info:
         try:
             import psutil
             
             process = psutil.Process()
             memory_info = process.memory_info()
+            ram_usage_mb = round(memory_info.rss / (1024 * 1024), 2)
+            virtual_memory_mb = round(memory_info.vms / (1024 * 1024), 2)
+            memory_percent = round(process.memory_percent(), 2)
+            
             process_info = {
-                "rss_mb": round(memory_info.rss / (1024 * 1024), 2),  # Resident Set Size (actual RAM usage)
-                "vms_mb": round(memory_info.vms / (1024 * 1024), 2),  # Virtual Memory Size
-                "percent": round(process.memory_percent(), 2),
-                "num_fds": process.num_fds() if hasattr(process, "num_fds") else None,
-                "num_threads": process.num_threads(),
-                "readable": f"Using {memory_info.rss / (1024 * 1024):.1f} MB of RAM ({process.memory_percent():.1f}% of system)",
+                "pid": worker_pid,
+                "summary": f"Worker PID {worker_pid} using {ram_usage_mb:.1f} MB of RAM ({memory_percent:.1f}% of system memory)",
+                "ram_usage": {
+                    "megabytes": ram_usage_mb,
+                    "description": "Actual physical RAM used by this process"
+                },
+                "virtual_memory": {
+                    "megabytes": virtual_memory_mb,
+                    "description": "Total virtual memory allocated (includes swapped memory)"
+                },
+                "system_memory_percent": {
+                    "percent": memory_percent,
+                    "description": "Percentage of total system RAM being used"
+                },
+                "open_file_handles": {
+                    "count": process.num_fds() if hasattr(process, "num_fds") else "N/A (Windows)",
+                    "description": "Number of open file descriptors/handles"
+                },
+                "threads": {
+                    "count": process.num_threads(),
+                    "description": "Number of active threads in this process"
+                }
             }
         except ImportError:
             process_info = {
+                "pid": worker_pid,
                 "error": "psutil not installed. Install with: pip install psutil"
             }
         except Exception as e:
             verbose_proxy_logger.debug(f"Error getting process info: {e}")
-            process_info = {"error": str(e)}
+            process_info = {"pid": worker_pid, "error": str(e)}
     
     return {
+        "worker_pid": worker_pid,  # Always include PID at top level
+        "process_memory": process_info,
         "garbage_collector": gc_stats,
         "objects": {
             "total_tracked": total_objects,
@@ -458,7 +611,7 @@ async def get_memory_details(
         },
         "uncollectable": uncollectable_info,
         "cache_memory": cache_stats,
-        "process_memory": process_info,
+        "router_memory": litellm_router_memory,
     }
 
 
@@ -468,7 +621,7 @@ async def trigger_gc_collection(
     full: bool = Query(True, description="Run full collection (all generations)"),
 ) -> Dict[str, Any]:
     """
-    🧹 Free up memory by running garbage collection
+    Free up memory by running garbage collection
     
     This endpoint manually triggers Python's garbage collector to reclaim memory from
     unreferenced objects. Use this when memory usage is high or growing over time.
@@ -493,7 +646,7 @@ async def trigger_gc_collection(
       -H "Authorization: Bearer sk-1234"
     ```
     
-    💡 After running this:
+    After running this:
     - Check GET /debug/memory/summary to see the impact
     - If memory is still high, check GET /debug/memory/details for what's using memory
     """
@@ -548,6 +701,7 @@ async def trigger_gc_collection(
     
     # Build response
     result = {
+        "worker_pid": os.getpid(),  # Always include PID
         "success": True,
         "collection_type": collection_type,
         "objects_collected": total_collected,
@@ -578,17 +732,17 @@ async def trigger_gc_collection(
     
     # Add helpful message
     if total_collected == 0:
-        result["message"] = "✅ No objects collected - memory is already optimized"
+        result["message"] = "No objects collected - memory is already optimized"
         result["recommendations"] = [
             "If memory is still high, check GET /debug/memory/details to see what's using memory",
             "Large caches may be holding memory - check GET /memory-usage-in-mem-cache"
         ]
     elif total_collected < 100:
-        result["message"] = f"✅ Collected {total_collected} objects - minor cleanup"
+        result["message"] = f"Collected {total_collected} objects - minor cleanup"
     elif total_collected < 1000:
-        result["message"] = f"✅ Collected {total_collected} objects - moderate cleanup"
+        result["message"] = f"Collected {total_collected} objects - moderate cleanup"
     else:
-        result["message"] = f"🧹 Collected {total_collected:,} objects - significant cleanup!"
+        result["message"] = f"Collected {total_collected:,} objects - significant cleanup!"
         
     result["next_steps"] = {
         "check_summary": "GET /debug/memory/summary",
@@ -596,6 +750,87 @@ async def trigger_gc_collection(
     }
     
     return result
+
+
+@router.post("/debug/memory/gc/configure", include_in_schema=False)
+async def configure_gc_thresholds_endpoint(
+    _: UserAPIKeyAuth = Depends(user_api_key_auth),
+    generation_0: int = Query(700, description="Generation 0 threshold (default: 700)"),
+    generation_1: int = Query(10, description="Generation 1 threshold (default: 10)"),
+    generation_2: int = Query(10, description="Generation 2 threshold (default: 10)"),
+) -> Dict[str, Any]:
+    """
+    Configure Python garbage collection thresholds
+    
+    This endpoint allows you to dynamically adjust Python's garbage collection thresholds.
+    Lower thresholds mean more frequent GC cycles (less memory usage, more CPU overhead).
+    Higher thresholds mean less frequent GC cycles (more memory usage, less CPU overhead).
+    
+    Query Parameters:
+    - generation_0: Number of allocations before gen-0 collection (default: 700)
+    - generation_1: Number of gen-0 collections before gen-1 collection (default: 10)  
+    - generation_2: Number of gen-1 collections before gen-2 collection (default: 10)
+    
+    Example:
+    ```bash
+    # Make GC more aggressive (more frequent collections)
+    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=500&generation_1=5&generation_2=5" \\
+      -H "Authorization: Bearer sk-1234"
+    
+    # Make GC less aggressive (less frequent collections)  
+    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=1000&generation_1=20&generation_2=20" \\
+      -H "Authorization: Bearer sk-1234"
+    ```
+    
+    Tips:
+    - If you're hitting 500MB frequently, try lowering generation_0 threshold
+    - Monitor memory usage with GET /debug/memory/summary after changes
+    - Consider your CPU vs memory trade-offs
+    """
+    # Get current thresholds
+    old_thresholds = gc.get_threshold()
+    
+    # Set new thresholds
+    gc.set_threshold(generation_0, generation_1, generation_2)
+    
+    # Get new thresholds to confirm
+    new_thresholds = gc.get_threshold()
+    
+    # Get current object counts
+    current_counts = gc.get_count()
+    
+    return {
+        "success": True,
+        "message": "GC thresholds updated successfully",
+        "thresholds": {
+            "old": {
+                "generation_0": old_thresholds[0],
+                "generation_1": old_thresholds[1], 
+                "generation_2": old_thresholds[2],
+            },
+            "new": {
+                "generation_0": new_thresholds[0],
+                "generation_1": new_thresholds[1],
+                "generation_2": new_thresholds[2],
+            }
+        },
+        "current_object_counts": {
+            "generation_0": current_counts[0],
+            "generation_1": current_counts[1],
+            "generation_2": current_counts[2],
+        },
+        "recommendations": [
+            "Monitor memory usage with GET /debug/memory/summary",
+            "Lower thresholds = more frequent GC = less memory usage",
+            "Higher thresholds = less frequent GC = more memory usage",
+            "Consider your CPU vs memory trade-offs"
+        ],
+        "next_steps": {
+            "monitor_memory": "GET /debug/memory/summary",
+            "trigger_gc": "POST /debug/memory/gc/collect",
+            "detailed_stats": "GET /debug/memory/details"
+        }
+    }
 
 
 @router.get("/otel-spans", include_in_schema=False)
