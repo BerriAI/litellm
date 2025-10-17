@@ -263,6 +263,7 @@ use_client: bool = False
 ssl_verify: Union[str, bool] = True
 ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
+ssl_ecdh_curve: Optional[str] = None  # Set to 'X25519' to disable PQC and improve performance
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
@@ -848,6 +849,7 @@ model_list = list(
     | wandb_models
     | ovhcloud_models
     | lemonade_models
+    | set(clarifai_models)
 )
 
 model_list_set = set(model_list)
@@ -933,6 +935,7 @@ models_by_provider: dict = {
     "wandb": wandb_models,
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
     "lemonade": lemonade_models,
+    "clarifai": clarifai_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1190,6 +1193,9 @@ from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from .llms.azure.responses.o_series_transformation import (
     AzureOpenAIOSeriesResponsesAPIConfig,
 )
+from .llms.litellm_proxy.responses.transformation import (
+    LiteLLMProxyResponsesAPIConfig,
+)
 from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
@@ -1284,6 +1290,7 @@ from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
 from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
 from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
 from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
+from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
 from .main import *  # type: ignore
@@ -1322,6 +1329,7 @@ from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
+from .ocr.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *

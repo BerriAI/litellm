@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { TextInput, Icon, Button as TremorButton, Text } from "@tremor/react";
-import { Modal, Form, Select, message, Tooltip, Input, Alert } from "antd";
+import { TextInput, Button as TremorButton } from "@tremor/react";
+import { Modal, Form, Select, Tooltip, Input, Alert } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { CredentialItem, vectorStoreCreateCall } from "../networking";
 import {

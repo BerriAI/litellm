@@ -365,6 +365,11 @@ def get_azure_ad_token(
             azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
         except ValueError:
             verbose_logger.debug("Azure AD Token Provider could not be used.")
+        except Exception as e:
+            verbose_logger.error(
+                f"Error calling Azure AD token provider: {str(e)}. Follow docs - https://docs.litellm.ai/docs/providers/azure/#azure-ad-token-refresh---defaultazurecredential"
+            )
+            raise e
 
         #########################################################
         # If litellm.enable_azure_ad_token_refresh is True and no other token provider is available,
@@ -561,7 +566,9 @@ class BaseAzureLLM(BaseOpenAILLM):
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
             )
             try:
-                azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
+                azure_ad_token_provider = get_azure_ad_token_provider(
+                    azure_scope=scope,
+                )
             except ValueError:
                 verbose_logger.debug("Azure AD Token Provider could not be used.")
         if api_version is None:
@@ -664,6 +671,10 @@ class BaseAzureLLM(BaseOpenAILLM):
         headers: dict, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
+
+        # Check if api-key is already in headers; if so, use it
+        if "api-key" in headers:
+            return headers
 
         api_key = (
             litellm_params.api_key

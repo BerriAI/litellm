@@ -4,24 +4,20 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
-from litellm._uuid import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
 
 import httpx
-from httpx import AsyncClient, Client
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm._uuid import uuid
 
-from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 from .llms.openai import OpenAIFileObject
 from .llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
-from .utils import ModelResponse, ProviderSpecificModelInfo
+from .utils import CustomPricingLiteLLMParams, ModelResponse
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
@@ -166,14 +162,7 @@ class CredentialLiteLLMParams(BaseModel):
     watsonx_region_name: Optional[str] = None
 
 
-class CustomPricingLiteLLMParams(BaseModel):
-    ## CUSTOM PRICING ##
-    input_cost_per_token: Optional[float] = None
-    output_cost_per_token: Optional[float] = None
-    input_cost_per_second: Optional[float] = None
-    output_cost_per_second: Optional[float] = None
-    input_cost_per_pixel: Optional[float] = None
-    output_cost_per_pixel: Optional[float] = None
+
 
 
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
@@ -482,7 +471,7 @@ class Deployment(BaseModel):
     def to_json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)  # noqa
-        except Exception as e:
+        except Exception:
             # if using pydantic v1
             return self.dict(**kwargs)
 
@@ -602,7 +591,7 @@ class ModelGroupInfo(BaseModel):
 
     def __init__(self, **data):
         for field_name, field_type in get_type_hints(self.__class__).items():
-            if field_type == bool and data.get(field_name) is None:
+            if field_type is bool and data.get(field_name) is None:
                 data[field_name] = False
         super().__init__(**data)
 

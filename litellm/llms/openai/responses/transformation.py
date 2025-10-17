@@ -124,7 +124,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 # Ensure required fields are present for ResponseReasoningItem
                 item_data = dict(item)
                 if "id" not in item_data:
-                    item_data["id"] = f"reasoning_{hash(str(item_data))}"
+                    item_data["id"] = f"rs_{hash(str(item_data))}"
                 if "summary" not in item_data:
                     item_data["summary"] = (
                         item_data.get("reasoning_content", "")[:100] + "..."
@@ -161,6 +161,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> ResponsesAPIResponse:
         """No transform applied since outputs are in OpenAI spec already"""
         try:
+            logging_obj.post_call(
+                original_response=raw_response.text,
+                additional_args={"complete_input_dict": {}},
+            )
             raw_response_json = raw_response.json()
             raw_response_json["created_at"] = _safe_convert_created_field(
                 raw_response_json["created_at"]
@@ -169,7 +173,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             raise OpenAIError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
-        return ResponsesAPIResponse(**raw_response_json)
+        try:
+            return ResponsesAPIResponse(**raw_response_json)
+        except Exception:
+            verbose_logger.debug(
+                f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct"
+            )
+            return ResponsesAPIResponse.model_construct(**raw_response_json)
 
     def validate_environment(
         self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
@@ -271,6 +281,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE: MCPCallArgumentsDoneEvent,
             ResponsesAPIStreamEvents.MCP_CALL_COMPLETED: MCPCallCompletedEvent,
             ResponsesAPIStreamEvents.MCP_CALL_FAILED: MCPCallFailedEvent,
+            ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE: ImageGenerationPartialImageEvent,
             ResponsesAPIStreamEvents.ERROR: ErrorEvent,
         }
 
