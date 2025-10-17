@@ -95,7 +95,6 @@ export default function KeyInfoView({
   }
 
   const handleKeyUpdate = async (formValues: Record<string, any>) => {
-    console.log("handle key update");
     try {
       if (!accessToken) return;
 
