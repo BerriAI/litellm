@@ -102,11 +102,11 @@ const CreateTeamModal = ({
     console.log(`models: ${models}`);
     setModelsToPick(models);
     form.setFieldValue("models", []);
-  }, [currentOrgForCreateTeam, userModels]);
+  }, [currentOrgForCreateTeam, userModels, form]);
 
   useEffect(() => {
     fetchMcpAccessGroups();
-  }, [accessToken]);
+  }, [accessToken, fetchMcpAccessGroups]);
 
   useEffect(() => {
     const fetchGuardrails = async () => {
