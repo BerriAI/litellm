@@ -36,6 +36,14 @@ graph LR
 - LiteLLM handles the provider authentication internally
 - Same authentication works across all passthrough endpoints
 
+:::info **Enterprise Feature**
+
+**Authentication for passthrough endpoints is an Enterprise feature.** 
+
+For open-source users, passthrough endpoints work without authentication. To enable authentication features, [contact us for Enterprise access](https://litellm.ai/#trial).
+
+:::
+
 ### Error Handling
 
 **Provider Errors**: Forwarded directly to you with original error codes and messages
