@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Literal, Tuple
+from typing import Any, List, Literal, Tuple, Optional
 
 import litellm
 from litellm._logging import verbose_logger
@@ -10,21 +10,22 @@ from litellm.types.utils import CallTypes, Usage
 async def calculate_batch_cost_and_usage(
     file_content_dictionary: List[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"],
+    model_name: Optional[str] = None,
 ) -> Tuple[float, Usage, List[str]]:
     """
     Calculate the cost and usage of a batch
     """
-    # Calculate costs and usage
     batch_cost = _batch_cost_calculator(
         custom_llm_provider=custom_llm_provider,
         file_content_dictionary=file_content_dictionary,
+        model_name=model_name,
     )
     batch_usage = _get_batch_job_total_usage_from_file_content(
         file_content_dictionary=file_content_dictionary,
         custom_llm_provider=custom_llm_provider,
+        model_name=model_name,
     )
-
-    batch_models = _get_batch_models_from_file_content(file_content_dictionary)
+    batch_models = _get_batch_models_from_file_content(file_content_dictionary, model_name)
 
     return batch_cost, batch_usage, batch_models
 
@@ -32,6 +33,7 @@ async def calculate_batch_cost_and_usage(
 async def _handle_completed_batch(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"],
+    model_name: Optional[str] = None,
 ) -> Tuple[float, Usage, List[str]]:
     """Helper function to process a completed batch and handle logging"""
     # Get batch results
@@ -43,23 +45,28 @@ async def _handle_completed_batch(
     batch_cost = _batch_cost_calculator(
         custom_llm_provider=custom_llm_provider,
         file_content_dictionary=file_content_dictionary,
+        model_name=model_name,
     )
     batch_usage = _get_batch_job_total_usage_from_file_content(
         file_content_dictionary=file_content_dictionary,
         custom_llm_provider=custom_llm_provider,
+        model_name=model_name,
     )
 
-    batch_models = _get_batch_models_from_file_content(file_content_dictionary)
+    batch_models = _get_batch_models_from_file_content(file_content_dictionary, model_name)
 
     return batch_cost, batch_usage, batch_models
 
 
 def _get_batch_models_from_file_content(
     file_content_dictionary: List[dict],
+    model_name: Optional[str] = None,
 ) -> List[str]:
     """
     Get the models from the file content
     """
+    if model_name:
+        return [model_name]
     batch_models = []
     for _item in file_content_dictionary:
         if _batch_response_was_successful(_item):
@@ -73,18 +80,105 @@ def _get_batch_models_from_file_content(
 def _batch_cost_calculator(
     file_content_dictionary: List[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    model_name: Optional[str] = None,
 ) -> float:
     """
     Calculate the cost of a batch based on the output file id
     """
-    if custom_llm_provider == "vertex_ai":
-        raise ValueError("Vertex AI does not support file content retrieval")
+    # Handle Vertex AI with specialized method
+    if custom_llm_provider == "vertex_ai" and model_name:
+        batch_cost, _ = calculate_vertex_ai_batch_cost_and_usage(file_content_dictionary, model_name)
+        verbose_logger.debug("vertex_ai_total_cost=%s", batch_cost)
+        return batch_cost
+    
+    # For other providers, use the existing logic
     total_cost = _get_batch_job_cost_from_file_content(
         file_content_dictionary=file_content_dictionary,
         custom_llm_provider=custom_llm_provider,
     )
     verbose_logger.debug("total_cost=%s", total_cost)
     return total_cost
+
+
+def calculate_vertex_ai_batch_cost_and_usage(
+    vertex_ai_batch_responses: List[dict],
+    model_name: Optional[str] = None,
+) -> Tuple[float, Usage]:
+    """
+    Calculate both cost and usage from Vertex AI batch responses
+    """
+    total_cost = 0.0
+    total_tokens = 0
+    prompt_tokens = 0
+    completion_tokens = 0
+    
+    for response in vertex_ai_batch_responses:
+        if response.get("status") == "JOB_STATE_SUCCEEDED":  # Check if response was successful
+            # Transform Vertex AI response to OpenAI format if needed
+            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+            from litellm import ModelResponse
+            from litellm.litellm_core_utils.litellm_logging import Logging
+            from litellm.types.utils import CallTypes
+            from litellm._uuid import uuid
+            import httpx
+            import time
+            
+            # Create required arguments for the transformation method
+            model_response = ModelResponse()
+            
+            # Ensure model_name is not None
+            actual_model_name = model_name or "gemini-2.5-flash"
+            
+            # Create a real LiteLLM logging object
+            logging_obj = Logging(
+                model=actual_model_name,
+                messages=[{"role": "user", "content": "batch_request"}],
+                stream=False,
+                call_type=CallTypes.aretrieve_batch,
+                start_time=time.time(),
+                litellm_call_id="batch_" + str(uuid.uuid4()),
+                function_id="batch_processing",
+                litellm_trace_id=str(uuid.uuid4()),
+                kwargs={"optional_params": {}}
+            )
+            
+            # Add the optional_params attribute that the Vertex AI transformation expects
+            logging_obj.optional_params = {}
+            raw_response = httpx.Response(200)  # Mock response object
+            
+            openai_format_response = VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
+                completion_response=response["response"],
+                model_response=model_response,
+                model=actual_model_name,
+                logging_obj=logging_obj,
+                raw_response=raw_response,
+            )
+            
+            # Calculate cost using existing function
+            cost = litellm.completion_cost(
+                completion_response=openai_format_response,
+                custom_llm_provider="vertex_ai",
+                call_type=CallTypes.aretrieve_batch.value,
+            )
+            total_cost += cost
+            
+            # Extract usage from the transformed response
+            if hasattr(openai_format_response, 'usage') and openai_format_response.usage:
+                usage = openai_format_response.usage
+            else:
+                # Fallback: create usage from response dict
+                response_dict = openai_format_response.dict() if hasattr(openai_format_response, 'dict') else {}
+                usage = _get_batch_job_usage_from_response_body(response_dict)
+            
+            total_tokens += usage.total_tokens
+            prompt_tokens += usage.prompt_tokens
+            completion_tokens += usage.completion_tokens
+    
+    return total_cost, Usage(
+        total_tokens=total_tokens,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
 
 
 async def _get_batch_output_file_content_as_dictionary(
@@ -157,10 +251,17 @@ def _get_batch_job_cost_from_file_content(
 def _get_batch_job_total_usage_from_file_content(
     file_content_dictionary: List[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    model_name: Optional[str] = None,
 ) -> Usage:
     """
     Get the tokens of a batch job from the file content
     """
+    # Handle Vertex AI with specialized method
+    if custom_llm_provider == "vertex_ai" and model_name:
+        _, batch_usage = calculate_vertex_ai_batch_cost_and_usage(file_content_dictionary, model_name)
+        return batch_usage
+    
+    # For other providers, use the existing logic
     total_tokens: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
