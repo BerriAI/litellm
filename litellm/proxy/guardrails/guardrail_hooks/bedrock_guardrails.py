@@ -604,7 +604,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             "anthropic_messages",
         ],
     ) -> Union[Exception, str, dict, None]:
-        verbose_proxy_logger.debug("Inside Bedrock Pre-Call Hook")
+        verbose_proxy_logger.debug("Inside Bedrock Pre-Call Hook for call_type: %s", call_type)
 
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
