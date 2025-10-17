@@ -198,6 +198,9 @@ JITTER = float(os.getenv("JITTER", 0.75))
 DEFAULT_IN_MEMORY_TTL = int(
     os.getenv("DEFAULT_IN_MEMORY_TTL", 5)
 )  # default time to live for the in-memory cache
+DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE = int(
+    os.getenv("DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE", 1000)
+)  # default max size for redis batch cache
 DEFAULT_POLLING_INTERVAL = float(
     os.getenv("DEFAULT_POLLING_INTERVAL", 0.03)
 )  # default polling interval for the scheduler

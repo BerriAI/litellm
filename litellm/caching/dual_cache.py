@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 
 from .base_cache import BaseCache
 from .in_memory_cache import InMemoryCache
@@ -60,7 +61,7 @@ class DualCache(BaseCache):
         default_in_memory_ttl: Optional[float] = None,
         default_redis_ttl: Optional[float] = None,
         default_redis_batch_cache_expiry: Optional[float] = None,
-        default_max_redis_batch_cache_size: int = 1000,
+        default_max_redis_batch_cache_size: int = DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE,
     ) -> None:
         super().__init__()
         # If in_memory_cache is not provided, use the default InMemoryCache

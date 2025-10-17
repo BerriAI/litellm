@@ -22,6 +22,7 @@ import uuid
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
+from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 
 
 @pytest.fixture
@@ -34,7 +35,7 @@ def cache_setup():
     dual_cache = DualCache(
         in_memory_cache=in_memory,
         redis_cache=redis_cache,
-        default_max_redis_batch_cache_size=1000,
+        default_max_redis_batch_cache_size=DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE,
     )
     return dual_cache, in_memory, redis_cache
 
@@ -44,8 +45,8 @@ async def test_batch_cache_size_is_1000_minimum(cache_setup):
     """Verify batch cache size is set to 1000 (never below 1k)"""
     dual_cache, _, _ = cache_setup
     
-    # Critical: batch cache size must be at least 1000
-    assert dual_cache.last_redis_batch_access_time.max_size >= 1000
+    # Critical: batch cache size must be at least DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
+    assert dual_cache.last_redis_batch_access_time.max_size >= DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 
 
 @pytest.mark.asyncio
