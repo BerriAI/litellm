@@ -9649,7 +9649,7 @@
         "supports_tool_choice": true,
         "supports_url_context": true,
         "supports_vision": true,
-        "supports_web_search": true,
+        "supports_web_search": false,
         "tpm": 8000000
     },
     "gemini-2.5-flash-image-preview": {
