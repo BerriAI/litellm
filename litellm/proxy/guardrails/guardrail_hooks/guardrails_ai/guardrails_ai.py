@@ -167,6 +167,10 @@ class GuardrailsAI(CustomGuardrail):
             set_last_user_message,
         )
 
+        # Only process completion-related call types
+        if call_type not in ["completion", "acompletion"]:
+            return data
+
         if "messages" not in data:  # invalid request
             return data
 
