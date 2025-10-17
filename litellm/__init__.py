@@ -263,6 +263,7 @@ use_client: bool = False
 ssl_verify: Union[str, bool] = True
 ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
+ssl_ecdh_curve: Optional[str] = None  # Set to 'X25519' to disable PQC and improve performance
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
@@ -1288,6 +1289,7 @@ from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
 from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
 from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
 from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
+from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .main import *  # type: ignore
 from .integrations import *
@@ -1325,6 +1327,7 @@ from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
+from .ocr.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *
