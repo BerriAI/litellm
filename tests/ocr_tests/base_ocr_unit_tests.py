@@ -96,6 +96,12 @@ class BaseOCRTest(ABC):
             
             assert len(total_text) > 0, "Should extract some text from the document"
 
+            #########################################################
+            # validate we get a response cost in hidden parameters
+            #########################################################
+            hidden_params = response._hidden_params
+            assert isinstance(hidden_params, dict), "Hidden parameters should be a dictionary"
+            
         except Exception as e:
             pytest.fail(f"OCR call failed: {str(e)}")
 
