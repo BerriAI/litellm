@@ -7,7 +7,7 @@ Provides real-time threat detection, DLP, URL filtering, content masking, and po
 
 import os
 from litellm._uuid import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Type
 
 from fastapi import HTTPException
 
@@ -47,9 +47,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     def __init__(
         self,
         guardrail_name: str,
-        api_key: str,
-        api_base: str,
         profile_name: str,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         default_on: bool = True,
         mask_on_block: bool = False,
         mask_request_content: bool = False,
@@ -72,7 +72,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             **kwargs
         )
 
-        # Store configuration
+        # Store configuration with env var fallbacks
         self.api_key = api_key or os.getenv("PANW_PRISMA_AIRS_API_KEY")
         self.api_base = (
             api_base
@@ -80,6 +80,13 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             or "https://service.api.aisecurity.paloaltonetworks.com"
         )
         self.profile_name = profile_name
+        
+        # Validate required configuration
+        if not self.api_key:
+            raise ValueError(
+                "PANW Prisma AIRS: api_key is required. "
+                "Set it via config or PANW_PRISMA_AIRS_API_KEY environment variable."
+            )
 
         verbose_proxy_logger.info(
             f"Initialized PANW Prisma AIRS Guardrail: {guardrail_name} "
@@ -384,20 +391,31 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             return data
 
         try:
-            # Extract prompt text from messages
+            # Extract prompt text from messages (chat completion) or prompt (text completion)
             messages = data.get("messages", [])
             prompt_text = self._extract_text_from_messages(messages)
+            
+            # Fallback to prompt field for text completion requests
+            if not prompt_text:
+                prompt_value = data.get("prompt")
+                if isinstance(prompt_value, str):
+                    prompt_text = prompt_value
+                elif isinstance(prompt_value, list):
+                    # Handle list of prompts (batch text completion)
+                    prompt_text = " ".join(str(p) for p in prompt_value if p)
+                else:
+                    prompt_text = ""
 
             if not prompt_text:
                 verbose_proxy_logger.warning(
-                    "PANW Prisma AIRS: No user prompt found in request"
+                    "PANW Prisma AIRS: No user prompt found in request (checked 'messages' and 'prompt' fields)"
                 )
                 return None
 
             # Prepare metadata
             metadata = {
-                "user": data.get("user", "litellm_user"),
-                "model": data.get("model", "unknown"),
+                "user": data.get("user") or "litellm_user",
+                "model": data.get("model") or "unknown",
             }
 
             # Scan prompt with PANW Prisma AIRS
@@ -412,7 +430,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             # If action is "allow", apply masking if available and allow through
             if action == "allow":
                 if masked_text:
-                    data["messages"] = self._apply_masking_to_messages(messages, masked_text)
+                    if messages:
+                        data["messages"] = self._apply_masking_to_messages(messages, masked_text)
+                    elif "prompt" in data:
+                        data["prompt"] = masked_text
                     verbose_proxy_logger.info(
                         f"PANW Prisma AIRS: Prompt allowed with masking (Category: {category})"
                     )
@@ -427,9 +448,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
             # Action is "block" - check if we should mask instead of blocking
             if masked_text and self.mask_request_content:
-                data["messages"] = self._apply_masking_to_messages(messages, masked_text)
+                if messages:
+                    data["messages"] = self._apply_masking_to_messages(messages, masked_text)
+                elif "prompt" in data:
+                    data["prompt"] = masked_text
                 verbose_proxy_logger.warning(
-                    f"PANW Prisma AIRS: Prompt blocked but masked instead (mask_request_content=True)"
+                    "PANW Prisma AIRS: Prompt blocked but masked instead (mask_request_content=True)"
                 )
                 add_guardrail_to_applied_guardrails_header(
                     request_data=data, guardrail_name=self.guardrail_name
@@ -499,8 +523,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
             # Prepare metadata
             metadata = {
-                "user": data.get("user", "litellm_user"),
-                "model": data.get("model", "unknown"),
+                "user": data.get("user") or "litellm_user",
+                "model": data.get("model") or "unknown",
             }
 
             # Scan response with PANW Prisma AIRS
@@ -532,7 +556,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             if masked_text and self.mask_response_content:
                 self._apply_masking_to_response(response, masked_text)
                 verbose_proxy_logger.warning(
-                    f"PANW Prisma AIRS: Response blocked but masked instead (mask_response_content=True)"
+                    "PANW Prisma AIRS: Response blocked but masked instead (mask_response_content=True)"
                 )
                 add_guardrail_to_applied_guardrails_header(
                     request_data=data, guardrail_name=self.guardrail_name
@@ -561,6 +585,63 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     }
                 }
             )
+
+    async def _scan_and_process_streaming_response(
+        self,
+        assembled_model_response: ModelResponse,
+        request_data: dict,
+    ) -> Tuple[bool, ModelResponse]:
+        """
+        Scan assembled streaming response and apply masking if needed.
+        Returns (content_was_modified, response).
+        """
+        content_was_modified = False
+        response_text = self._extract_response_text(assembled_model_response)
+        
+        if not response_text or not response_text.strip():
+            verbose_proxy_logger.info("PANW Prisma AIRS: No content to scan in streaming response")
+            return content_was_modified, assembled_model_response
+        
+        # Prepare metadata and scan
+        metadata = {
+            "user": request_data.get("user") or "litellm_user",
+            "model": request_data.get("model") or "unknown",
+        }
+        
+        scan_result = await self._call_panw_api(
+            content=response_text, is_response=True, metadata=metadata
+        )
+        
+        action = scan_result.get("action", "block")
+        category = scan_result.get("category", "unknown")
+        masked_text = self._get_masked_text(scan_result, is_response=True)
+        
+        # Handle scan results
+        if action == "allow":
+            if masked_text:
+                self._apply_masking_to_response(assembled_model_response, masked_text)
+                content_was_modified = True
+                verbose_proxy_logger.info(
+                    f"PANW Prisma AIRS: Streaming response allowed with masking (Category: {category})"
+                )
+            else:
+                verbose_proxy_logger.info(
+                    f"PANW Prisma AIRS: Streaming response allowed (Category: {category})"
+                )
+        elif masked_text and self.mask_response_content:
+            self._apply_masking_to_response(assembled_model_response, masked_text)
+            content_was_modified = True
+            verbose_proxy_logger.warning(
+                "PANW Prisma AIRS: Streaming response blocked but masked instead (mask_response_content=True)"
+            )
+        else:
+            error_detail = self._build_error_detail(scan_result, is_response=True)
+            verbose_proxy_logger.warning(
+                f"PANW Prisma AIRS: {error_detail['error']['message']}"
+            )
+            raise HTTPException(status_code=400, detail=error_detail)
+        
+        return content_was_modified, assembled_model_response
 
     @log_guardrail_information
     async def async_post_call_streaming_iterator_hook(
@@ -602,54 +683,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             assembled_model_response = stream_chunk_builder(chunks=all_chunks)
             
             if isinstance(assembled_model_response, ModelResponse):
-                # Extract response text for scanning
-                response_text = self._extract_response_text(assembled_model_response)
-                
-                if response_text and response_text.strip():
-                    # Prepare metadata
-                    metadata = {
-                        "user": request_data.get("user", "litellm_user"),
-                        "model": request_data.get("model", "unknown"),
-                    }
-                    
-                    # Scan assembled response with PANW Prisma AIRS
-                    scan_result = await self._call_panw_api(
-                        content=response_text, is_response=True, metadata=metadata
-                    )
-                    
-                    action = scan_result.get("action", "block")
-                    category = scan_result.get("category", "unknown")
-                    masked_text = self._get_masked_text(scan_result, is_response=True)
-                    
-                    # If action is "allow", apply masking if available
-                    if action == "allow":
-                        if masked_text:
-                            self._apply_masking_to_response(assembled_model_response, masked_text)
-                            content_was_modified = True
-                            verbose_proxy_logger.info(
-                                f"PANW Prisma AIRS: Streaming response allowed with masking (Category: {category})"
-                            )
-                        else:
-                            verbose_proxy_logger.info(
-                                f"PANW Prisma AIRS: Streaming response allowed (Category: {category})"
-                            )
-                    # Action is "block" - check if we should mask instead
-                    elif masked_text and self.mask_response_content:
-                        self._apply_masking_to_response(assembled_model_response, masked_text)
-                        content_was_modified = True
-                        verbose_proxy_logger.warning(
-                            f"PANW Prisma AIRS: Streaming response blocked but masked instead (mask_response_content=True)"
-                        )
-                    else:
-                        # Block the response
-                        error_detail = self._build_error_detail(scan_result, is_response=True)
-                        verbose_proxy_logger.warning(
-                            f"PANW Prisma AIRS: {error_detail['error']['message']}"
-                        )
-                        raise HTTPException(status_code=400, detail=error_detail)
-                else:
-                    # No content to scan, pass through
-                    verbose_proxy_logger.info("PANW Prisma AIRS: No content to scan in streaming response")
+                # Scan and process the assembled response
+                content_was_modified, assembled_model_response = await self._scan_and_process_streaming_response(
+                    assembled_model_response, request_data
+                )
                 
                 # Add guardrail to applied guardrails header for observability
                 add_guardrail_to_applied_guardrails_header(

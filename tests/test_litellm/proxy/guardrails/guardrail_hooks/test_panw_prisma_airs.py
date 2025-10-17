@@ -63,16 +63,14 @@ class TestPanwAirsInitialization:
 
     def test_missing_api_key_raises_error(self):
         """Test that missing API key raises ValueError."""
-        litellm_params = SimpleNamespace(
-            profile_name="test_profile",
-            api_base=None,
-            default_on=True,
-            api_key=None,
-        )
-        guardrail_config = {"guardrail_name": "test_guardrail"}
-
+        # Test direct handler initialization without api_key or env var
         with pytest.raises(ValueError, match="api_key is required"):
-            initialize_guardrail(litellm_params, guardrail_config)  
+            PanwPrismaAirsHandler(
+                guardrail_name="test_panw_airs",
+                profile_name="test_profile",
+                api_key=None,  # No API key provided
+                default_on=True,
+            )  
 
     def test_missing_profile_name_raises_error(self):
         """Test that missing profile name raises ValueError."""
@@ -886,6 +884,131 @@ class TestPanwAirsAdvancedFeatures:
                     request_data=request_data, 
                     guardrail_name="test_panw_airs"
                 )
+
+
+class TestTextCompletionSupport:
+    """Test support for text completion (non-chat) requests."""
+
+    @pytest.mark.asyncio
+    async def test_text_completion_prompt_extraction(self):
+        """Test that guardrail can extract and scan text completion prompts."""
+        handler = PanwPrismaAirsHandler(
+            guardrail_name="test_panw_airs",
+            api_key="test_api_key",
+            profile_name="test_profile",
+            default_on=True,
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test_key", user_id="test_user", team_id="test_team"
+        )
+
+        # Text completion request (no messages, just prompt)
+        data = {
+            "prompt": "Complete this sentence: AI security is",
+            "model": "gpt-3.5-turbo-instruct",
+            "max_tokens": 50
+        }
+
+        mock_scan_result = {"action": "allow", "category": "safe"}
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = mock_scan_result
+
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=MagicMock(),
+                data=data,
+                call_type="text_completion",
+            )
+
+            # Verify API was called with the prompt text
+            mock_api.assert_called_once()
+            call_args = mock_api.call_args
+            assert call_args.kwargs["content"] == "Complete this sentence: AI security is"
+            assert call_args.kwargs["is_response"] is False
+
+            # Verify request was allowed through
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_text_completion_with_masking(self):
+        """Test that masking works with text completion prompts."""
+        handler = PanwPrismaAirsHandler(
+            guardrail_name="test_panw_airs",
+            api_key="test_api_key",
+            profile_name="test_profile",
+            default_on=True,
+            mask_request_content=True,
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test_key", user_id="test_user", team_id="test_team"
+        )
+
+        data = {
+            "prompt": "Send money to account 123-456-7890",
+            "model": "gpt-3.5-turbo-instruct",
+        }
+
+        # Simulate PANW blocking but providing masked content
+        mock_scan_result = {
+            "action": "block",
+            "category": "dlp",
+            "prompt_masked_data": {"data": "Send money to account XXXXXXXXXX"}
+        }
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = mock_scan_result
+
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=MagicMock(),
+                data=data,
+                call_type="text_completion",
+            )
+
+            # Verify the prompt was masked
+            assert result is None
+            assert data["prompt"] == "Send money to account XXXXXXXXXX"
+
+    @pytest.mark.asyncio
+    async def test_text_completion_with_list_prompts(self):
+        """Test that guardrail handles batch text completion (list of prompts)."""
+        handler = PanwPrismaAirsHandler(
+            guardrail_name="test_panw_airs",
+            api_key="test_api_key",
+            profile_name="test_profile",
+            default_on=True,
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test_key", user_id="test_user", team_id="test_team"
+        )
+
+        # Batch completion request
+        data = {
+            "prompt": ["Tell me a joke", "What is AI?"],
+            "model": "gpt-3.5-turbo-instruct",
+        }
+
+        mock_scan_result = {"action": "allow", "category": "safe"}
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = mock_scan_result
+
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=MagicMock(),
+                data=data,
+                call_type="text_completion",
+            )
+
+            # Verify API was called with joined prompts
+            mock_api.assert_called_once()
+            call_args = mock_api.call_args
+            assert "Tell me a joke" in call_args.kwargs["content"]
+            assert "What is AI?" in call_args.kwargs["content"]
 
 
 if __name__ == "__main__":
