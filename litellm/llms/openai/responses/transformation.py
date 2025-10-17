@@ -124,7 +124,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 # Ensure required fields are present for ResponseReasoningItem
                 item_data = dict(item)
                 if "id" not in item_data:
-                    item_data["id"] = f"rs_{hash(str(item_data))}"
+                    # Use abs() to ensure ID is always positive (hash() can return negative values)
+                    # Issue: https://github.com/BerriAI/litellm/issues/14846
+                    item_data["id"] = f"rs_{abs(hash(str(item_data)))}"
                 if "summary" not in item_data:
                     item_data["summary"] = (
                         item_data.get("reasoning_content", "")[:100] + "..."
