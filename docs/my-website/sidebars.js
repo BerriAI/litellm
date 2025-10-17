@@ -426,6 +426,7 @@ const sidebars = {
           label: "Vertex AI",
           items: [
             "providers/vertex",
+            "providers/vertex_auth",
             "providers/vertex_partner",
             "providers/vertex_self_deployed",
             "providers/vertex_image",
