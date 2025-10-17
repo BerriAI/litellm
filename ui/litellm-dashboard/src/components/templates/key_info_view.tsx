@@ -16,6 +16,7 @@ import { CopyIcon, CheckIcon } from "lucide-react";
 import { mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers";
 import { parseErrorMessage } from "../shared/errorUtils";
 import AutoRotationView from "../common_components/AutoRotationView";
+import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -106,6 +107,9 @@ export default function KeyInfoView({
         delete formValues.guardrails;
         delete formValues.prompts;
       }
+
+      // Handle max budget empty string
+      formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
 
       // Handle object_permission updates
       if (formValues.vector_stores !== undefined) {
@@ -630,7 +634,8 @@ export default function KeyInfoView({
                   <div>
                     <Text className="font-medium">Allowed Pass Through Routes</Text>
                     <Text>
-                      {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) && currentKeyData.metadata.allowed_passthrough_routes.length > 0
+                      {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) &&
+                      currentKeyData.metadata.allowed_passthrough_routes.length > 0
                         ? currentKeyData.metadata.allowed_passthrough_routes.map((route, index) => (
                             <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
                               {route}
