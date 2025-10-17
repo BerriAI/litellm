@@ -830,7 +830,7 @@ class SlackAlerting(CustomBatchLogger):
 
         # Convert deployment_ids back to set if it was stored as a list
         if outage_value is not None:
-            outage_value = self._restore_outage_value_from_cache(outage_value)
+            outage_value = self._restore_outage_value_from_cache(outage_value)  # type: ignore
 
         if (
             getattr(exception, "status_code", None) is None
