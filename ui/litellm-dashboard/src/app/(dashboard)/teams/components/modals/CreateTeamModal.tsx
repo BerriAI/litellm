@@ -104,6 +104,18 @@ const CreateTeamModal = ({
     form.setFieldValue("models", []);
   }, [currentOrgForCreateTeam, userModels, form]);
 
+  const fetchMcpAccessGroups = async () => {
+    try {
+      if (accessToken == null) {
+        return;
+      }
+      const groups = await fetchMCPAccessGroups(accessToken);
+      setMcpAccessGroups(groups);
+    } catch (error) {
+      console.error("Failed to fetch MCP access groups:", error);
+    }
+  };
+
   useEffect(() => {
     fetchMcpAccessGroups();
   }, [accessToken, fetchMcpAccessGroups]);
@@ -125,18 +137,6 @@ const CreateTeamModal = ({
 
     fetchGuardrails();
   }, [accessToken]);
-
-  const fetchMcpAccessGroups = async () => {
-    try {
-      if (accessToken == null) {
-        return;
-      }
-      const groups = await fetchMCPAccessGroups(accessToken);
-      setMcpAccessGroups(groups);
-    } catch (error) {
-      console.error("Failed to fetch MCP access groups:", error);
-    }
-  };
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
