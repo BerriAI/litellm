@@ -579,7 +579,11 @@ class LiteLLMProxyRequestSetup:
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
-            user_api_key_budget_reset_at=user_api_key_dict.budget_reset_at.isoformat() if user_api_key_dict.budget_reset_at else None,
+            user_api_key_budget_reset_at=(
+                user_api_key_dict.budget_reset_at.isoformat()
+                if user_api_key_dict.budget_reset_at
+                else None
+            ),
         )
         return user_api_key_logged_metadata
 
@@ -1198,8 +1202,10 @@ def add_provider_specific_headers_to_request(
             added_header = True
 
     if added_header is True:
+        # Anthropic headers work across multiple providers
+        # Store as comma-separated list so retrieval can match any of them
         data["provider_specific_header"] = ProviderSpecificHeader(
-            custom_llm_provider="anthropic",
+            custom_llm_provider="anthropic,bedrock,bedrock_converse,vertex_ai",
             extra_headers=anthropic_headers,
         )
 
