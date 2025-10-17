@@ -134,6 +134,27 @@ class SlackAlerting(CustomBatchLogger):
         if llm_router is not None:
             self.llm_router = llm_router
 
+    def _prepare_outage_value_for_cache(self, outage_value: Union[dict, ProviderRegionOutageModel, OutageModel]) -> dict:
+        """
+        Helper method to prepare outage value for Redis caching.
+        Converts set objects to lists for JSON serialization.
+        """
+        # Convert to dict for processing
+        cache_value = dict(outage_value)
+        
+        if "deployment_ids" in cache_value and isinstance(cache_value["deployment_ids"], set):
+            cache_value["deployment_ids"] = list(cache_value["deployment_ids"])
+        return cache_value
+
+    def _restore_outage_value_from_cache(self, outage_value: Optional[dict]) -> Optional[dict]:
+        """
+        Helper method to restore outage value after retrieving from cache.
+        Converts list objects back to sets for proper handling.
+        """
+        if outage_value and isinstance(outage_value.get("deployment_ids"), list):
+            outage_value["deployment_ids"] = set(outage_value["deployment_ids"])
+        return outage_value
+
     async def deployment_in_cooldown(self):
         pass
 
@@ -809,6 +830,10 @@ class SlackAlerting(CustomBatchLogger):
             ProviderRegionOutageModel
         ] = await self.internal_usage_cache.async_get_cache(key=cache_key)
 
+        # Convert deployment_ids back to set if it was stored as a list
+        if outage_value is not None:
+            outage_value = self._restore_outage_value_from_cache(outage_value)  # type: ignore
+
         if (
             getattr(exception, "status_code", None) is None
             or (
@@ -832,9 +857,11 @@ class SlackAlerting(CustomBatchLogger):
             )
 
             ## add to cache ##
+            # Convert set to list for JSON serialization
+            cache_value = self._prepare_outage_value_for_cache(outage_value)
             await self.internal_usage_cache.async_set_cache(
                 key=cache_key,
-                value=outage_value,
+                value=cache_value,
                 ttl=self.alerting_args.region_outage_alert_ttl,
             )
             return
@@ -900,8 +927,10 @@ class SlackAlerting(CustomBatchLogger):
             outage_value["major_alert_sent"] = True
 
         ## update cache ##
+        # Convert set to list for JSON serialization
+        cache_value = self._prepare_outage_value_for_cache(outage_value)
         await self.internal_usage_cache.async_set_cache(
-            key=cache_key, value=outage_value
+            key=cache_key, value=cache_value
         )
 
     async def outage_alerts(
@@ -1025,8 +1054,10 @@ class SlackAlerting(CustomBatchLogger):
                 outage_value["major_alert_sent"] = True
 
             ## update cache ##
+            # Convert set to list for JSON serialization
+            cache_value = self._prepare_outage_value_for_cache(outage_value)
             await self.internal_usage_cache.async_set_cache(
-                key=deployment_id, value=outage_value
+                key=deployment_id, value=cache_value
             )
         except Exception:
             pass
