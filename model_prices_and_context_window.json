@@ -3275,6 +3275,15 @@
         "supports_tool_choice": true,
         "supports_reasoning": true
     },
+    "azure_ai/mistral-document-ai-2505": {
+        "litellm_provider": "azure_ai",
+        "ocr_cost_per_page": 3e-3,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://devblogs.microsoft.com/foundry/whats-new-in-azure-ai-foundry-august-2025/#mistral-document-ai-(ocr)-%E2%80%94-serverless-in-foundry"
+    },
     "azure_ai/MAI-DS-R1": {
         "input_cost_per_token": 1.35e-06,
         "litellm_provider": "azure_ai",
@@ -15569,6 +15578,26 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "mistral/mistral-ocr-latest": {
+        "litellm_provider": "mistral",
+        "ocr_cost_per_page": 1e-3,
+        "annotation_cost_per_page": 3e-3,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://mistral.ai/pricing#api-pricing"
+    },
+    "mistral/mistral-ocr-2505-completion": {
+        "litellm_provider": "mistral",
+        "ocr_cost_per_page": 1e-3,
+        "annotation_cost_per_page": 3e-3,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/magistral-medium-latest": {
         "input_cost_per_token": 2e-06,

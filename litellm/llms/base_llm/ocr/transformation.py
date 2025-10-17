@@ -4,9 +4,10 @@ Base OCR transformation configuration.
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
-from pydantic import BaseModel
+from pydantic import PrivateAttr
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -18,14 +19,14 @@ else:
 DocumentType = Dict[str, str]
 
 
-class OCRPageDimensions(BaseModel):
+class OCRPageDimensions(LiteLLMPydanticObjectBase):
     """Page dimensions from OCR response."""
     dpi: Optional[int] = None
     height: Optional[int] = None
     width: Optional[int] = None
 
 
-class OCRPageImage(BaseModel):
+class OCRPageImage(LiteLLMPydanticObjectBase):
     """Image extracted from OCR page."""
     image_base64: Optional[str] = None
     bbox: Optional[Dict[str, Any]] = None
@@ -33,7 +34,7 @@ class OCRPageImage(BaseModel):
     model_config = {"extra": "allow"}
 
 
-class OCRPage(BaseModel):
+class OCRPage(LiteLLMPydanticObjectBase):
     """Single page from OCR response."""
     index: int
     markdown: str
@@ -43,7 +44,7 @@ class OCRPage(BaseModel):
     model_config = {"extra": "allow"}
 
 
-class OCRUsageInfo(BaseModel):
+class OCRUsageInfo(LiteLLMPydanticObjectBase):
     """Usage information from OCR response."""
     pages_processed: Optional[int] = None
     doc_size_bytes: Optional[int] = None
@@ -51,7 +52,7 @@ class OCRUsageInfo(BaseModel):
     model_config = {"extra": "allow"}
 
 
-class OCRResponse(BaseModel):
+class OCRResponse(LiteLLMPydanticObjectBase):
     """
     Standard OCR response format.
     Standardized to Mistral OCR format - other providers should transform to this format.
@@ -64,8 +65,11 @@ class OCRResponse(BaseModel):
     
     model_config = {"extra": "allow"}
 
+    # Define private attributes using PrivateAttr
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
 
-class OCRRequestData(BaseModel):
+
+class OCRRequestData(LiteLLMPydanticObjectBase):
     """OCR request data structure."""
     data: Optional[Union[Dict, bytes]] = None
     files: Optional[Dict[str, Any]] = None
