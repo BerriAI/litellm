@@ -153,6 +153,7 @@ def cost_per_token(  # noqa: PLR0915
     audio_transcription_file_duration: float = 0.0,  # for audio transcription calls - the file time in seconds
     ### SERVICE TIER ###
     service_tier: Optional[str] = None,  # for OpenAI service tier pricing
+    response: Optional[Any] = None,
 ) -> Tuple[float, float]:  # type: ignore
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -292,6 +293,12 @@ def cost_per_token(  # noqa: PLR0915
             model=model,
             custom_llm_provider=custom_llm_provider,
             billed_units=rerank_billed_units,
+        )
+    elif call_type == "ocr" or call_type == "aocr":
+        return ocr_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            response=response,
         )
     elif (
         call_type == "aretrieve_batch"
@@ -1001,6 +1008,7 @@ def completion_cost(  # noqa: PLR0915
                     audio_transcription_file_duration=audio_transcription_file_duration,
                     rerank_billed_units=rerank_billed_units,
                     service_tier=service_tier,
+                    response=completion_response,
                 )
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
@@ -1156,6 +1164,52 @@ def response_cost_calculator(
         return response_cost
     except Exception as e:
         raise e
+
+
+def ocr_cost(
+    model: str,
+    custom_llm_provider: Optional[str],
+    response: Optional[Any] = None,
+) -> Tuple[float, float]:
+    """
+    Args:
+        model: str - model name
+        custom_llm_provider: Optional[str] - custom LLM provider
+        response: Optional[Any] - response object
+
+    Returns:
+        Tuple[float, float]: cost of OCR processing
+
+        (Parent function requires a tuple, so we return a tuple. Cost is only in the first element.)
+    """
+    from litellm.llms.base_llm.ocr.transformation import OCRResponse
+
+    #########################################################
+    # validate it's an OCR response
+    #########################################################
+    if response is None or not isinstance(response, OCRResponse):
+        raise ValueError(f"response must be of type OCRResponse got type={type(response)}")
+    
+    if response.usage_info is None:
+        raise ValueError("OCR response usage_info is None")
+    
+    pages_processed = response.usage_info.pages_processed
+    if pages_processed is None:
+        raise ValueError("OCR response pages_processed is None")
+    
+    try:
+        model_info: Optional[ModelInfo] = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+    except Exception:
+        model_info = None
+
+    ocr_cost_per_page: float = 0.0
+    if model_info is not None:
+        ocr_cost_per_page = model_info.get("ocr_cost_per_page") or 0.0
+    
+    total_ocr_processing_cost: float = ocr_cost_per_page * pages_processed
+    return total_ocr_processing_cost, 0.0
 
 
 def rerank_cost(

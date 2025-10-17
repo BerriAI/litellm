@@ -5,6 +5,7 @@ This follows the same pattern as BaseLLMChatTest in tests/llm_translation/base_l
 """
 import pytest
 import litellm
+import os
 from abc import ABC, abstractmethod
 
 
@@ -45,6 +46,8 @@ class BaseOCRTest(ABC):
         litellm._turn_on_debug()
         base_ocr_call_args = self.get_base_ocr_call_args()
         print("BASE OCR Call args=", base_ocr_call_args)
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
 
         try:
             if sync_mode:
@@ -96,6 +99,19 @@ class BaseOCRTest(ABC):
             
             assert len(total_text) > 0, "Should extract some text from the document"
 
+            #########################################################
+            # validate we get a response cost in hidden parameters
+            #########################################################
+            hidden_params = response._hidden_params
+            assert isinstance(hidden_params, dict), "Hidden parameters should be a dictionary"
+
+            print("response usage_info:", response.usage_info)
+
+            response_cost = hidden_params.get("response_cost")
+            assert response_cost is not None, "Response cost should be in hidden parameters"
+            assert response_cost > 0, "Response cost should be greater than 0"
+            print("response_cost=", response_cost)
+            
         except Exception as e:
             pytest.fail(f"OCR call failed: {str(e)}")
 
