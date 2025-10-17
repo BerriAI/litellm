@@ -301,7 +301,7 @@ class DualCache(BaseCache):
                     for key, value in redis_result.items():
                         result[key_to_index[key]] = value
                         
-                        if value is not None:
+                        if value is not None and self.in_memory_cache is not None:
                             await self.in_memory_cache.async_set_cache(
                                 key, value, **kwargs
                             )

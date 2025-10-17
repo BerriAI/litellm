@@ -98,3 +98,30 @@ async def test_basic_functionality_not_broken(cache_setup):
     
     assert result == test_value
 
+
+@pytest.mark.asyncio
+async def test_batch_get_with_no_in_memory_cache():
+    """Test that batch get works when in_memory_cache is None"""
+    redis_cache = RedisCache(
+        host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT")
+    )
+    
+    # Create DualCache with no in-memory cache
+    dual_cache = DualCache(
+        in_memory_cache=None,  # This is the edge case we're testing
+        redis_cache=redis_cache,
+    )
+    
+    # Set some test data directly in Redis
+    test_key = f"no_memory_test_{str(uuid.uuid4())}"
+    test_value = {"test": "data_without_memory_cache"}
+    
+    await redis_cache.async_set_cache(test_key, test_value)
+    
+    # Should not crash when fetching from Redis without in-memory cache
+    result = await dual_cache.async_batch_get_cache([test_key])
+    
+    assert result is not None
+    assert len(result) == 1
+    assert result[0] == test_value
+
