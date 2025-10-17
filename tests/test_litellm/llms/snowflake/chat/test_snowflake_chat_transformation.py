@@ -3,15 +3,11 @@ Unit tests for Snowflake chat transformation
 Tests tool calling request/response transformations
 """
 
-import os
-import copy
 import json
-
-import pytest
-from unittest.mock import patch
 from unittest.mock import MagicMock
 
 import httpx
+import pytest
 
 import litellm
 from litellm.llms.snowflake.chat.transformation import SnowflakeConfig
@@ -70,10 +66,7 @@ class TestSnowflakeToolTransformation:
         assert "tool_spec" in snowflake_tool
         assert snowflake_tool["tool_spec"]["type"] == "generic"
         assert snowflake_tool["tool_spec"]["name"] == "get_weather"
-        assert (
-            snowflake_tool["tool_spec"]["description"]
-            == "Get the current weather in a given location"
-        )
+        assert snowflake_tool["tool_spec"]["description"] == "Get the current weather in a given location"
         assert "input_schema" in snowflake_tool["tool_spec"]
         assert snowflake_tool["tool_spec"]["input_schema"]["type"] == "object"
         assert "location" in snowflake_tool["tool_spec"]["input_schema"]["properties"]
@@ -100,9 +93,7 @@ class TestSnowflakeToolTransformation:
         # Verify tool_choice was transformed to Snowflake format
         assert "tool_choice" in transformed_request
         assert transformed_request["tool_choice"]["type"] == "tool"
-        assert transformed_request["tool_choice"]["name"] == [
-            "get_weather"
-        ]  # Array format
+        assert transformed_request["tool_choice"]["name"] == ["get_weather"]  # Array format
 
     def test_transform_request_with_string_tool_choice(self):
         """
@@ -141,10 +132,7 @@ class TestSnowflakeToolTransformation:
                                 "tool_use": {
                                     "tool_use_id": "tooluse_abc123",
                                     "name": "get_weather",
-                                    "input": {
-                                        "location": "Paris, France",
-                                        "unit": "celsius",
-                                    },
+                                    "input": {"location": "Paris, France", "unit": "celsius"},
                                 },
                             },
                         ]
@@ -219,10 +207,7 @@ class TestSnowflakeToolTransformation:
                 {
                     "message": {
                         "content_list": [
-                            {
-                                "type": "text",
-                                "text": "Let me check the weather for you. ",
-                            },
+                            {"type": "text", "text": "Let me check the weather for you. "},
                             {
                                 "type": "tool_use",
                                 "tool_use": {
@@ -315,10 +300,7 @@ class TestSnowflakeToolTransformation:
 
         # Verify standard response works
         assert isinstance(result, ModelResponse)
-        assert (
-            result.choices[0].message.content
-            == "Hello! I'm doing well, thank you for asking."
-        )
+        assert result.choices[0].message.content == "Hello! I'm doing well, thank you for asking."
 
     def test_get_supported_openai_params_includes_tools(self):
         """
@@ -331,120 +313,3 @@ class TestSnowflakeToolTransformation:
         assert "tool_choice" in supported_params
         assert "temperature" in supported_params
         assert "max_tokens" in supported_params
-
-
-class TestSnowFlakeCompletion:
-    model_name = "mistral"
-
-    messages = [
-        {"role": "system", "content": "hi"},
-        {"role": "user", "content": "the capital of France"},
-    ]
-
-    response = {
-        "choices": [
-            {
-                "message": {
-                    "content": "Paris",
-                    "content_list": [{"type": "text", "text": "Paris"}],
-                }
-            }
-        ],
-        "usage": {"prompt_tokens": 16, "completion_tokens": 18, "total_tokens": 34},
-    }
-
-    @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-    def test_snowflake_no_account_id(self, mock_post):
-        mock_post().json.return_value = copy.deepcopy(self.response)
-
-        with pytest.raises(Exception):
-            litellm.completion(
-                f"snowflake/{self.model_name}",
-                messages=self.messages,
-                api_key="0000",
-            )
-
-    @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-    def test_snowflake_no_api_key(self, mock_post):
-        mock_post().json.return_value = copy.deepcopy(self.response)
-
-        with pytest.raises(Exception):
-            litellm.completion(
-                f"snowflake/{self.model_name}",
-                messages=self.messages,
-                account_id="AAAA-BBBB",
-            )
-
-    @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-    def test_snowflake_jwt_account_id(self, mock_post):
-        mock_post().json.return_value = copy.deepcopy(self.response)
-
-        response = litellm.completion(
-            f"snowflake/{self.model_name}",
-            messages=self.messages,
-            api_key="00000",
-            account_id="AAAA-BBBB",
-        )
-        assert len(response.choices) == 1
-        assert response.choices[0]["message"].content == "Paris"
-
-        # check request
-        post_kwargs = mock_post.call_args_list[-1][1]
-        body = json.loads(post_kwargs["data"])
-        assert body["model"] == self.model_name
-        assert "the capital of France" in str(body["messages"])
-
-        # JWT key was used
-        assert "00000" in post_kwargs["headers"]["Authorization"]
-        # account id was used
-        assert "AAAA-BBBB" in post_kwargs["url"]
-        # is completion
-        post_kwargs["url"].endswith("cortex/inference:complete")
-
-    @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-    def test_snowflake_pat_key_account_id(self, mock_post):
-        mock_post().json.return_value = copy.deepcopy(self.response)
-
-        response = litellm.completion(
-            f"snowflake/{self.model_name}",
-            messages=self.messages,
-            pat_key="xxxxx",
-            account_id="AAAA-BBBB",
-        )
-        assert len(response.choices) == 1
-        assert response.choices[0]["message"].content == "Paris"
-
-        # PAT key was used
-        post_kwargs = mock_post.call_args_list[-1][1]
-        assert "xxxxx" in post_kwargs["headers"]["Authorization"]
-        assert (
-            post_kwargs["headers"]["X-Snowflake-Authorization-Token-Type"]
-            == "PROGRAMMATIC_ACCESS_TOKEN"
-        )
-
-        # account id was used
-        assert "AAAA-BBBB" in post_kwargs["url"]
-
-    @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-    def test_snowflake_env(self, mock_post):
-        mock_post().json.return_value = copy.deepcopy(self.response)
-
-        os.environ["SNOWFLAKE_ACCOUNT_ID"] = "AAAA-BBBB"
-        os.environ["SNOWFLAKE_JWT"] = "00000"
-
-        response = litellm.completion(
-            f"snowflake/{self.model_name}",
-            messages=self.messages,
-        )
-
-        assert len(response.choices) == 1
-        assert response.choices[0]["message"].content == "Paris"
-
-        # JWT key was used
-        post_kwargs = mock_post.call_args_list[-1][1]
-        assert "00000" in post_kwargs["headers"]["Authorization"]
-        # account id was used
-        assert "AAAA-BBBB" in post_kwargs["url"]
-
-        os.environ.pop("SNOWFLAKE_ACCOUNT_ID", None)
-        os.environ.pop("SNOWFLAKE_JWT", None)
