@@ -5,6 +5,7 @@ This follows the same pattern as BaseLLMChatTest in tests/llm_translation/base_l
 """
 import pytest
 import litellm
+import os
 from abc import ABC, abstractmethod
 
 
@@ -45,6 +46,8 @@ class BaseOCRTest(ABC):
         litellm._turn_on_debug()
         base_ocr_call_args = self.get_base_ocr_call_args()
         print("BASE OCR Call args=", base_ocr_call_args)
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
 
         try:
             if sync_mode:
