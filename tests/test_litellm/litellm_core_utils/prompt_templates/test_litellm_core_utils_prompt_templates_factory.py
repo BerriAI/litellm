@@ -571,3 +571,42 @@ def test_bedrock_tools_unpack_defs():
     _bedrock_tools_pt(tools=tools)
 
 
+def test_bedrock_tools_pt_empty_description():
+    """
+    Test that _bedrock_tools_pt handles empty string descriptions correctly.
+    
+    When a tool has an empty string description, Bedrock doesn't accept it,
+    so the function should fall back to using the function name as the description.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "",  # Empty string description
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        }
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    result = _bedrock_tools_pt(tools=tools)
+
+    # Verify that the result is a list with one tool
+    assert len(result) == 1
+    
+    # Verify that the description falls back to the function name
+    assert result[0]["toolSpec"]["name"] == "get_weather"
+    assert result[0]["toolSpec"]["description"] == "get_weather"
+
+
