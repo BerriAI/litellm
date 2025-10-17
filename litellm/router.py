@@ -1944,10 +1944,12 @@ class Router:
             )
 
     def _is_prompt_management_model(self, model: str) -> bool:
-        # Early exit: prompt management models must have "/" in name
-        # This avoids expensive get_model_list call for 99% of requests
-        if "/" not in model:
-            return False
+        # Early exit optimization: if model has "/" but prefix is not a known prompt management provider
+        # This avoids expensive get_model_list call for 99% of direct model calls
+        if "/" in model:
+            model_prefix = model.split("/")[0]
+            if model_prefix not in litellm._known_custom_logger_compatible_callbacks:
+                return False
         
         model_list = self.get_model_list(model_name=model)
         if model_list is None or len(model_list) != 1:
