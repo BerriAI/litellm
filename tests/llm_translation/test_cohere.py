@@ -107,7 +107,6 @@ def test_completion_cohere_command_r_plus_function_call():
         assert isinstance(
             response.choices[0].message.tool_calls[0].function.arguments, str
         )
-        print(second_response)
     except litellm.Timeout:
         pass
     except Exception as e:
