@@ -1,8 +1,8 @@
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
-import litellm
 
+import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
@@ -52,20 +52,20 @@ class CohereRerankConfig(BaseRerankConfig):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         max_tokens_per_doc: Optional[int] = None,
-    ) -> OptionalRerankParams:
+    ) -> Dict:
         """
         Map Cohere rerank params
 
         No mapping required - returns all supported params
         """
-        return OptionalRerankParams(
+        return dict(OptionalRerankParams(
             query=query,
             documents=documents,
             top_n=top_n,
             rank_fields=rank_fields,
             return_documents=return_documents,
             max_chunks_per_doc=max_chunks_per_doc,
-        )
+        ))
 
     def validate_environment(
         self,
@@ -86,7 +86,7 @@ class CohereRerankConfig(BaseRerankConfig):
             )
 
         default_headers = {
-            "Authorization": f"bearer {api_key}",
+            "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "content-type": "application/json",
         }
@@ -101,7 +101,7 @@ class CohereRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: OptionalRerankParams,
+        optional_rerank_params: Dict,
         headers: dict,
     ) -> dict:
         if "query" not in optional_rerank_params:
