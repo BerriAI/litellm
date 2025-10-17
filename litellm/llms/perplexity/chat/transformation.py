@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
@@ -87,12 +87,12 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,  
-        api_key: str | None = None,
-        json_mode: bool | None = None,  
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,  
     ) -> ModelResponse:
         """Transform Perplexity response to standard format."""
         # Call the parent transform_response first to handle the standard transformation
