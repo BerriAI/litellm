@@ -43,6 +43,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import NotificationsManager from "../molecules/notifications_manager";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
+import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 
 export interface TeamMembership {
   user_id: string;
@@ -323,6 +324,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         },
         organization_id: values.organization_id,
       };
+
+      updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
 
       if (values.team_member_budget !== undefined) {
         updateData.team_member_budget = Number(values.team_member_budget);
