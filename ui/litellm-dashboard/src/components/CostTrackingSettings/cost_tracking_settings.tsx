@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from "react";
-import { Card, Title, Text, Subtitle, Grid, Col, Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import React, { useState, useEffect, useCallback } from "react";
+import { Title, Text, Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { Modal, Form } from "antd";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationsManager from "../molecules/notifications_manager";
-import { Providers, provider_map } from "../provider_info_helpers";
+import { Providers } from "../provider_info_helpers";
 import { CostTrackingSettingsProps, DiscountConfig } from "./types";
 import { getProviderBackendValue } from "./provider_display_helpers";
 import ProviderDiscountTable from "./provider_discount_table";
@@ -30,13 +30,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
   const [form] = Form.useForm();
   const [modal, contextHolder] = Modal.useModal();
 
-  useEffect(() => {
-    if (accessToken) {
-      fetchDiscountConfig();
-    }
-  }, [accessToken]);
-
-  const fetchDiscountConfig = async () => {
+  const fetchDiscountConfig = useCallback(async () => {
     setIsFetching(true);
     try {
       const proxyBaseUrl = getProxyBaseUrl();
@@ -64,7 +58,13 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
     } finally {
       setIsFetching(false);
     }
-  };
+  }, [accessToken]);
+
+  useEffect(() => {
+    if (accessToken) {
+      fetchDiscountConfig();
+    }
+  }, [accessToken, fetchDiscountConfig]);
 
   const saveDiscountConfig = async (config: DiscountConfig) => {
     try {
@@ -243,7 +243,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
                     No provider discounts configured
                   </Text>
                   <Text className="text-gray-500 text-sm">
-                    Click "Add Provider Discount" to get started
+                    Click &quot;Add Provider Discount&quot; to get started
                   </Text>
                 </div>
               )}
