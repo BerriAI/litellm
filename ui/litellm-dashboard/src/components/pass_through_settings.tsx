@@ -15,6 +15,7 @@ interface GeneralSettingsPageProps {
   userRole: string | null;
   userID: string | null;
   modelData: any;
+  premiumUser?: boolean;
 }
 
 interface routingStrategyArgs {
@@ -37,6 +38,7 @@ export interface passThroughItem {
   headers: object;
   include_subpath?: boolean;
   cost_per_request?: number;
+  auth?: boolean;
 }
 
 // Password field component for headers
@@ -54,7 +56,7 @@ const PasswordField: React.FC<{ value: object }> = ({ value }) => {
   );
 };
 
-const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID, modelData }) => {
+const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID, modelData, premiumUser }) => {
   const [generalSettings, setGeneralSettings] = useState<passThroughItem[]>([]);
   const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -208,6 +210,7 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
         accessToken={accessToken}
         setPassThroughItems={setGeneralSettings}
         passThroughItems={generalSettings}
+        premiumUser={premiumUser}
       />
 
       <DataTable
