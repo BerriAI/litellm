@@ -190,25 +190,15 @@ async def get_memory_summary(
     _: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> Dict[str, Any]:
     """
-        
-    This endpoint provides a simplified, actionable view of your proxy's memory usage.
+    Get simplified memory usage summary for the proxy.
     
-    Returns:
-    - Current memory usage (MB) and percentage
-    - Cache sizes and item counts  
-    - Active object counts
-    - Health status
+    Returns current memory usage, cache sizes, object counts, and health status.
     
-    Example:
-    ```bash
-    curl http://localhost:4000/debug/memory/summary \\
-      -H "Authorization: Bearer sk-1234" \\
-      | python -m json.tool | pygmentize -l json
-    ```
+    Example usage:
+    curl http://localhost:4000/debug/memory/summary -H "Authorization: Bearer sk-1234"
     
-    Next steps based on results:
-    - For detailed analysis: Call GET /debug/memory/details
-    - To clear caches: Use the cache management endpoints
+    For detailed analysis, call GET /debug/memory/details
+    For cache management, use the cache management endpoints
     """
     from litellm.proxy.proxy_server import (
         llm_router,
@@ -234,7 +224,7 @@ async def get_memory_summary(
             "system_memory_percent": round(memory_percent, 2),
         }
         
-        # Health assessment
+        # Check memory health status
         if memory_percent > 80:
             health_status = "critical"
         elif memory_percent > 60:
@@ -258,7 +248,7 @@ async def get_memory_summary(
         caches["user_api_keys"] = {
             "count": user_cache_items,
             "count_readable": f"{user_cache_items:,}",
-            "what_it_stores": "Validated API keys to speed up authentication"
+            "what_it_stores": "Validated API keys for faster authentication"
         }
         
         # Router cache
@@ -268,10 +258,10 @@ async def get_memory_summary(
             caches["llm_responses"] = {
                 "count": router_cache_items,
                 "count_readable": f"{router_cache_items:,}",
-                "what_it_stores": "LLM responses for identical requests (semantic caching)"
+                "what_it_stores": "LLM responses for identical requests"
             }
         
-        # Proxy logging cache  
+        # Proxy logging cache
         logging_cache_items = len(
             proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.cache_dict
         )
@@ -279,13 +269,13 @@ async def get_memory_summary(
         caches["usage_tracking"] = {
             "count": logging_cache_items,
             "count_readable": f"{logging_cache_items:,}",
-            "what_it_stores": "Usage metrics before writing to database"
+            "what_it_stores": "Usage metrics before database write"
         }
             
     except Exception as e:
         caches["error"] = str(e)
     
-    # Get GC stats - simplified for summary view
+    # Get garbage collector stats
     gc_enabled = gc.isenabled()
     objects_pending = gc.get_count()[0]
     uncollectable = len(gc.garbage)
@@ -295,7 +285,7 @@ async def get_memory_summary(
         "objects_awaiting_collection": objects_pending,
     }
     
-    # Add warning if GC issues detected
+    # Add warning if garbage collection issues detected
     if uncollectable > 0:
         gc_info["warning"] = f"{uncollectable} uncollectable objects (possible memory leak)"
     
@@ -318,31 +308,19 @@ async def get_memory_details(
     include_process_info: bool = Query(True, description="Include process memory info"),
 ) -> Dict[str, Any]:
     """
-    Detailed memory diagnostics for deep debugging
+    Get detailed memory diagnostics for deep debugging.
     
-    Returns comprehensive memory usage information about:
-    - **Process Memory**: RSS, VMS, file descriptors, threads (requires psutil)
-    - **Garbage Collector**: Collections per generation, thresholds, current counts
-    - **Objects**: Total tracked objects and top object types by count
-    - **Uncollectable Objects**: Potential memory leaks from reference cycles
-    - **Cache Memory**: User API key cache, router cache, logging cache, Redis cache
-    - **Router Memory**: Model list, deployments, latency map, fallbacks
-    - **Callbacks Memory**: Callback lists, success/failure callbacks, logging manager
-    - **Queue Memory**: Request queue size and memory usage
-    - **Global Objects Memory**: Database client, settings, health checks, proxy logging
+    Returns comprehensive memory information including process memory, garbage collector stats,
+    object counts, cache memory, router memory, callbacks, queue, and global objects.
     
     Query Parameters:
     - top_n: Number of top object types to return (default: 20)
     - include_process_info: Include process-level memory info using psutil (default: true)
     
-    Example:
-    ```bash
-    curl "http://localhost:4000/debug/memory/details?top_n=30" \\
-      -H "Authorization: Bearer sk-1234" \\
-      | python -m json.tool | pygmentize -l json
-    ```
+    Example usage:
+    curl "http://localhost:4000/debug/memory/details?top_n=30" -H "Authorization: Bearer sk-1234"
     
-    All memory sizes are reported in both bytes and MB for easy analysis.
+    All memory sizes are reported in both bytes and MB.
     """
     from litellm.proxy.proxy_server import (
         llm_router,
@@ -600,34 +578,23 @@ async def configure_gc_thresholds_endpoint(
     generation_2: int = Query(10, description="Generation 2 threshold (default: 10)"),
 ) -> Dict[str, Any]:
     """
-    Configure Python garbage collection thresholds
+    Configure Python garbage collection thresholds.
     
-    This endpoint allows you to dynamically adjust Python's garbage collection thresholds.
-    Lower thresholds mean more frequent GC cycles (less memory usage, more CPU overhead).
-    Higher thresholds mean less frequent GC cycles (more memory usage, less CPU overhead).
+    Lower thresholds mean more frequent GC cycles (less memory, more CPU overhead).
+    Higher thresholds mean less frequent GC cycles (more memory, less CPU overhead).
     
     Query Parameters:
     - generation_0: Number of allocations before gen-0 collection (default: 700)
     - generation_1: Number of gen-0 collections before gen-1 collection (default: 10)  
     - generation_2: Number of gen-1 collections before gen-2 collection (default: 10)
     
-    Example:
-    ```bash
-    # Make GC more aggressive (more frequent collections)
-    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=500&generation_1=5&generation_2=5" \\
-      -H "Authorization: Bearer sk-1234" \\
-      | python -m json.tool | pygmentize -l json
+    Example for more aggressive collection:
+    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=500" -H "Authorization: Bearer sk-1234"
     
-    # Make GC less aggressive (less frequent collections)  
-    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=1000&generation_1=20&generation_2=20" \\
-      -H "Authorization: Bearer sk-1234" \\
-      | python -m json.tool | pygmentize -l json
-    ```
+    Example for less aggressive collection:
+    curl -X POST "http://localhost:4000/debug/memory/gc/configure?generation_0=1000" -H "Authorization: Bearer sk-1234"
     
-    Tips:
-    - If you're hitting 500MB frequently, try lowering generation_0 threshold
-    - Monitor memory usage with GET /debug/memory/summary after changes
-    - Consider your CPU vs memory trade-offs
+    Monitor memory usage with GET /debug/memory/summary after changes.
     """
     # Get current thresholds for logging
     old_thresholds = gc.get_threshold()
