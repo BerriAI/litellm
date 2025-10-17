@@ -7,6 +7,82 @@ Requirements:
 
 - Need to a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc) [**See Setup**](./virtual_keys.md#setup)
 
+## Understanding Budget Types
+
+LiteLLM supports multiple budget types, each serving different use cases:
+
+### 🏢 **Team Budgets**
+- **Purpose**: Control spending for an entire team/organization
+- **Scope**: All team members share the same budget pool
+- **Use Case**: Department budgets, project budgets, company-wide spending limits
+- **Behavior**: When a team member makes a request, it counts against the team's shared budget
+
+### 👤 **User Budgets** 
+- **Purpose**: Control spending for individual users
+- **Scope**: Each user has their own personal budget
+- **Use Case**: Individual developer budgets, per-user spending limits
+- **Behavior**: Each user's spending is tracked independently
+
+### 🔑 **Key Budgets**
+- **Purpose**: Control spending for specific API keys
+- **Scope**: Each API key has its own budget
+- **Use Case**: Per-key spending limits, temporary access keys
+- **Behavior**: Spending is tracked per API key, regardless of who uses it
+
+### 👥 **Team Member Budgets**
+- **Purpose**: Control individual spending within a team
+- **Scope**: Each team member has their own budget within the team
+- **Use Case**: Team members with individual spending limits
+- **Behavior**: Team members have personal budgets that count against the team's total budget
+
+### 🎯 **Customer Budgets**
+- **Purpose**: Control spending for end-users without creating API keys
+- **Scope**: Budgets tied to user IDs passed in requests
+- **Use Case**: End-user spending limits, customer-facing applications
+- **Behavior**: Spending tracked by user ID, no API key required
+
+## Budget Hierarchy & Relationships
+
+Understanding how different budget types work together:
+
+### **Budget Priority Order**
+1. **Team Member Budget** (highest priority) - Individual spending limits within a team
+2. **Team Budget** - Shared budget pool for the entire team
+3. **User Budget** - Personal budget for individual users
+4. **Key Budget** - Budget tied to specific API keys
+5. **Customer Budget** - End-user spending limits
+
+### **How Budgets Interact**
+
+:::info **Key Rule**: When a user has a `team_id`, team budgets take precedence over user budgets.
+
+:::
+
+**Example Scenarios:**
+
+**Scenario 1: User with Team ID**
+```
+User: john@company.com
+Team: engineering-team (budget: $1000)
+User's personal budget: $500
+Result: Uses team budget ($1000), personal budget ignored
+```
+
+**Scenario 2: User without Team ID**
+```
+User: jane@company.com  
+Team: None
+User's personal budget: $500
+Result: Uses personal budget ($500)
+```
+
+**Scenario 3: Team Member with Individual Budget**
+```
+User: mike@company.com
+Team: engineering-team (budget: $1000)
+Team member budget: $200
+Result: Uses team member budget ($200), counts against team total
+```
 
 ## Set Budgets
 
@@ -49,10 +125,9 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
-### Team
+### Team Budgets
 
-You can:
-- Add budgets to Teams
+Team budgets allow you to control spending for an entire team or organization. All team members share the same budget pool.
 
 :::info
 
@@ -64,6 +139,12 @@ You can:
 👉 [https://docs.litellm.ai/docs/proxy/team_budgets](https://docs.litellm.ai/docs/proxy/team_budgets)
 
 :::
+
+**When to use Team Budgets:**
+- Department or project budgets
+- Company-wide spending limits
+- Shared resource pools
+- When you want all team members to share the same budget
 
 
 #### **Add budgets to teams**
@@ -121,9 +202,21 @@ curl 'http://0.0.0.0:4000/team/new' \
 }'
 ```
 
-### Team Members
+### Team Member Budgets
 
-Use this when you want to budget a users spend within a Team 
+Team member budgets allow you to set individual spending limits for users within a team. Each team member has their own budget that counts against the team's total budget.
+
+**When to use Team Member Budgets:**
+- Individual spending limits within a team
+- Per-person budgets that count against team total
+- When you want both team and individual control
+- Preventing one team member from using all the team budget
+
+**Key Behavior:**
+- Each team member has their own spending limit
+- All spending counts against the team's total budget
+- If a team member exceeds their individual budget, requests fail
+- If the team exceeds its total budget, all team requests fail 
 
 
 #### Step 1. Create User
@@ -191,15 +284,27 @@ curl --location 'http://localhost:4000/chat/completions' \
 ```
 
 
-### Internal User
+### User Budgets
 
-Apply a budget across all calls an internal user (key owner) can make on the proxy. 
+User budgets allow you to set spending limits for individual users. Each user has their own personal budget that is independent of other users.
+
+**When to use User Budgets:**
+- Individual developer budgets
+- Per-user spending limits
+- Personal API access control
+- When users don't belong to a team
+
+**Key Behavior:**
+- Each user has their own independent budget
+- Spending is tracked per user, not shared
+- If a user exceeds their budget, their requests fail
+- Other users are not affected by one user's spending
 
 :::info
 
-For keys, with a 'team_id' set, the team budget is used instead of the user's personal budget.
+**Important**: For keys with a `team_id` set, the team budget is used instead of the user's personal budget.
 
-To apply a budget to a user within a team, use team member budgets.
+To apply a budget to a user within a team, use team member budgets instead.
 
 :::
 
@@ -260,9 +365,21 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 --data '{"models": ["azure-models"], "user_id": "krrish3@berri.ai"}'
 ```
 
-### Virtual Key
+### Key Budgets
 
-Apply a budget on a key.
+Key budgets allow you to set spending limits for specific API keys. Each API key has its own independent budget.
+
+**When to use Key Budgets:**
+- Per-key spending limits
+- Temporary access keys with spending limits
+- API key-specific budget control
+- When you want to limit spending per key rather than per user
+
+**Key Behavior:**
+- Each API key has its own independent budget
+- Spending is tracked per key, regardless of who uses it
+- If a key exceeds its budget, requests using that key fail
+- Other keys are not affected by one key's spending
 
 You can:
 - Add budgets to keys [**Jump**](#add-budgets-to-keys)
@@ -417,9 +534,21 @@ Expected response on failure
 </Tabs>
 
 
-### Customers
+### Customer Budgets
 
-Use this to budget `user` passed to `/chat/completions`, **without needing to create a key for every user**
+Customer budgets allow you to set spending limits for end-users without creating API keys for each user. Budgets are tied to user IDs passed in requests.
+
+**When to use Customer Budgets:**
+- End-user spending limits
+- Customer-facing applications
+- When you don't want to create API keys for each user
+- User-based spending control without key management
+
+**Key Behavior:**
+- Budgets are tied to user IDs passed in requests
+- No API key creation required for each user
+- Spending tracked by user ID
+- Perfect for customer-facing applications
 
 **Step 1. Modify config.yaml**
 Define `litellm.max_end_user_budget`
@@ -849,6 +978,17 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 --data '{"models": ["azure-models"], "user_id": "krrish@berri.ai"}'
 ```
 
+
+## Quick Reference: Choosing the Right Budget Type
+
+| Use Case | Budget Type | Why Choose This |
+|----------|-------------|-----------------|
+| **Department/Project Budget** | Team Budget | All team members share the same budget pool |
+| **Individual Developer Limits** | User Budget | Each developer has their own independent budget |
+| **API Key Spending Control** | Key Budget | Control spending per API key, regardless of user |
+| **Team with Individual Limits** | Team Member Budget | Individual limits within a team budget |
+| **Customer-Facing App** | Customer Budget | End-user limits without creating API keys |
+| **Global Proxy Limit** | Global Budget | Overall spending limit for the entire proxy |
 
 ## API Specification 
 
