@@ -134,17 +134,19 @@ class SlackAlerting(CustomBatchLogger):
         if llm_router is not None:
             self.llm_router = llm_router
 
-    def _prepare_outage_value_for_cache(self, outage_value: dict) -> dict:
+    def _prepare_outage_value_for_cache(self, outage_value: Union[dict, ProviderRegionOutageModel, OutageModel]) -> dict:
         """
         Helper method to prepare outage value for Redis caching.
         Converts set objects to lists for JSON serialization.
         """
+        # Convert to dict for processing
         cache_value = dict(outage_value)
+        
         if "deployment_ids" in cache_value and isinstance(cache_value["deployment_ids"], set):
             cache_value["deployment_ids"] = list(cache_value["deployment_ids"])
         return cache_value
 
-    def _restore_outage_value_from_cache(self, outage_value: dict) -> dict:
+    def _restore_outage_value_from_cache(self, outage_value: Optional[dict]) -> Optional[dict]:
         """
         Helper method to restore outage value after retrieving from cache.
         Converts list objects back to sets for proper handling.
