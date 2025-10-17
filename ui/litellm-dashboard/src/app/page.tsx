@@ -447,6 +447,7 @@ export default function CreateKeyPage() {
                     userRole={userRole}
                     accessToken={accessToken}
                     modelData={modelData}
+                    premiumUser={premiumUser}
                   />
                 ) : page == "logs" ? (
                   <SpendLogsTable
