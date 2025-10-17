@@ -95,7 +95,7 @@ from litellm.types.mcp import (
     MCPPreCallRequestObject,
     MCPPreCallResponseObject,
 )
-from litellm.types.utils import CallTypes, LLMResponseTypes, LoggedLiteLLMParams
+from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
