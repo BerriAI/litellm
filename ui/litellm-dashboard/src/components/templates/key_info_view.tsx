@@ -95,6 +95,7 @@ export default function KeyInfoView({
   }
 
   const handleKeyUpdate = async (formValues: Record<string, any>) => {
+    console.log("handle key update");
     try {
       if (!accessToken) return;
 
@@ -138,6 +139,11 @@ export default function KeyInfoView({
           };
         }
         delete formValues.mcp_tool_permissions;
+      }
+
+      // Handle max_budget empty string
+      if (formValues.max_budget === "") {
+        formValues.max_budget = null;
       }
 
       // Convert metadata back to an object if it exists and is a string
@@ -630,7 +636,8 @@ export default function KeyInfoView({
                   <div>
                     <Text className="font-medium">Allowed Pass Through Routes</Text>
                     <Text>
-                      {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) && currentKeyData.metadata.allowed_passthrough_routes.length > 0
+                      {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) &&
+                      currentKeyData.metadata.allowed_passthrough_routes.length > 0
                         ? currentKeyData.metadata.allowed_passthrough_routes.map((route, index) => (
                             <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
                               {route}
