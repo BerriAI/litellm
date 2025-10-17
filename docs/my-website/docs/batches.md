@@ -177,7 +177,7 @@ print("list_batches_response=", list_batches_response)
 ## **Supported Providers**:
 ### [Azure OpenAI](./providers/azure#azure-batches-api)
 ### [OpenAI](#quick-start)
-### [Vertex AI](./providers/vertex#batch-apis)
+### [Vertex AI Batch Passthrough](./providers/vertex_batch_passthrough.md)
 ### [Bedrock](./providers/bedrock_batches)
 
 
