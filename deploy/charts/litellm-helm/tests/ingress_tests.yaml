@@ -1,0 +1,462 @@
+suite: Ingress Configuration Tests
+templates:
+  - ingress.yaml
+tests:
+  - it: should not create Ingress manifest when disabled
+    set:
+      ingress.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should create an Ingress Manifest with default settings when enabled
+    set:
+      ingress.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Ingress
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm
+      - isSubset:
+          path: metadata.labels
+          content:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+      - equal:
+          path: spec.rules[0].host
+          value: api.example.local
+      - equal:
+          path: spec.rules[0].http.paths[0].path
+          value: /
+      - equal:
+          path: spec.rules[0].http.paths[0].pathType
+          value: ImplementationSpecific
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: RELEASE-NAME-litellm
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+          value: 4000
+
+  - it: should use custom className when specified for Kubernetes >= 1.18
+    capabilities:
+      majorVersion: 1
+      minorVersion: 19
+    set:
+      ingress.enabled: true
+      ingress.className: "traefik"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.ingressClassName
+          value: traefik
+
+  - it: should not include ingressClassName for Kubernetes < 1.18
+    capabilities:
+      majorVersion: 1
+      minorVersion: 17
+    set:
+      ingress.enabled: true
+      ingress.className: "nginx"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notExists:
+          path: spec.ingressClassName
+      - equal:
+          path: metadata.annotations["kubernetes.io/ingress.class"]
+          value: nginx
+
+  - it: should add annotations when specified
+    set:
+      ingress.enabled: true
+      ingress.annotations:
+        kubernetes.io/tls-acme: "true"
+        nginx.ingress.kubernetes.io/rewrite-target: /
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.annotations["kubernetes.io/tls-acme"]
+          value: "true"
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/rewrite-target"]
+          value: /
+
+  - it: should configure TLS when specified
+    set:
+      ingress.enabled: true
+      ingress.tls:
+        - secretName: litellm-tls
+          hosts:
+            - api.example.local
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.tls[0].secretName
+          value: litellm-tls
+      - equal:
+          path: spec.tls[0].hosts[0]
+          value: api.example.local
+
+  - it: should support multiple hosts with different paths
+    capabilities:
+      majorVersion: 1
+      minorVersion: 18
+    set:
+      ingress.enabled: true
+      ingress.hosts:
+        - host: api.example.com
+          paths:
+            - path: /
+              pathType: Prefix
+            - path: /v1
+              pathType: Exact
+        - host: api2.example.com
+          paths:
+            - path: /health
+              pathType: ImplementationSpecific
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.rules[0].host
+          value: api.example.com
+      - equal:
+          path: spec.rules[0].http.paths[0].path
+          value: /
+      - equal:
+          path: spec.rules[0].http.paths[0].pathType
+          value: Prefix
+      - equal:
+          path: spec.rules[0].http.paths[1].path
+          value: /v1
+      - equal:
+          path: spec.rules[0].http.paths[1].pathType
+          value: Exact
+      - equal:
+          path: spec.rules[1].host
+          value: api2.example.com
+      - equal:
+          path: spec.rules[1].http.paths[0].pathType
+          value: ImplementationSpecific
+
+  - it: should use custom serviceName when specified (K8s >= 1.19)
+    capabilities:
+      majorVersion: 1
+      minorVersion: 19
+    set:
+      ingress.enabled: true
+      ingress.hosts:
+        - host: api.example.com
+          paths:
+            - path: /
+              pathType: Prefix
+              serviceName: custom-service
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: custom-service
+
+  - it: should use custom servicePort as number when specified as integer (K8s >= 1.19)
+    capabilities:
+      majorVersion: 1
+      minorVersion: 19
+    set:
+      ingress.enabled: true
+      ingress.hosts:
+        - host: api.example.com
+          paths:
+            - path: /
+              pathType: Prefix
+              servicePort: 8080
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+          value: 8080
+      - notExists:
+          path: spec.rules[0].http.paths[0].backend.service.port.name
+
+  - it: should use custom servicePort as name when specified as string (K8s >= 1.19)
+    capabilities:
+      majorVersion: 1
+      minorVersion: 19
+    set:
+      ingress.enabled: true
+      ingress.hosts:
+        - host: api.example.com
+          paths:
+            - path: /
+              pathType: Prefix
+              servicePort: "http-admin"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.name
+          value: http-admin
+      - notExists:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+
+  - it: should use custom service port from values when specified
+    set:
+      ingress.enabled: true
+      service.port: 9000
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+          value: 9000
+
+  - it: should create document even with empty hosts list
+    set:
+      ingress.enabled: true
+      ingress.hosts: []
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.rules
+          value: null
+
+  - it: should use networking.k8s.io/v1 API version for Kubernetes >= 1.19
+    capabilities:
+      majorVersion: 1
+      minorVersion: 19
+    set:
+      ingress.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: apiVersion
+          value: networking.k8s.io/v1
+
+  - it: should use networking.k8s.io/v1beta1 API version for Kubernetes >= 1.14 and < 1.19
+    capabilities:
+      majorVersion: 1
+      minorVersion: 18
+    set:
+      ingress.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: apiVersion
+          value: networking.k8s.io/v1beta1
+
+  - it: should use extensions/v1beta1 API version for Kubernetes < 1.14
+    capabilities:
+      majorVersion: 1
+      minorVersion: 13
+    set:
+      ingress.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: apiVersion
+          value: extensions/v1beta1
+
+  - it: should use serviceName and servicePort backend format for Kubernetes < 1.19
+    capabilities:
+      majorVersion: 1
+      minorVersion: 18
+    set:
+      ingress.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.serviceName
+          value: RELEASE-NAME-litellm
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.servicePort
+          value: 4000
+      - notExists:
+          path: spec.rules[0].http.paths[0].backend.service
+
+  - it: should use custom serviceName and servicePort for Kubernetes < 1.19
+    capabilities:
+      majorVersion: 1
+      minorVersion: 18
+    set:
+      ingress.enabled: true
+      ingress.hosts:
+        - host: api.example.com
+          paths:
+            - path: /
+              pathType: Prefix
+              serviceName: custom-service
+              servicePort: 8080
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.serviceName
+          value: custom-service
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.servicePort
+          value: 8080
+      - notExists:
+          path: spec.rules[0].http.paths[0].backend.service
+
+  - it: should include pathType only for Kubernetes >= 1.18
+    capabilities:
+      majorVersion: 1
+      minorVersion: 18
+    set:
+      ingress.enabled: true
+      ingress.hosts:
+        - host: api.example.com
+          paths:
+            - path: /
+              pathType: Prefix
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.rules[0].http.paths[0].pathType
+          value: Prefix
+
+  - it: should not include pathType for Kubernetes < 1.18
+    capabilities:
+      majorVersion: 1
+      minorVersion: 17
+    set:
+      ingress.enabled: true
+      ingress.hosts:
+        - host: api.example.com
+          paths:
+            - path: /
+              pathType: Prefix
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notExists:
+          path: spec.rules[0].http.paths[0].pathType
+
+  - it: should work with fullnameOverride
+    capabilities:
+      majorVersion: 1
+      minorVersion: 19
+    set:
+      ingress.enabled: true
+      fullnameOverride: "my-custom-litellm"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: my-custom-litellm
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: my-custom-litellm
+
+  - it: should work with nameOverride
+    set:
+      ingress.enabled: true
+      nameOverride: "custom-name"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-custom-name
+      - isSubset:
+          path: metadata.labels
+          content:
+            app.kubernetes.io/name: custom-name
+
+  - it: should not override existing ingress.class annotation for Kubernetes < 1.18
+    capabilities:
+      majorVersion: 1
+      minorVersion: 17
+    set:
+      ingress.enabled: true
+      ingress.className: "nginx"
+      ingress.annotations:
+        kubernetes.io/ingress.class: "traefik"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.annotations["kubernetes.io/ingress.class"]
+          value: traefik
+      - notExists:
+          path: spec.ingressClassName
+
+  - it: should not add ingress.class annotation for Kubernetes >= 1.18
+    capabilities:
+      majorVersion: 1
+      minorVersion: 18
+    set:
+      ingress.enabled: true
+      ingress.className: "nginx"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - notExists:
+          path: metadata.annotations["kubernetes.io/ingress.class"]
+
+  - it: should handle mixed servicePort types in different paths (K8s >= 1.19)
+    capabilities:
+      majorVersion: 1
+      minorVersion: 19
+    set:
+      ingress.enabled: true
+      ingress.hosts:
+        - host: api.example.com
+          paths:
+            - path: /api
+              pathType: Prefix
+              servicePort: 8080
+            - path: /metrics
+              pathType: Prefix
+              servicePort: "metrics-port"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+          value: 8080
+      - notExists:
+          path: spec.rules[0].http.paths[0].backend.service.port.name
+      - equal:
+          path: spec.rules[0].http.paths[1].backend.service.port.name
+          value: metrics-port
+      - notExists:
+          path: spec.rules[0].http.paths[1].backend.service.port.number
+
+  - it: should not create annotations section when empty
+    set:
+      ingress.enabled: true
+      ingress.annotations: {}
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notExists:
+          path: metadata.annotations
+
+  - it: should not create TLS section when empty
+    set:
+      ingress.enabled: true
+      ingress.tls: []
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notExists:
+          path: spec.tls
