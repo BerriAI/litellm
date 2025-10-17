@@ -11,35 +11,40 @@ Requirements:
 
 LiteLLM supports multiple budget types, each serving different use cases:
 
-### 🏢 **Team Budgets**
-- **Purpose**: Control spending for an entire team/organization
-- **Scope**: All team members share the same budget pool
-- **Use Case**: Department budgets, project budgets, company-wide spending limits
-- **Behavior**: When a team member makes a request, it counts against the team's shared budget
-
-### 👤 **User Budgets** 
+### 👤 **User Budgets** {#user-budgets}
 - **Purpose**: Control spending for individual users
 - **Scope**: Each user has their own personal budget
 - **Use Case**: Individual developer budgets, per-user spending limits
 - **Behavior**: Each user's spending is tracked independently
+- **[→ Set User Budgets](#set-user-budgets)**
 
-### 🔑 **Key Budgets**
+### 🔑 **Key Budgets** {#key-budgets}
 - **Purpose**: Control spending for specific API keys
 - **Scope**: Each API key has its own budget
 - **Use Case**: Per-key spending limits, temporary access keys
 - **Behavior**: Spending is tracked per API key, regardless of who uses it
+- **[→ Set Key Budgets](#set-key-budgets)**
 
-### 👥 **Team Member Budgets**
+### 🏢 **Team Budgets** {#team-budgets}
+- **Purpose**: Control spending for an entire team/organization
+- **Scope**: All team members share the same budget pool
+- **Use Case**: Department budgets, project budgets, company-wide spending limits
+- **Behavior**: When a team member makes a request, it counts against the team's shared budget
+- **[→ Set Team Budgets](#set-team-budgets)**
+
+### 👥 **Team Member Budgets** {#team-member-budgets}
 - **Purpose**: Control individual spending within a team
 - **Scope**: Each team member has their own budget within the team
 - **Use Case**: Team members with individual spending limits
 - **Behavior**: Team members have personal budgets that count against the team's total budget
+- **[→ Set Team Member Budgets](#set-team-member-budgets)**
 
-### 🎯 **Customer Budgets**
+### 🎯 **Customer Budgets** {#customer-budgets}
 - **Purpose**: Control spending for end-users without creating API keys
 - **Scope**: Budgets tied to user IDs passed in requests
 - **Use Case**: End-user spending limits, customer-facing applications
 - **Behavior**: Spending tracked by user ID, no API key required
+- **[→ Set Customer Budgets](#set-customer-budgets)**
 
 ## Budget Hierarchy & Relationships
 
@@ -54,35 +59,10 @@ Understanding how different budget types work together:
 
 ### **How Budgets Interact**
 
-:::info **Key Rule**: When a user has a `team_id`, team budgets take precedence over user budgets.
-
+:::info **Key Rule:** 
+Users can add a `team_id` to virtual keys to use team budget, or leave blank to use their own budget. 
 :::
 
-**Example Scenarios:**
-
-**Scenario 1: User with Team ID**
-```
-User: john@company.com
-Team: engineering-team (budget: $1000)
-User's personal budget: $500
-Result: Uses team budget ($1000), personal budget ignored
-```
-
-**Scenario 2: User without Team ID**
-```
-User: jane@company.com  
-Team: None
-User's personal budget: $500
-Result: Uses personal budget ($500)
-```
-
-**Scenario 3: Team Member with Individual Budget**
-```
-User: mike@company.com
-Team: engineering-team (budget: $1000)
-Team member budget: $200
-Result: Uses team member budget ($200), counts against team total
-```
 
 ## Set Budgets
 
@@ -112,7 +92,7 @@ litellm /path/to/config.yaml
 
 ```bash
 curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Autherization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-1234' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "gpt-3.5-turbo",
@@ -125,166 +105,8 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
-### Team Budgets
 
-Team budgets allow you to control spending for an entire team or organization. All team members share the same budget pool.
-
-:::info
-
-**Step-by step tutorial on setting, resetting budgets on Teams here (API or using Admin UI)**
-
-> **Prerequisite:**
-> To enable team member rate limits, you must set the environment variable `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING=true` before starting the proxy server. Without this, team member rate limits will not be enforced.
-
-👉 [https://docs.litellm.ai/docs/proxy/team_budgets](https://docs.litellm.ai/docs/proxy/team_budgets)
-
-:::
-
-**When to use Team Budgets:**
-- Department or project budgets
-- Company-wide spending limits
-- Shared resource pools
-- When you want all team members to share the same budget
-
-
-#### **Add budgets to teams**
-```shell 
-curl --location 'http://localhost:4000/team/new' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data-raw '{
-  "team_alias": "my-new-team_4",
-  "members_with_roles": [{"role": "admin", "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"}],
-  "rpm_limit": 99
-}' 
-```
-
-[**See Swagger**](https://litellm-api.up.railway.app/#/team%20management/new_team_team_new_post)
-
-**Sample Response**
-
-```shell
-{
-    "team_alias": "my-new-team_4",
-    "team_id": "13e83b19-f851-43fe-8e93-f96e21033100",
-    "admins": [],
-    "members": [],
-    "members_with_roles": [
-        {
-            "role": "admin",
-            "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"
-        }
-    ],
-    "metadata": {},
-    "tpm_limit": null,
-    "rpm_limit": 99,
-    "max_budget": null,
-    "models": [],
-    "spend": 0.0,
-    "max_parallel_requests": null,
-    "budget_duration": null,
-    "budget_reset_at": null
-}
-```
-
-#### **Add budget duration to teams**
-
-`budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
-
-```
-curl 'http://0.0.0.0:4000/team/new' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data-raw '{
-  "team_alias": "my-new-team_4",
-  "members_with_roles": [{"role": "admin", "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"}],
-  "budget_duration": 10s,
-}'
-```
-
-### Team Member Budgets
-
-Team member budgets allow you to set individual spending limits for users within a team. Each team member has their own budget that counts against the team's total budget.
-
-**When to use Team Member Budgets:**
-- Individual spending limits within a team
-- Per-person budgets that count against team total
-- When you want both team and individual control
-- Preventing one team member from using all the team budget
-
-**Key Behavior:**
-- Each team member has their own spending limit
-- All spending counts against the team's total budget
-- If a team member exceeds their individual budget, requests fail
-- If the team exceeds its total budget, all team requests fail 
-
-
-#### Step 1. Create User
-
-Create a user with `user_id=ishaan`
-
-```shell
-curl --location 'http://0.0.0.0:4000/user/new' \
-    --header 'Authorization: Bearer sk-1234' \
-    --header 'Content-Type: application/json' \
-    --data '{
-        "user_id": "ishaan"
-}'
-```
-
-#### Step 2. Add User to an existing Team - set `max_budget_in_team`
-
-Set `max_budget_in_team` when adding a User to a team. We use the same `user_id` we set in Step 1
-
-```shell
-curl -X POST 'http://0.0.0.0:4000/team/member_add' \
--H 'Authorization: Bearer sk-1234' \
--H 'Content-Type: application/json' \
--d '{"team_id": "e8d1460f-846c-45d7-9b43-55f3cc52ac32", "max_budget_in_team": 0.000000000001, "member": {"role": "user", "user_id": "ishaan"}}'
-```
-
-#### Step 3. Create a Key for Team member from Step 1
-
-Set `user_id=ishaan` from step 1
-
-```shell
-curl --location 'http://0.0.0.0:4000/key/generate' \
-    --header 'Authorization: Bearer sk-1234' \
-    --header 'Content-Type: application/json' \
-    --data '{
-        "user_id": "ishaan",
-        "team_id": "e8d1460f-846c-45d7-9b43-55f3cc52ac32"
-}'
-```
-Response from `/key/generate`
-
-We use the `key` from this response in Step 4
-```shell
-{"key":"sk-RV-l2BJEZ_LYNChSx2EueQ", "models":[],"spend":0.0,"max_budget":null,"user_id":"ishaan","team_id":"e8d1460f-846c-45d7-9b43-55f3cc52ac32","max_parallel_requests":null,"metadata":{},"tpm_limit":null,"rpm_limit":null,"budget_duration":null,"allowed_cache_controls":[],"soft_budget":null,"key_alias":null,"duration":null,"aliases":{},"config":{},"permissions":{},"model_max_budget":{},"key_name":null,"expires":null,"token_id":null}% 
-```
-
-#### Step 4. Make /chat/completions requests for Team member
-
-Use the key from step 3 for this request. After 2-3 requests expect to see The following error `ExceededBudget: Crossed spend within team` 
-
-
-```shell
-curl --location 'http://localhost:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-RV-l2BJEZ_LYNChSx2EueQ' \
-    --header 'Content-Type: application/json' \
-    --data '{
-    "model": "llama3",
-    "messages": [
-        {
-        "role": "user",
-        "content": "tes4"
-        }
-    ]
-}'
-```
-
-
-### User Budgets
+### User Budgets {#set-user-budgets}
 
 User budgets allow you to set spending limits for individual users. Each user has their own personal budget that is independent of other users.
 
@@ -365,7 +187,167 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 --data '{"models": ["azure-models"], "user_id": "krrish3@berri.ai"}'
 ```
 
-### Key Budgets
+
+### Team Budgets {#set-team-budgets}
+
+You can:
+- Add budgets to Teams
+
+:::info
+
+**Step-by-step tutorial on setting, resetting budgets on Teams here (API or using Admin UI)**
+
+> **Prerequisite:**
+> To enable team member rate limits, you must set the environment variable `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING=true` before starting the proxy server. Without this, team member rate limits will not be enforced.
+
+👉 [https://docs.litellm.ai/docs/proxy/team_budgets](https://docs.litellm.ai/docs/proxy/team_budgets)
+
+:::
+
+**When to use Team Budgets:**
+- Department or project budgets
+- Company-wide spending limits
+- Shared resource pools
+- When you want all team members to share the same budget
+
+
+#### **Add budgets to teams**
+```shell 
+curl --location 'http://localhost:4000/team/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "team_alias": "my-new-team_4",
+  "members_with_roles": [{"role": "admin", "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"}],
+  "rpm_limit": 99
+}' 
+```
+
+[**See Swagger**](https://litellm-api.up.railway.app/#/team%20management/new_team_team_new_post)
+
+**Sample Response**
+
+```shell
+{
+    "team_alias": "my-new-team_4",
+    "team_id": "13e83b19-f851-43fe-8e93-f96e21033100",
+    "admins": [],
+    "members": [],
+    "members_with_roles": [
+        {
+            "role": "admin",
+            "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"
+        }
+    ],
+    "metadata": {},
+    "tpm_limit": null,
+    "rpm_limit": 99,
+    "max_budget": null,
+    "models": [],
+    "spend": 0.0,
+    "max_parallel_requests": null,
+    "budget_duration": null,
+    "budget_reset_at": null
+}
+```
+
+#### **Add budget duration to teams**
+
+`budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+
+```
+curl 'http://0.0.0.0:4000/team/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "team_alias": "my-new-team_4",
+  "members_with_roles": [{"role": "admin", "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"}],
+  "budget_duration": 10s,
+}'
+```
+
+### Team Member Budgets {#set-team-member-budgets}
+
+Team member budgets allow you to set individual spending limits for users within a team. Each team member has their own budget that counts against the team's total budget.
+
+**When to use Team Member Budgets:**
+- Individual spending limits within a team
+- Per-person budgets that count against team total
+- When you want both team and individual control
+- Preventing one team member from using all the team budget
+
+**Key Behavior:**
+- Each team member has their own spending limit
+- All spending counts against the team's total budget
+- If a team member exceeds their individual budget, requests fail
+- If the team exceeds its total budget, all team requests fail 
+
+
+#### Step 1. Create User
+
+Create a user with `user_id=ishaan`
+
+```shell
+curl --location 'http://0.0.0.0:4000/user/new' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "ishaan"
+}'
+```
+
+#### Step 2. Add User to an existing Team - set `max_budget_in_team`
+
+Set `max_budget_in_team` when adding a User to a team. We use the same `user_id` we set in Step 1
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/team/member_add' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{"team_id": "e8d1460f-846c-45d7-9b43-55f3cc52ac32", "max_budget_in_team": 0.000000000001, "member": {"role": "user", "user_id": "ishaan"}}'
+```
+
+#### Step 3. Create a Key for Team member from Step 1
+
+Set `user_id=ishaan` from step 1
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/generate' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "ishaan",
+        "team_id": "e8d1460f-846c-45d7-9b43-55f3cc52ac32"
+}'
+```
+Response from `/key/generate`
+
+We use the `key` from this response in Step 4
+```shell
+{"key":"sk-RV-l2BJEZ_LYNChSx2EueQ", "models":[],"spend":0.0,"max_budget":null,"user_id":"ishaan","team_id":"e8d1460f-846c-45d7-9b43-55f3cc52ac32","max_parallel_requests":null,"metadata":{},"tpm_limit":null,"rpm_limit":null,"budget_duration":null,"allowed_cache_controls":[],"soft_budget":null,"key_alias":null,"duration":null,"aliases":{},"config":{},"permissions":{},"model_max_budget":{},"key_name":null,"expires":null,"token_id":null}% 
+```
+
+#### Step 4. Make /chat/completions requests for Team member
+
+Use the key from step 3 for this request. After 2-3 requests expect to see The following error `ExceededBudget: Crossed spend within team` 
+
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-RV-l2BJEZ_LYNChSx2EueQ' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "llama3",
+    "messages": [
+        {
+        "role": "user",
+        "content": "tes4"
+        }
+    ]
+}'
+```
+
+### Key Budgets {#set-key-budgets}
 
 Key budgets allow you to set spending limits for specific API keys. Each API key has its own independent budget.
 
@@ -385,9 +367,9 @@ You can:
 - Add budgets to keys [**Jump**](#add-budgets-to-keys)
 - Add budget durations, to reset spend [**Jump**](#add-budget-duration-to-keys)
 
-**Expected Behaviour**
+**Expected Behavior**
 - Costs Per key get auto-populated in `LiteLLM_VerificationToken` Table
-- After the key crosses it's `max_budget`, requests fail
+- After the key crosses its `max_budget`, requests fail
 - If duration set, spend is reset at the end of the duration
 
 By default the `max_budget` is set to `null` and is not checked for keys
@@ -444,6 +426,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
   "budget_duration": 10s,
 }'
 ```
+
 
 
 ### ✨ Virtual Key (Model Specific)
@@ -534,7 +517,7 @@ Expected response on failure
 </Tabs>
 
 
-### Customer Budgets
+### Customer Budgets {#set-customer-budgets}
 
 Customer budgets allow you to set spending limits for end-users without creating API keys for each user. Budgets are tied to user IDs passed in requests.
 
@@ -978,17 +961,6 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 --data '{"models": ["azure-models"], "user_id": "krrish@berri.ai"}'
 ```
 
-
-## Quick Reference: Choosing the Right Budget Type
-
-| Use Case | Budget Type | Why Choose This |
-|----------|-------------|-----------------|
-| **Department/Project Budget** | Team Budget | All team members share the same budget pool |
-| **Individual Developer Limits** | User Budget | Each developer has their own independent budget |
-| **API Key Spending Control** | Key Budget | Control spending per API key, regardless of user |
-| **Team with Individual Limits** | Team Member Budget | Individual limits within a team budget |
-| **Customer-Facing App** | Customer Budget | End-user limits without creating API keys |
-| **Global Proxy Limit** | Global Budget | Overall spending limit for the entire proxy |
 
 ## API Specification 
 
