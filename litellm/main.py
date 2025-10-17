@@ -5910,6 +5910,7 @@ async def ahealth_check(
             "batch",
             "rerank",
             "realtime",
+            "responses",
         ]
     ] = "chat",
     prompt: Optional[str] = None,
@@ -6017,6 +6018,10 @@ async def ahealth_check(
             ),
             "batch": lambda: litellm.alist_batches(
                 **_filter_model_params(model_params),
+            ),
+            "responses": lambda: litellm.aresponses(
+                **_filter_model_params(model_params),
+                input=prompt or "test",
             ),
         }
 
