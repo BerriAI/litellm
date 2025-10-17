@@ -8163,18 +8163,11 @@ async def onboarding(invite_link: str, request: Request):
             status_code=401, detail={"error": "Invitation link has expired."}
         )
 
-    #### INVALIDATE LINK
-    current_time = litellm.utils.get_utc_datetime()
-
-    _ = await prisma_client.db.litellm_invitationlink.update(
-        where={"id": invite_link},
-        data={
-            "accepted_at": current_time,
-            "updated_at": current_time,
-            "is_accepted": True,
-            "updated_by": invite_obj.user_id,  # type: ignore
-        },
-    )
+    #### CHECK IF ALREADY ACCEPTED
+    if invite_obj.is_accepted is True:
+        raise HTTPException(
+            status_code=401, detail={"error": "Invitation link has already been used."}
+        )
 
     ### GET USER OBJECT ###
     user_obj = await prisma_client.db.litellm_usertable.find_unique(
@@ -8279,21 +8272,6 @@ async def claim_onboarding_link(data: InvitationClaim):
             status_code=401, detail={"error": "Invitation link has expired."}
         )
 
-    #### CHECK IF CLAIMED
-    ##### if claimed - accept
-    ##### if unclaimed - reject
-
-    if invite_obj.is_accepted is True:
-        # this is a valid invite that was accepted
-        pass
-    else:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": "The invitation link was never validated. Please file an issue, if this is not intended - https://github.com/BerriAI/litellm/issues."
-            },
-        )
-
     #### CHECK IF VALID USER ID
     if invite_obj.user_id != data.user_id:
         raise HTTPException(
@@ -8304,6 +8282,36 @@ async def claim_onboarding_link(data: InvitationClaim):
                 )
             },
         )
+
+    #### CHECK IF ALREADY ACCEPTED
+    if invite_obj.is_accepted is True:
+        raise HTTPException(
+            status_code=401, detail={"error": "Invitation link has already been used."}
+        )
+
+    ### ATOMICALLY MARK INVITATION AS ACCEPTED ###
+    # Use update_many with compound WHERE clause to prevent race conditions
+    # Only updates if is_accepted = False, ensuring one-time use
+    current_time = litellm.utils.get_utc_datetime()
+    update_result = await prisma_client.db.litellm_invitationlink.update_many(
+        where={"id": data.invitation_link, "is_accepted": False},
+        data={
+            "is_accepted": True,
+            "accepted_at": current_time,
+            "updated_at": current_time,
+            "updated_by": invite_obj.user_id,  # type: ignore
+        },
+    )
+
+    # If no rows were updated, the invitation was already accepted (race condition)
+    if update_result == 0:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "The invitation link has already been used. Please request a new invitation link or use the forgot password flow."
+            },
+        )
+
     ### UPDATE USER OBJECT ###
     hash_password = hash_token(token=data.password)
     user_obj = await prisma_client.db.litellm_usertable.update(

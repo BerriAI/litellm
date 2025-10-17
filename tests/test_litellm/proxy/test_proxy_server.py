@@ -2288,3 +2288,381 @@ async def test_tag_cache_update_multiple_tags():
             assert tag_updates["tag:tag2"]["spend"] == 25.0
 
 
+@pytest.mark.asyncio
+async def test_onboarding_get_token_happy_path():
+    """
+    Test the happy path for /onboarding/get_token endpoint.
+
+    Validates that:
+    - Valid invitation link is accepted
+    - User object is retrieved
+    - Key is generated via generate_key_helper_fn
+    - JWT token is created and returned
+    - Response contains login_url, token, and user_email
+    """
+    from datetime import datetime, timedelta
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import jwt
+    from fastapi import Request
+
+    from litellm.proxy.proxy_server import onboarding
+
+    # Setup test data
+    test_invite_link = "test-invite-123"
+    test_user_id = "user-456"
+    test_user_email = "test@example.com"
+    test_user_role = "internal_user"
+    test_master_key = "sk-master-key-789"
+    test_generated_key = "sk-generated-key-abc"
+
+    # Mock invitation object (valid and not expired)
+    mock_invite_obj = MagicMock()
+    mock_invite_obj.id = test_invite_link
+    mock_invite_obj.user_id = test_user_id
+    mock_invite_obj.expires_at = datetime.utcnow() + timedelta(
+        days=7
+    )  # Valid for 7 more days
+    mock_invite_obj.is_accepted = False
+
+    # Mock user object
+    mock_user_obj = MagicMock()
+    mock_user_obj.user_id = test_user_id
+    mock_user_obj.user_email = test_user_email
+    mock_user_obj.user_role = test_user_role
+
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_invitationlink.find_unique = AsyncMock(
+        return_value=mock_invite_obj
+    )
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=mock_user_obj
+    )
+
+    # Mock generate_key_helper_fn response
+    mock_generate_key_response = {
+        "token": test_generated_key,
+        "user_id": test_user_id,
+        "expires": None,
+    }
+
+    # Mock request object
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+
+    # Only patch what's absolutely necessary for the happy path
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm.proxy.proxy_server.master_key", test_master_key
+    ), patch("litellm.proxy.proxy_server.premium_user", False), patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"litellm_key_header_name": "Authorization"},
+    ), patch(
+        "litellm.proxy.proxy_server.generate_key_helper_fn",
+        AsyncMock(return_value=mock_generate_key_response),
+    ):
+        # Call the endpoint
+        response = await onboarding(invite_link=test_invite_link, request=mock_request)
+
+        # Verify response structure
+        assert "login_url" in response
+        assert "token" in response
+        assert "user_email" in response
+
+        # Verify response values
+        assert response["user_email"] == test_user_email
+        assert "token=" in response["login_url"]
+        assert "user_email=" in response["login_url"]
+        assert "/ui/onboarding" in response["login_url"]
+
+        # Verify JWT token can be decoded
+        jwt_token = response["token"]
+        decoded_token = jwt.decode(jwt_token, test_master_key, algorithms=["HS256"])
+
+        # Verify JWT token contents
+        assert decoded_token["user_id"] == test_user_id
+        assert decoded_token["key"] == test_generated_key
+        assert decoded_token["user_email"] == test_user_email
+        assert decoded_token["user_role"] == test_user_role
+        assert decoded_token["login_method"] == "username_password"
+        assert decoded_token["premium_user"] is False
+        assert decoded_token["auth_header_name"] == "Authorization"
+        # These fields use actual utility functions with defaults, so just verify they exist
+        assert "disabled_non_admin_personal_key_creation" in decoded_token
+        assert "server_root_path" in decoded_token
+
+        # Verify database calls were made
+        mock_prisma_client.db.litellm_invitationlink.find_unique.assert_called_once_with(
+            where={"id": test_invite_link}
+        )
+        mock_prisma_client.db.litellm_usertable.find_unique.assert_called_once_with(
+            where={"user_id": test_user_id}
+        )
+
+
+@pytest.mark.asyncio
+async def test_onboarding_get_token_already_accepted():
+    """
+    Test that an invitation link that has already been accepted returns 401.
+
+    Validates that:
+    - Invitation link is found in database
+    - is_accepted is True
+    - HTTPException with 401 status code is raised
+    - Error message indicates link has already been used
+    """
+    from datetime import datetime, timedelta
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from fastapi import HTTPException, Request
+
+    from litellm.proxy.proxy_server import onboarding
+
+    # Setup test data
+    test_invite_link = "test-invite-123"
+    test_user_id = "user-456"
+    test_user_email = "test@example.com"
+    test_user_role = "internal_user"
+    test_master_key = "sk-master-key-789"
+    test_generated_key = "sk-generated-key-abc"
+
+    # Mock invitation object (valid but already accepted)
+    mock_invite_obj = MagicMock()
+    mock_invite_obj.id = test_invite_link
+    mock_invite_obj.user_id = test_user_id
+    mock_invite_obj.expires_at = datetime.utcnow() + timedelta(
+        days=7
+    )  # Valid for 7 more days
+    mock_invite_obj.is_accepted = True  # Already accepted!
+
+    # Mock user object
+    mock_user_obj = MagicMock()
+    mock_user_obj.user_id = test_user_id
+    mock_user_obj.user_email = test_user_email
+    mock_user_obj.user_role = test_user_role
+
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_invitationlink.find_unique = AsyncMock(
+        return_value=mock_invite_obj
+    )
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=mock_user_obj
+    )
+
+    # Mock generate_key_helper_fn response
+    mock_generate_key_response = {
+        "token": test_generated_key,
+        "user_id": test_user_id,
+        "expires": None,
+    }
+
+    # Mock request object
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm.proxy.proxy_server.master_key", test_master_key
+    ), patch("litellm.proxy.proxy_server.premium_user", False), patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"litellm_key_header_name": "Authorization"},
+    ), patch(
+        "litellm.proxy.proxy_server.generate_key_helper_fn",
+        AsyncMock(return_value=mock_generate_key_response),
+    ):
+        # Call the endpoint and expect HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await onboarding(invite_link=test_invite_link, request=mock_request)
+
+        # Verify the exception details
+        assert exc_info.value.status_code == 401
+        assert isinstance(exc_info.value.detail, dict)
+        assert "already been used" in exc_info.value.detail.get("error", "")
+
+        # Verify invitation was looked up but user was never queried
+        mock_prisma_client.db.litellm_invitationlink.find_unique.assert_called_once_with(
+            where={"id": test_invite_link}
+        )
+        # User lookup should NOT have been called since we failed earlier
+        mock_prisma_client.db.litellm_usertable.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_claim_onboarding_link_happy_path():
+    """
+    Test the happy path for /onboarding/claim_token endpoint.
+
+    Validates that:
+    - Valid invitation link is accepted
+    - User ID matches invitation
+    - Invitation is atomically marked as accepted (update_many returns 1)
+    - User password is updated with hashed password
+    - User object is returned
+    """
+    from datetime import datetime, timedelta
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import InvitationClaim
+    from litellm.proxy.proxy_server import claim_onboarding_link
+
+    # Setup test data
+    test_invite_link = "test-invite-claim-123"
+    test_user_id = "user-claim-456"
+    test_password = "newSecurePassword123!"
+
+    # Mock invitation object (valid and not yet accepted)
+    mock_invite_obj = MagicMock()
+    mock_invite_obj.id = test_invite_link
+    mock_invite_obj.user_id = test_user_id
+    mock_invite_obj.expires_at = datetime.utcnow() + timedelta(
+        days=7
+    )  # Valid for 7 more days
+    mock_invite_obj.is_accepted = False
+
+    # Mock updated user object (returned after password update)
+    mock_updated_user = MagicMock()
+    mock_updated_user.user_id = test_user_id
+    mock_updated_user.user_email = "test@example.com"
+    mock_updated_user.user_role = "internal_user"
+
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_invitationlink.find_unique = AsyncMock(
+        return_value=mock_invite_obj
+    )
+    # update_many returns the count of updated rows (1 for success)
+    mock_prisma_client.db.litellm_invitationlink.update_many = AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(
+        return_value=mock_updated_user
+    )
+
+    # Create request data
+    claim_data = InvitationClaim(
+        invitation_link=test_invite_link, user_id=test_user_id, password=test_password
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm.proxy.proxy_server.hash_token"
+    ) as mock_hash_token:
+        # Mock hash_token to return a predictable hash
+        mock_hashed_password = "hashed_password_xyz"
+        mock_hash_token.return_value = mock_hashed_password
+
+        # Call the endpoint
+        response = await claim_onboarding_link(data=claim_data)
+
+        # Verify response is the updated user object
+        assert response == mock_updated_user
+        assert response.user_id == test_user_id
+
+        # Verify invitation was looked up
+        mock_prisma_client.db.litellm_invitationlink.find_unique.assert_called_once_with(
+            where={"id": test_invite_link}
+        )
+
+        # Verify invitation was atomically marked as accepted
+        mock_prisma_client.db.litellm_invitationlink.update_many.assert_called_once()
+        update_many_call = (
+            mock_prisma_client.db.litellm_invitationlink.update_many.call_args
+        )
+        assert update_many_call.kwargs["where"]["id"] == test_invite_link
+        assert update_many_call.kwargs["where"]["is_accepted"] is False
+        assert update_many_call.kwargs["data"]["is_accepted"] is True
+        assert "accepted_at" in update_many_call.kwargs["data"]
+        assert "updated_at" in update_many_call.kwargs["data"]
+        assert update_many_call.kwargs["data"]["updated_by"] == test_user_id
+
+        # Verify password was hashed
+        mock_hash_token.assert_called_once_with(token=test_password)
+
+        # Verify user password was updated
+        mock_prisma_client.db.litellm_usertable.update.assert_called_once_with(
+            where={"user_id": test_user_id}, data={"password": mock_hashed_password}
+        )
+
+
+@pytest.mark.asyncio
+async def test_claim_onboarding_link_already_accepted():
+    """
+    Test that claiming an invitation link that has already been accepted returns 401.
+
+    Validates that:
+    - Invitation link is found in database
+    - is_accepted is True
+    - HTTPException with 401 status code is raised
+    - Error message indicates link has already been used
+    - No database updates are attempted
+    """
+    from datetime import datetime, timedelta
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import InvitationClaim
+    from litellm.proxy.proxy_server import claim_onboarding_link
+
+    # Setup test data
+    test_invite_link = "test-invite-claim-already-used"
+    test_user_id = "user-claim-789"
+    test_password = "newSecurePassword123!"
+
+    # Mock invitation object (valid but already accepted)
+    mock_invite_obj = MagicMock()
+    mock_invite_obj.id = test_invite_link
+    mock_invite_obj.user_id = test_user_id
+    mock_invite_obj.expires_at = datetime.utcnow() + timedelta(
+        days=7
+    )  # Still valid date
+    mock_invite_obj.is_accepted = True  # Already accepted!
+
+    # Mock updated user object (for completeness, though it won't be used)
+    mock_updated_user = MagicMock()
+    mock_updated_user.user_id = test_user_id
+    mock_updated_user.user_email = "test@example.com"
+    mock_updated_user.user_role = "internal_user"
+
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_invitationlink.find_unique = AsyncMock(
+        return_value=mock_invite_obj
+    )
+    # update_many returns the count of updated rows (mocked but shouldn't be called)
+    mock_prisma_client.db.litellm_invitationlink.update_many = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(
+        return_value=mock_updated_user
+    )
+
+    # Create request data
+    claim_data = InvitationClaim(
+        invitation_link=test_invite_link, user_id=test_user_id, password=test_password
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm.proxy.proxy_server.hash_token"
+    ) as mock_hash_token:
+        # Mock hash_token to return a predictable hash
+        mock_hashed_password = "hashed_password_xyz"
+        mock_hash_token.return_value = mock_hashed_password
+
+        # Call the endpoint and expect HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await claim_onboarding_link(data=claim_data)
+
+        # Verify the exception details
+        assert exc_info.value.status_code == 401
+        assert isinstance(exc_info.value.detail, dict)
+        assert "already been used" in exc_info.value.detail.get("error", "")
+
+        # Verify invitation was looked up
+        mock_prisma_client.db.litellm_invitationlink.find_unique.assert_called_once_with(
+            where={"id": test_invite_link}
+        )
+
+        # Verify update_many was NOT called (fails before atomic update)
+        mock_prisma_client.db.litellm_invitationlink.update_many.assert_not_called()
+
+        # Verify password was NOT hashed (fails before this step)
+        mock_hash_token.assert_not_called()
+
+        # Verify user password was NOT updated (fails before this step)
+        mock_prisma_client.db.litellm_usertable.update.assert_not_called()
