@@ -9,13 +9,15 @@ from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
 
+
+
 """
 Pydantic object defining how to set guardrails on litellm proxy
 
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera", "zscaler_ai_guard"
       mode: "during_call"
       guardrailIdentifier: ff6ujrregl1q
       guardrailVersion: "DRAFT"
@@ -42,6 +44,7 @@ class SupportedGuardrailIntegrations(Enum):
     OPENAI_MODERATION = "openai_moderation"
     NOMA = "noma"
     TOOL_PERMISSION = "tool_permission"
+    ZSCALER_AI_GUARD = "zscaler_ai_guard"    
     JAVELIN = "javelin"
     ENKRYPTAI = "enkryptai"
 
