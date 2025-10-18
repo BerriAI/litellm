@@ -1069,6 +1069,8 @@ async def update_team(
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+    - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
+    - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
     Example - update team TPM Limit
 
     ```
