@@ -206,6 +206,7 @@ class GenerationConfig(TypedDict, total=False):
     responseLogprobs: bool
     logprobs: int
     responseModalities: List[GeminiResponseModalities]
+    speechConfig: SpeechConfig
     thinkingConfig: GeminiThinkingConfig
 
 
