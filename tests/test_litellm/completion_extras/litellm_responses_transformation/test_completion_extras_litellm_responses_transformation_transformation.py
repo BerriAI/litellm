@@ -273,3 +273,83 @@ def test_convert_tools_to_responses_format():
     result = handler._convert_tools_to_responses_format(tools)
 
     assert result[0]["name"] == "test"
+
+
+def test_openai_responses_chunk_parser_web_search_call_added():
+    """Test that web_search_call output items in response.output_item.added are handled without error."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.output_item.added",
+        "output_index": 1,
+        "item": {
+            "id": "ws_0e5386c91dd50f830068ebe883849081919a0164a2c5f5a7f5",
+            "type": "web_search_call",
+            "status": "in_progress"
+        },
+        "sequence_number": 563
+    }
+
+    result = iterator.chunk_parser(chunk)
+    
+    assert result is not None
+    assert result.get("text") == ""
+    assert result.get("is_finished") is False
+    assert result.get("tool_use") is None
+    provider_fields = result.get("provider_specific_fields")
+    assert provider_fields is not None
+    assert "web_search" in provider_fields
+    web_search = provider_fields["web_search"]
+    assert web_search["id"] == "ws_0e5386c91dd50f830068ebe883849081919a0164a2c5f5a7f5"
+    assert web_search["type"] == "web_search_call"
+    assert web_search["status"] == "in_progress"
+    print("✓ web_search_call in output_item.added handled successfully")
+
+
+def test_openai_responses_chunk_parser_web_search_call_done():
+    """Test that web_search_call output items in response.output_item.done are handled without error."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.output_item.done",
+        "output_index": 1,
+        "item": {
+            "id": "ws_0e5386c91dd50f830068ebe883849081919a0164a2c5f5a7f5",
+            "type": "web_search_call",
+            "status": "completed",
+            "action": {
+                "type": "search",
+                "query": "search query",
+            }
+        },
+        "sequence_number": 600
+    }
+
+    result = iterator.chunk_parser(chunk)
+    
+    assert result is not None
+    assert result.get("text") == ""
+    assert result.get("is_finished") is False
+    assert result.get("tool_use") is None
+    provider_fields = result.get("provider_specific_fields")
+    assert provider_fields is not None
+    assert "web_search" in provider_fields
+    web_search = provider_fields["web_search"]
+    assert web_search["id"] == "ws_0e5386c91dd50f830068ebe883849081919a0164a2c5f5a7f5"
+    assert web_search["type"] == "web_search_call"
+    assert web_search["status"] == "completed"
+    assert web_search["action"]["type"] == "search"
+    assert web_search["action"]["query"] == "search query"
+    print("✓ web_search_call in output_item.done handled successfully")

@@ -640,9 +640,18 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     finish_reason="",
                     usage=None,
                 )
-            elif output_item.get("type") == "message":
-                pass
-            elif output_item.get("type") == "reasoning":
+            elif output_item.get("type") == "web_search_call":
+                return GenericStreamingChunk(
+                    text="",
+                    tool_use=None,
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    provider_specific_fields={
+                        "web_search": output_item
+                    }
+                )
+            elif output_item.get("type") in ["message", "reasoning"]:
                 pass
             else:
                 raise ValueError(f"Chat provider: Invalid output_item  {output_item}")
@@ -689,6 +698,17 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             elif output_item.get("type") == "message":
                 return GenericStreamingChunk(
                     finish_reason="stop", is_finished=True, usage=None, text=""
+                )
+            elif output_item.get("type") == "web_search_call":
+                return GenericStreamingChunk(
+                    text="",
+                    tool_use=None,
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    provider_specific_fields={
+                        "web_search": output_item
+                    }
                 )
             elif output_item.get("type") == "reasoning":
                 pass
