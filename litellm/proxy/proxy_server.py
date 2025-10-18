@@ -1684,7 +1684,7 @@ class ProxyConfig:
                     environment_variables=decrypted_env_vars
                 )
 
-            new_config.pop("model_list", None)
+            config_to_save.pop("model_list", None)
             await prisma_client.insert_data(data=config_to_save, table_name="config")
         else:
             # Save the updated config - if user is not using a dB
