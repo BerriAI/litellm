@@ -51,6 +51,7 @@ const sidebars = {
           "proxy/guardrails/custom_guardrail",
           "proxy/guardrails/prompt_injection",
           "proxy/guardrails/tool_permission",
+          "proxy/guardrails/zscaler_ai_guard"
           "proxy/guardrails/javelin",
         ].sort(),
       ],
@@ -429,7 +430,6 @@ const sidebars = {
             "providers/vertex_partner",
             "providers/vertex_self_deployed",
             "providers/vertex_image",
-            "providers/vertex_batch",
           ]
         },
         {
@@ -449,7 +449,6 @@ const sidebars = {
           label: "Bedrock",
           items: [
             "providers/bedrock",
-            "providers/bedrock_embedding",
             "providers/bedrock_agents",
             "providers/bedrock_batches",
             "providers/bedrock_vector_store",
