@@ -35,7 +35,6 @@ def _set_object_metadata_field(
     object_data: Union[
         LiteLLM_TeamTable,
         KeyRequestBase,
-        LiteLLM_BudgetTable,
         LiteLLM_OrganizationTable,
     ],
     field_name: str,
@@ -51,6 +50,7 @@ def _set_object_metadata_field(
     """
     if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
         _premium_user_check(field_name)
+
     object_data.metadata = object_data.metadata or {}
     object_data.metadata[field_name] = value
 
