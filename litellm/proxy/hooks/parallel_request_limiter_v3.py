@@ -103,6 +103,7 @@ return results
 REDIS_CLUSTER_SLOTS = 16384
 REDIS_NODE_HASHTAG_NAME = "all_keys"
 
+
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
     requests_per_unit: Optional[int]
     tokens_per_unit: Optional[int]
@@ -157,15 +158,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _is_redis_cluster(self) -> bool:
         """
         Check if the dual cache is using Redis cluster.
-        
+
         Returns:
             bool: True if using Redis cluster, False otherwise.
         """
         from litellm.caching.redis_cluster_cache import RedisClusterCache
-        
+
         return (
             self.internal_usage_cache.dual_cache.redis_cache is not None
-            and isinstance(self.internal_usage_cache.dual_cache.redis_cache, RedisClusterCache)
+            and isinstance(
+                self.internal_usage_cache.dual_cache.redis_cache, RedisClusterCache
+            )
         )
 
     async def in_memory_cache_sliding_window(
@@ -310,7 +313,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         return RateLimitResponse(overall_code=overall_code, statuses=statuses)
-    
+
     def keyslot_for_redis_cluster(self, key: str) -> int:
         """
         Compute the Redis Cluster slot for a given key.
@@ -325,34 +328,34 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Returns:
             int: The slot number (0-16383).
 
-            
+
         """
         # Handle hash tags: use substring between { and }
-        start = key.find('{')
+        start = key.find("{")
         if start != -1:
-            end = key.find('}', start + 1)
+            end = key.find("}", start + 1)
             if end != -1 and end != start + 1:
-                key = key[start + 1:end]
+                key = key[start + 1 : end]
 
         # Compute CRC16 and mod 16384
-        crc = binascii.crc_hqx(key.encode('utf-8'), 0)
+        crc = binascii.crc_hqx(key.encode("utf-8"), 0)
         return crc % REDIS_CLUSTER_SLOTS
 
     def _group_keys_by_hash_tag(self, keys: List[str]) -> Dict[str, List[str]]:
         """
         Group keys by their Redis hash tag to ensure cluster compatibility.
-        
+
         For Redis clusters, uses slot calculation to group keys that belong to the same slot.
         For regular Redis, no grouping is needed - all keys can be processed together.
         """
         groups: Dict[str, List[str]] = {}
-        
+
         # Use slot calculation for Redis clusters only
         if self._is_redis_cluster():
             for key in keys:
                 slot = self.keyslot_for_redis_cluster(key)
                 slot_key = f"slot_{slot}"
-                
+
                 if slot_key not in groups:
                     groups[slot_key] = []
                 groups[slot_key].append(key)
@@ -414,7 +417,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Check if any of the rate limit descriptors should be rate limited.
         Returns a RateLimitResponse with the overall code and status for each descriptor.
         Uses batch operations for Redis to improve performance.
-        
+
         Args:
             descriptors: List of rate limit descriptors to check
             parent_otel_span: Optional OpenTelemetry span for tracing
@@ -499,7 +502,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 parent_otel_span=parent_otel_span,
                 local_only=False,  # Check Redis too
             )
-            
+
             # For keys that don't exist yet, set them to 0
             if cache_values is None:
                 cache_values = []
@@ -545,6 +548,66 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             keys_to_fetch, cache_values, key_metadata
         )
         return rate_limit_response
+
+    def _add_model_per_key_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: Optional[str],
+        descriptors: List[RateLimitDescriptor],
+    ) -> None:
+        """
+        Add model-specific rate limit descriptor for API key if applicable.
+
+        Args:
+            user_api_key_dict: User API key authentication dictionary
+            requested_model: The model being requested
+            descriptors: List of rate limit descriptors to append to
+        """
+        from litellm.proxy.auth.auth_utils import (
+            get_key_model_rpm_limit,
+            get_key_model_tpm_limit,
+        )
+
+        if not requested_model:
+            return
+
+        _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict)
+        _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict)
+
+        if _tpm_limit_for_key_model is None and _rpm_limit_for_key_model is None:
+            return
+
+        _tpm_limit_for_key_model = _tpm_limit_for_key_model or {}
+        _rpm_limit_for_key_model = _rpm_limit_for_key_model or {}
+
+        # Check if model has any rate limits configured
+        should_check_rate_limit = (
+            requested_model in _tpm_limit_for_key_model
+            or requested_model in _rpm_limit_for_key_model
+        )
+
+        if not should_check_rate_limit:
+            return
+
+        # Get model-specific limits
+        model_specific_tpm_limit: Optional[int] = _tpm_limit_for_key_model.get(
+            requested_model
+        )
+        model_specific_rpm_limit: Optional[int] = _rpm_limit_for_key_model.get(
+            requested_model
+        )
+
+        descriptors.append(
+            RateLimitDescriptor(
+                key="model_per_key",
+                value=f"{user_api_key_dict.api_key}:{requested_model}",
+                rate_limit={
+                    "requests_per_unit": model_specific_rpm_limit,
+                    "tokens_per_unit": model_specific_tpm_limit,
+                    "window_size": self.window_size,
+                },
+            )
+        )
 
     def _should_enforce_rate_limit(
         self,
@@ -626,8 +689,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Returns list of descriptors for API key, user, team, team member, end user, and model-specific limits.
         """
         from litellm.proxy.auth.auth_utils import (
-            get_key_model_rpm_limit,
-            get_key_model_tpm_limit,
+            get_team_model_rpm_limit,
+            get_team_model_tpm_limit,
         )
         
         descriptors = []
@@ -732,29 +795,43 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Model rate limits
         requested_model = data.get("model", None)
-        if requested_model and (
-            get_key_model_tpm_limit(user_api_key_dict) is not None
-            or get_key_model_rpm_limit(user_api_key_dict) is not None
+        self._add_model_per_key_rate_limit_descriptor(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model,
+            descriptors=descriptors,
+        )
+
+        if (
+            get_team_model_rpm_limit(user_api_key_dict) is not None
+            or get_team_model_tpm_limit(user_api_key_dict) is not None
         ):
-            _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict) or {}
-            _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict) or {}
+            _tpm_limit_for_team_model = (
+                get_team_model_tpm_limit(user_api_key_dict) or {}
+            )
+            _rpm_limit_for_team_model = (
+                get_team_model_rpm_limit(user_api_key_dict) or {}
+            )
             should_check_rate_limit = False
-            if requested_model in _tpm_limit_for_key_model:
+            if requested_model in _tpm_limit_for_team_model:
                 should_check_rate_limit = True
-            elif requested_model in _rpm_limit_for_key_model:
+            elif requested_model in _rpm_limit_for_team_model:
                 should_check_rate_limit = True
 
             if should_check_rate_limit:
-                model_specific_tpm_limit: Optional[int] = None
-                model_specific_rpm_limit: Optional[int] = None
-                if requested_model in _tpm_limit_for_key_model:
-                    model_specific_tpm_limit = _tpm_limit_for_key_model[requested_model]
-                if requested_model in _rpm_limit_for_key_model:
-                    model_specific_rpm_limit = _rpm_limit_for_key_model[requested_model]
+                model_specific_tpm_limit = None
+                model_specific_rpm_limit = None
+                if requested_model in _tpm_limit_for_team_model:
+                    model_specific_tpm_limit = _tpm_limit_for_team_model[
+                        requested_model
+                    ]
+                if requested_model in _rpm_limit_for_team_model:
+                    model_specific_rpm_limit = _rpm_limit_for_team_model[
+                        requested_model
+                    ]
                 descriptors.append(
                     RateLimitDescriptor(
-                        key="model_per_key",
-                        value=f"{user_api_key_dict.api_key}:{requested_model}",
+                        key="model_per_team",
+                        value=f"{user_api_key_dict.team_id}:{requested_model}",
                         rate_limit={
                             "requests_per_unit": model_specific_rpm_limit,
                             "tokens_per_unit": model_specific_tpm_limit,
@@ -1160,6 +1237,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     self._create_pipeline_operations(
                         key="model_per_key",
                         value=f"{user_api_key}:{model_group}",
+                        rate_limit_type="tokens",
+                        total_tokens=total_tokens,
+                    )
+                )
+            if model_group and user_api_key_team_id:
+                pipeline_operations.extend(
+                    self._create_pipeline_operations(
+                        key="model_per_team",
+                        value=f"{user_api_key_team_id}:{model_group}",
                         rate_limit_type="tokens",
                         total_tokens=total_tokens,
                     )
