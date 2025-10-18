@@ -8679,23 +8679,26 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                 **config["litellm_settings"],
             }
 
-            # if litellm.success_callback in updated_litellm_settings and config["litellm_settings"]
-            if (
-                "success_callback" in updated_litellm_settings
-                and "success_callback" in config["litellm_settings"]
-            ):
-                # check both success callback are lists
-                if isinstance(
-                    config["litellm_settings"]["success_callback"], list
-                ) and isinstance(updated_litellm_settings["success_callback"], list):
-                    combined_success_callback = (
-                        config["litellm_settings"]["success_callback"]
-                        + updated_litellm_settings["success_callback"]
-                    )
-                    combined_success_callback = list(set(combined_success_callback))
-                    config["litellm_settings"][
-                        "success_callback"
-                    ] = combined_success_callback
+            # Merge callbacks - always preserve existing callbacks unless explicitly overwriting
+            if "success_callback" in updated_litellm_settings:
+                existing_callbacks = config["litellm_settings"].get(
+                    "success_callback", []
+                )
+                updated_callbacks = updated_litellm_settings.get("success_callback", [])
+
+                # Ensure both are lists
+                if not isinstance(existing_callbacks, list):
+                    existing_callbacks = []
+                if not isinstance(updated_callbacks, list):
+                    updated_callbacks = []
+
+                # Combine and deduplicate callbacks
+                combined_success_callback = list(
+                    set(existing_callbacks + updated_callbacks)
+                )
+                config["litellm_settings"][
+                    "success_callback"
+                ] = combined_success_callback
 
         # Save the updated config
         await proxy_config.save_config(new_config=config)
