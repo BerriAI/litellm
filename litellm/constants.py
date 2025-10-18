@@ -396,6 +396,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "extra_headers",
     "thinking",
     "web_search_options",
+    "service_tier",
 ]
 
 OPENAI_TRANSCRIPTION_PARAMS = [
@@ -450,6 +451,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "reasoning_effort": None,
     "thinking": None,
     "web_search_options": None,
+    "service_tier": None,
     "safety_identifier": None,
 }
 
