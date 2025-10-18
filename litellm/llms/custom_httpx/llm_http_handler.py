@@ -1602,7 +1602,7 @@ class BaseLLMHTTPHandler:
             custom_llm_provider=custom_llm_provider,
         )
         # Prepare request body
-        request_body = anthropic_messages_provider_config.transform_anthropic_messages_request(
+        request_body = await anthropic_messages_provider_config.transform_anthropic_messages_request(
             model=model,
             messages=messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,

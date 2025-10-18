@@ -64,7 +64,7 @@ class BaseAnthropicMessagesConfig(ABC):
         pass
 
     @abstractmethod
-    def transform_anthropic_messages_request(
+    async def transform_anthropic_messages_request(
         self,
         model: str,
         messages: List[Dict],
@@ -73,8 +73,7 @@ class BaseAnthropicMessagesConfig(ABC):
         headers: dict,
     ) -> Dict:
         pass
-
-    @abstractmethod
+    
     def transform_anthropic_messages_response(
         self,
         model: str,

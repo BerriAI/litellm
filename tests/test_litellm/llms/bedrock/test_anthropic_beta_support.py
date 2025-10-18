@@ -76,12 +76,13 @@ class TestAnthropicBetaHeaderSupport:
         assert "anthropic_beta" in additional_fields
         assert additional_fields["anthropic_beta"] == ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"]
 
-    def test_messages_transformation_anthropic_beta(self):
+    @pytest.mark.asyncio
+    async def test_messages_transformation_anthropic_beta(self):
         """Test that Messages API transformation includes anthropic_beta in request."""
         config = AmazonAnthropicClaudeMessagesConfig()
         headers = {"anthropic-beta": "output-128k-2025-02-19"}
         
-        result = config.transform_anthropic_messages_request(
+        result = await config.transform_anthropic_messages_request(
             model="anthropic.claude-3-5-sonnet-20241022-v2:0",
             messages=[{"role": "user", "content": "Test"}],
             anthropic_messages_optional_request_params={"max_tokens": 100},
@@ -164,3 +165,119 @@ class TestAnthropicBetaHeaderSupport:
         
         assert "anthropic_beta" in result
         assert result["anthropic_beta"] == supported_features
+
+    @pytest.mark.asyncio
+    async def test_async_process_image_content_with_urls(self):
+        """Test that async_anthropic_provider_process_image_content correctly converts URLs to base64."""
+        from litellm.litellm_core_utils.prompt_templates.image_handling import async_anthropic_provider_process_image_content
+        
+        # Test with image URL in string format
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What's in this image?"
+                    },
+                    {
+                        "type": "image",
+                        "source": "https://example.com/image.jpg"
+                    }
+                ]
+            }
+        ]
+        
+        # Mock the async_convert_url_to_base64 function
+        with patch('litellm.litellm_core_utils.prompt_templates.image_handling.async_convert_url_to_base64') as mock_convert:
+            mock_convert.return_value = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD"
+            
+            result = await async_anthropic_provider_process_image_content(messages)
+            
+            # Verify the URL was converted to base64 format
+            image_content = result[0]["content"][1]
+            assert image_content["source"]["type"] == "base64"
+            assert image_content["source"]["media_type"] == "image/jpeg"
+            assert image_content["source"]["data"] == "/9j/4AAQSkZJRgABAQAAAQABAAD"
+            mock_convert.assert_called_once_with("https://example.com/image.jpg")
+
+    @pytest.mark.asyncio
+    async def test_async_process_image_content_with_url_objects(self):
+        """Test that async_anthropic_provider_process_image_content correctly handles URL objects."""
+        from litellm.litellm_core_utils.prompt_templates.image_handling import async_anthropic_provider_process_image_content
+        
+        # Test with image URL in object format
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What's in this image?"
+                    },
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "url",
+                            "url": "https://example.com/image.png"
+                        }
+                    }
+                ]
+            }
+        ]
+        
+        # Mock the async_convert_url_to_base64 function
+        with patch('litellm.litellm_core_utils.prompt_templates.image_handling.async_convert_url_to_base64') as mock_convert:
+            mock_convert.return_value = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+            
+            result = await async_anthropic_provider_process_image_content(messages)
+            
+            # Verify the URL was converted to base64 format
+            image_content = result[0]["content"][1]
+            assert image_content["source"]["type"] == "base64"
+            assert image_content["source"]["media_type"] == "image/png"
+            assert image_content["source"]["data"] == "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+            mock_convert.assert_called_once_with("https://example.com/image.png")
+
+    @pytest.mark.asyncio
+    async def test_async_transform_anthropic_messages_request(self):
+        """Test that async_transform_anthropic_messages_request uses async image processing."""
+        config = AmazonAnthropicClaudeMessagesConfig()
+        
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What's in this image?"
+                    },
+                    {
+                        "type": "image",
+                        "source": "https://example.com/image.jpg"
+                    }
+                ]
+            }
+        ]
+        
+        headers = {"anthropic-beta": "context-1m-2025-08-07"}
+        
+        # Mock the async_anthropic_provider_process_image_content function
+        with patch('litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation.async_anthropic_provider_process_image_content') as mock_async_process:
+            mock_async_process.return_value = messages  # Return messages unchanged for simplicity
+            
+            result = await config.transform_anthropic_messages_request(
+                model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+                messages=messages,
+                anthropic_messages_optional_request_params={"max_tokens": 100},
+                litellm_params={},
+                headers=headers
+            )
+            
+            # Verify async_anthropic_provider_process_image_content was called
+            mock_async_process.assert_called_once_with(messages)
+            
+            # Verify the result contains expected fields
+            assert "anthropic_version" in result
+            assert "anthropic_beta" in result
+            assert result["anthropic_beta"] == ["context-1m-2025-08-07"]

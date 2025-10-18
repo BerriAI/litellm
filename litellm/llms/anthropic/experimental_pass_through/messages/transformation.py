@@ -73,7 +73,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         return headers, api_base
 
-    def transform_anthropic_messages_request(
+    async def transform_anthropic_messages_request(
         self,
         model: str,
         messages: List[Dict],

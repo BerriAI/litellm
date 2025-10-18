@@ -84,3 +84,94 @@ def convert_url_to_base64(url: str) -> str:
     raise litellm.ImageFetchError(
         f"Error: Unable to fetch image from URL after 3 attempts. url={url}",
     )
+
+async def handle_string_url_to_base64(source: str) -> dict:
+    """
+    Handle string URL source and convert to base64 format (sync version).
+    
+    Args:
+        source: String URL starting with http:// or https://
+        
+    Returns:
+        dict: Base64 formatted source with type, media_type, and data
+    """
+    base64_data = await async_convert_url_to_base64(source)
+    
+    # Extract media type from the base64 data URL
+    if base64_data.startswith("data:"):
+        media_type = base64_data.split(";")[0].split(":")[1]
+        base64_content = base64_data.split(",")[1]
+    else:
+        media_type = "image/jpeg"  # Default fallback
+        base64_content = base64_data
+    
+    return {
+        "type": "base64",
+        "media_type": media_type,
+        "data": base64_content
+    }
+
+
+async def handle_url_object_to_base64(source: dict) -> dict:
+    """
+    Handle URL object source and convert to base64 format (sync version).
+    
+    Args:
+        source: Dictionary with type="url" and url field
+        
+    Returns:
+        dict: Base64 formatted source with type, media_type, and data
+    """
+    url = source.get("url", "")
+    base64_data = await async_convert_url_to_base64(url)
+    
+    # Extract media type from the base64 data URL
+    if base64_data.startswith("data:"):
+        media_type = base64_data.split(";")[0].split(":")[1]
+        base64_content = base64_data.split(",")[1]
+    else:
+        media_type = "image/jpeg"  # Default fallback
+        base64_content = base64_data
+    
+    return {
+        "type": "base64",
+        "media_type": media_type,
+        "data": base64_content
+    }
+
+
+async def async_anthropic_provider_process_image_content(
+    messages: list,
+) -> list:
+    """
+    Process image content in messages, converting URLs to base64 format (async version).
+    
+    Args:
+        messages: List of message dictionaries
+
+    Returns:
+        list: Processed messages with converted image sources
+    """
+    for message in messages:
+        if message.get("role") == "user" and isinstance(message.get("content"), list):
+            for content in message["content"]:
+                if content.get("type") == "image":
+                    source = content.get("source", {})
+                    
+                    # Check if source has a URL that needs conversion
+                    if isinstance(source, str) and (source.startswith("http://") or source.startswith("https://")):
+                        try:
+                            content["source"] = await handle_string_url_to_base64(source)
+                        except Exception:
+                            # If conversion fails, keep original content
+                            pass
+                    elif isinstance(source, dict) and source.get("type") == "url":
+                        # Handle URL object format
+                        url = source.get("url", "")
+                        if url.startswith("http://") or url.startswith("https://"):
+                            try:
+                                content["source"] = await handle_url_object_to_base64(source)
+                            except Exception:
+                                # If conversion fails, keep original content
+                                pass
+    return messages
