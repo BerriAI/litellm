@@ -29,6 +29,7 @@ from litellm.router import Router
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    LlmProviders,
     ProviderSpecificHeader,
     StandardLoggingUserAPIKeyMetadata,
     SupportedCacheControls,
@@ -1255,7 +1256,7 @@ def add_provider_specific_headers_to_request(
         # Anthropic headers work across multiple providers
         # Store as comma-separated list so retrieval can match any of them
         data["provider_specific_header"] = ProviderSpecificHeader(
-            custom_llm_provider="anthropic,bedrock,bedrock_converse,vertex_ai",
+            custom_llm_provider=f"{LlmProviders.ANTHROPIC},{LlmProviders.BEDROCK},{LlmProviders.VERTEX_AI}",
             extra_headers=anthropic_headers,
         )
 
