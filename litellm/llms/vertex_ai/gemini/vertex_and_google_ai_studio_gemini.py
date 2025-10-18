@@ -215,6 +215,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
+    
+    def _supports_penalty_parameters(self, model: str) -> bool:
+        unsupported_models = ["gemini-2.5-pro-preview-06-05"]
+
+        for pattern in unsupported_models:
+            if model in pattern:
+                return False
+
+        return True
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = [
@@ -229,8 +238,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "response_format",
             "n",
             "stop",
-            "frequency_penalty",
-            "presence_penalty",
             "extra_headers",
             "seed",
             "logprobs",
@@ -239,6 +246,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "parallel_tool_calls",
             "web_search_options",
         ]
+        
+        # Add penalty parameters only for non-preview models
+        if self._supports_penalty_parameters(model):
+            supported_params.extend(["frequency_penalty", "presence_penalty"])
+        
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
@@ -679,9 +691,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     value=value, optional_params=optional_params
                 )
             elif param == "frequency_penalty":
-                optional_params["frequency_penalty"] = value
+                if self._supports_penalty_parameters(model):
+                    optional_params["frequency_penalty"] = value
             elif param == "presence_penalty":
-                optional_params["presence_penalty"] = value
+                if self._supports_penalty_parameters(model):
+                    optional_params["presence_penalty"] = value
             elif param == "logprobs":
                 optional_params["responseLogprobs"] = value
             elif param == "top_logprobs":

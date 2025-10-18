@@ -37,6 +37,7 @@ import ChatImageRenderer from "./ChatImageRenderer";
 import { createChatMultimodalMessage, createChatDisplayMessage } from "./ChatImageUtils";
 import SessionManagement from "./SessionManagement";
 import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
+import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import {
   ApiOutlined,
   KeyOutlined,
@@ -436,6 +437,25 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     });
   };
 
+  const updateSearchResults = (searchResults: any[]) => {
+    console.log("Received search results:", searchResults);
+    setChatHistory((prevHistory) => {
+      const lastMessage = prevHistory[prevHistory.length - 1];
+
+      if (lastMessage && lastMessage.role === "assistant") {
+        console.log("Updating message with search results");
+        const updatedMessage = {
+          ...lastMessage,
+          searchResults,
+        };
+
+        return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
+      }
+
+      return prevHistory;
+    });
+  };
+
   const handleResponseId = (responseId: string) => {
     console.log("Received response ID for session management:", responseId);
     if (useApiSessionManagement) {
@@ -687,6 +707,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
             selectedMCPTools, // Pass the selected tools array
             updateChatImageUI, // Pass the image callback
+            updateSearchResults, // Pass the search results callback
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -1100,6 +1121,11 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
                             <MCPEventsDisplay events={mcpEvents} />
                           </div>
                         )}
+
+                      {/* Show search results at the start of assistant messages */}
+                      {message.role === "assistant" && message.searchResults && (
+                        <SearchResultsDisplay searchResults={message.searchResults} />
+                      )}
 
                       <div
                         className="whitespace-pre-wrap break-words max-w-full message-content"
