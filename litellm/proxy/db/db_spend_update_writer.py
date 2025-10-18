@@ -1010,7 +1010,7 @@ class DBSpendUpdateWriter:
                             table = getattr(batcher, table_name)
 
                             # Common data structure for both create and update
-                            common_data = {
+                            common_data: Dict[str, Any] = {
                                 entity_id_field: entity_id,
                                 "date": transaction["date"],
                                 "api_key": transaction["api_key"],
@@ -1042,7 +1042,7 @@ class DBSpendUpdateWriter:
                                     transaction.get("cache_creation_input_tokens", 0)
                                 )
                             if "user_id" in transaction:
-                                common_data["user_id"] = transaction["user_id"]
+                                common_data["user_id"] = transaction["user_id"]  # type: ignore
 
                             # Create update data structure
                             update_data = {
