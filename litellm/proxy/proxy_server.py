@@ -262,9 +262,7 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    user_update,
-)
+from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -312,9 +310,7 @@ from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import (
-    set_files_config,
-)
+from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -1669,8 +1665,28 @@ class ProxyConfig:
         ):
             # if using - db for config - models are in ModelTable
 
-            new_config.pop("model_list", None)
-            await prisma_client.insert_data(data=new_config, table_name="config")
+            # Make a copy to avoid mutating the original config
+            config_to_save = new_config.copy()
+
+            # SECURITY: Always encrypt environment_variables before DB write
+            if (
+                "environment_variables" in config_to_save
+                and config_to_save["environment_variables"]
+            ):
+
+                # decrypt the environment_variables - in case a caller function has already encrypted the environment_variables
+                decrypted_env_vars = self._decrypt_and_set_db_env_variables(
+                    environment_variables=config_to_save["environment_variables"],
+                    return_original_value=True,
+                )
+
+                # encrypt the environment_variables,
+                config_to_save["environment_variables"] = self._encrypt_env_variables(
+                    environment_variables=decrypted_env_vars
+                )
+
+            config_to_save.pop("model_list", None)
+            await prisma_client.insert_data(data=config_to_save, table_name="config")
         else:
             # Save the updated config - if user is not using a dB
             ## YAML
@@ -2847,7 +2863,9 @@ class ProxyConfig:
             encrypted_env_vars[k] = encrypted_value
         return encrypted_env_vars
 
-    def _decrypt_and_set_db_env_variables(self, environment_variables: dict) -> dict:
+    def _decrypt_and_set_db_env_variables(
+        self, environment_variables: dict, return_original_value: bool = False
+    ) -> dict:
         """
         Decrypts a dictionary of environment variables and then sets them in the environment
 
@@ -2858,7 +2876,9 @@ class ProxyConfig:
         decrypted_env_vars = {}
         for k, v in environment_variables.items():
             try:
-                decrypted_value = decrypt_value_helper(value=v, key=k)
+                decrypted_value = decrypt_value_helper(
+                    value=v, key=k, return_original_value=return_original_value
+                )
                 if decrypted_value is not None:
                     os.environ[k] = decrypted_value
                     decrypted_env_vars[k] = decrypted_value
@@ -3056,7 +3076,9 @@ class ProxyConfig:
                         d[k] = v
 
         if param_name == "environment_variables":
-            decrypted_env_vars = self._decrypt_and_set_db_env_variables(db_param_value)
+            decrypted_env_vars = self._decrypt_and_set_db_env_variables(
+                db_param_value, return_original_value=True
+            )
             current_config.setdefault("environment_variables", {}).update(
                 decrypted_env_vars
             )
