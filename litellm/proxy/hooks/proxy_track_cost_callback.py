@@ -64,7 +64,6 @@ class _ProxyDBLogger(CustomLogger):
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,
                 user_api_key_request_route=user_api_key_dict.request_route,
                 user_api_key_auth_metadata=user_api_key_dict.metadata,
-                user_api_key_organization_id=user_api_key_dict.organization_id,
             )
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key

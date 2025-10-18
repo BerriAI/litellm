@@ -558,14 +558,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptors: List[RateLimitDescriptor] = []
 
         # Global org rate limits
-        if user_api_key_dict.organization_id is not None and (
+        if user_api_key_dict.org_id is not None and (
             user_api_key_dict.organization_rpm_limit is not None
             or user_api_key_dict.organization_tpm_limit is not None
         ):
             descriptors.append(
                 RateLimitDescriptor(
                     key="organization",
-                    value=user_api_key_dict.organization_id,
+                    value=user_api_key_dict.org_id,
                     rate_limit={
                         "requests_per_unit": user_api_key_dict.organization_rpm_limit,
                         "tokens_per_unit": user_api_key_dict.organization_tpm_limit,
@@ -618,7 +618,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 descriptors.append(
                     RateLimitDescriptor(
                         key="model_per_organization",
-                        value=f"{user_api_key_dict.organization_id}:{requested_model}",
+                        value=f"{user_api_key_dict.org_id}:{requested_model}",
                         rate_limit={
                             "requests_per_unit": model_specific_rpm_limit,
                             "tokens_per_unit": model_specific_tpm_limit,

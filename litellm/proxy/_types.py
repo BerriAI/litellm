@@ -1852,7 +1852,6 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     allowed_routes: Optional[list] = []
     permissions: Dict = {}
     model_spend: Dict = {}
-    organization_id: Optional[str] = None
     model_max_budget: Dict = {}
     soft_budget_cooldown: bool = False
     blocked: Optional[bool] = None
@@ -1921,6 +1920,9 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
                     kwargs[attr_name] = value
             if key == "end_user_id" and value is not None and isinstance(value, int):
                 kwargs[key] = str(value)
+
+        if kwargs.get("organization_id") is not None:
+            kwargs["org_id"] = kwargs.pop("organization_id")
         # Initialize the superclass
         super().__init__(**kwargs)
 
