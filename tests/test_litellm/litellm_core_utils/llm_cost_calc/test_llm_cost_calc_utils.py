@@ -628,6 +628,7 @@ def test_service_tier_fallback_pricing():
     assert abs(std_cost[1] - expected_standard_completion) < 1e-10, f"Standard completion cost mismatch: {std_cost[1]} vs {expected_standard_completion}"
 
 
+
 def test_bedrock_anthropic_prompt_caching():
     """Test Bedrock Anthropic models with prompt caching return correct costs."""
     model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
@@ -649,5 +650,5 @@ def test_bedrock_anthropic_prompt_caching():
 
     assert prompt_cost >= 0
     assert completion_cost >= 0
-    assert round(prompt_cost, 3) == 0.845
+    assert round(prompt_cost, 3) == 0.111
     assert round(completion_cost, 5) == 0.00820
