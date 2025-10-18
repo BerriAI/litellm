@@ -5,6 +5,10 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
+from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
+    EnkryptAIGuardrailConfigs,
+)
+
 """
 Pydantic object defining how to set guardrails on litellm proxy
 
@@ -39,7 +43,7 @@ class SupportedGuardrailIntegrations(Enum):
     NOMA = "noma"
     TOOL_PERMISSION = "tool_permission"
     JAVELIN = "javelin"
-
+    ENKRYPTAI = "enkryptai"
 
 class Role(Enum):
     SYSTEM = "system"
@@ -356,6 +360,22 @@ class PillarGuardrailConfigModel(BaseModel):
         default="monitor",
         description="Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
     )
+    async_mode: Optional[bool] = Field(
+        default=None,
+        description="Set to True to request asynchronous analysis (sets `plr_async` header). Defaults to provider behaviour when omitted.",
+    )
+    persist_session: Optional[bool] = Field(
+        default=None,
+        description="Controls Pillar session persistence (sets `plr_persist` header). Set to False to disable persistence.",
+    )
+    include_scanners: Optional[bool] = Field(
+        default=True,
+        description="Include scanner category summaries in responses (sets `plr_scanners` header).",
+    )
+    include_evidence: Optional[bool] = Field(
+        default=True,
+        description="Include detailed evidence payloads in responses (sets `plr_evidence` header).",
+    )
 
 
 class NomaGuardrailConfigModel(BaseModel):
@@ -502,6 +522,7 @@ class LitellmParams(
     ToolPermissionGuardrailConfigModel,
     JavelinGuardrailConfigModel,
     BaseLitellmParams,
+    EnkryptAIGuardrailConfigs,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(

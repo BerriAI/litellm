@@ -81,12 +81,12 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.rerank import RerankResponse
-from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
     CachingDetails,
     CallTypes,
     CostBreakdown,
     CostResponseTypes,
+    CustomPricingLiteLLMParams,
     DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
     GuardrailStatus,
@@ -699,6 +699,9 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["prompt_integration"] = (
                 vector_store_custom_logger.__class__.__name__
             )
+            # Add to global callbacks so post-call hooks are invoked
+            if vector_store_custom_logger and vector_store_custom_logger not in litellm.callbacks:
+                litellm.logging_callback_manager.add_litellm_callback(vector_store_custom_logger)
             return vector_store_custom_logger
 
         return None
@@ -1171,6 +1174,9 @@ class Logging(LiteLLMLoggingBaseClass):
         output_cost: float,
         total_cost: float,
         cost_for_built_in_tools_cost_usd_dollar: float,
+        original_cost: Optional[float] = None,
+        discount_percent: Optional[float] = None,
+        discount_amount: Optional[float] = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1180,6 +1186,9 @@ class Logging(LiteLLMLoggingBaseClass):
             output_cost: Cost of output/completion tokens
             cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
             total_cost: Total cost of request
+            original_cost: Cost before discount
+            discount_percent: Discount percentage (0.05 = 5%)
+            discount_amount: Discount amount in USD
         """
 
         self.cost_breakdown = CostBreakdown(
@@ -1188,9 +1197,16 @@ class Logging(LiteLLMLoggingBaseClass):
             total_cost=total_cost,
             tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
         )
-        verbose_logger.debug(
-            f"Cost breakdown set - input: {input_cost}, output: {output_cost}, cost_for_built_in_tools_cost_usd_dollar: {cost_for_built_in_tools_cost_usd_dollar}, total: {total_cost}"
-        )
+        
+        # Store discount information if provided
+        if original_cost is not None:
+            self.cost_breakdown["original_cost"] = original_cost
+        if discount_percent is not None:
+            self.cost_breakdown["discount_percent"] = discount_percent
+        if discount_amount is not None:
+            self.cost_breakdown["discount_amount"] = discount_amount
+        
+
 
     def _response_cost_calculator(
         self,
@@ -4040,6 +4056,7 @@ class StandardLoggingPayloadSetup:
             usage_object=usage_object,
             requester_custom_headers=None,
             cold_storage_object_key=None,
+            user_api_key_auth_metadata=None,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -4755,6 +4772,7 @@ def get_standard_logging_metadata(
         requester_custom_headers=None,
         user_api_key_request_route=None,
         cold_storage_object_key=None,
+        user_api_key_auth_metadata=None,
     )
     if isinstance(metadata, dict):
         # Update the clean_metadata with values from input metadata that match StandardLoggingMetadata fields

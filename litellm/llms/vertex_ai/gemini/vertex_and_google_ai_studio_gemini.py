@@ -215,6 +215,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
+    
+    def _supports_penalty_parameters(self, model: str) -> bool:
+        unsupported_models = ["gemini-2.5-pro-preview-06-05"]
+
+        for pattern in unsupported_models:
+            if model in pattern:
+                return False
+
+        return True
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = [
@@ -229,8 +238,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "response_format",
             "n",
             "stop",
-            "frequency_penalty",
-            "presence_penalty",
             "extra_headers",
             "seed",
             "logprobs",
@@ -239,6 +246,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "parallel_tool_calls",
             "web_search_options",
         ]
+        
+        # Add penalty parameters only for non-preview models
+        if self._supports_penalty_parameters(model):
+            supported_params.extend(["frequency_penalty", "presence_penalty"])
+        
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
@@ -415,8 +427,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 googleSearchRetrieval = self.get_tool_value(tool, VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value)
             elif tool_name and tool_name == VertexToolName.ENTERPRISE_WEB_SEARCH.value:
                 enterpriseWebSearch = self.get_tool_value(tool, VertexToolName.ENTERPRISE_WEB_SEARCH.value)
-            elif tool_name and tool_name == VertexToolName.URL_CONTEXT.value:
-                urlContext = self.get_tool_value(tool, VertexToolName.URL_CONTEXT.value)
+            elif tool_name and (tool_name == VertexToolName.URL_CONTEXT.value or tool_name == "urlContext"):
+                urlContext = self.get_tool_value(tool, tool_name)
             elif tool_name and (
                 tool_name == VertexToolName.GOOGLE_MAPS.value or tool_name == "google_maps"
             ):
@@ -448,9 +460,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     "Invalid tool={}. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
                 )
 
-        _tools = Tools(
-            function_declarations=gtool_func_declarations,
-        )
+        # Only include function_declarations if there are actual functions
+        _tools = Tools()
+        if gtool_func_declarations:
+            _tools["function_declarations"] = gtool_func_declarations
         if googleSearch is not None:
             _tools[VertexToolName.GOOGLE_SEARCH.value] = googleSearch
         if googleSearchRetrieval is not None:
@@ -678,9 +691,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     value=value, optional_params=optional_params
                 )
             elif param == "frequency_penalty":
-                optional_params["frequency_penalty"] = value
+                if self._supports_penalty_parameters(model):
+                    optional_params["frequency_penalty"] = value
             elif param == "presence_penalty":
-                optional_params["presence_penalty"] = value
+                if self._supports_penalty_parameters(model):
+                    optional_params["presence_penalty"] = value
             elif param == "logprobs":
                 optional_params["responseLogprobs"] = value
             elif param == "top_logprobs":
@@ -1791,7 +1806,6 @@ class VertexLLM(VertexBase):
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ) -> CustomStreamWrapper:
-        request_body = await async_transform_request_body(**data)  # type: ignore
 
         should_use_v1beta1_features = self.is_using_v1beta1_features(
             optional_params=optional_params
@@ -1824,6 +1838,13 @@ class VertexLLM(VertexBase):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
+
+        request_body = await async_transform_request_body(
+            **data,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_auth_header=auth_header)  # type: ignore
+
 
         ## LOGGING
         logging_obj.pre_call(
@@ -1912,7 +1933,12 @@ class VertexLLM(VertexBase):
             litellm_params=litellm_params,
         )
 
-        request_body = await async_transform_request_body(**data)  # type: ignore
+        request_body = await async_transform_request_body(
+            **data,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_auth_header=auth_header)  # type: ignore
+
         _async_client_params = {}
         if timeout:
             _async_client_params["timeout"] = timeout
@@ -2087,7 +2113,11 @@ class VertexLLM(VertexBase):
         )
 
         ## TRANSFORMATION ##
-        data = sync_transform_request_body(**transform_request_params)
+        data = sync_transform_request_body(
+            **transform_request_params,
+            vertex_project=vertex_project, 
+            vertex_location=vertex_location,
+            vertex_auth_header=auth_header)
 
         ## LOGGING
         logging_obj.pre_call(
