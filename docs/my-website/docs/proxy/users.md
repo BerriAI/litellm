@@ -3,6 +3,16 @@ import TabItem from '@theme/TabItem';
 
 # Budgets, Rate Limits
 
+:::info **Budget Setup Options**
+**Personal budgets**: Create virtual keys without team_id for individual spending limits
+
+**Team budgets**: Add team_id to virtual keys to utilize a team's shared budget
+
+**Team member budgets**: Set individual spending limits within the team's shared budget
+
+***If a key belongs to a team, the team budget is applied, not the user's personal budget.***
+:::
+
 Requirements: 
 
 - Need to a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc) [**See Setup**](./virtual_keys.md#setup)
