@@ -55,6 +55,10 @@ Each machine deploying LiteLLM had the following specs:
 - 4 CPU
 - 8GB RAM
 
+## Configuration
+
+- Database: PostgreSQL
+- Redis: Not used
 
 ## Locust Settings
 
