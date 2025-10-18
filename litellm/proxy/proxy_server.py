@@ -2440,6 +2440,15 @@ class ProxyConfig:
         ## NON-LLM CONFIGS eg. MCP tools, vector stores, etc.
         self._init_non_llm_configs(config=config)
 
+        # Set user_request_timeout from litellm.request_timeout if not already set
+        global user_request_timeout
+        if (
+            user_request_timeout is None
+            and hasattr(litellm, "request_timeout")
+            and litellm.request_timeout is not None
+        ):
+            user_request_timeout = litellm.request_timeout
+
         return router, router.get_model_list(), general_settings
 
     def _init_non_llm_configs(self, config: dict):
