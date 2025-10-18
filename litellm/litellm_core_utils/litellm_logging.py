@@ -699,6 +699,9 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["prompt_integration"] = (
                 vector_store_custom_logger.__class__.__name__
             )
+            # Add to global callbacks so post-call hooks are invoked
+            if vector_store_custom_logger and vector_store_custom_logger not in litellm.callbacks:
+                litellm.logging_callback_manager.add_litellm_callback(vector_store_custom_logger)
             return vector_store_custom_logger
 
         return None
