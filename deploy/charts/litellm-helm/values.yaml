@@ -1,4 +1,5 @@
 # Default values for litellm.
+#
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
@@ -62,6 +63,9 @@ service:
   # If service type is `LoadBalancer` you can
   # optionally specify loadBalancerClass
   # loadBalancerClass: tailscale
+  # If service type is 'NodePort' you can 
+  # optionally specify nodePort
+  # nodePort: 30000
 
 # Separate health app configuration
 # When enabled, health checks will use a separate port and the application
