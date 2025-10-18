@@ -152,6 +152,7 @@ class PagerDutyAlerting(SlackAlerting):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[Union[Exception, str, dict]]:
         """

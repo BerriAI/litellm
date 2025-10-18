@@ -3275,6 +3275,15 @@
         "supports_tool_choice": true,
         "supports_reasoning": true
     },
+    "azure_ai/mistral-document-ai-2505": {
+        "litellm_provider": "azure_ai",
+        "ocr_cost_per_page": 3e-3,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://devblogs.microsoft.com/foundry/whats-new-in-azure-ai-foundry-august-2025/#mistral-document-ai-(ocr)-%E2%80%94-serverless-in-foundry"
+    },
     "azure_ai/MAI-DS-R1": {
         "input_cost_per_token": 1.35e-06,
         "litellm_provider": "azure_ai",
@@ -12174,20 +12183,20 @@
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 1e-06,
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
-        "source": "https://aws.amazon.com/about-aws/whats-new/2025/10/claude-4-5-haiku-anthropic-amazon-bedrock",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 346
     },
     "gpt-3.5-turbo": {
         "input_cost_per_token": 0.5e-06,
@@ -15588,6 +15597,26 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "mistral/mistral-ocr-latest": {
+        "litellm_provider": "mistral",
+        "ocr_cost_per_page": 1e-3,
+        "annotation_cost_per_page": 3e-3,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://mistral.ai/pricing#api-pricing"
+    },
+    "mistral/mistral-ocr-2505-completion": {
+        "litellm_provider": "mistral",
+        "ocr_cost_per_page": 1e-3,
+        "annotation_cost_per_page": 3e-3,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/magistral-medium-latest": {
         "input_cost_per_token": 2e-06,
@@ -20602,6 +20631,25 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346
     },
+    "au.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "cache_creation_input_token_cost": 1.375e-06,
+        "cache_read_input_token_cost": 1.1e-07,
+        "input_cost_per_token": 1.1e-06,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 5.5e-06,
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 346
+    },
     "us.anthropic.claude-opus-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 1.875e-05,
         "cache_read_input_token_cost": 1.5e-06,
@@ -20863,6 +20911,16 @@
         "max_tokens": 40960,
         "mode": "chat",
         "output_cost_per_token": 2.4e-07
+    },
+    "vercel_ai_gateway/glm-4.6": {
+        "litellm_provider": "vercel_ai_gateway",
+        "cache_read_input_token_cost": 1.1e-07,
+        "input_cost_per_token": 6e-07,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 200000,
+        "max_tokens": 200000,
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-06
     },
     "vercel_ai_gateway/alibaba/qwen-3-235b": {
         "input_cost_per_token": 2e-07,
@@ -23522,7 +23580,9 @@
         "max_tokens": 2e6,
         "mode": "chat",
         "input_cost_per_token": 0.2e-06,
+        "input_cost_per_token_above_128k_tokens": 0.4e-06,
         "output_cost_per_token": 0.5e-06,
+        "output_cost_per_token_above_128k_tokens": 1e-06,
         "cache_read_input_token_cost": 0.05e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
@@ -23538,7 +23598,9 @@
         "max_tokens": 2e6,
         "mode": "chat",
         "input_cost_per_token": 0.2e-06,
+        "input_cost_per_token_above_128k_tokens": 0.4e-06,
         "output_cost_per_token": 0.5e-06,
+        "output_cost_per_token_above_128k_tokens": 1e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
         "supports_tool_choice": true,
@@ -23546,12 +23608,14 @@
     },
     "xai/grok-4-0709": {
         "input_cost_per_token": 3e-06,
+        "input_cost_per_token_above_128k_tokens": 6e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 256000,
         "max_output_tokens": 256000,
         "max_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token_above_128k_tokens": 30e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -23560,12 +23624,14 @@
     },
     "xai/grok-4-latest": {
         "input_cost_per_token": 3e-06,
+        "input_cost_per_token_above_128k_tokens": 6e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 256000,
         "max_output_tokens": 256000,
         "max_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token_above_128k_tokens": 30e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
         "supports_reasoning": true,
