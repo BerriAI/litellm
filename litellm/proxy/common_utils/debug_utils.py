@@ -243,7 +243,7 @@ async def get_memory_summary(
         process_memory["error"] = str(e)
     
     # Get cache information
-    caches = {}
+    caches: Dict[str, Any] = {}
     total_cache_items = 0
     
     try:
@@ -368,7 +368,7 @@ def _get_uncollectable_objects_info() -> Dict[str, Any]:
 
 def _get_cache_memory_stats(user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache) -> Dict[str, Any]:
     """Calculate memory usage for all caches."""
-    cache_stats = {}
+    cache_stats: Dict[str, Any] = {}
     try:
         # User API key cache
         user_cache_size = sys.getsizeof(user_api_key_cache.in_memory_cache.cache_dict)
@@ -436,7 +436,7 @@ def _get_cache_memory_stats(user_api_key_cache, llm_router, proxy_logging_obj, r
 
 def _get_router_memory_stats(llm_router) -> Dict[str, Any]:
     """Get memory usage statistics for LiteLLM router."""
-    litellm_router_memory = {}
+    litellm_router_memory: Dict[str, Any] = {}
     try:
         if llm_router is not None:
             # Model list memory size
