@@ -47,7 +47,7 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
-from litellm.proxy.auth.oauth2_check import check_oauth2_token
+from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -455,17 +455,20 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         ########## End of Route Checks Before Reading DB / Cache for "token" ########
 
         if general_settings.get("enable_oauth2_auth", False) is True:
-            # return UserAPIKeyAuth object
-            # helper to check if the api_key is a valid oauth2 token
-            from litellm.proxy.proxy_server import premium_user
+            # Only apply OAuth2 M2M authentication to LLM API routes, not UI/management routes
+            # This allows UI SSO to work separately from API M2M authentication
+            if RouteChecks.is_llm_api_route(route=route):
+                # return UserAPIKeyAuth object
+                # helper to check if the api_key is a valid oauth2 token
+                from litellm.proxy.proxy_server import premium_user
 
-            if premium_user is not True:
-                raise ValueError(
-                    "Oauth2 token validation is only available for premium users"
-                    + CommonProxyErrors.not_premium_user.value
-                )
+                if premium_user is not True:
+                    raise ValueError(
+                        "Oauth2 token validation is only available for premium users"
+                        + CommonProxyErrors.not_premium_user.value
+                    )
 
-            return await check_oauth2_token(token=api_key)
+                return await Oauth2Handler.check_oauth2_token(token=api_key)
 
         if general_settings.get("enable_oauth2_proxy_auth", False) is True:
             return await handle_oauth2_proxy_request(request=request)
