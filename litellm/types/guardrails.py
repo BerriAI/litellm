@@ -1,17 +1,15 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
 
-from litellm.types.proxy.guardrails.guardrail_hooks.openai.openai_moderation import (
-    OpenAIModerationGuardrailConfigModel,
-)
+
 
 """
 Pydantic object defining how to set guardrails on litellm proxy

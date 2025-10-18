@@ -14,9 +14,9 @@
     "write-heading-ids": "docusaurus write-heading-ids"
   },
   "dependencies": {
-    "@docusaurus/core": "^3.9.2",
-    "@docusaurus/plugin-google-gtag": "^3.9.2",
-    "@docusaurus/plugin-ideal-image": "^3.9.2",
+    "@docusaurus/core": "3.8.1",
+    "@docusaurus/plugin-google-gtag": "3.8.1",
+    "@docusaurus/plugin-ideal-image": "3.8.1",
     "@docusaurus/preset-classic": "3.8.1",
     "@docusaurus/theme-mermaid": "^3.8.1",
     "@inkeep/cxkit-docusaurus": "^0.5.89",
