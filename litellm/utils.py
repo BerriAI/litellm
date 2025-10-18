@@ -909,6 +909,7 @@ def _get_wrapper_timeout(
 
     return timeout
 
+
 def check_coroutine(value) -> bool:
     return get_coroutine_checker().is_async_callable(value)
 
@@ -988,9 +989,7 @@ def post_call_processing(
                         ].message.content  # type: ignore
                         if model_response is not None:
                             ### POST-CALL RULES ###
-                            rules_obj.post_call_rules(
-                                input=model_response, model=model
-                            )
+                            rules_obj.post_call_rules(input=model_response, model=model)
                             ### JSON SCHEMA VALIDATION ###
                             if litellm.enable_json_schema_validation is True:
                                 try:
@@ -1006,9 +1005,9 @@ def post_call_processing(
                                                 optional_params["response_format"],
                                                 dict,
                                             )
-                                            and optional_params[
-                                                "response_format"
-                                            ].get("json_schema")
+                                            and optional_params["response_format"].get(
+                                                "json_schema"
+                                            )
                                             is not None
                                         ):
                                             json_response_format = optional_params[
@@ -1036,9 +1035,7 @@ def post_call_processing(
                             if (
                                 optional_params is not None
                                 and "response_format" in optional_params
-                                and isinstance(
-                                    optional_params["response_format"], dict
-                                )
+                                and isinstance(optional_params["response_format"], dict)
                                 and "type" in optional_params["response_format"]
                                 and optional_params["response_format"]["type"]
                                 == "json_object"
@@ -1071,7 +1068,6 @@ def post_call_processing(
 
 def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
-
 
     @wraps(original_function)
     def wrapper(*args, **kwargs):  # noqa: PLR0915

@@ -524,14 +524,14 @@ async def get_tag_objects_batch(
     Optimizes for latency by:
     1. Fetching all cached tags in parallel
     2. Batch fetching uncached tags in one DB query
-    
+
     Args:
         tag_names: List of tag names to fetch
         prisma_client: Prisma database client
         user_api_key_cache: Cache for storing tag objects
         parent_otel_span: Optional OpenTelemetry span for tracing
         proxy_logging_obj: Optional proxy logging object
-        
+
     Returns:
         Dictionary mapping tag_name to LiteLLM_TagTable object
     """
@@ -574,9 +574,7 @@ async def get_tag_objects_batch(
                 )
                 tag_objects[tag_name] = LiteLLM_TagTable(**db_tag.dict())
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Error batch fetching tags from database: {e}"
-            )
+            verbose_proxy_logger.debug(f"Error batch fetching tags from database: {e}")
 
     return tag_objects
 
@@ -593,14 +591,14 @@ async def get_tag_object(
     Returns tag object from cache or db.
 
     Uses default cache TTL (same as end_user objects) to avoid drift.
-    
+
     Args:
         tag_name: Name of the tag to fetch
         prisma_client: Prisma database client
         user_api_key_cache: Cache for storing tag objects
         parent_otel_span: Optional OpenTelemetry span for tracing
         proxy_logging_obj: Optional proxy logging object
-        
+
     Returns:
         LiteLLM_TagTable object if found, None otherwise
     """
@@ -1355,6 +1353,8 @@ async def get_org_object(
         raise Exception(
             "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
         )
+    if not isinstance(org_id, str):
+        return None
 
     # check if in cache
     cached_org_obj = user_api_key_cache.async_get_cache(key="org_id:{}".format(org_id))
@@ -1776,9 +1776,7 @@ async def _tag_max_budget_check(
         BudgetExceededError if any tag is over its max budget.
         Triggers a budget alert if any tag is over its max budget.
     """
-    from litellm.proxy.common_utils.http_parsing_utils import (
-        get_tags_from_request_body,
-    )
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 
     if prisma_client is None:
         return
