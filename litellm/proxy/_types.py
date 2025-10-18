@@ -779,10 +779,10 @@ class KeyRequestBase(GenerateRequestBase):
     allowed_routes: Optional[list] = []
     allowed_passthrough_routes: Optional[list] = None
     rpm_limit_type: Optional[
-        Literal["guaranteed_throughput", "best_effort_throughput"]
+        Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
     tpm_limit_type: Optional[
-        Literal["guaranteed_throughput", "best_effort_throughput"]
+        Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
 
 

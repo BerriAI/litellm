@@ -302,26 +302,27 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     )
                 if thinking_blocks is not None:
                     for block in thinking_blocks:
-                        block_thinking_str = block.get("thinking")
-                        block_signature = block.get("signature")
-                        if (
-                            block_thinking_str is not None
-                            and block_signature is not None
-                        ):
-                            try:
-                                assistant_content.append(
-                                    PartType(
-                                        thoughtSignature=block_signature,
-                                        **json.loads(block_thinking_str),
+                        if block["type"] == "thinking":
+                            block_thinking_str = block.get("thinking")
+                            block_signature = block.get("signature")
+                            if (
+                                block_thinking_str is not None
+                                and block_signature is not None
+                            ):
+                                try:
+                                    assistant_content.append(
+                                        PartType(
+                                            thoughtSignature=block_signature,
+                                            **json.loads(block_thinking_str),
+                                        )
                                     )
-                                )
-                            except Exception:
-                                assistant_content.append(
-                                    PartType(
-                                        thoughtSignature=block_signature,
-                                        text=block_thinking_str,
+                                except Exception:
+                                    assistant_content.append(
+                                        PartType(
+                                            thoughtSignature=block_signature,
+                                            text=block_thinking_str,
+                                        )
                                     )
-                                )
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts = []
                     for element in _message_content:

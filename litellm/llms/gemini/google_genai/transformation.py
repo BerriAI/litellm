@@ -317,5 +317,20 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             )
 
         logging_obj.model_call_details["httpx_response"] = raw_response
+        response = self.convert_citation_sources_to_citations(response)
 
         return GenerateContentResponse(**response)
+
+    def convert_citation_sources_to_citations(self, response: Dict) -> Dict:
+        """
+        Convert citation sources to citations.
+        API's camelCase citationSources becomes the SDK's snake_case citations
+        """
+        if "candidates" in response:
+            for candidate in response["candidates"]:
+                if "citationMetadata" in candidate and isinstance(candidate["citationMetadata"], dict):
+                    citation_metadata = candidate["citationMetadata"]
+                    # Transform citationSources to citations to match expected schema
+                    if "citationSources" in citation_metadata:
+                        citation_metadata["citations"] = citation_metadata.pop("citationSources")
+        return response

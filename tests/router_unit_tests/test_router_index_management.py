@@ -18,25 +18,38 @@ class TestRouterIndexManagement:
         """Create a router instance for testing"""
         return Router(model_list=[])
 
-    def test_update_deployment_indices_after_removal(self, router):
-        """Test _update_deployment_indices_after_removal function"""
-        # Setup: Add models to router with proper structure
+    def test_deletion_updates_model_name_indices(self, router):
+        """Test that deleting a deployment updates model_name_to_deployment_indices correctly"""
         router.model_list = [
-            {"model": "test1", "model_info": {"id": "model-1"}}, 
-            {"model": "test2", "model_info": {"id": "model-2"}}, 
-            {"model": "test3", "model_info": {"id": "model-3"}}
+            {"model_name": "gpt-3.5", "model_info": {"id": "model-1"}},
+            {"model_name": "gpt-4", "model_info": {"id": "model-2"}},
+            {"model_name": "gpt-4", "model_info": {"id": "model-3"}},
+            {"model_name": "claude", "model_info": {"id": "model-4"}}
         ]
-        router.model_id_to_deployment_index_map = {"model-1": 0, "model-2": 1, "model-3": 2}
+        router.model_id_to_deployment_index_map = {
+            "model-1": 0, "model-2": 1, "model-3": 2, "model-4": 3
+        }
+        router.model_name_to_deployment_indices = {
+            "gpt-3.5": [0],
+            "gpt-4": [1, 2],
+            "claude": [3]
+        }
 
-        # Test: Remove model-2 (index 1)
+        # Remove one of the duplicate gpt-4 deployments
         router._update_deployment_indices_after_removal(model_id="model-2", removal_idx=1)
 
-        # Verify: model-2 is removed from index
-        assert "model-2" not in router.model_id_to_deployment_index_map
-        # Verify: model-3 index is updated (2 -> 1)
-        assert router.model_id_to_deployment_index_map["model-3"] == 1
-        # Verify: model-1 index remains unchanged
-        assert router.model_id_to_deployment_index_map["model-1"] == 0
+        # Verify indices are shifted correctly
+        assert router.model_name_to_deployment_indices["gpt-3.5"] == [0]
+        assert router.model_name_to_deployment_indices["gpt-4"] == [1]  # was [1,2], removed 1, shifted 2->1
+        assert router.model_name_to_deployment_indices["claude"] == [2]  # was [3], shifted to [2]
+
+        # Remove the last gpt-4 deployment
+        router._update_deployment_indices_after_removal(model_id="model-3", removal_idx=1)
+
+        # Verify gpt-4 is removed from dict when no deployments remain
+        assert "gpt-4" not in router.model_name_to_deployment_indices
+        assert router.model_name_to_deployment_indices["gpt-3.5"] == [0]
+        assert router.model_name_to_deployment_indices["claude"] == [1]
 
     def test_build_model_id_to_deployment_index_map(self, router):
         """Test _build_model_id_to_deployment_index_map function"""

@@ -1,6 +1,7 @@
 import openai from "openai";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { TokenUsage } from "../ResponseMetrics";
+import { VectorStoreSearchResponse } from "../types";
 import { getProxyBaseUrl } from "@/components/networking";
 
 export async function makeOpenAIChatCompletionRequest(
@@ -18,6 +19,7 @@ export async function makeOpenAIChatCompletionRequest(
   guardrails?: string[],
   selectedMCPTools?: string[],
   onImageGenerated?: (imageUrl: string, model?: string) => void,
+  onSearchResults?: (searchResults: VectorStoreSearchResponse[]) => void,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -125,6 +127,12 @@ export async function makeOpenAIChatCompletionRequest(
           onReasoningContent(reasoningContent);
         }
         fullReasoningContent += reasoningContent;
+      }
+
+      // Check for search results in provider_specific_fields
+      if (delta && delta.provider_specific_fields?.search_results && onSearchResults) {
+        console.log("Search results found:", delta.provider_specific_fields.search_results);
+        onSearchResults(delta.provider_specific_fields.search_results);
       }
 
       // Check for usage data using type assertion

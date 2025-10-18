@@ -216,3 +216,58 @@ def test_transform_request_meta_llama(bedrock_transformer):
     print("transformed request for invoke meta llama=", json.dumps(result, indent=4))
     expected_result = {"prompt": "Hello", "max_gen_len": 2048}
     assert result == expected_result
+
+
+def test_filter_headers_for_aws_signature():
+    """Test that header filtering works correctly for AWS signature calculation"""
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+    
+    # Create a test instance
+    aws_llm = BaseAWSLLM()
+    
+    # Test headers including both AWS and non-AWS headers
+    test_headers = {
+        "Content-Type": "application/json",
+        "Host": "bedrock-runtime.us-east-1.amazonaws.com",
+        "x-amz-date": "20240101T120000Z",
+        "x-amz-security-token": "test-token",
+        "x-custom-header": "custom-value",
+        "x-litellm-user-id": "user123",
+        "x-forwarded-for": "192.168.1.1",
+        "authorization": "Bearer test-token",
+        "user-agent": "test-agent",
+        "x-envoy-expected-rq-timeout-ms": "300000",
+        "x-envoy-external-address": "10.105.1.156"
+    }
+    
+    # Filter headers for AWS signature
+    filtered_headers = aws_llm._filter_headers_for_aws_signature(test_headers)
+    
+    # Verify that only AWS-related headers are included
+    expected_aws_headers = {
+        "Content-Type": "application/json",
+        "Host": "bedrock-runtime.us-east-1.amazonaws.com",
+        "x-amz-date": "20240101T120000Z",
+        "x-amz-security-token": "test-token"
+    }
+    
+    assert filtered_headers == expected_aws_headers, f"Expected {expected_aws_headers}, got {filtered_headers}"
+    
+    # Verify that non-AWS headers are excluded
+    excluded_headers = ["x-custom-header", "x-litellm-user-id", "x-forwarded-for", "user-agent", 
+                       "x-envoy-expected-rq-timeout-ms", "x-envoy-external-address"]
+    for header in excluded_headers:
+        assert header not in filtered_headers, f"Header {header} should not be in filtered headers"
+    
+    # Test with empty headers
+    empty_filtered = aws_llm._filter_headers_for_aws_signature({})
+    assert empty_filtered == {}
+    
+    # Test with only non-AWS headers
+    non_aws_headers = {
+        "x-custom-trace": "trace-123",
+        "x-user-context": "premium",
+        "x-request-source": "mobile-app"
+    }
+    filtered_non_aws = aws_llm._filter_headers_for_aws_signature(non_aws_headers)
+    assert filtered_non_aws == {}

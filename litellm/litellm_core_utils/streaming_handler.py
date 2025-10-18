@@ -20,7 +20,9 @@ from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.types.llms.openai import ChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import Delta
+from litellm.types.utils import (
+    Delta,
+)
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
     ModelResponse,
@@ -1520,6 +1522,43 @@ class CustomStreamWrapper:
         """
         self.logging_loop = loop
 
+    async def _call_post_streaming_deployment_hook(self, chunk):
+        """
+        Call the post-call streaming deployment hook for callbacks.
+        
+        This allows callbacks to modify streaming chunks before they're returned.
+        """
+        try:
+            import litellm
+            from litellm.integrations.custom_logger import CustomLogger
+            from litellm.types.utils import CallTypes
+
+            # Get request kwargs from logging object
+            request_data = self.logging_obj.model_call_details
+            call_type_str = self.logging_obj.call_type
+            
+            try:
+                typed_call_type = CallTypes(call_type_str)
+            except ValueError:
+                typed_call_type = None
+            
+            # Call hooks for all callbacks
+            for callback in litellm.callbacks:
+                if isinstance(callback, CustomLogger) and hasattr(callback, "async_post_call_streaming_deployment_hook"):
+                    result = await callback.async_post_call_streaming_deployment_hook(
+                        request_data=request_data,
+                        response_chunk=chunk,
+                        call_type=typed_call_type,
+                    )
+                    if result is not None:
+                        chunk = result
+            
+            return chunk
+        except Exception as e:
+            from litellm._logging import verbose_logger
+            verbose_logger.exception(f"Error in post-call streaming deployment hook: {str(e)}")
+            return chunk
+
     def cache_streaming_response(self, processed_chunk, cache_hit: bool):
         """
         Caches the streaming response
@@ -1825,6 +1864,11 @@ class CustomStreamWrapper:
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
                         processed_chunk._hidden_params["usage"] = usage
+                    
+                    # Call post-call streaming deployment hook for final chunk
+                    if self.sent_last_chunk is True:
+                        processed_chunk = await self._call_post_streaming_deployment_hook(processed_chunk)
+                    
                     return processed_chunk
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls

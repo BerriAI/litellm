@@ -429,8 +429,7 @@ class Router:
         self.model_name_to_deployment_indices: Dict[str, List[int]] = {}
 
         if model_list is not None:
-            # Build model index immediately to enable O(1) lookups from the start
-            self._build_model_id_to_deployment_index_map(model_list)
+            # set_model_list will build indices automatically
             self.set_model_list(model_list)
             self.healthy_deployments: List = self.model_list  # type: ignore
             for m in model_list:
@@ -5211,8 +5210,8 @@ class Router:
         )
         self.model_names = {m["model_name"] for m in model_list}
         
-        # Build model_name index for O(1) lookups
-        self._build_model_name_index(self.model_list)
+        # Note: model_name_to_deployment_indices is already built incrementally
+        # by _create_deployment -> _add_model_to_list_and_index_map
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
@@ -5435,6 +5434,26 @@ class Router:
         # Remove the deleted model from index
         if model_id in self.model_id_to_deployment_index_map:
             del self.model_id_to_deployment_index_map[model_id]
+        
+        # Update model_name_to_deployment_indices
+        for model_name, indices in list(self.model_name_to_deployment_indices.items()):
+            # Remove the deleted index
+            if removal_idx in indices:
+                indices.remove(removal_idx)
+            
+            # Decrement all indices greater than removal_idx
+            updated_indices = []
+            for idx in indices:
+                if idx > removal_idx:
+                    updated_indices.append(idx - 1)
+                else:
+                    updated_indices.append(idx)
+            
+            # Update or remove the entry
+            if len(updated_indices) > 0:
+                self.model_name_to_deployment_indices[model_name] = updated_indices
+            else:
+                del self.model_name_to_deployment_indices[model_name]
 
     def _add_model_to_list_and_index_map(
         self, model: dict, model_id: Optional[str] = None
