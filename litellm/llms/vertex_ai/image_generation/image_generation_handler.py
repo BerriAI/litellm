@@ -10,35 +10,85 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
+from litellm.llms.vertex_ai.common_utils import all_gemini_url_modes
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import ImageResponse
 
 
 class VertexImageGeneration(VertexLLM):
+    @staticmethod
+    def _is_gemini_image_preview_model(model: Optional[str]) -> bool:
+        if model is None:
+            return False
+
+        normalized_model = model.split("/")[-1]
+        return "2.5-flash-image-preview" in normalized_model
+
     def process_image_generation_response(
         self,
         json_response: Dict[str, Any],
         model_response: ImageResponse,
         model: Optional[str] = None,
     ) -> ImageResponse:
-        if "predictions" not in json_response:
-            raise litellm.InternalServerError(
-                message=f"image generation response does not contain 'predictions', got {json_response}",
-                llm_provider="vertex_ai",
-                model=model,
-            )
+        # Gemini generateContent returns `candidates`, Imagen returns `predictions`
+        if "candidates" in json_response:
+            response_data: List[Image] = []
+            candidates = json_response.get("candidates", [])
+            for candidate in candidates:
+                content = candidate.get("content", {})
+                parts = content.get("parts", [])
+                for part in parts:
+                    inline_data = part.get("inlineData")
+                    if inline_data and inline_data.get("data"):
+                        response_data.append(
+                            Image(
+                                b64_json=inline_data["data"],
+                            )
+                        )
 
-        predictions = json_response["predictions"]
-        response_data: List[Image] = []
+            if not response_data:
+                raise litellm.InternalServerError(
+                    message=(
+                        "Unable to parse Gemini image response. "
+                        f"Received payload: {json_response}"
+                    ),
+                    llm_provider="vertex_ai",
+                    model=model,
+                )
 
-        for prediction in predictions:
-            bytes_base64_encoded = prediction["bytesBase64Encoded"]
-            image_object = Image(b64_json=bytes_base64_encoded)
-            response_data.append(image_object)
+            model_response.data = response_data
+            return model_response
 
-        model_response.data = response_data
-        return model_response
+        if "predictions" in json_response:
+            predictions = json_response["predictions"]
+            response_data: List[Image] = []
+            for prediction in predictions:
+                bytes_base64_encoded = prediction.get("bytesBase64Encoded")
+                if bytes_base64_encoded is not None:
+                    response_data.append(Image(b64_json=bytes_base64_encoded))
+
+            if not response_data:
+                raise litellm.InternalServerError(
+                    message=(
+                        "Unable to parse Imagen response: missing bytesBase64Encoded. "
+                        f"Received payload: {json_response}"
+                    ),
+                    llm_provider="vertex_ai",
+                    model=model,
+                )
+
+            model_response.data = response_data
+            return model_response
+
+        raise litellm.InternalServerError(
+            message=(
+                "Unexpected image generation response. "
+                f"Received payload: {json_response}"
+            ),
+            llm_provider="vertex_ai",
+            model=model,
+        )
 
     def transform_optional_params(self, optional_params: Optional[dict]) -> dict:
         """
@@ -109,14 +159,17 @@ class VertexImageGeneration(VertexLLM):
         else:
             sync_handler = client  # type: ignore
 
-        # url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
-
         auth_header: Optional[str] = None
         auth_header, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
             custom_llm_provider="vertex_ai",
         )
+        is_gemini_image_preview = self._is_gemini_image_preview_model(model)
+        vertex_mode: all_gemini_url_modes = (
+            "chat" if is_gemini_image_preview else "image_generation"
+        )
+
         auth_header, api_base = self._get_token_and_url(
             model=model,
             gemini_api_key=None,
@@ -128,19 +181,28 @@ class VertexImageGeneration(VertexLLM):
             custom_llm_provider="vertex_ai",
             api_base=api_base,
             should_use_v1beta1_features=False,
-            mode="image_generation",
+            mode=vertex_mode,
         )
-        optional_params = optional_params or {
-            "sampleCount": 1
-        }  # default optional params
+        optional_params = (optional_params or {}).copy()
 
-        # Transform optional params to camelCase format
-        optional_params = self.transform_optional_params(optional_params)
+        if is_gemini_image_preview:
+            request_data = {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": prompt}],
+                    }
+                ],
+                "generationConfig": {"responseModalities": ["IMAGE", "TEXT"]},
+            }
+        else:
+            optional_params = optional_params or {"sampleCount": 1}
+            optional_params = self.transform_optional_params(optional_params)
 
-        request_data = {
-            "instances": [{"prompt": prompt}],
-            "parameters": optional_params,
-        }
+            request_data = {
+                "instances": [{"prompt": prompt}],
+                "parameters": optional_params,
+            }
 
         headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
 
@@ -148,17 +210,24 @@ class VertexImageGeneration(VertexLLM):
             input=prompt,
             api_key="",
             additional_args={
-                "complete_input_dict": optional_params,
+                "complete_input_dict": request_data,
                 "api_base": api_base,
                 "headers": headers,
             },
         )
 
-        response = sync_handler.post(
-            url=api_base,
-            headers=headers,
-            data=json.dumps(request_data),
-        )
+        if is_gemini_image_preview:
+            response = sync_handler.post(
+                url=api_base,
+                headers=headers,
+                json=request_data,
+            )
+        else:
+            response = sync_handler.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(request_data),
+            )
 
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
@@ -200,32 +269,17 @@ class VertexImageGeneration(VertexLLM):
         else:
             self.async_handler = client  # type: ignore
 
-        # make POST request to
-        # https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict
-
-        """
-        Docs link: https://console.cloud.google.com/vertex-ai/publishers/google/model-garden/imagegeneration?project=adroit-crow-413218
-        curl -X POST \
-        -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-        -H "Content-Type: application/json; charset=utf-8" \
-        -d {
-            "instances": [
-                {
-                    "prompt": "a cat"
-                }
-            ],
-            "parameters": {
-                "sampleCount": 1
-            }
-        } \
-        "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict"
-        """
         auth_header: Optional[str] = None
         auth_header, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
             custom_llm_provider="vertex_ai",
         )
+        is_gemini_image_preview = self._is_gemini_image_preview_model(model)
+        vertex_mode: all_gemini_url_modes = (
+            "chat" if is_gemini_image_preview else "image_generation"
+        )
+
         auth_header, api_base = self._get_token_and_url(
             model=model,
             gemini_api_key=None,
@@ -237,16 +291,29 @@ class VertexImageGeneration(VertexLLM):
             custom_llm_provider="vertex_ai",
             api_base=api_base,
             should_use_v1beta1_features=False,
-            mode="image_generation",
+            mode=vertex_mode,
         )
 
-        # Transform optional params to camelCase format
-        optional_params = self.transform_optional_params(optional_params)
+        optional_params = (optional_params or {}).copy()
 
-        request_data = {
-            "instances": [{"prompt": prompt}],
-            "parameters": optional_params,
-        }
+        if is_gemini_image_preview:
+            request_data = {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": prompt}],
+                    }
+                ],
+                "generationConfig": {"responseModalities": ["IMAGE", "TEXT"]},
+            }
+        else:
+            optional_params = optional_params or {"sampleCount": 1}
+            optional_params = self.transform_optional_params(optional_params)
+
+            request_data = {
+                "instances": [{"prompt": prompt}],
+                "parameters": optional_params,
+            }
 
         headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
 
@@ -254,17 +321,24 @@ class VertexImageGeneration(VertexLLM):
             input=prompt,
             api_key="",
             additional_args={
-                "complete_input_dict": optional_params,
+                "complete_input_dict": request_data,
                 "api_base": api_base,
                 "headers": headers,
             },
         )
 
-        response = await self.async_handler.post(
-            url=api_base,
-            headers=headers,
-            data=json.dumps(request_data),
-        )
+        if is_gemini_image_preview:
+            response = await self.async_handler.post(
+                url=api_base,
+                headers=headers,
+                json=request_data,
+            )
+        else:
+            response = await self.async_handler.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(request_data),
+            )
 
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
