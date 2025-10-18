@@ -355,6 +355,7 @@ const sidebars = {
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
           items: [
             "pass_through/intro",
+            "proxy/pass_through",
             "pass_through/anthropic_completion",
             "pass_through/assembly_ai",
             "pass_through/bedrock",
@@ -365,8 +366,7 @@ const sidebars = {
             "pass_through/mistral",
             "pass_through/openai_passthrough",
             "pass_through/vertex_ai",
-            "pass_through/vllm",
-            "proxy/pass_through"
+            "pass_through/vllm"
           ]
         },
         "realtime",
