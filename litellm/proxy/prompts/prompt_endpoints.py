@@ -6,12 +6,13 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Body
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.prompts.prompt_completion_service import PromptCompletionService, PromptCompletionRequest
 from litellm.types.prompts.init_prompts import (
     ListPromptsResponse,
     PromptInfo,
@@ -20,7 +21,6 @@ from litellm.types.prompts.init_prompts import (
     PromptSpec,
     PromptTemplateBase,
 )
-
 
 router = APIRouter()
 
@@ -77,7 +77,7 @@ async def list_prompts(
     ```
     """
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.prompts.prompt_registry import PROMPT_HUB
 
     # check key metadata for prompts
     key_metadata = user_api_key_dict.metadata
@@ -86,9 +86,9 @@ async def list_prompts(
         if prompts is not None:
             return ListPromptsResponse(
                 prompts=[
-                    IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[prompt]
+                    PROMPT_HUB.IN_MEMORY_PROMPTS[prompt]
                     for prompt in prompts
-                    if prompt in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS
+                    if prompt in PROMPT_HUB.IN_MEMORY_PROMPTS
                 ]
             )
     # check if user is proxy admin - show all prompts
@@ -97,7 +97,7 @@ async def list_prompts(
         or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     ):
         return ListPromptsResponse(
-            prompts=list(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.values())
+            prompts=list(PROMPT_HUB.IN_MEMORY_PROMPTS.values())
         )
     else:
         return ListPromptsResponse(prompts=[])
@@ -148,7 +148,7 @@ async def get_prompt_info(
     }
     ```
     """
-    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.prompts.prompt_registry import PROMPT_HUB
 
     ## CHECK IF USER HAS ACCESS TO PROMPT
     prompts: Optional[List[str]] = None
@@ -169,14 +169,19 @@ async def get_prompt_info(
             detail=f"You are not authorized to access this prompt. Your role - {user_api_key_dict.user_role}, Your key's prompts - {prompts}",
         )
 
-    prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
+    prompt_spec = PROMPT_HUB.get_prompt_by_id(prompt_id)
+    verbose_proxy_logger.debug(f"found prompt with id {prompt_id}-->{prompt_spec}")
     if prompt_spec is None:
         raise HTTPException(status_code=400, detail=f"Prompt {prompt_id} not found")
 
     # Get prompt content from the callback
     prompt_template: Optional[PromptTemplateBase] = None
     try:
-        prompt_callback = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(prompt_id)
+        prompt_callback = PROMPT_HUB.get_prompt_callback_by_id(prompt_id)
+        verbose_proxy_logger.debug(
+            f"Found the prompt callback for prompt id {prompt_id} --> {prompt_callback}"
+        )
+
         if prompt_callback is not None:
             # Extract content based on integration type
             integration_name = prompt_callback.integration_name
@@ -196,6 +201,20 @@ async def get_prompt_info(
                             content=template[template_id]["content"],
                             metadata=template[template_id]["metadata"],
                         )
+            if integration_name == "gitlab":
+                from litellm.integrations.gitlab import (
+                    GitLabPromptManager,
+                )
+                if isinstance(prompt_callback, GitLabPromptManager):
+                    template = prompt_callback.prompt_manager.get_all_prompts_as_json()
+                    if template is not None and len(template) == 1:
+                        template_id = list(template.keys())[0]
+                        prompt_template = PromptTemplateBase(
+                            litellm_prompt_id=template_id,  # id sent to prompt management tool
+                            content=template[template_id]["content"],
+                            metadata=template[template_id]["metadata"],
+                        )
+
 
     except Exception:
         # If content extraction fails, continue without content
@@ -660,3 +679,31 @@ async def convert_prompt_file_to_json(
             except OSError:
                 pass  # Directory not empty or other error
 
+
+
+@router.post(
+    "/prompts/completions",
+    tags=["Prompt Completions"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def generate_completion_from_prompt_id(
+        request: PromptCompletionRequest = Body(...),
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Generate a model completion using a managed prompt.
+
+    Merge priority:
+    1. Prompt metadata/config
+    2. Prompt-level litellm_params
+    3. User request.extra_body overrides
+    """
+
+    service = PromptCompletionService(user_api_key_dict)
+    response = await service.run_completion(
+        prompt_id=request.prompt_id,
+        variables=request.prompt_variables or {},
+        prompt_version=request.prompt_version,
+        extra_body=getattr(request, "extra_body", {}) or {},
+    )
+    return response
