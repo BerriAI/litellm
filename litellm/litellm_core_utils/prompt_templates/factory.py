@@ -364,17 +364,19 @@ def phind_codellama_pt(messages):
     return prompt
 
 
-def _render_chat_template(env, chat_template: str, bos_token: str, eos_token: str, messages: list) -> str:
+def _render_chat_template(
+    env, chat_template: str, bos_token: str, eos_token: str, messages: list
+) -> str:
     """
     Shared template rendering logic for both sync and async hf_chat_template
-    
+
     Args:
         env: Jinja2 environment
         chat_template: Chat template string
         bos_token: Beginning of sequence token
         eos_token: End of sequence token
         messages: Messages to render
-        
+
     Returns:
         Rendered template string
     """
@@ -456,7 +458,7 @@ async def _afetch_and_extract_template(
 ) -> Tuple[str, str, str]:
     """
     Async version: Fetch template and tokens from HuggingFace.
-    
+
     Returns: (chat_template, bos_token, eos_token)
     """
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
@@ -518,7 +520,7 @@ def _fetch_and_extract_template(
 ) -> Tuple[str, str, str]:
     """
     Sync version: Fetch template and tokens from HuggingFace.
-    
+
     Returns: (chat_template, bos_token, eos_token)
     """
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
@@ -604,9 +606,7 @@ async def ahf_chat_template(
     )
 
 
-def hf_chat_template(
-    model: str, messages: list, chat_template: Optional[Any] = None
-):
+def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = None):
     """HuggingFace chat template (sync version)"""
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
         _get_chat_template_file,
@@ -1205,10 +1205,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for tool in tool_calls:
                 if "function" in tool:
-                    gemini_function_call: Optional[
-                        VertexFunctionCall
-                    ] = _gemini_tool_call_invoke_helper(
-                        function_call_params=tool["function"]
+                    gemini_function_call: Optional[VertexFunctionCall] = (
+                        _gemini_tool_call_invoke_helper(
+                            function_call_params=tool["function"]
+                        )
                     )
                     if gemini_function_call is not None:
                         _parts_list.append(
@@ -1727,9 +1727,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element[
-                                    "cache_control"
-                                ] = _content_element["cache_control"]
+                                _anthropic_content_element["cache_control"] = (
+                                    _content_element["cache_control"]
+                                )
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -1767,9 +1767,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_content_text_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -3964,9 +3964,11 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         # related issue: https://github.com/BerriAI/litellm/issues/5007
         # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
         name = make_valid_bedrock_tool_name(input_tool_name=name)
-        description = tool.get("function", {}).get(
-            "description", name
-        )  # converse api requires a description
+        _tool_description = tool.get("function", {}).get("description", None)
+        if _tool_description:  # bedrock doesn't accept empty "" or None descriptions
+            description = _tool_description
+        else:
+            description = name
 
         defs = parameters.pop("$defs", {})
         defs_copy = copy.deepcopy(defs)
@@ -4171,8 +4173,11 @@ def prompt_factory(
         return azure_text_pt(messages=messages)
     elif custom_llm_provider == "watsonx":
         from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
-        return IBMWatsonXChatConfig.apply_prompt_template(model=model, messages=messages)
-        
+
+        return IBMWatsonXChatConfig.apply_prompt_template(
+            model=model, messages=messages
+        )
+
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
