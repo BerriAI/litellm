@@ -302,6 +302,13 @@ def test_openai_responses_chunk_parser_web_search_call_added():
     assert result.get("text") == ""
     assert result.get("is_finished") is False
     assert result.get("tool_use") is None
+    provider_fields = result.get("provider_specific_fields")
+    assert provider_fields is not None
+    assert "web_search" in provider_fields
+    web_search = provider_fields["web_search"]
+    assert web_search["id"] == "ws_0e5386c91dd50f830068ebe883849081919a0164a2c5f5a7f5"
+    assert web_search["type"] == "web_search_call"
+    assert web_search["status"] == "in_progress"
     print("✓ web_search_call in output_item.added handled successfully")
 
 
@@ -321,16 +328,28 @@ def test_openai_responses_chunk_parser_web_search_call_done():
         "item": {
             "id": "ws_0e5386c91dd50f830068ebe883849081919a0164a2c5f5a7f5",
             "type": "web_search_call",
-            "status": "completed"
+            "status": "completed",
+            "action": {
+                "type": "search",
+                "query": "search query",
+            }
         },
         "sequence_number": 600
     }
 
     result = iterator.chunk_parser(chunk)
     
-    # Should return an empty GenericStreamingChunk
     assert result is not None
     assert result.get("text") == ""
     assert result.get("is_finished") is False
     assert result.get("tool_use") is None
+    provider_fields = result.get("provider_specific_fields")
+    assert provider_fields is not None
+    assert "web_search" in provider_fields
+    web_search = provider_fields["web_search"]
+    assert web_search["id"] == "ws_0e5386c91dd50f830068ebe883849081919a0164a2c5f5a7f5"
+    assert web_search["type"] == "web_search_call"
+    assert web_search["status"] == "completed"
+    assert web_search["action"]["type"] == "search"
+    assert web_search["action"]["query"] == "search query"
     print("✓ web_search_call in output_item.done handled successfully")
