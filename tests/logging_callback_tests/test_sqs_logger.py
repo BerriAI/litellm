@@ -11,7 +11,7 @@ import pytest
 from litellm.integrations.sqs import SQSLogger
 from litellm.types.utils import StandardLoggingPayload
 
-from litellm.integrations.sqs import AppCrypto
+from litellm.litellm_core_utils.app_crypto import AppCrypto
 
 
 @pytest.mark.asyncio
