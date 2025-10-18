@@ -29,7 +29,6 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
-from litellm.litellm_core_utils.app_crypto import AppCrypto
 
 
 class SQSLogger(CustomBatchLogger, BaseAWSLLM):
@@ -205,8 +204,9 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 litellm.aws_sqs_callback_params.get("sqs_app_encryption_aad")
                 or sqs_app_encryption_aad
         )
-        self.app_crypto: Optional[AppCrypto] = None
+        self.app_crypto: Optional["AppCrypto"] = None
         if self.sqs_aws_use_application_level_encryption:
+            from litellm.litellm_core_utils.app_crypto import AppCrypto
             if not self.sqs_app_encryption_key_b64:
                 raise ValueError("sqs_app_encryption_key_b64 is required when encryption is enabled.")
             key = base64.b64decode(self.sqs_app_encryption_key_b64)
