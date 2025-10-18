@@ -86,11 +86,7 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import (
-    PrismaClient,
-    _premium_user_check,
-    handle_exception_on_proxy,
-)
+from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
 from litellm.router import Router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -850,6 +846,50 @@ async def new_team(  # noqa: PLR0915
         raise handle_exception_on_proxy(e)
 
 
+async def _create_team_update_audit_log(
+    existing_team_row: LiteLLM_TeamTable,
+    updated_kv: dict,
+    team_id: str,
+    litellm_changed_by: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: str,
+) -> None:
+    """
+    Create an audit log entry for team update operations.
+
+    Args:
+        existing_team_row: The team row before the update
+        updated_kv: Dictionary of updated key-value pairs
+        team_id: The ID of the team being updated
+        litellm_changed_by: Optional header indicating who made the change
+        user_api_key_dict: User API key authentication details
+        litellm_proxy_admin_name: Name of the proxy admin
+    """
+    from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+
+    _before_value = existing_team_row.json(exclude_none=True)
+    _before_value = json.dumps(_before_value, default=str)
+    _after_value: str = json.dumps(updated_kv, default=str)
+
+    asyncio.create_task(
+        create_audit_log_for_update(
+            request_data=LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=litellm_changed_by
+                or user_api_key_dict.user_id
+                or litellm_proxy_admin_name,
+                changed_by_api_key=user_api_key_dict.api_key,
+                table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                object_id=team_id,
+                action="updated",
+                updated_values=_after_value,
+                before_value=_before_value,
+            )
+        )
+    )
+
+
 async def _update_model_table(
     data: UpdateTeamRequest,
     model_id: Optional[str],
@@ -1096,7 +1136,6 @@ async def update_team(
     """
     from litellm.proxy.auth.auth_checks import _cache_team_object
     from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
         litellm_proxy_admin_name,
         llm_router,
         prisma_client,
@@ -1243,26 +1282,13 @@ async def update_team(
 
     # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
     if litellm.store_audit_logs is True:
-        _before_value = existing_team_row.json(exclude_none=True)
-        _before_value = json.dumps(_before_value, default=str)
-        _after_value: str = json.dumps(updated_kv, default=str)
-
-        asyncio.create_task(
-            create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=litellm_changed_by
-                    or user_api_key_dict.user_id
-                    or litellm_proxy_admin_name,
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                    object_id=data.team_id,
-                    action="updated",
-                    updated_values=_after_value,
-                    before_value=_before_value,
-                )
-            )
+        await _create_team_update_audit_log(
+            existing_team_row=existing_team_row,
+            updated_kv=updated_kv,
+            team_id=data.team_id,
+            litellm_changed_by=litellm_changed_by,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
         )
 
     return {"team_id": team_row.team_id, "data": team_row}

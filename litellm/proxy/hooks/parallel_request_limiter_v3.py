@@ -27,10 +27,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import (
-    get_model_rate_limit_from_metadata,
-    get_team_model_tpm_limit,
-)
+from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 
 if TYPE_CHECKING:
@@ -630,7 +627,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return descriptors
 
-
     def _add_model_per_key_rate_limit_descriptor(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -698,11 +694,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> bool:
         """
         Determine if rate limit should be enforced based on limit type and model health.
-        
+
         Args:
             limit_type: Type of rate limit ("dynamic", "guaranteed_throughput", "best_effort_throughput", or None)
             model_has_failures: Whether the model has recent failures
-            
+
         Returns:
             True if rate limit should be enforced, False otherwise
         """
@@ -720,24 +716,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> Optional[int]:
         """
         Get the rate limit value to enforce based on limit type and model health.
-        
+
         Args:
             limit_value: The configured limit value
             limit_type: Type of rate limit ("dynamic", "guaranteed_throughput", "best_effort_throughput", or None)
             model_has_failures: Whether the model has recent failures
-            
+
         Returns:
             The limit value if it should be enforced, None otherwise
         """
         if limit_value is None:
             return None
-        
+
         if self._should_enforce_rate_limit(
             limit_type=limit_type,
             model_has_failures=model_has_failures,
         ):
             return limit_value
-        
+
         return None
 
     def _is_dynamic_rate_limiting_enabled(
@@ -747,11 +743,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> bool:
         """
         Check if dynamic rate limiting is enabled for either RPM or TPM.
-        
+
         Args:
             rpm_limit_type: RPM rate limit type
             tpm_limit_type: TPM rate limit type
-            
+
         Returns:
             True if dynamic mode is enabled for either limit type
         """
@@ -767,14 +763,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> List[RateLimitDescriptor]:
         """
         Create all rate limit descriptors for the request.
-        
+
         Returns list of descriptors for API key, user, team, team member, end user, and model-specific limits.
         """
         from litellm.proxy.auth.auth_utils import (
             get_team_model_rpm_limit,
             get_team_model_tpm_limit,
         )
-        
+
         descriptors = []
 
         # API Key rate limits
@@ -921,7 +917,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         },
                     )
                 )
-        
+
         return descriptors
 
     async def _check_model_has_recent_failures(
@@ -932,47 +928,47 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Check if any deployment for this model has recent failures by using
         the router's existing failure tracking.
-        
+
         Returns True if any deployment has failures in the current minute.
         """
         from litellm.proxy.proxy_server import llm_router
         from litellm.router_utils.router_callbacks.track_deployment_metrics import (
             get_deployment_failures_for_current_minute,
         )
-        
+
         if llm_router is None:
             return False
-        
+
         try:
             # Get all deployments for this model
             model_list = llm_router.get_model_list(model_name=model)
             if not model_list:
                 return False
-            
+
             # Check each deployment's failure count
             for deployment in model_list:
                 deployment_id = deployment.get("model_info", {}).get("id")
                 if not deployment_id:
                     continue
-                
+
                 # Use router's existing failure tracking
                 failure_count = get_deployment_failures_for_current_minute(
                     litellm_router_instance=llm_router,
                     deployment_id=deployment_id,
                 )
-                
+
                 if failure_count > DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE:
                     verbose_proxy_logger.debug(
                         f"[Dynamic Rate Limit] Deployment {deployment_id} has {failure_count} failures "
                         f"in current minute - enforcing rate limits for model {model}"
                     )
                     return True
-            
+
             verbose_proxy_logger.debug(
                 f"[Dynamic Rate Limit] No failures detected for model {model} - allowing dynamic exceeding"
             )
             return False
-            
+
         except Exception as e:
             verbose_proxy_logger.debug(
                 f"Error checking model failure status: {str(e)}, defaulting to enforce limits"
@@ -997,15 +993,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         metadata = user_api_key_dict.metadata or {}
         rpm_limit_type = metadata.get("rpm_limit_type")
         tpm_limit_type = metadata.get("tpm_limit_type")
-        
+
         # For dynamic mode, check if the model has recent failures
         model_has_failures = False
         requested_model = data.get("model", None)
-        
-        if self._is_dynamic_rate_limiting_enabled(
-            rpm_limit_type=rpm_limit_type,
-            tpm_limit_type=tpm_limit_type,
-        ) and requested_model:
+
+        if (
+            self._is_dynamic_rate_limiting_enabled(
+                rpm_limit_type=rpm_limit_type,
+                tpm_limit_type=tpm_limit_type,
+            )
+            and requested_model
+        ):
             model_has_failures = await self._check_model_has_recent_failures(
                 model=requested_model,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
