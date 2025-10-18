@@ -199,6 +199,9 @@ JITTER = float(os.getenv("JITTER", 0.75))
 DEFAULT_IN_MEMORY_TTL = int(
     os.getenv("DEFAULT_IN_MEMORY_TTL", 5)
 )  # default time to live for the in-memory cache
+DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE = int(
+    os.getenv("DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE", 1000)
+)  # default max size for redis batch cache
 DEFAULT_POLLING_INTERVAL = float(
     os.getenv("DEFAULT_POLLING_INTERVAL", 0.03)
 )  # default polling interval for the scheduler
@@ -969,6 +972,10 @@ DEFAULT_SOFT_BUDGET = float(
 )  # by default all litellm proxy keys have a soft budget of 50.0
 # makes it clear this is a rate limit error for a litellm virtual key
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY = "LiteLLM Virtual Key user_api_key_hash"
+
+# Python garbage collection threshold configuration
+# Format: "gen0,gen1,gen2" e.g., "1000,50,50"
+PYTHON_GC_THRESHOLD = os.getenv("PYTHON_GC_THRESHOLD")
 
 # pass through route constansts
 BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
