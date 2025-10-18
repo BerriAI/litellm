@@ -158,10 +158,20 @@ Use this for LLM API Error monitoring and tracking remaining rate limits and tok
 | `litellm_remaining_tokens_metric`                | Track `x-ratelimit-remaining-tokens` return from LLM API Deployment. Labels: `"model_group", "api_provider", "api_base", "litellm_model_name", "hashed_api_key", "api_key_alias"` |
 
 ### Deployment State 
+
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
 | `litellm_deployment_state`             | The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage. Labels: `"litellm_model_name", "model_id", "api_base", "api_provider"` |
 | `litellm_deployment_latency_per_output_token`       | Latency per output token for deployment. Labels: `"litellm_model_name", "model_id", "api_base", "api_provider", "hashed_api_key", "api_key_alias", "team", "team_alias"` |
+
+#### State Transitions
+
+| From State | To State | Trigger Conditions |
+|------------|----------|-------------------|
+| **Healthy (0)** | **Partial Outage (1)** | • Any single API call fails<br/>• Network timeout<br/>• Authentication error (401)<br/>• Rate limit hit (429)<br/>• Server error (5xx)<br/>• Any other exception during API call |
+| **Partial Outage (1)** | **Complete Outage (2)** | • Cooldown logic triggers (multiple failures)<br/>• Rate limiting detected<br/>• High failure rate (>50%)<br/>• Non-retryable errors accumulate |
+| **Partial Outage (1)** | **Healthy (0)** | • Next successful API call<br/>• Deployment recovers from cooldown<br/>• Manual intervention |
+| **Complete Outage (2)** | **Healthy (0)** | • Cooldown TTL expires (default: 5 seconds)<br/>• Successful request after cooldown period<br/>• Manual intervention |
 
 #### Fallback (Failover) Metrics
 
