@@ -12,6 +12,9 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+# Set the SERVER_ROOT_PATH environment variable to match the custom mount path
+os.environ["SERVER_ROOT_PATH"] = "/my-custom-path"
+
 from litellm.proxy.proxy_server import app as litellm_app
 from litellm.proxy.proxy_server import proxy_startup_event
 
