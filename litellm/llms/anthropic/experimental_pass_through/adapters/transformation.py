@@ -13,8 +13,6 @@ from typing import (
 
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
-from litellm.types.utils import StreamingChoices
-
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthopicMessagesAssistantMessageParam,
@@ -22,8 +20,8 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
     AnthropicMessagesToolChoice,
     AnthropicMessagesUserMessageParam,
-    AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockRedactedThinking,
+    AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
     ContentBlockDelta,
@@ -59,7 +57,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
 )
-from litellm.types.utils import Choices, ModelResponse, Usage
+from litellm.types.utils import Choices, ModelResponse, StreamingChoices, Usage
 
 from .streaming_iterator import AnthropicStreamWrapper
 
@@ -462,34 +460,6 @@ class LiteLLMAnthropicMessagesAdapter:
                         type="text", text=choice.message.content
                     )
                 )
-            elif choice.message.thinking_blocks is not None:
-                for thinking_block in choice.message.thinking_blocks:
-                    if "thinking" in thinking_block and "signature" in thinking_block:
-                        thinking = thinking_block.get("thinking")
-                        signature = thinking_block.get("signature")
-
-                        assert isinstance(thinking, str)
-                        assert isinstance(signature, str) or signature is None
-
-                        new_content.append(
-                            AnthropicResponseContentBlockThinking(
-                                type="thinking",
-                                thinking=thinking,
-                                signature=signature,
-                            )
-                        )
-                    elif "data" in thinking_block:
-                        data = thinking_block.get("data")
-
-                        assert isinstance(data, str)
-
-                        new_content.append(
-                            AnthropicResponseContentBlockRedactedThinking(
-                                type="redacted_thinking",
-                                data=data,
-                            )
-                        )
-                    
 
         return new_content
 
@@ -539,7 +509,6 @@ class LiteLLMAnthropicMessagesAdapter:
         "ContentBlockContentBlockDict",
     ]:
         from litellm._uuid import uuid
-
         from litellm.types.llms.anthropic import TextBlock, ToolUseBlock
 
         for choice in choices:
@@ -602,7 +571,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         tool.function is not None
                         and tool.function.arguments is not None
                     ):
-                        partial_json += tool.function.arguments
+                        partial_json = (partial_json or "") + tool.function.arguments
             elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
                 thinking_blocks = choice.delta.thinking_blocks or []
                 if len(thinking_blocks) > 0:
