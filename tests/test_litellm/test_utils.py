@@ -93,6 +93,39 @@ def test_get_optional_params_image_gen_filters_empty_values():
     assert optional_params == {}
 
 
+def test_azure_gpt_image_1_no_extra_body_injection():
+    """
+    Test that unsupported parameters for Azure gpt-image-1 are properly dropped
+    and don't get injected into extra_body when using provider config.
+    
+    This test addresses the issue where response_format parameter was being
+    incorrectly added to extra_body causing 400 Bad Request errors.
+    """
+    from litellm.llms.azure.image_generation import AzureGPTImageGenerationConfig
+
+    provider_config = AzureGPTImageGenerationConfig()
+    optional_params = get_optional_params_image_gen(
+        model="gpt-image-1",
+        response_format="b64_json",  # This should be dropped, not added to extra_body
+        n=1,
+        quality="hd",
+        custom_llm_provider="azure",
+        drop_params=True,
+        provider_config=provider_config,
+    )
+    
+    # Verify that response_format is completely dropped
+    assert "response_format" not in optional_params
+    
+    # Verify that extra_body doesn't contain response_format
+    if "extra_body" in optional_params:
+        assert "response_format" not in optional_params["extra_body"]
+    
+    # Verify that supported params are preserved
+    assert optional_params["n"] == 1
+    assert optional_params["quality"] == "hd"
+
+
 def test_all_model_configs():
     from litellm.llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
         VertexAIAi21Config,
