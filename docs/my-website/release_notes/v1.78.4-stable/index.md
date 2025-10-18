@@ -84,9 +84,12 @@ pip install litellm==1.78.4
 - **[Anthropic](../../docs/providers/anthropic)**
     - Reduce claude-4-sonnet max_output_tokens to 64k - [PR #15409](https://github.com/BerriAI/litellm/pull/15409)
     - Added claude-haiku-4.5 - [PR #15579](https://github.com/BerriAI/litellm/pull/15579)
+    - Add support for thinking blocks and redacted thinking blocks in Anthropic v1/messages API - [PR #15501](https://github.com/BerriAI/litellm/pull/15501)
 
 - **[Bedrock](../../docs/providers/bedrock)**
     - Add anthropic.claude-haiku-4-5-20251001-v1:0 on Bedrock, VertexAI - [PR #15581](https://github.com/BerriAI/litellm/pull/15581)
+    - Add Claude Haiku 4.5 support for Bedrock global and US regions - [PR #15650](https://github.com/BerriAI/litellm/pull/15650)
+    - Add Claude Haiku 4.5 support for Bedrock Other regions - [PR #15653](https://github.com/BerriAI/litellm/pull/15653)
     - Add JP Cross-Region Inference jp.anthropic.claude-haiku-4-5-20251001 - [PR #15598](https://github.com/BerriAI/litellm/pull/15598)
     - Fix: bedrock-pricing-geo-inregion-cross-region / add Global Cross-Region Inference - [PR #15685](https://github.com/BerriAI/litellm/pull/15685)
     - Fix: Support us-gov prefix for AWS GovCloud Bedrock models - [PR #15626](https://github.com/BerriAI/litellm/pull/15626)
@@ -95,6 +98,7 @@ pip install litellm==1.78.4
 - **[Gemini](../../docs/providers/gemini)**
     - Feat(pricing): Add Gemini 2.5 Flash Image (Nano Banana) in GA - [PR #15557](https://github.com/BerriAI/litellm/pull/15557)
     - Fix: Gemini 2.5 Flash Image should not have supports_web_search=true - [PR #15642](https://github.com/BerriAI/litellm/pull/15642)
+    - Remove penalty params as supported params for gemini preview model - [PR #15503](https://github.com/BerriAI/litellm/pull/15503)
 
 - **[Ollama](../../docs/providers/ollama)**
     - Fix(ollama/chat): correctly map reasoning_effort to think in requests - [PR #15465](https://github.com/BerriAI/litellm/pull/15465)
@@ -117,6 +121,9 @@ pip install litellm==1.78.4
 - **[Vercel AI Gateway](../../docs/providers/vercel_ai_gateway)**
     - Add glm-4.6 model to pricing configuration - [PR #15679](https://github.com/BerriAI/litellm/pull/15679)
 
+- **[Vertex AI](../../docs/providers/vertex)**
+    - Add Vertex AI Discovery Engine Rerank Support - [PR #15532](https://github.com/BerriAI/litellm/pull/15532)
+
 ### Bug Fixes
 
 - **[Anthropic](../../docs/providers/anthropic)**
@@ -124,6 +131,9 @@ pip install litellm==1.78.4
 
 - **[OpenRouter](../../docs/providers/openrouter)**
     - Change gpt-5-codex support in model_price json - [PR #15540](https://github.com/BerriAI/litellm/pull/15540)
+
+- **[Bedrock](../../docs/providers/bedrock)**
+    - Fix filtering headers for signature calcs - [PR #15590](https://github.com/BerriAI/litellm/pull/15590)
 
 - **General**
     - Add native reasoning and streaming support flag for gpt-5-codex - [PR #15569](https://github.com/BerriAI/litellm/pull/15569)
@@ -147,6 +157,7 @@ pip install litellm==1.78.4
 
 - **[/generateContent](../../docs/providers/gemini)**
     - Fix: GEMINI - CLI - add google_routes to llm_api_routes - [PR #15500](https://github.com/BerriAI/litellm/pull/15500)
+    - Fix Pydantic validation error for citationMetadata.citationSources in Google GenAI responses - [PR #15592](https://github.com/BerriAI/litellm/pull/15592)
 
 - **[Images API](../../docs/image_generation)**
     - Fix: Dall-e-2 for Image Edits API - [PR #15604](https://github.com/BerriAI/litellm/pull/15604)
