@@ -1079,3 +1079,70 @@ async def test_user_api_key_from_query_param():
     valid_token = await user_api_key_auth(request=request, api_key="")
     assert valid_token.token == hash_token(user_key)
 
+
+@pytest.mark.parametrize(
+    "api_key_length",
+    [
+        100,     # Normal length
+        1000,    # Long JWT token
+        5000,    # Very long JWT token
+        10000,   # Extremely long token
+        50000,   # Maliciously long token
+    ],
+)
+def test_user_api_key_auth_object_with_long_api_keys(api_key_length):
+    """
+    Test UserAPIKeyAuth object creation with various API key lengths to examine the final object.
+    This validates how the _safe_hash_litellm_api_key method handles tokens of different lengths.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    # Create tokens of different types and lengths
+    if api_key_length <= 1000:
+        # Create a JWT-like token
+        header = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9"
+        payload_padding = "a" * max(0, api_key_length - len(header) - 100)
+        signature = "x" * 86
+        long_api_key = f"{header}.{payload_padding}.{signature}"
+    else:
+        # Create a very long token (could be OAuth2 or other long token type)
+        long_api_key = "very_long_token_" + "x" * (api_key_length - 18)
+
+    # Test with sk- prefixed key (should be hashed)
+    sk_api_key = f"sk-{long_api_key}"
+    user_auth_sk = UserAPIKeyAuth(api_key=sk_api_key)
+    
+    print(f"\nTesting with API key length: {len(sk_api_key)}")
+    print(f"Original API key starts with: {sk_api_key[:50]}...")
+    print(f"Final api_key field length: {len(user_auth_sk.api_key) if user_auth_sk.api_key else 0}")
+    print(f"Final api_key field value: {user_auth_sk.api_key[:100] if user_auth_sk.api_key else None}...")
+    
+    # Test with JWT-like token (3 parts separated by dots)
+    jwt_like_token = f"{long_api_key}.payload.signature" if "." not in long_api_key else long_api_key
+    user_auth_jwt = UserAPIKeyAuth(api_key=jwt_like_token)
+    
+    print(f"JWT-like token length: {len(jwt_like_token)}")
+    print(f"Final JWT api_key field length: {len(user_auth_jwt.api_key) if user_auth_jwt.api_key else 0}")
+    print(f"Final JWT api_key field value: {user_auth_jwt.api_key[:100] if user_auth_jwt.api_key else None}...")
+    
+    # Test with regular long token (no sk- prefix, not JWT format)
+    user_auth_regular = UserAPIKeyAuth(api_key=long_api_key)
+    
+    print(f"Regular token length: {len(long_api_key)}")
+    print(f"Final regular api_key field length: {len(user_auth_regular.api_key) if user_auth_regular.api_key else 0}")
+    print(f"Final regular api_key field value: {user_auth_regular.api_key[:100] if user_auth_regular.api_key else None}...")
+    
+    # Assertions to validate behavior
+    assert user_auth_sk.api_key is not None
+    assert user_auth_jwt.api_key is not None  
+    assert user_auth_regular.api_key is not None
+    
+    # For sk- prefixed keys, should be hashed (64 chars)
+    if sk_api_key.startswith("sk-"):
+        assert len(user_auth_sk.api_key) == 64, f"sk- prefixed key should be hashed to 64 chars, got {len(user_auth_sk.api_key)}"
+    
+    # For JWT tokens, should be hashed with prefix (75 chars: "hashed-jwt-" + 64)
+    if jwt_like_token.count(".") == 2:  # JWT format
+        expected_jwt_length = 75  # "hashed-jwt-" (11) + hash (64)
+        assert len(user_auth_jwt.api_key) == expected_jwt_length, f"JWT should be hashed to {expected_jwt_length} chars, got {len(user_auth_jwt.api_key)}"
+
