@@ -253,13 +253,18 @@ from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.cost_tracking_settings import (
+    router as cost_tracking_settings_router,
+)
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -303,10 +308,13 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -9767,6 +9775,7 @@ app.include_router(response_router)
 app.include_router(batches_router)
 app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
+app.include_router(ocr_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(vector_store_router)
@@ -9799,6 +9808,7 @@ app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(tag_management_router)
+app.include_router(cost_tracking_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)

@@ -263,6 +263,7 @@ use_client: bool = False
 ssl_verify: Union[str, bool] = True
 ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
+ssl_ecdh_curve: Optional[str] = None  # Set to 'X25519' to disable PQC and improve performance
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
@@ -411,6 +412,7 @@ output_parse_pii: bool = False
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
+cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
 custom_prompt_dict: Dict[str, dict] = {}
 check_provider_endpoint = False
 
@@ -848,6 +850,7 @@ model_list = list(
     | wandb_models
     | ovhcloud_models
     | lemonade_models
+    | set(clarifai_models)
 )
 
 model_list_set = set(model_list)
@@ -933,6 +936,7 @@ models_by_provider: dict = {
     "wandb": wandb_models,
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
     "lemonade": lemonade_models,
+    "clarifai": clarifai_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1070,6 +1074,7 @@ from .llms.infinity.rerank.transformation import InfinityRerankConfig
 from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
 from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
+from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
 from .llms.meta_llama.chat.transformation import LlamaAPIConfig
@@ -1288,6 +1293,7 @@ from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
 from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
 from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
 from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
+from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .main import *  # type: ignore
 from .integrations import *
@@ -1326,6 +1332,7 @@ from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
+from .ocr.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *
