@@ -12119,6 +12119,14 @@
             "video"
         ]
     },
+    "glm-4.6": {
+        "cache_read_input_token_cost": 1.1e-07,
+        "input_cost_per_token": 6e-07,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 200000,
+        "max_tokens": 200000,
+        "output_cost_per_token": 2.2e-06
+    },
     "global.anthropic.claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
