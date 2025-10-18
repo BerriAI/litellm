@@ -195,6 +195,7 @@ from .llms.vertex_ai.multimodal_embeddings.embedding_handler import (
     VertexMultimodalEmbedding,
 )
 from .llms.vertex_ai.text_to_speech.text_to_speech_handler import VertexTextToSpeechAPI
+from .llms.elevenlabs.text_to_speech.text_to_speech_handler import ElevenLabsTextToSpeechAPI
 from .llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
 from .llms.vertex_ai.vertex_embeddings.embedding_handler import VertexEmbedding
 from .llms.vertex_ai.vertex_gemma_models.main import VertexAIGemmaModels
@@ -264,6 +265,7 @@ vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_gemma_chat_completion = VertexAIGemmaModels()
 vertex_model_garden_chat_completion = VertexAIModelGardenModels()
 vertex_text_to_speech = VertexTextToSpeechAPI()
+elevenlabs_text_to_speech = ElevenLabsTextToSpeechAPI()
 sagemaker_llm = SagemakerLLM()
 watsonx_chat_completion = WatsonXChatHandler()
 openai_like_embedding = OpenAILikeEmbeddingHandler()
@@ -5665,7 +5667,7 @@ def speech(  # noqa: PLR0915
     metadata: Optional[dict] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     response_format: Optional[str] = None,
-    speed: Optional[int] = None,
+    speed: Optional[float] = None,
     instructions: Optional[str] = None,
     client=None,
     headers: Optional[dict] = None,
@@ -5883,6 +5885,32 @@ def speech(  # noqa: PLR0915
             headers=headers or {},
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
+        )
+    elif custom_llm_provider == LlmProviders.ELEVENLABS.value:
+        if voice is None or not (isinstance(voice, str)):
+            raise litellm.BadRequestError(
+                message="'voice' is required to be passed as a string (ElevenLabs voice ID) for ElevenLabs TTS",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+
+        api_key = (
+            api_key
+            or litellm.api_key
+            or get_secret("ELEVENLABS_API_KEY")
+        )  # type: ignore
+
+        response = elevenlabs_text_to_speech.audio_speech(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            aspeech=aspeech,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
         )
 
     if response is None:
