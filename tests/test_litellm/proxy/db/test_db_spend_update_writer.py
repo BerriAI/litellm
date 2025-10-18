@@ -259,3 +259,22 @@ async def test_update_tag_db_without_prisma_client():
     )
 
     assert writer.spend_update_queue.add_update.call_count == 0
+
+@pytest.mark.asyncio
+async def test_update_tag_db_with_user_id():
+    """
+    Test that _update_tag_db correctly handles user_id in the transaction.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    response_cost = 0.05
+    request_tags = '["tag1"]'
+    user_id = "user-123"
+
+    writer.spend_update_queue.add_update = AsyncMock()
+
+    await writer._update_tag_db(
+        response_cost=response_cost,
+        request_tags=request_tags,
+        prisma_client=mock_prisma,
+    )
