@@ -14,7 +14,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Any, AsyncGenerator, List, Literal, Optional, Tuple, Union
+from typing import Any, AsyncGenerator, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
 from fastapi import HTTPException
@@ -40,6 +40,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockTextContent,
 )
 from litellm.types.utils import (
+    CallTypes,
     Choices,
     GuardrailStatus,
     ModelResponse,
@@ -600,9 +601,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Union[Exception, str, dict, None]:
-        verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
+        verbose_proxy_logger.debug("Inside Bedrock Pre-Call Hook for call_type: %s", call_type)
 
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -611,19 +613,24 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
-
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        
+        new_messages = self.get_guardrails_messages_for_call_type(
+            call_type=cast(CallTypes, call_type),
+            data=data,
+        )
+        
+        # Handle None case
         if new_messages is None:
-            verbose_proxy_logger.warning(
-                "Bedrock AI: not running guardrail. No messages in data"
-            )
+            verbose_proxy_logger.debug("No messages found for call_type, skipping guardrail")
             return data
-
+        
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
         bedrock_guardrail_response = await self.make_bedrock_api_request(
-            source="INPUT", messages=new_messages, request_data=data
+            source="INPUT", 
+            messages=new_messages,
+            request_data=data,
         )
         #########################################################
 
@@ -657,6 +664,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ):
         from litellm.proxy.common_utils.callback_utils import (
@@ -667,7 +675,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        new_messages = self.get_guardrails_messages_for_call_type(
+            call_type=cast(CallTypes, call_type),
+            data=data,
+        )
+        
         if new_messages is None:
             verbose_proxy_logger.warning(
                 "Bedrock AI: not running guardrail. No messages in data"

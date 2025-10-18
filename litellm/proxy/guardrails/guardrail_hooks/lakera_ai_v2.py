@@ -193,6 +193,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[Union[Exception, str, Dict]]:
         from litellm.proxy.common_utils.callback_utils import (
@@ -264,6 +265,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ):
         from litellm.proxy.common_utils.callback_utils import (

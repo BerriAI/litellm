@@ -360,6 +360,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Union[Exception, str, dict, None]:
         """Pre-call hook to sanitize user prompts."""

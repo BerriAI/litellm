@@ -175,6 +175,7 @@ class JavelinGuardrail(CustomGuardrail):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[Union[Exception, str, Dict]]:
         """

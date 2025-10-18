@@ -291,6 +291,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Union[Exception, str, dict, None]:
         """
@@ -348,6 +349,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ):
         """

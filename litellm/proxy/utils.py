@@ -22,6 +22,7 @@ from typing import (
     overload,
 )
 
+from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME, MAX_TEAM_LIST_LIMIT
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -32,6 +33,7 @@ from litellm.proxy._types import (
     SpendLogsPayload,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CallTypes
 
 try:
     import backoff
@@ -93,7 +95,7 @@ from litellm.types.mcp import (
     MCPPreCallRequestObject,
     MCPPreCallResponseObject,
 )
-from litellm.types.utils import CallTypes, LLMResponseTypes, LoggedLiteLLMParams
+from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -391,7 +393,7 @@ class ProxyLogging:
         for callback in litellm.callbacks:
             if isinstance(callback, str):
                 callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                    callback,
+                    cast(_custom_logger_compatible_callbacks_literal, callback),
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
                 )
@@ -799,6 +801,7 @@ class ProxyLogging:
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> None:
         pass
@@ -818,6 +821,7 @@ class ProxyLogging:
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> dict:
         pass
@@ -836,6 +840,7 @@ class ProxyLogging:
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[dict]:
         """
@@ -902,7 +907,7 @@ class ProxyLogging:
                 _callback = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        callback
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback  # type: ignore
@@ -1241,7 +1246,7 @@ class ProxyLogging:
                 _callback: Optional[CustomLogger] = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        callback
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback  # type: ignore
@@ -1404,7 +1409,7 @@ class ProxyLogging:
                 _callback: Optional[CustomLogger] = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        callback
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback  # type: ignore
@@ -1486,7 +1491,7 @@ class ProxyLogging:
                             continue
                     if isinstance(callback, str):
                         _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                            callback
+                            cast(_custom_logger_compatible_callbacks_literal, callback)
                         )
                     else:
                         _callback = callback  # type: ignore
@@ -1526,7 +1531,7 @@ class ProxyLogging:
             _callback: Optional[CustomLogger] = None
             if isinstance(callback, str):
                 _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                    callback
+                    cast(_custom_logger_compatible_callbacks_literal, callback)
                 )
             else:
                 _callback = callback  # type: ignore

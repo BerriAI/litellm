@@ -220,7 +220,7 @@ class GenericStreamingChunk(TypedDict, total=False):
 from enum import Enum
 
 
-class CallTypes(Enum):
+class CallTypes(str, Enum):
     embedding = "embedding"
     aembedding = "aembedding"
     completion = "completion"

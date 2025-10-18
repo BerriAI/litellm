@@ -4,12 +4,12 @@
 import asyncio
 import base64
 import json
-from litellm._uuid import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import HTTPException
 
 from litellm import Router, verbose_logger
+from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
@@ -291,6 +291,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "alist_fine_tuning_jobs",
             "acancel_fine_tuning_job",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Union[Exception, str, Dict, None]:
         """

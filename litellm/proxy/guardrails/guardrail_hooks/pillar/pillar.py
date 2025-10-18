@@ -15,6 +15,7 @@ from fastapi import HTTPException
 # LiteLLM imports
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
+from litellm._version import version as litellm_version
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -30,8 +31,6 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import LLMResponseTypes
-from litellm._version import version as litellm_version
-
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -172,6 +171,7 @@ class PillarGuardrail(CustomGuardrail):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[Union[Exception, str, dict]]:
         """
@@ -219,6 +219,7 @@ class PillarGuardrail(CustomGuardrail):
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[Union[Exception, str, dict]]:
         """

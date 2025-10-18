@@ -31,6 +31,7 @@ class MyCustomHandler(
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ):
         return data
@@ -65,6 +66,7 @@ class MyCustomHandler(
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ):
         pass

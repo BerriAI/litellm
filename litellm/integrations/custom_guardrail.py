@@ -11,6 +11,9 @@ from litellm.types.guardrails import (
     Mode,
     PiiEntityType,
 )
+from litellm.types.llms.openai import (
+    AllMessageValues,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
     CallTypes,
@@ -492,6 +495,43 @@ class CustomGuardrail(CustomLogger):
         """
         for key, value in vars(litellm_params).items():
             setattr(self, key, value)
+    
+    def get_guardrails_messages_for_call_type(self, call_type: CallTypes, data: Optional[dict] = None) -> Optional[List[AllMessageValues]]:
+        """
+        Returns the messages for the given call type and data
+        """
+        if call_type is None or data is None:
+            return None
+        
+        #########################################################
+        # /chat/completions 
+        # /messages 
+        # Both endpoints store the messages in the "messages" key
+        #########################################################
+        if call_type == CallTypes.completion.value or call_type == CallTypes.acompletion.value or call_type == CallTypes.anthropic_messages.value:
+            return data.get("messages")
+        
+        #########################################################
+        # /responses 
+        # User/System messages are stored in the "input" key, use litellm transformation to get the messages
+        #########################################################
+        if call_type == CallTypes.responses.value or call_type == CallTypes.aresponses.value:
+            from typing import cast
+
+            from litellm.responses.litellm_completion_transformation.transformation import (
+                LiteLLMCompletionResponsesConfig,
+            )
+            
+            input_data = data.get("input")
+            if input_data is None:
+                return None
+            
+            messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=input_data,
+                responses_api_request=data,
+            )
+            return cast(List[AllMessageValues], messages)
+        return None
 
 
 def log_guardrail_information(func):
