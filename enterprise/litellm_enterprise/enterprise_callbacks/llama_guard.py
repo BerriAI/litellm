@@ -106,6 +106,7 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ):
         """

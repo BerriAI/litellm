@@ -1,5 +1,11 @@
 # /ocr
 
+| Feature | Supported | 
+|---------|-----------|
+| Cost Tracking | ✅ |
+| Logging | ✅ (Basic Logging not supported) |
+| Load Balancing | ✅ |
+
 :::tip
 
 LiteLLM follows the [Mistral API request/response for the OCR API](https://docs.mistral.ai/capabilities/vision/#optical-character-recognition-ocr)
