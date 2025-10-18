@@ -148,7 +148,11 @@ class AnthropicMessagesContainerUploadParam(TypedDict, total=False):
 class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Required[Literal["image"]]
     source: Required[
-        Union[AnthropicContentParamSource, AnthropicContentParamSourceFileId]
+        Union[
+            AnthropicContentParamSource,
+            AnthropicContentParamSourceFileId,
+            AnthropicContentParamSourceUrl,
+        ]
     ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
