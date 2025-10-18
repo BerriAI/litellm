@@ -120,3 +120,33 @@ async def test_handle_lpop_count_for_older_redis_versions(monkeypatch):
     assert result == [b"value1", b"value2"]
     assert mock_pipeline.lpop.call_count == 2
     assert mock_pipeline.execute.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_redis_cache_tls_client_cert_init(monkeypatch, redis_no_ping):
+    """Test RedisCache initialization with TLS client certificate parameters"""
+    monkeypatch.setenv("REDIS_HOST", "rediss://my-secure-host:6380")
+
+    # Test with SSL client certificate parameters
+    redis_cache = RedisCache(
+        ssl_certfile="/path/to/client.crt",
+        ssl_keyfile="/path/to/client.key",
+        ssl_ca_certs="/path/to/ca.crt"
+    )
+
+    # Verify SSL parameters are stored in redis_kwargs
+    assert redis_cache.redis_kwargs["ssl_certfile"] == "/path/to/client.crt"
+    assert redis_cache.redis_kwargs["ssl_keyfile"] == "/path/to/client.key"
+    assert redis_cache.redis_kwargs["ssl_ca_certs"] == "/path/to/ca.crt"
+
+    # Verify client initialization includes SSL parameters
+    client = redis_cache.init_async_client()
+    assert client is not None
+
+    # Check that SSL parameters are passed to the connection pool
+    connection_kwargs = client.connection_pool.connection_kwargs
+    assert connection_kwargs["ssl_certfile"] == "/path/to/client.crt"
+    assert connection_kwargs["ssl_keyfile"] == "/path/to/client.key"
+    assert connection_kwargs["ssl_ca_certs"] == "/path/to/ca.crt"
+
+
