@@ -1747,7 +1747,6 @@ class InitPassThroughEndpointHelpers:
         Returns:
             bool: True if route is a registered pass-through endpoint, False otherwise
         """
-
         ## CHECK IF MAPPED PASS THROUGH ENDPOINT
         for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
             if route.startswith(mapped_route):
@@ -1911,11 +1910,14 @@ async def initialize_pass_through_endpoints(
 
 async def _get_pass_through_endpoints_from_db(
     endpoint_id: Optional[str] = None,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
 ) -> List[PassThroughGenericEndpoint]:
+    from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.proxy_server import get_config_general_settings
 
     try:
+        if user_api_key_dict is None:
+            user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
         response: ConfigFieldInfo = await get_config_general_settings(
             field_name="pass_through_endpoints", user_api_key_dict=user_api_key_dict
         )
