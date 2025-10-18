@@ -935,18 +935,13 @@ async def _check_org_key_limits(
     Only runs check if tpm_limit_type or rpm_limit_type is "guaranteed_throughput"
     """
 
-    rpm_limit_type = (
-        getattr(data, "rpm_limit_type", None)
-        or data.metadata.get("rpm_limit_type", None)
-        if data.metadata
-        else None
+    rpm_limit_type = getattr(data, "rpm_limit_type", None) or (
+        data.metadata.get("rpm_limit_type", None) if data.metadata else None
     )
-    tpm_limit_type = (
-        getattr(data, "tpm_limit_type", None)
-        or data.metadata.get("tpm_limit_type", None)
-        if data.metadata
-        else None
+    tpm_limit_type = getattr(data, "tpm_limit_type", None) or (
+        data.metadata.get("tpm_limit_type", None) if data.metadata else None
     )
+
     if (
         tpm_limit_type != "guaranteed_throughput"
         and rpm_limit_type != "guaranteed_throughput"
@@ -955,7 +950,6 @@ async def _check_org_key_limits(
     # get all organization keys
     # calculate allocated tpm/rpm limit
     # check if specified tpm/rpm limit is greater than allocated tpm/rpm limit
-
     keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"organization_id": org_table.organization_id},
     )
