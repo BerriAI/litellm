@@ -273,8 +273,28 @@ async def test_update_tag_db_with_user_id():
 
     writer.spend_update_queue.add_update = AsyncMock()
 
-    await writer._update_tag_db(
-        response_cost=response_cost,
-        request_tags=request_tags,
+    await writer.add_spend_log_transaction_to_daily_tag_transaction(
+        payload={
+            "request_tags": request_tags,
+            "user": user_id,
+            "api_key": "api-key-123",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "date": "2024-01-01",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        },
         prisma_client=mock_prisma,
     )
+
+    assert writer.spend_update_queue.add_update.call_count == 1
+
+    call_args = writer.spend_update_queue.add_update.call_args_list[0][1]
+    assert call_args["update"]["entity_type"] == Litellm_EntityType.TAG
+    assert call_args["update"]["entity_id"] == "tag1"
+    assert call_args["update"]["response_cost"] == response_cost
+    assert call_args["update"]["user_id"] == user_id
