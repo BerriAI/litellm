@@ -5,7 +5,9 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
 )
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.types.router import GenericLiteLLMParams
-
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_anthropic_provider_process_image_content,
+)
 from ....vertex_llm_base import VertexBase
 
 
@@ -66,7 +68,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             )
         return api_base  # no transformation is needed - handled in validate_environment
 
-    def transform_anthropic_messages_request(
+    async def transform_anthropic_messages_request(
         self,
         model: str,
         messages: List[Dict],
@@ -74,7 +76,8 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
-        anthropic_messages_request = super().transform_anthropic_messages_request(
+        messages = await async_anthropic_provider_process_image_content(messages)
+        anthropic_messages_request = await super().transform_anthropic_messages_request(
             model=model,
             messages=messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,

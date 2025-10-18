@@ -12,6 +12,9 @@ from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_anthropic_provider_process_image_content,
+)
 from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk
@@ -95,7 +98,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             stream=stream,
         )
 
-    def transform_anthropic_messages_request(
+    async def transform_anthropic_messages_request(
         self,
         model: str,
         messages: List[Dict],
@@ -103,7 +106,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
-        anthropic_messages_request = AnthropicMessagesConfig.transform_anthropic_messages_request(
+
+        messages = await async_anthropic_provider_process_image_content(messages)
+        anthropic_messages_request = await AnthropicMessagesConfig.transform_anthropic_messages_request(
             self=self,
             model=model,
             messages=messages,
