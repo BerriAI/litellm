@@ -73,6 +73,23 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if item_type == "reasoning":
             return None, index
 
+        # Handle function_call items (for gpt-5-codex and similar models)
+        # Issue: https://github.com/BerriAI/litellm/issues/14846
+        if item_type == "function_call":
+            msg = Message(
+                content=None,
+                tool_calls=[{
+                    "id": item.get("call_id"),
+                    "function": {
+                        "name": item.get("name"),
+                        "arguments": item.get("arguments", ""),
+                    },
+                    "type": "function",
+                }]
+            )
+            choice = Choices(message=msg, finish_reason="tool_calls", index=index)
+            return choice, index + 1
+
         # Handle message items with output_text content
         if item_type == "message":
             content_list = item.get("content", [])
