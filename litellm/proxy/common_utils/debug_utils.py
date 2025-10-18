@@ -306,42 +306,9 @@ async def get_memory_summary(
     }
 
 
-@router.get("/debug/memory/details", include_in_schema=False)
-async def get_memory_details(
-    _: UserAPIKeyAuth = Depends(user_api_key_auth),
-    top_n: int = Query(20, description="Number of top object types to return"),
-    include_process_info: bool = Query(True, description="Include process memory info"),
-) -> Dict[str, Any]:
-    """
-    Get detailed memory diagnostics for deep debugging.
-    
-    Returns:
-    - worker_pid: Process ID
-    - process_memory: RAM usage, virtual memory, file handles, threads
-    - garbage_collector: GC thresholds, counts, collection history
-    - objects: Total tracked objects and top object types
-    - uncollectable: Objects that can't be garbage collected (potential leaks)
-    - cache_memory: Memory usage of user_api_key, router, and logging caches
-    - router_memory: Memory usage of router components (model_list, deployment_names, etc.)
-    
-    Query Parameters:
-    - top_n: Number of top object types to return (default: 20)
-    - include_process_info: Include process-level memory info using psutil (default: true)
-    
-    Example usage:
-    curl "http://localhost:4000/debug/memory/details?top_n=30" -H "Authorization: Bearer sk-1234"
-    
-    All memory sizes are reported in both bytes and MB.
-    """
-    from litellm.proxy.proxy_server import (
-        llm_router,
-        proxy_logging_obj,
-        user_api_key_cache,
-        redis_usage_cache,
-    )
-    
-    # Get GC statistics
-    gc_stats = {
+def _get_gc_statistics() -> Dict[str, Any]:
+    """Get garbage collector statistics."""
+    return {
         "enabled": gc.isenabled(),
         "thresholds": {
             "generation_0": gc.get_threshold()[0],
@@ -365,8 +332,10 @@ async def get_memory_details(
             for i, stat in enumerate(gc.get_stats())
         ],
     }
-    
-    # Count objects by type
+
+
+def _get_object_type_counts(top_n: int) -> tuple[int, list[Dict[str, Any]]]:
+    """Count objects by type and return total count and top N types."""
     type_counts: Counter = Counter()
     total_objects = 0
     
@@ -375,7 +344,6 @@ async def get_memory_details(
         obj_type = type(obj).__name__
         type_counts[obj_type] += 1
     
-    # Get top N object types with readable counts
     top_object_types = [
         {
             "type": obj_type, 
@@ -385,15 +353,21 @@ async def get_memory_details(
         for obj_type, count in type_counts.most_common(top_n)
     ]
     
-    # Get uncollectable objects (potential memory leaks)
+    return total_objects, top_object_types
+
+
+def _get_uncollectable_objects_info() -> Dict[str, Any]:
+    """Get information about uncollectable objects (potential memory leaks)."""
     uncollectable = gc.garbage
-    uncollectable_info = {
+    return {
         "count": len(uncollectable),
-        "sample_types": [type(obj).__name__ for obj in uncollectable[:10]],  # First 10
+        "sample_types": [type(obj).__name__ for obj in uncollectable[:10]],
         "warning": "If count > 0, you may have reference cycles preventing garbage collection" if len(uncollectable) > 0 else None,
     }
-    
-    # Calculate cache memory usage
+
+
+def _get_cache_memory_stats(user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache) -> Dict[str, Any]:
+    """Calculate memory usage for all caches."""
     cache_stats = {}
     try:
         # User API key cache
@@ -457,7 +431,11 @@ async def get_memory_details(
         verbose_proxy_logger.debug(f"Error calculating cache stats: {e}")
         cache_stats["error"] = str(e)
     
-    # LiteLLM Router memory usage
+    return cache_stats
+
+
+def _get_router_memory_stats(llm_router) -> Dict[str, Any]:
+    """Get memory usage statistics for LiteLLM router."""
     litellm_router_memory = {}
     try:
         if llm_router is not None:
@@ -519,55 +497,103 @@ async def get_memory_details(
         verbose_proxy_logger.debug(f"Error getting router memory info: {e}")
         litellm_router_memory = {"error": str(e)}
     
-    # Process memory info (requires psutil)
-    process_info = None
-    worker_pid = os.getpid()  # Always get PID, even without psutil
+    return litellm_router_memory
+
+
+def _get_process_memory_info(worker_pid: int, include_process_info: bool) -> Dict[str, Any] | None:
+    """Get process-level memory information using psutil."""
+    if not include_process_info:
+        return None
+        
+    try:
+        import psutil
+        
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        ram_usage_mb = round(memory_info.rss / (1024 * 1024), 2)
+        virtual_memory_mb = round(memory_info.vms / (1024 * 1024), 2)
+        memory_percent = round(process.memory_percent(), 2)
+        
+        return {
+            "pid": worker_pid,
+            "summary": f"Worker PID {worker_pid} using {ram_usage_mb:.1f} MB of RAM ({memory_percent:.1f}% of system memory)",
+            "ram_usage": {
+                "megabytes": ram_usage_mb,
+                "description": "Actual physical RAM used by this process"
+            },
+            "virtual_memory": {
+                "megabytes": virtual_memory_mb,
+                "description": "Total virtual memory allocated (includes swapped memory)"
+            },
+            "system_memory_percent": {
+                "percent": memory_percent,
+                "description": "Percentage of total system RAM being used"
+            },
+            "open_file_handles": {
+                "count": process.num_fds() if hasattr(process, "num_fds") else "N/A (Windows)",
+                "description": "Number of open file descriptors/handles"
+            },
+            "threads": {
+                "count": process.num_threads(),
+                "description": "Number of active threads in this process"
+            }
+        }
+    except ImportError:
+        return {
+            "pid": worker_pid,
+            "error": "psutil not installed. Install with: pip install psutil"
+        }
+    except Exception as e:
+        verbose_proxy_logger.debug(f"Error getting process info: {e}")
+        return {"pid": worker_pid, "error": str(e)}
+
+
+@router.get("/debug/memory/details", include_in_schema=False)
+async def get_memory_details(
+    _: UserAPIKeyAuth = Depends(user_api_key_auth),
+    top_n: int = Query(20, description="Number of top object types to return"),
+    include_process_info: bool = Query(True, description="Include process memory info"),
+) -> Dict[str, Any]:
+    """
+    Get detailed memory diagnostics for deep debugging.
     
-    if include_process_info:
-        try:
-            import psutil
-            
-            process = psutil.Process()
-            memory_info = process.memory_info()
-            ram_usage_mb = round(memory_info.rss / (1024 * 1024), 2)
-            virtual_memory_mb = round(memory_info.vms / (1024 * 1024), 2)
-            memory_percent = round(process.memory_percent(), 2)
-            
-            process_info = {
-                "pid": worker_pid,
-                "summary": f"Worker PID {worker_pid} using {ram_usage_mb:.1f} MB of RAM ({memory_percent:.1f}% of system memory)",
-                "ram_usage": {
-                    "megabytes": ram_usage_mb,
-                    "description": "Actual physical RAM used by this process"
-                },
-                "virtual_memory": {
-                    "megabytes": virtual_memory_mb,
-                    "description": "Total virtual memory allocated (includes swapped memory)"
-                },
-                "system_memory_percent": {
-                    "percent": memory_percent,
-                    "description": "Percentage of total system RAM being used"
-                },
-                "open_file_handles": {
-                    "count": process.num_fds() if hasattr(process, "num_fds") else "N/A (Windows)",
-                    "description": "Number of open file descriptors/handles"
-                },
-                "threads": {
-                    "count": process.num_threads(),
-                    "description": "Number of active threads in this process"
-                }
-            }
-        except ImportError:
-            process_info = {
-                "pid": worker_pid,
-                "error": "psutil not installed. Install with: pip install psutil"
-            }
-        except Exception as e:
-            verbose_proxy_logger.debug(f"Error getting process info: {e}")
-            process_info = {"pid": worker_pid, "error": str(e)}
+    Returns:
+    - worker_pid: Process ID
+    - process_memory: RAM usage, virtual memory, file handles, threads
+    - garbage_collector: GC thresholds, counts, collection history
+    - objects: Total tracked objects and top object types
+    - uncollectable: Objects that can't be garbage collected (potential leaks)
+    - cache_memory: Memory usage of user_api_key, router, and logging caches
+    - router_memory: Memory usage of router components (model_list, deployment_names, etc.)
+    
+    Query Parameters:
+    - top_n: Number of top object types to return (default: 20)
+    - include_process_info: Include process-level memory info using psutil (default: true)
+    
+    Example usage:
+    curl "http://localhost:4000/debug/memory/details?top_n=30" -H "Authorization: Bearer sk-1234"
+    
+    All memory sizes are reported in both bytes and MB.
+    """
+    from litellm.proxy.proxy_server import (
+        llm_router,
+        proxy_logging_obj,
+        user_api_key_cache,
+        redis_usage_cache,
+    )
+    
+    worker_pid = os.getpid()
+    
+    # Collect all diagnostics using helper functions
+    gc_stats = _get_gc_statistics()
+    total_objects, top_object_types = _get_object_type_counts(top_n)
+    uncollectable_info = _get_uncollectable_objects_info()
+    cache_stats = _get_cache_memory_stats(user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache)
+    litellm_router_memory = _get_router_memory_stats(llm_router)
+    process_info = _get_process_memory_info(worker_pid, include_process_info)
     
     return {
-        "worker_pid": worker_pid,  # Always include PID at top level
+        "worker_pid": worker_pid,
         "process_memory": process_info,
         "garbage_collector": gc_stats,
         "objects": {
