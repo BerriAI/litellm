@@ -173,6 +173,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
+    ocr_cost_per_page: Optional[float]  # for OCR models
+    annotation_cost_per_page: Optional[float]  # for OCR models
     search_context_cost_per_query: Optional[
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
@@ -330,6 +332,8 @@ CallTypesLiteral = Literal[
     "agenerate_content",
     "generate_content_stream",
     "agenerate_content_stream",
+    "ocr",
+    "aocr",
 ]
 
 
