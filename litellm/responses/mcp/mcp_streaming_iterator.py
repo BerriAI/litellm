@@ -436,7 +436,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     value  # Copy all params as-is since tools are already processed
                 )
 
-            tools_count = len(params_for_llm.get("tools", []))
+            tools_count = (
+                len(params_for_llm.get("tools", []))
+                if params_for_llm.get("tools")
+                else 0
+            )
             verbose_logger.debug(f"Making LLM call with {tools_count} tools")
             response = await aresponses(**params_for_llm)
 
