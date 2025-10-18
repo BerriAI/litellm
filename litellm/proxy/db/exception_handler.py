@@ -59,3 +59,28 @@ class PrismaDBExceptionHandler:
         ):
             return None
         raise e
+
+
+def is_deadlock_error(e: Exception) -> bool:
+    """
+    Best-effort detector for Postgres deadlocks (SQLSTATE 40P01) coming through Prisma.
+
+    We can't rely on a strongly-typed error from the Prisma Python client for this,
+    so we match on the SQLSTATE code or message text.
+    """
+    message = str(e)
+    if "40P01" in message:
+        return True
+    if "deadlock detected" in message.lower():
+        return True
+    try:
+        import prisma  # type: ignore
+
+        if isinstance(e, prisma.errors.PrismaError) and (
+            "40P01" in message or "deadlock" in message.lower()
+        ):
+            return True
+    except Exception:
+        # If prisma isn't available or anything goes wrong, fall back to string checks
+        pass
+    return False
