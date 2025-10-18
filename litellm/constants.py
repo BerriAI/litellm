@@ -334,6 +334,7 @@ LITELLM_CHAT_PROVIDERS = [
     "gradient_ai",
     "github_copilot",  # GitHub Copilot Chat API
     "novita",
+    "siliconflow",
     "meta_llama",
     "featherless_ai",
     "nscale",
@@ -484,6 +485,7 @@ openai_compatible_endpoints: List = [
     "https://api.hyperbolic.xyz/v1",
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
+    "https://api.siliconflow.com/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
 ]
 
@@ -517,6 +519,7 @@ openai_compatible_providers: List = [
     "galadriel",
     "github_copilot",  # GitHub Copilot Chat API
     "novita",
+    "siliconflow",
     "meta_llama",
     "featherless_ai",
     "nscale",
