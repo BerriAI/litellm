@@ -18,6 +18,7 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_query,
+    get_custom_llm_provider_from_request_headers,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
@@ -282,6 +283,7 @@ async def retrieve_batch(
         else:
             custom_llm_provider = (
                 provider
+                or get_custom_llm_provider_from_request_headers(request=request)
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
             )
@@ -392,6 +394,7 @@ async def list_batches(
         else:
             custom_llm_provider = (
                 provider
+                or get_custom_llm_provider_from_request_headers(request=request)
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
             )
