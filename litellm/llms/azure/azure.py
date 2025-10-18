@@ -744,6 +744,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     client=client,
                     litellm_params=litellm_params,
                     api_base=api_base,
+                    api_version=api_version,
+                    max_retries=max_retries,
+                    azure_ad_token=azure_ad_token,
+                    azure_ad_token_provider=azure_ad_token_provider,
                 )
             azure_client = self.get_azure_openai_client(
                 api_version=api_version,
