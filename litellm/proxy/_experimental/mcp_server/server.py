@@ -703,12 +703,17 @@ if MCP_AVAILABLE:
         #########################################################
         if litellm_logging_obj:
             end_time = datetime.now()
-            await litellm_logging_obj.async_post_mcp_tool_call_hook(
-                kwargs=litellm_logging_obj.model_call_details,
-                response_obj=response,
-                start_time=start_time,
-                end_time=end_time,
-            )
+            try:
+                # log mcp response
+                await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                    kwargs=litellm_logging_obj.model_call_details,
+                    response_obj=response,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            except Exception as e:
+                verbose_logger.exception(f"Error in post MCP tool call hook: {str(e)}")
+        
         return response
 
     def _get_standard_logging_mcp_tool_call(

@@ -214,6 +214,10 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
 
         try:
+            from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+                MCPRequestHandler,
+            )
+
             data = await request.json()
             data = await add_litellm_data_to_request(
                 data=data,
@@ -221,7 +225,32 @@ if MCP_AVAILABLE:
                 user_api_key_dict=user_api_key_dict,
                 proxy_config=proxy_config,
             )
-            return await call_mcp_tool(**data)
+            headers = request.headers
+            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(
+                headers
+            )
+            mcp_server_auth_headers = (
+                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+                or None
+            )
+            oauth2_headers = (
+                MCPRequestHandler._get_oauth2_headers_from_headers(headers) or None
+            )
+            raw_headers = dict(headers)
+            secret_fields = data.get("secret_fields")
+            if isinstance(secret_fields, dict) and secret_fields.get("raw_headers"):
+                raw_headers = secret_fields["raw_headers"]
+
+            result = await call_mcp_tool(
+                **data,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+            )
+            
+            return result
+            
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
             raise HTTPException(
