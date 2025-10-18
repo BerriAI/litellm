@@ -71,5 +71,10 @@ files_settings:
   - custom_llm_provider: openai
     api_key: os.environ/OPENAI_API_KEY
 
+# for /videos endpoints
+videos_settings:
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys

@@ -2907,3 +2907,386 @@ class OpenAIAssistantsAPI(BaseLLM):
         )
 
         return response
+
+
+class OpenAIVideosAPI(BaseLLM):
+    """
+    OpenAI methods to support for videos API
+    - create_video()
+    - retrieve_video()
+    - delete_video()
+    - video_content()
+    - list_videos()
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_openai_client(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+        _is_async: bool = False,
+    ) -> Optional[Union[OpenAI, AsyncOpenAI]]:
+        received_args = locals()
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = None
+        if client is None:
+            data = {}
+            for k, v in received_args.items():
+                if k == "self" or k == "client" or k == "_is_async":
+                    pass
+                elif k == "api_base" and v is not None:
+                    data["base_url"] = v
+                elif v is not None:
+                    data[k] = v
+            if _is_async is True:
+                openai_client = AsyncOpenAI(**data)
+            else:
+                openai_client = OpenAI(**data)  # type: ignore
+        else:
+            openai_client = client
+
+        return openai_client
+
+    async def acreate_video(
+        self,
+        create_video_data: dict,
+        openai_client: AsyncOpenAI,
+    ):
+        from litellm.types.llms.openai import OpenAIVideoObject
+        # Since OpenAI SDK doesn't have videos API yet, we make direct HTTP call
+        
+        # Check if input_reference is present (file upload)
+        if "input_reference" in create_video_data and create_video_data["input_reference"] is not None:
+            # Extract file data and prepare files parameter
+            file_data = create_video_data.pop("input_reference")
+            filename, content, content_type = file_data
+            
+            files = {
+                "input_reference": (filename, content, content_type)
+            }
+            
+            # Add other parameters as form data
+            data = {}
+            for key, value in create_video_data.items():
+                if value is not None:
+                    data[key] = value
+            
+            # Use OpenAI client's built-in files support
+            response = await openai_client.post(
+                "/videos",
+                files=files,
+                body=data,
+                cast_to=object,
+            )
+            return OpenAIVideoObject(**response)  # type: ignore  # type: ignore
+        else:
+            # Regular JSON request
+            response = await openai_client.post(
+                "/videos",
+                body=create_video_data,
+                cast_to=object,
+            )
+            return OpenAIVideoObject(**response)  # type: ignore  # type: ignore
+
+    def create_video(
+        self,
+        _is_async: bool,
+        create_video_data: dict,
+        api_base: str,
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+    ):
+        from litellm.types.llms.openai import OpenAIVideoObject
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.acreate_video(  # type: ignore
+                create_video_data=create_video_data, openai_client=openai_client
+            )
+        
+        # Check if input_reference is present (file upload)
+        if "input_reference" in create_video_data and create_video_data["input_reference"] is not None:
+            # Extract file data and prepare files parameter
+            file_data = create_video_data.pop("input_reference")
+            filename, content, content_type = file_data
+            
+            files = {
+                "input_reference": (filename, content, content_type)
+            }
+            
+            # Add other parameters as form data
+            data = {}
+            for key, value in create_video_data.items():
+                if value is not None:
+                    data[key] = value
+            
+            # Use OpenAI client's built-in files support
+            response = cast(OpenAI, openai_client).post(
+                "/videos",
+                files=files,
+                body=data,
+                cast_to=object,
+            )
+            return OpenAIVideoObject(**response)  # type: ignore  # type: ignore
+        else:
+            # Regular JSON request
+            response = cast(OpenAI, openai_client).post(
+                "/videos",
+                body=create_video_data,
+                cast_to=object,
+            )
+            return OpenAIVideoObject(**response)  # type: ignore  # type: ignore
+
+    async def aretrieve_video(
+        self,
+        video_id: str,
+        openai_client: AsyncOpenAI,
+    ):
+        from litellm.types.llms.openai import OpenAIVideoObject
+        response = await openai_client.get(
+            f"/videos/{video_id}",
+            cast_to=object,
+        )
+        return OpenAIVideoObject(**response)  # type: ignore
+
+    def retrieve_video(
+        self,
+        _is_async: bool,
+        video_id: str,
+        api_base: str,
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+    ):
+        from litellm.types.llms.openai import OpenAIVideoObject
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.aretrieve_video(  # type: ignore
+                video_id=video_id,
+                openai_client=openai_client,
+            )
+        response = openai_client.get(
+            f"/videos/{video_id}",
+            cast_to=object,
+        )
+
+        return OpenAIVideoObject(**response)  # type: ignore
+
+    async def adelete_video(
+        self,
+        video_id: str,
+        openai_client: AsyncOpenAI,
+    ):
+        response = await openai_client.delete(
+            f"/videos/{video_id}",
+            cast_to=object,
+        )
+        return response
+
+    def delete_video(
+        self,
+        _is_async: bool,
+        video_id: str,
+        api_base: str,
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+    ):
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.adelete_video(  # type: ignore
+                video_id=video_id,
+                openai_client=openai_client,
+            )
+        response = openai_client.delete(
+            f"/videos/{video_id}",
+            cast_to=object,
+        )
+
+        return response
+
+    async def avideo_content(
+        self,
+        video_id: str,
+        openai_client: AsyncOpenAI,
+    ):
+        from litellm.types.llms.openai import HttpxBinaryResponseContent
+        response = await openai_client.get(
+            f"/videos/{video_id}/content",
+            cast_to=httpx.Response,
+        )
+        return HttpxBinaryResponseContent(response=response)  # type: ignore
+
+    def video_content(
+        self,
+        _is_async: bool,
+        video_id: str,
+        api_base: str,
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+    ):
+        from litellm.types.llms.openai import HttpxBinaryResponseContent
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.avideo_content(  # type: ignore
+                video_id=video_id,
+                openai_client=openai_client,
+            )
+        response = openai_client.get(
+            f"/videos/{video_id}/content",
+            cast_to=httpx.Response,
+        )
+
+        return HttpxBinaryResponseContent(response=response)  # type: ignore
+
+    async def alist_videos(
+        self,
+        openai_client: AsyncOpenAI,
+        limit: Optional[int] = None,
+        after: Optional[str] = None,
+    ):
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if after is not None:
+            params["after"] = after
+        
+        response = await openai_client.get(
+            "/videos",
+            cast_to=object,
+            options={"params": params} if params else {},
+        )
+        return response
+
+    def list_videos(
+        self,
+        _is_async: bool,
+        api_base: str,
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        limit: Optional[int] = None,
+        after: Optional[str] = None,
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+    ):
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.alist_videos(  # type: ignore
+                openai_client=openai_client,
+                limit=limit,
+                after=after,
+            )
+        
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if after is not None:
+            params["after"] = after
+        
+        response = openai_client.get(
+            "/videos",
+            cast_to=object,
+            options={"params": params} if params else {},
+        )
+
+        return response
