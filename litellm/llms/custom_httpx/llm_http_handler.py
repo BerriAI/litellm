@@ -1825,7 +1825,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     json=data,
                     timeout=timeout
-                    or response_api_optional_request_params.get("timeout"),
+                    or float(response_api_optional_request_params.get("timeout", 0)),
                     stream=stream,
                 )
                 if fake_stream is True:
@@ -1853,7 +1853,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     json=data,
                     timeout=timeout
-                    or response_api_optional_request_params.get("timeout"),
+                    or float(response_api_optional_request_params.get("timeout", 0)),
                 )
         except Exception as e:
             raise self._handle_error(
@@ -1946,7 +1946,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     json=data,
                     timeout=timeout
-                    or response_api_optional_request_params.get("timeout"),
+                    or float(response_api_optional_request_params.get("timeout", 0)),
                     stream=stream,
                 )
 
@@ -1976,7 +1976,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     json=data,
                     timeout=timeout
-                    or response_api_optional_request_params.get("timeout"),
+                    or float(response_api_optional_request_params.get("timeout", 0)),
                 )
 
         except Exception as e:
@@ -4406,7 +4406,6 @@ class BaseLLMHTTPHandler:
                 url=api_base,
                 headers=headers,
                 params=params,
-                timeout=timeout,
             )
 
             return video_list_provider_config.transform_video_list_response(
