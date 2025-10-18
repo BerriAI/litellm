@@ -131,17 +131,17 @@ In cases where Zscaler AI Guard encounters operational issues, it returns:
    "code": "500"
 }
 ```
-## 6. Sending User Information to Zscaler_AI_Guard for Analysis (Optional)
-If you need to send end-user information to Zscaler_AI_Guard for analysis, this is optional. You can set the configuration in the environment variables to True and include the relevant information in custom_headers on Zscaler_AI_Guard.
+## 6. Sending User Information to Zscaler AI Guard for Analysis (Optional)
+If you need to send end-user information to Zscaler AI Guard for analysis, this is optional. You can set the configuration in the environment variables to True and include the relevant information in custom_headers on Zscaler AI Guard.
 
 - To send user_api_key_alias:
 Set SEND_USER_API_KEY_ALIAS = True in litellm (Default: False)
-Add user_api_key_alias to the custom_headers in Zscaler_AI_Guard 
+Add user_api_key_alias to the custom_headers in Zscaler AI Guard
 
 - To send user_api_key_user_id:
 Set SEND_USER_API_KEY_USER_ID = True in litellm  (Default: False)
-Add user_api_key_user_id to the custom_headers in Zscaler_AI_Guard 
+Add user_api_key_user_id to the custom_headers in Zscaler AI Guard
 
 - To send user_api_key_team_id:
 Set SEND_USER_API_KEY_TEAM_ID = True in litellm  (Default: True)
-Add user_api_key_team_id to the custom_headers in Zscaler_AI_Guard          
+Add user_api_key_team_id to the custom_headers in Zscaler AI Guard
