@@ -1336,6 +1336,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     team_member_budget: Optional[float] = None
+    team_member_budget_duration: Optional[str] = None
     team_member_rpm_limit: Optional[int] = None
     team_member_tpm_limit: Optional[int] = None
     team_member_key_duration: Optional[str] = None

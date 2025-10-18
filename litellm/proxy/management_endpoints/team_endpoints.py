@@ -111,6 +111,7 @@ class TeamMemberBudgetHandler:
     @staticmethod
     def should_create_budget(
         team_member_budget: Optional[float] = None,
+        team_member_budget_duration: Optional[float] = None,
         team_member_rpm_limit: Optional[int] = None,
         team_member_tpm_limit: Optional[int] = None,
     ) -> bool:
@@ -118,6 +119,7 @@ class TeamMemberBudgetHandler:
         return any(
             [
                 team_member_budget is not None,
+                team_member_budget_duration is not None,
                 team_member_rpm_limit is not None,
                 team_member_tpm_limit is not None,
             ]
@@ -129,6 +131,7 @@ class TeamMemberBudgetHandler:
         new_team_data_json: dict,
         user_api_key_dict: UserAPIKeyAuth,
         team_member_budget: Optional[float] = None,
+        team_member_budget_duration: Optional[str] = None,
         team_member_rpm_limit: Optional[int] = None,
         team_member_tpm_limit: Optional[int] = None,
     ) -> dict:
@@ -157,6 +160,8 @@ class TeamMemberBudgetHandler:
             budget_request.rpm_limit = team_member_rpm_limit
         if team_member_tpm_limit is not None:
             budget_request.tpm_limit = team_member_tpm_limit
+        if team_member_budget_duration is not None:
+            budget_request.budget_duration = team_member_budget_duration
 
         team_member_budget_table = await new_budget(
             budget_obj=budget_request,
@@ -181,6 +186,7 @@ class TeamMemberBudgetHandler:
         user_api_key_dict: UserAPIKeyAuth,
         updated_kv: dict,
         team_member_budget: Optional[float] = None,
+        team_member_budget_duration: Optional[float] = None,
         team_member_rpm_limit: Optional[int] = None,
         team_member_tpm_limit: Optional[int] = None,
     ) -> dict:
@@ -204,6 +210,8 @@ class TeamMemberBudgetHandler:
                 budget_request.rpm_limit = team_member_rpm_limit
             if team_member_tpm_limit is not None:
                 budget_request.tpm_limit = team_member_tpm_limit
+            if team_member_budget_duration is not None:
+                budget_request.budget_duration = team_member_budget_duration
 
             budget_row = await update_budget(
                 budget_obj=budget_request,
@@ -222,6 +230,7 @@ class TeamMemberBudgetHandler:
                 new_team_data_json=updated_kv,
                 user_api_key_dict=user_api_key_dict,
                 team_member_budget=team_member_budget,
+                team_member_budget_duration=team_member_budget_duration,
                 team_member_rpm_limit=team_member_rpm_limit,
                 team_member_tpm_limit=team_member_tpm_limit,
             )
@@ -234,6 +243,7 @@ class TeamMemberBudgetHandler:
     def _clean_team_member_fields(data_dict: dict) -> None:
         """Remove team member fields from data dictionary"""
         data_dict.pop("team_member_budget", None)
+        data_dict.pop("team_member_budget_duration", None)
         data_dict.pop("team_member_rpm_limit", None)
         data_dict.pop("team_member_tpm_limit", None)
 
@@ -890,6 +900,7 @@ async def update_team(
 
     if TeamMemberBudgetHandler.should_create_budget(
         team_member_budget=data.team_member_budget,
+        team_member_budget_duration=data.team_member_budget_duration,
         team_member_rpm_limit=data.team_member_rpm_limit,
         team_member_tpm_limit=data.team_member_tpm_limit,
     ):
@@ -898,6 +909,7 @@ async def update_team(
             user_api_key_dict=user_api_key_dict,
             updated_kv=updated_kv,
             team_member_budget=data.team_member_budget,
+            team_member_budget_duration=data.team_member_budget_duration,
             team_member_rpm_limit=data.team_member_rpm_limit,
             team_member_tpm_limit=data.team_member_tpm_limit,
         )
