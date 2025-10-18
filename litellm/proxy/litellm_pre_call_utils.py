@@ -1256,7 +1256,7 @@ def add_provider_specific_headers_to_request(
         # Anthropic headers work across multiple providers
         # Store as comma-separated list so retrieval can match any of them
         data["provider_specific_header"] = ProviderSpecificHeader(
-            custom_llm_provider=f"{LlmProviders.ANTHROPIC},{LlmProviders.BEDROCK},{LlmProviders.VERTEX_AI}",
+            custom_llm_provider=f"{LlmProviders.ANTHROPIC.value},{LlmProviders.BEDROCK.value},{LlmProviders.VERTEX_AI.value}",
             extra_headers=anthropic_headers,
         )
 
