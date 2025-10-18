@@ -1,3 +1,4 @@
+import asyncio
 import time
 import types
 from typing import (
@@ -432,11 +433,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         start_time = time.time()
         try:
-            raw_response = (
-                await openai_aclient.chat.completions.with_raw_response.create(
-                    **data, timeout=timeout
+            try:
+                raw_response = (
+                    await openai_aclient.chat.completions.with_raw_response.create(
+                        **data, timeout=timeout
+                    )
                 )
-            )
+            except asyncio.CancelledError:
+                # If the request was cancelled, ensure we propagate the cancellation
+                # This will cause the HTTP connection to be closed, which downstream services can detect
+                raise
             end_time = time.time()
 
             if hasattr(raw_response, "headers"):

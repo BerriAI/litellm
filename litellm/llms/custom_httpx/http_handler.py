@@ -312,9 +312,14 @@ class AsyncHTTPHandler:
                 files=files,
                 content=content,
             )
-            response = await self.client.send(req, stream=stream)
-            response.raise_for_status()
-            return response
+            try:
+                response = await self.client.send(req, stream=stream)
+                response.raise_for_status()
+                return response
+            except asyncio.CancelledError:
+                # If the request was cancelled, ensure we propagate the cancellation
+                # This will cause the HTTP connection to be closed, which downstream services can detect
+                raise
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
