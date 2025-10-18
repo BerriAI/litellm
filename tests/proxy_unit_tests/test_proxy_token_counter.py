@@ -3,6 +3,9 @@
 
 
 import sys, os
+from pathlib import Path
+from contextlib import contextmanager
+import importlib
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -10,9 +13,13 @@ import os
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+repo_root = Path(__file__).resolve().parents[2]
+repo_root_str = str(repo_root)
+if repo_root_str not in sys.path:
+    sys.path.insert(0, repo_root_str)
+for module_name in list(sys.modules.keys()):
+    if module_name == "litellm" or module_name.startswith("litellm."):
+        sys.modules.pop(module_name)
 import pytest, logging
 import litellm
 from litellm.proxy.proxy_server import token_counter
@@ -515,6 +522,114 @@ async def test_factory_anthropic_endpoint_calls_anthropic_counter():
 
             # Verify that Anthropic API was called
             mock_anthropic_count.assert_called_once()
+
+
+def _setup_mock_anthropic_client(mock_client_instance, input_tokens: int = 123):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    mock_client_instance.beta = MagicMock()
+    mock_client_instance.beta.messages = MagicMock()
+    mock_client_instance.beta.messages.count_tokens.return_value = SimpleNamespace(
+        input_tokens=input_tokens
+    )
+
+
+@contextmanager
+def _local_proxy_utils_module():
+    original_modules = {}
+    for module_name in list(sys.modules.keys()):
+        if module_name == "litellm" or module_name.startswith("litellm."):
+            original_modules[module_name] = sys.modules.pop(module_name)
+    try:
+        proxy_utils_module = importlib.import_module("litellm.proxy.utils")
+        yield proxy_utils_module
+    finally:
+        for module_name in list(sys.modules.keys()):
+            if module_name == "litellm" or module_name.startswith("litellm."):
+                sys.modules.pop(module_name)
+        sys.modules.update(original_modules)
+
+
+def test_count_tokens_with_anthropic_api_respects_deployment_api_base():
+    """Ensure Anthropic client honors deployment-specific api_base."""
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+    import sys
+
+    messages = [{"role": "user", "content": "Hello"}]
+    deployment = {
+        "litellm_params": {
+            "api_key": "test-key",
+            "api_base": "https://custom.anthropic.example",
+        }
+    }
+
+    mock_client_instance = MagicMock()
+    _setup_mock_anthropic_client(mock_client_instance)
+    mock_anthropic_class = MagicMock(return_value=mock_client_instance)
+
+    anthropic_module = SimpleNamespace(Anthropic=mock_anthropic_class)
+
+    with _local_proxy_utils_module() as proxy_utils_module:
+        with patch.dict(sys.modules, {"anthropic": anthropic_module}):
+            result = asyncio.run(
+                proxy_utils_module.count_tokens_with_anthropic_api(
+                    model_to_use="claude-sonnet-4",
+                    messages=messages,
+                    deployment=deployment,
+                )
+            )
+
+    mock_anthropic_class.assert_called_once_with(
+        api_key="test-key", base_url="https://custom.anthropic.example"
+    )
+    mock_client_instance.beta.messages.count_tokens.assert_called_once_with(
+        model="claude-sonnet-4",
+        messages=messages,
+        betas=["token-counting-2024-11-01"],
+    )
+    assert result == {
+        "total_tokens": 123,
+        "tokenizer_used": "anthropic_api",
+    }
+
+
+def test_count_tokens_with_anthropic_api_respects_env_api_base(monkeypatch):
+    """Ensure Anthropic client honors ANTHROPIC_API_BASE env fallback."""
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+    import sys
+
+    messages = [{"role": "user", "content": "Hi"}]
+    deployment = {"litellm_params": {"api_key": "test-key"}}
+    monkeypatch.setenv("ANTHROPIC_API_BASE", "https://env.anthropic.example")
+
+    mock_client_instance = MagicMock()
+    _setup_mock_anthropic_client(mock_client_instance, input_tokens=456)
+    mock_anthropic_class = MagicMock(return_value=mock_client_instance)
+
+    anthropic_module = SimpleNamespace(Anthropic=mock_anthropic_class)
+
+    with _local_proxy_utils_module() as proxy_utils_module:
+        with patch.dict(sys.modules, {"anthropic": anthropic_module}):
+            result = asyncio.run(
+                proxy_utils_module.count_tokens_with_anthropic_api(
+                    model_to_use="claude-sonnet-4",
+                    messages=messages,
+                    deployment=deployment,
+                )
+            )
+
+    mock_anthropic_class.assert_called_once_with(
+        api_key="test-key", base_url="https://env.anthropic.example"
+    )
+    assert result == {
+        "total_tokens": 456,
+        "tokenizer_used": "anthropic_api",
+    }
 
 
 @pytest.mark.asyncio
