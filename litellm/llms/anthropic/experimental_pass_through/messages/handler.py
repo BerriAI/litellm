@@ -132,7 +132,7 @@ def anthropic_messages_handler(
     """
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
     """
-    from litellm.types.utils import LlmProviders
+    from litellm.types.utils import LlmProviders, LlmProvidersSet
 
     metadata = validate_anthropic_api_metadata(metadata)
 
@@ -170,9 +170,7 @@ def anthropic_messages_handler(
 
     anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = None
 
-    if custom_llm_provider is not None and custom_llm_provider in [
-        provider.value for provider in LlmProviders
-    ]:
+    if custom_llm_provider is not None and custom_llm_provider in LlmProvidersSet:
         anthropic_messages_provider_config = (
             ProviderConfigManager.get_provider_anthropic_messages_config(
                 model=model,
