@@ -1182,7 +1182,11 @@ async def update_team(
         if data.organization_id is not None
         else existing_team_row.organization_id
     )
-    if org_id_to_check is not None and prisma_client is not None:
+    if (
+        org_id_to_check is not None
+        and isinstance(org_id_to_check, str)
+        and prisma_client is not None
+    ):
         org_table = await get_org_object(
             org_id=org_id_to_check,
             user_api_key_cache=user_api_key_cache,
