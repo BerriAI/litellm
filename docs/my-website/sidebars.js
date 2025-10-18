@@ -364,7 +364,14 @@ const sidebars = {
             "pass_through/langfuse",
             "pass_through/mistral",
             "pass_through/openai_passthrough",
-            "pass_through/vertex_ai",
+            {
+              type: "category",
+              label: "Vertex AI",
+              items: [
+                "pass_through/vertex_ai",
+                "pass_through/vertex_ai_live_websocket",
+              ]
+            },
             "pass_through/vllm",
             "proxy/pass_through"
           ]
