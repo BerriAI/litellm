@@ -728,6 +728,7 @@ def test_openai_safety_identifier_parameter_sync():
         assert request_body["safety_identifier"] == "user_code_123456"
 
 
+@pytest.mark.asyncio
 async def test_openai_service_tier_parameter():
     """Test that service_tier parameter is correctly passed to the OpenAI API."""
     from openai import AsyncOpenAI
