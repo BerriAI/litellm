@@ -34,7 +34,7 @@ LiteLLM will then automatically add a `cache_control` directive to the specified
 
 Use the `cache_control_injection_points` parameter in your completion calls to automatically inject caching directives.
 
-### Basic Example - Cache System Messages
+#### Basic Example - Cache System Messages
 
 ```python showLineNumbers title="cache_system_messages.py"
 from litellm import completion
@@ -110,7 +110,7 @@ LiteLLM automatically transforms your request by adding `cache_control` to the l
 }
 ```
 
-### Target Specific Messages by Index
+#### Target Specific Messages by Index
 
 You can target specific messages by their index in the messages array. Use negative indices to target from the end.
 
