@@ -144,6 +144,11 @@ export default function KeyInfoView({
         delete formValues.mcp_tool_permissions;
       }
 
+      // Handle max_budget empty string
+      if (formValues.max_budget === "") {
+        formValues.max_budget = null;
+      }
+
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
         try {
