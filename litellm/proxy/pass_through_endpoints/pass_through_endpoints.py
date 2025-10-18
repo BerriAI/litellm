@@ -1593,6 +1593,79 @@ def _extract_model_from_vertex_ai_setup(setup_response: dict) -> Optional[str]:
     return None
 
 
+class SafeRouteAdder:
+    """
+    Wrapper class for adding routes to FastAPI app.
+    Only adds routes if they don't already exist on the app.
+    """
+
+    @staticmethod
+    def _is_path_registered(app: FastAPI, path: str, methods: List[str]) -> bool:
+        """
+        Check if a path with any of the specified methods is already registered on the app.
+        
+        Args:
+            app: The FastAPI application instance
+            path: The path to check (e.g., "/v1/chat/completions")
+            methods: List of HTTP methods to check (e.g., ["GET", "POST"])
+            
+        Returns:
+            True if the path is already registered with any of the methods, False otherwise
+        """
+        for route in app.routes:
+            # Use getattr to safely access route attributes
+            route_path = getattr(route, "path", None)
+            route_methods = getattr(route, "methods", None)
+            
+            if route_path == path and route_methods is not None:
+                # Check if any of the methods overlap
+                if any(method in route_methods for method in methods):
+                    return True
+        return False
+
+    @staticmethod
+    def add_api_route_if_not_exists(
+        app: FastAPI,
+        path: str,
+        endpoint: Any,
+        methods: List[str],
+        dependencies: Optional[List] = None,
+    ) -> bool:
+        """
+        Add an API route to the app only if it doesn't already exist.
+        
+        Args:
+            app: The FastAPI application instance
+            path: The path for the route
+            endpoint: The endpoint function/callable
+            methods: List of HTTP methods
+            dependencies: Optional list of dependencies
+            
+        Returns:
+            True if route was added, False if it already existed
+        """
+        if SafeRouteAdder._is_path_registered(app=app, path=path, methods=methods):
+            verbose_proxy_logger.debug(
+                "Skipping route registration - path %s with methods %s already registered on app",
+                path,
+                methods,
+            )
+            return False
+
+        app.add_api_route(
+            path=path,
+            endpoint=endpoint,
+            methods=methods,
+            dependencies=dependencies,
+        )
+        verbose_proxy_logger.debug(
+            "Successfully added route: %s with methods %s",
+            path,
+            methods,
+        )
+        return True
+
+
 class InitPassThroughEndpointHelpers:
     @staticmethod
     def add_exact_path_route(
@@ -1623,7 +1696,9 @@ class InitPassThroughEndpointHelpers:
             dependencies,
         )
 
-        app.add_api_route(
+        # Use SafeRouteAdder to only add route if it doesn't exist on the app
+        was_added = SafeRouteAdder.add_api_route_if_not_exists(
+            app=app,
             path=path,
             endpoint=create_pass_through_route(  # type: ignore
                 path,
@@ -1638,20 +1713,21 @@ class InitPassThroughEndpointHelpers:
             dependencies=dependencies,
         )
 
-        # Register the route to prevent duplicates
-        _registered_pass_through_routes[route_key] = {
-            "endpoint_id": endpoint_id,
-            "path": path,
-            "type": "exact",
-            "passthrough_params": {
-                "target": target,
-                "custom_headers": custom_headers,
-                "forward_headers": forward_headers,
-                "merge_query_params": merge_query_params,
-                "dependencies": dependencies,
-                "cost_per_request": cost_per_request,
-            },
-        }
+        # Register the route to prevent duplicates only if it was added
+        if was_added:
+            _registered_pass_through_routes[route_key] = {
+                "endpoint_id": endpoint_id,
+                "path": path,
+                "type": "exact",
+                "passthrough_params": {
+                    "target": target,
+                    "custom_headers": custom_headers,
+                    "forward_headers": forward_headers,
+                    "merge_query_params": merge_query_params,
+                    "dependencies": dependencies,
+                    "cost_per_request": cost_per_request,
+                },
+            }
 
     @staticmethod
     def add_subpath_route(
@@ -1683,7 +1759,9 @@ class InitPassThroughEndpointHelpers:
             dependencies,
         )
 
-        app.add_api_route(
+        # Use SafeRouteAdder to only add route if it doesn't exist on the app
+        was_added = SafeRouteAdder.add_api_route_if_not_exists(
+            app=app,
             path=wildcard_path,
             endpoint=create_pass_through_route(  # type: ignore
                 path,
@@ -1699,20 +1777,21 @@ class InitPassThroughEndpointHelpers:
             dependencies=dependencies,
         )
 
-        # Register the route to prevent duplicates
-        _registered_pass_through_routes[route_key] = {
-            "endpoint_id": endpoint_id,
-            "path": path,
-            "type": "subpath",
-            "passthrough_params": {
-                "target": target,
-                "custom_headers": custom_headers,
-                "forward_headers": forward_headers,
-                "merge_query_params": merge_query_params,
-                "dependencies": dependencies,
-                "cost_per_request": cost_per_request,
-            },
-        }
+        # Register the route to prevent duplicates only if it was added
+        if was_added:
+            _registered_pass_through_routes[route_key] = {
+                "endpoint_id": endpoint_id,
+                "path": path,
+                "type": "subpath",
+                "passthrough_params": {
+                    "target": target,
+                    "custom_headers": custom_headers,
+                    "forward_headers": forward_headers,
+                    "merge_query_params": merge_query_params,
+                    "dependencies": dependencies,
+                    "cost_per_request": cost_per_request,
+                },
+            }
 
     @staticmethod
     def remove_endpoint_routes(endpoint_id: str):
