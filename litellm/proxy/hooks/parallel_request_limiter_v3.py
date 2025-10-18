@@ -548,6 +548,66 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         return rate_limit_response
 
+    def _add_model_per_key_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: Optional[str],
+        descriptors: List[RateLimitDescriptor],
+    ) -> None:
+        """
+        Add model-specific rate limit descriptor for API key if applicable.
+
+        Args:
+            user_api_key_dict: User API key authentication dictionary
+            requested_model: The model being requested
+            descriptors: List of rate limit descriptors to append to
+        """
+        from litellm.proxy.auth.auth_utils import (
+            get_key_model_rpm_limit,
+            get_key_model_tpm_limit,
+        )
+
+        if not requested_model:
+            return
+
+        _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict)
+        _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict)
+
+        if _tpm_limit_for_key_model is None and _rpm_limit_for_key_model is None:
+            return
+
+        _tpm_limit_for_key_model = _tpm_limit_for_key_model or {}
+        _rpm_limit_for_key_model = _rpm_limit_for_key_model or {}
+
+        # Check if model has any rate limits configured
+        should_check_rate_limit = (
+            requested_model in _tpm_limit_for_key_model
+            or requested_model in _rpm_limit_for_key_model
+        )
+
+        if not should_check_rate_limit:
+            return
+
+        # Get model-specific limits
+        model_specific_tpm_limit: Optional[int] = _tpm_limit_for_key_model.get(
+            requested_model
+        )
+        model_specific_rpm_limit: Optional[int] = _rpm_limit_for_key_model.get(
+            requested_model
+        )
+
+        descriptors.append(
+            RateLimitDescriptor(
+                key="model_per_key",
+                value=f"{user_api_key_dict.api_key}:{requested_model}",
+                rate_limit={
+                    "requests_per_unit": model_specific_rpm_limit,
+                    "tokens_per_unit": model_specific_tpm_limit,
+                    "window_size": self.window_size,
+                },
+            )
+        )
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -559,8 +619,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Pre-call hook to check rate limits before making the API call.
         """
         from litellm.proxy.auth.auth_utils import (
-            get_key_model_rpm_limit,
-            get_key_model_tpm_limit,
             get_team_model_rpm_limit,
             get_team_model_tpm_limit,
         )
@@ -662,36 +720,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Model rate limits
         requested_model = data.get("model", None)
-        if requested_model and (
-            get_key_model_tpm_limit(user_api_key_dict) is not None
-            or get_key_model_rpm_limit(user_api_key_dict) is not None
-        ):
-            _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict) or {}
-            _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict) or {}
-            should_check_rate_limit = False
-            if requested_model in _tpm_limit_for_key_model:
-                should_check_rate_limit = True
-            elif requested_model in _rpm_limit_for_key_model:
-                should_check_rate_limit = True
-
-            if should_check_rate_limit:
-                model_specific_tpm_limit: Optional[int] = None
-                model_specific_rpm_limit: Optional[int] = None
-                if requested_model in _tpm_limit_for_key_model:
-                    model_specific_tpm_limit = _tpm_limit_for_key_model[requested_model]
-                if requested_model in _rpm_limit_for_key_model:
-                    model_specific_rpm_limit = _rpm_limit_for_key_model[requested_model]
-                descriptors.append(
-                    RateLimitDescriptor(
-                        key="model_per_key",
-                        value=f"{user_api_key_dict.api_key}:{requested_model}",
-                        rate_limit={
-                            "requests_per_unit": model_specific_rpm_limit,
-                            "tokens_per_unit": model_specific_tpm_limit,
-                            "window_size": self.window_size,
-                        },
-                    )
-                )
+        self._add_model_per_key_rate_limit_descriptor(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model,
+            descriptors=descriptors,
+        )
 
         if (
             get_team_model_rpm_limit(user_api_key_dict) is not None
