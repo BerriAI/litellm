@@ -2,7 +2,6 @@ from typing import Any, Dict, Optional, Union
 
 from litellm.proxy._types import (
     KeyRequestBase,
-    LiteLLM_BudgetTable,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_OrganizationTable,
     LiteLLM_TeamTable,
