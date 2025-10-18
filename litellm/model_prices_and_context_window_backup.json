@@ -12520,6 +12520,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4.1-2025-04-14": {
@@ -12553,6 +12554,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4.1-mini": {
@@ -12589,6 +12591,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4.1-mini-2025-04-14": {
@@ -12622,6 +12625,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4.1-nano": {
@@ -12658,6 +12662,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4.1-nano-2025-04-14": {
@@ -12691,6 +12696,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4.5-preview": {
@@ -12755,6 +12761,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4o-2024-05-13": {
@@ -12795,6 +12802,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4o-2024-11-20": {
@@ -12815,6 +12823,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4o-audio-preview": {
@@ -12906,6 +12915,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4o-mini-2024-07-18": {
@@ -12931,6 +12941,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4o-mini-audio-preview": {
@@ -13248,6 +13259,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-5-pro": {
@@ -13485,6 +13497,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-5-mini-2025-08-07": {
@@ -13523,6 +13536,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-5-nano": {
@@ -16543,6 +16557,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "o3-2025-04-16": {
@@ -16574,6 +16589,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "o3-deep-research": {
@@ -16758,6 +16774,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "o4-mini-2025-04-16": {
@@ -16776,6 +16793,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "o4-mini-deep-research": {
