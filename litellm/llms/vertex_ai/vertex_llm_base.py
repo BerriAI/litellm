@@ -12,6 +12,9 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.vertex_ai.aws_credentials_supplier import (
+    Boto3AwsSecurityCredentialsSupplier,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexPartnerProvider
 
@@ -89,7 +92,20 @@ class VertexBase:
                     else ""
                 )
                 if isinstance(environment_id, str) and "aws" in environment_id:
-                    creds = self._credentials_from_identity_pool_with_aws(json_obj)
+                    # Check if explicit AWS auth parameters are provided
+                    aws_params = self._extract_aws_params(json_obj)
+                    if aws_params:
+                        verbose_logger.debug(
+                            "Explicit AWS auth parameters detected, using custom federation flow"
+                        )
+                        creds = self._credentials_from_aws_with_explicit_auth(
+                            json_obj=json_obj, aws_params=aws_params
+                        )
+                    else:
+                        verbose_logger.debug(
+                            "No explicit AWS auth parameters, using default metadata-based flow"
+                        )
+                        creds = self._credentials_from_identity_pool_with_aws(json_obj)
                 else:
                     creds = self._credentials_from_identity_pool(json_obj)
             # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
@@ -139,6 +155,100 @@ class VertexBase:
         from google.auth import aws
 
         return aws.Credentials.from_info(json_obj)
+
+    def _extract_aws_params(self, json_obj: dict) -> Optional[dict]:
+        """
+        Extract AWS authentication parameters from credential config.
+
+        Returns:
+            Dict of AWS auth params if any are present, None otherwise
+        """
+        aws_keys = [
+            "aws_access_key_id",
+            "aws_secret_access_key",
+            "aws_session_token",
+            "aws_role_name",
+            "aws_session_name",
+            "aws_profile_name",
+            "aws_web_identity_token",
+            "aws_region_name",
+            "aws_external_id",
+            "aws_sts_endpoint",
+        ]
+
+        aws_params = {k: json_obj.get(k) for k in aws_keys if k in json_obj}
+        return aws_params if aws_params else None
+
+    def _credentials_from_aws_with_explicit_auth(
+        self, json_obj: dict, aws_params: dict
+    ) -> GoogleCredentialsObject:
+        """
+        Create GCP credentials using explicit AWS authentication (no metadata endpoints).
+        Reuses BaseAWSLLM for all AWS auth flows (roles, profiles, web identity tokens, etc.).
+
+        Args:
+            json_obj: The external_account credential configuration
+            aws_params: Dict of AWS authentication parameters
+
+        Returns:
+            Google credentials object configured with custom AWS supplier
+        """
+        from google.auth import aws
+
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        verbose_logger.debug(
+            "Using explicit AWS authentication for GCP federation (no metadata endpoints)"
+        )
+        verbose_logger.debug(f"AWS parameters provided: {list(aws_params.keys())}")
+
+        # Use BaseAWSLLM to get AWS credentials (handles all auth flows)
+        aws_llm = BaseAWSLLM()
+        boto3_credentials = aws_llm.get_credentials(
+            aws_access_key_id=aws_params.get("aws_access_key_id"),
+            aws_secret_access_key=aws_params.get("aws_secret_access_key"),
+            aws_session_token=aws_params.get("aws_session_token"),
+            aws_region_name=aws_params.get("aws_region_name"),
+            aws_session_name=aws_params.get("aws_session_name"),
+            aws_profile_name=aws_params.get("aws_profile_name"),
+            aws_role_name=aws_params.get("aws_role_name"),
+            aws_web_identity_token=aws_params.get("aws_web_identity_token"),
+            aws_sts_endpoint=aws_params.get("aws_sts_endpoint"),
+            aws_external_id=aws_params.get("aws_external_id"),
+        )
+
+        # Create custom supplier that uses boto3 credentials (bypasses metadata)
+        supplier = Boto3AwsSecurityCredentialsSupplier(
+            boto3_credentials=boto3_credentials,
+            aws_region=aws_params.get("aws_region_name", "us-east-1"),
+        )
+
+        verbose_logger.debug(
+            "Created custom AWS credentials supplier, creating GCP credentials"
+        )
+
+        # Validate required fields for external account credentials
+        token_url = json_obj.get("token_url")
+        if not token_url:
+            raise ValueError(
+                "token_url is required for external account credentials with AWS federation"
+            )
+
+        # Create GCP credentials with custom supplier (bypasses metadata)
+        return aws.Credentials(
+            audience=json_obj.get("audience"),
+            subject_token_type=json_obj.get("subject_token_type"),
+            token_url=token_url,
+            credential_source=None,  # Not using metadata endpoints
+            aws_security_credentials_supplier=supplier,  # Custom supplier
+            service_account_impersonation_url=json_obj.get(
+                "service_account_impersonation_url"
+            ),
+            client_id=json_obj.get("client_id"),
+            client_secret=json_obj.get("client_secret"),
+            quota_project_id=json_obj.get("quota_project_id"),
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
 
     def _credentials_from_authorized_user(self, json_obj, scopes):
         import google.oauth2.credentials
