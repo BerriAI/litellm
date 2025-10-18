@@ -6,7 +6,7 @@ import os
 import sys
 import tracemalloc
 from collections import Counter
-from typing import Dict,Any
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -334,7 +334,7 @@ def _get_gc_statistics() -> Dict[str, Any]:
     }
 
 
-def _get_object_type_counts(top_n: int) -> tuple[int, list[Dict[str, Any]]]:
+def _get_object_type_counts(top_n: int) -> Tuple[int, List[Dict[str, Any]]]:
     """Count objects by type and return total count and top N types."""
     type_counts: Counter = Counter()
     total_objects = 0
@@ -500,7 +500,7 @@ def _get_router_memory_stats(llm_router) -> Dict[str, Any]:
     return litellm_router_memory
 
 
-def _get_process_memory_info(worker_pid: int, include_process_info: bool) -> Dict[str, Any] | None:
+def _get_process_memory_info(worker_pid: int, include_process_info: bool) -> Optional[Dict[str, Any]]:
     """Get process-level memory information using psutil."""
     if not include_process_info:
         return None
