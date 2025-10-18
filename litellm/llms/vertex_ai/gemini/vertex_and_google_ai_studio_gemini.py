@@ -691,11 +691,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     value=value, optional_params=optional_params
                 )
             elif param == "frequency_penalty":
-                optional_params["frequency_penalty"] = value
                 if self._supports_penalty_parameters(model):
                     optional_params["frequency_penalty"] = value
             elif param == "presence_penalty":
-                optional_params["presence_penalty"] = value
                 if self._supports_penalty_parameters(model):
                     optional_params["presence_penalty"] = value
             elif param == "logprobs":
