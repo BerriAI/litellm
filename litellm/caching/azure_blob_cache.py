@@ -15,6 +15,7 @@ from contextlib import suppress
 from litellm._logging import print_verbose, verbose_logger
 
 from .base_cache import BaseCache
+from .json_utils import TimedeltaJSONEncoder
 
 
 class AzureBlobCache(BaseCache):
@@ -22,7 +23,9 @@ class AzureBlobCache(BaseCache):
         from azure.storage.blob import BlobServiceClient
         from azure.core.exceptions import ResourceExistsError
         from azure.identity import DefaultAzureCredential
-        from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
+        from azure.identity.aio import (
+            DefaultAzureCredential as AsyncDefaultAzureCredential,
+        )
         from azure.storage.blob.aio import BlobServiceClient as AsyncBlobServiceClient
 
         self.container_client = BlobServiceClient(
@@ -39,7 +42,7 @@ class AzureBlobCache(BaseCache):
 
     def set_cache(self, key, value, **kwargs) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
-        serialized_value = json.dumps(value)
+        serialized_value = json.dumps(value, cls=TimedeltaJSONEncoder)
         try:
             self.container_client.upload_blob(key, serialized_value)
         except Exception as e:
@@ -48,16 +51,18 @@ class AzureBlobCache(BaseCache):
 
     async def async_set_cache(self, key, value, **kwargs) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
-        serialized_value = json.dumps(value)
+        serialized_value = json.dumps(value, cls=TimedeltaJSONEncoder)
         try:
-            await self.async_container_client.upload_blob(key, serialized_value, overwrite=True)
+            await self.async_container_client.upload_blob(
+                key, serialized_value, overwrite=True
+            )
         except Exception as e:
             # NON blocking - notify users Azure Blob is throwing an exception
             print_verbose(f"LiteLLM set_cache() - Got exception from Azure Blob: {e}")
 
     def get_cache(self, key, **kwargs):
         from azure.core.exceptions import ResourceNotFoundError
-        
+
         try:
             print_verbose(f"Get Azure Blob Cache: key: {key}")
             as_bytes = self.container_client.download_blob(key).readall()
@@ -74,7 +79,7 @@ class AzureBlobCache(BaseCache):
 
     async def async_get_cache(self, key, **kwargs):
         from azure.core.exceptions import ResourceNotFoundError
-        
+
         try:
             print_verbose(f"Get Azure Blob Cache: key: {key}")
             blob = await self.async_container_client.download_blob(key)
