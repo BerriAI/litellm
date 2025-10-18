@@ -56,11 +56,23 @@ interface MenuItemCfg {
 /**
  * Normalizes NEXT_PUBLIC_BASE_URL to either "/" or "/ui/" (always with a trailing slash).
  * Supported env values: "" or "ui/".
+ * Also considers the serverRootPath from the proxy config (e.g., "/my-custom-path").
  */
 const getBasePath = () => {
+  const { serverRootPath } = require("@/components/networking");
   const raw = process.env.NEXT_PUBLIC_BASE_URL ?? "";
   const trimmed = raw.replace(/^\/+|\/+$/g, ""); // strip leading/trailing slashes
-  return trimmed ? `/${trimmed}/` : "/"; // ensure trailing slash
+  const uiPath = trimmed ? `/${trimmed}/` : "/";
+  
+  // If serverRootPath is set and not "/", prepend it to the UI path
+  if (serverRootPath && serverRootPath !== "/") {
+    // Remove trailing slash from serverRootPath and ensure uiPath has no leading slash for proper joining
+    const cleanServerRoot = serverRootPath.replace(/\/+$/, "");
+    const cleanUiPath = uiPath.replace(/^\/+/, "");
+    return `${cleanServerRoot}/${cleanUiPath}`;
+  }
+  
+  return uiPath;
 };
 
 /** Map legacy `page` ids to real app routes (relative, no leading slash). */
