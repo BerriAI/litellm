@@ -293,6 +293,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[
         Union[Exception, str, dict]
@@ -340,6 +341,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Any:
         pass
