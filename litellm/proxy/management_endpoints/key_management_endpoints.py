@@ -667,7 +667,8 @@ def check_team_key_model_specific_limits(
     if data.model_rpm_limit is not None:
         for model, rpm_limit in data.model_rpm_limit.items():
             if (
-                model_specific_rpm_limit.get(model, 0) + rpm_limit
+                team_table.rpm_limit is not None
+                and model_specific_rpm_limit.get(model, 0) + rpm_limit
                 > team_table.rpm_limit
             ):
                 raise HTTPException(
@@ -687,7 +688,7 @@ def check_team_key_model_specific_limits(
                 ):
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than team RPM limit={team_model_specific_rpm_limit.get(model, 0)}",
+                        detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than team RPM limit={team_model_specific_rpm_limit}",
                     )
     if data.model_tpm_limit is not None:
         for model, tpm_limit in data.model_tpm_limit.items():
