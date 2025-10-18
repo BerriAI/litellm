@@ -14,7 +14,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Any, AsyncGenerator, List, Literal, Optional, Tuple, Union
+from typing import Any, AsyncGenerator, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
 from fastapi import HTTPException
@@ -614,15 +614,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
         
-        # Convert string call_type to CallTypes enum
-        try:
-            typed_call_type = CallTypes(call_type)
-        except ValueError:
-            verbose_proxy_logger.debug(f"Unknown call_type: {call_type}, skipping guardrail")
-            return data
-        
         new_messages = self.get_guardrails_messages_for_call_type(
-            call_type=typed_call_type,
+            call_type=cast(CallTypes, call_type),
             data=data,
         )
         
@@ -682,7 +675,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        new_messages = self.get_guardrails_messages_for_call_type(
+            call_type=cast(CallTypes, call_type),
+            data=data,
+        )
+        
         if new_messages is None:
             verbose_proxy_logger.warning(
                 "Bedrock AI: not running guardrail. No messages in data"
