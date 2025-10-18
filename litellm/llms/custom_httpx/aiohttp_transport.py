@@ -236,6 +236,16 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             data = request.stream  # type: ignore
             request.headers.pop("transfer-encoding", None)  # handled by aiohttp
 
+        # DEBUG: Show what timeout values are being used for ClientTimeout
+        client_timeout_values = {
+            "sock_connect": timeout.get("connect"),
+            "sock_read": timeout.get("read"),
+            "connect": timeout.get("pool"),
+        }
+        verbose_logger.warning(
+            f"[TIMEOUT DEBUG] ClientTimeout values: {client_timeout_values}"
+        )
+
         response = await client_session.request(
             method=request.method,
             url=YarlURL(str(request.url), encoded=True),
@@ -259,6 +269,18 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         request: httpx.Request,
     ) -> httpx.Response:
         timeout = request.extensions.get("timeout", {})
+
+        # DEBUG: Log timeout configuration to demonstrate the bug
+        verbose_logger.warning(
+            f"[TIMEOUT DEBUG] request.extensions: {request.extensions}"
+        )
+        verbose_logger.warning(
+            f"[TIMEOUT DEBUG] timeout dict: {timeout}"
+        )
+        verbose_logger.warning(
+            f"[TIMEOUT DEBUG] timeout type: {type(timeout)}"
+        )
+
         sni_hostname = request.extensions.get("sni_hostname")
 
         # Use helper to ensure we have a valid session for the current event loop
