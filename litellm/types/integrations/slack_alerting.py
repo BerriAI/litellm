@@ -199,3 +199,4 @@ class HangingRequestData(BaseModel):
     key_alias: Optional[str] = None
     team_alias: Optional[str] = None
     alerting_metadata: Optional[dict] = None
+    start_time: float = Field(default_factory=lambda: __import__('time').time())
