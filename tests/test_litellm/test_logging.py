@@ -30,6 +30,7 @@ from litellm._logging import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
+from litellm.litellm_core_utils.litellm_logging import Logging
 
 
 class CacheHitCustomLogger(CustomLogger):
@@ -152,3 +153,36 @@ async def test_cache_hit_includes_custom_llm_provider():
         # Clean up
         litellm.callbacks = original_callbacks
         litellm.cache = None
+
+
+@pytest.mark.asyncio
+async def test_unified_handler_calls_get_standard_logging_object_payload_once(mocker, monkeypatch):
+    """
+    Tests that for a cache hit,
+    the test_unified_handler_calls_get_standard_logging_object_payload_once is called exactly once.
+    """
+    monkeypatch.setattr(litellm, "cache", litellm.Cache())
+    test_message = [{"role": "user", "content": "helper function call test"}]
+
+    mock_helper_fn = mocker.spy(Logging, "_success_handler_helper_fn")
+    mock_get_standard_logging_object = mocker.spy(
+        litellm.litellm_core_utils.litellm_logging, "get_standard_logging_object_payload"
+    )
+    # First call (miss) - this will call the helper function
+    await litellm.acompletion(model="gpt-3.5-turbo", messages=test_message, mock_response="r2", caching=True)
+    await asyncio.sleep(0.1)
+    mock_helper_fn.reset_mock()
+    mock_get_standard_logging_object.reset_mock()
+
+    # Second call (hit) - this is the call we are testing
+    await litellm.acompletion(model="gpt-3.5-turbo", messages=test_message, mock_response="r2", caching=True)
+    await asyncio.sleep(0.1)  # allow logs to process
+
+    # Assert the helper function was called exactly once during the cache hit
+    mock_helper_fn.assert_called_once()
+    assert mock_helper_fn.call_args.kwargs["cache_hit"] is True
+    assert mock_helper_fn.call_args.kwargs["result"].choices[0].message.content == "r2"
+
+    mock_get_standard_logging_object.assert_called_once()
+    assert mock_get_standard_logging_object.call_args.kwargs["status"] == "success"
+    assert mock_get_standard_logging_object.call_args.kwargs["init_response_obj"].choices[0].message.content == "r2"
