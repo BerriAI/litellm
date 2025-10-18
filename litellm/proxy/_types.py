@@ -3408,6 +3408,7 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
 class BaseDailySpendTransaction(TypedDict):
     date: str
     api_key: str
+    user_id: Optional[str]
     model: Optional[str]
     model_group: Optional[str]
     mcp_namespaced_tool_name: Optional[str]

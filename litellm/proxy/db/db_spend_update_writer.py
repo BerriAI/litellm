@@ -1041,7 +1041,7 @@ class DBSpendUpdateWriter:
                                 common_data["cache_creation_input_tokens"] = (
                                     transaction.get("cache_creation_input_tokens", 0)
                                 )
-                            if "user_id" in transaction and (entity_type == "user" or entity_type == "tag"):
+                            if "user_id" in transaction:
                                 common_data["user_id"] = transaction["user_id"]
 
                             # Create update data structure
