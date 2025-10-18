@@ -1041,6 +1041,8 @@ class DBSpendUpdateWriter:
                                 common_data["cache_creation_input_tokens"] = (
                                     transaction.get("cache_creation_input_tokens", 0)
                                 )
+                            if "user_id" in transaction:
+                                common_data["user_id"] = transaction["user_id"]
 
                             # Create update data structure
                             update_data = {
@@ -1348,9 +1350,9 @@ class DBSpendUpdateWriter:
         else:
             raise ValueError(f"Invalid request_tags: {payload['request_tags']}")
         for tag in request_tags:
-            daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}"
+            daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{payload['user']}"
             daily_transaction = DailyTagSpendTransaction(
-                tag=tag, **base_daily_transaction
+                tag=tag, user_id=payload["user"], **base_daily_transaction
             )
 
             await self.daily_tag_spend_update_queue.add_update(
