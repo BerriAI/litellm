@@ -104,6 +104,7 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
                   </Tooltip>
                 </TableHeaderCell>
                 <TableHeaderCell>Team Member Budget (USD)</TableHeaderCell>
+                <TableHeaderCell>Next Budget Reset</TableHeaderCell>
                 <TableHeaderCell>
                   Team Member Rate Limits{" "}
                   <Tooltip title="Rate limits for this member's usage within this team.">
@@ -117,61 +118,77 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
             </TableHead>
 
             <TableBody>
-              {teamData.team_info.members_with_roles.map((member: Member, index: number) => (
-                <TableRow key={index}>
-                  <TableCell>
-                    <Text className="font-mono">{member.user_id}</Text>
-                  </TableCell>
-                  <TableCell>
-                    <Text className="font-mono">{member.user_email ? member.user_email : "No Email"}</Text>
-                  </TableCell>
-                  <TableCell>
-                    <Text className="font-mono">{member.role}</Text>
-                  </TableCell>
-                  <TableCell>
-                    <Text className="font-mono">${formatNumberWithCommas(getUserSpend(member.user_id), 4)}</Text>
-                  </TableCell>
-                  <TableCell>
-                    <Text className="font-mono">
-                      {getUserBudget(member.user_id)
-                        ? `$${formatNumberWithCommas(Number(getUserBudget(member.user_id)), 4)}`
-                        : "No Limit"}
-                    </Text>
-                  </TableCell>
-                  <TableCell>
-                    <Text className="font-mono">{getUserRateLimits(member.user_id)}</Text>
-                  </TableCell>
-                  <TableCell className="sticky right-0 bg-white z-10 border-l border-gray-200">
-                    {canEditTeam && (
-                      <div className="flex gap-2">
-                        <Icon
-                          icon={PencilAltIcon}
-                          size="sm"
-                          onClick={() => {
-                            // Get budget and rate limit data from team membership
-                            const membership = teamData.team_memberships.find((tm) => tm.user_id === member.user_id);
-                            const enhancedMember = {
-                              ...member,
-                              max_budget_in_team: membership?.litellm_budget_table?.max_budget || null,
-                              tpm_limit: membership?.litellm_budget_table?.tpm_limit || null,
-                              rpm_limit: membership?.litellm_budget_table?.rpm_limit || null,
-                            };
-                            setSelectedEditMember(enhancedMember);
-                            setIsEditMemberModalVisible(true);
-                          }}
-                          className="cursor-pointer hover:text-blue-600"
-                        />
-                        <Icon
-                          icon={TrashIcon}
-                          size="sm"
-                          onClick={() => handleMemberDelete(member)}
-                          className="cursor-pointer hover:text-red-600"
-                        />
-                      </div>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
+              {teamData.team_info.members_with_roles.map((member: Member, index: number) => {
+                const [member_budget_reset_duration] = teamData.team_memberships.filter(
+                  (tm) => tm.user_id === member.user_id,
+                );
+                const member_budget_reset_duration_datestring = member_budget_reset_duration
+                  ? member_budget_reset_duration.litellm_budget_table.budget_reset_at
+                  : teamData.team_info.budget_reset_at || null;
+
+                return (
+                  <TableRow key={index}>
+                    <TableCell>
+                      <Text className="font-mono">{member.user_id}</Text>
+                    </TableCell>
+                    <TableCell>
+                      <Text className="font-mono">{member.user_email ? member.user_email : "No Email"}</Text>
+                    </TableCell>
+                    <TableCell>
+                      <Text className="font-mono">{member.role}</Text>
+                    </TableCell>
+                    <TableCell>
+                      <Text className="font-mono">${formatNumberWithCommas(getUserSpend(member.user_id), 4)}</Text>
+                    </TableCell>
+                    <TableCell>
+                      <Text className="font-mono">
+                        {getUserBudget(member.user_id)
+                          ? `$${formatNumberWithCommas(Number(getUserBudget(member.user_id)), 4)}`
+                          : "No Limit"}
+                      </Text>
+                    </TableCell>
+                    <TableCell>
+                      <Text className="font-mono">
+                        {member_budget_reset_duration_datestring === null
+                          ? "N/A"
+                          : new Date(member_budget_reset_duration_datestring).toLocaleDateString()}
+                      </Text>
+                    </TableCell>
+                    <TableCell>
+                      <Text className="font-mono">{getUserRateLimits(member.user_id)}</Text>
+                    </TableCell>
+                    <TableCell className="sticky right-0 bg-white z-10 border-l border-gray-200">
+                      {canEditTeam && (
+                        <div className="flex gap-2">
+                          <Icon
+                            icon={PencilAltIcon}
+                            size="sm"
+                            onClick={() => {
+                              // Get budget and rate limit data from team membership
+                              const membership = teamData.team_memberships.find((tm) => tm.user_id === member.user_id);
+                              const enhancedMember = {
+                                ...member,
+                                max_budget_in_team: membership?.litellm_budget_table?.max_budget || null,
+                                tpm_limit: membership?.litellm_budget_table?.tpm_limit || null,
+                                rpm_limit: membership?.litellm_budget_table?.rpm_limit || null,
+                              };
+                              setSelectedEditMember(enhancedMember);
+                              setIsEditMemberModalVisible(true);
+                            }}
+                            className="cursor-pointer hover:text-blue-600"
+                          />
+                          <Icon
+                            icon={TrashIcon}
+                            size="sm"
+                            onClick={() => handleMemberDelete(member)}
+                            className="cursor-pointer hover:text-red-600"
+                          />
+                        </div>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </div>

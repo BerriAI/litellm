@@ -59,6 +59,7 @@ export interface TeamMembership {
     rpm_limit: number | null;
     model_max_budget: Record<string, number> | null;
     budget_duration: string | null;
+    budget_reset_at: string | null;
   };
 }
 
@@ -331,6 +332,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.team_member_budget = Number(values.team_member_budget);
       }
 
+      if (values.team_member_budget_duration !== undefined) {
+        updateData.team_member_budget_duration = values.team_member_budget_duration;
+      }
+
       if (values.team_member_key_duration !== undefined) {
         updateData.team_member_key_duration = values.team_member_key_duration;
       }
@@ -544,6 +549,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     rpm_limit: info.rpm_limit,
                     max_budget: info.max_budget,
                     budget_duration: info.budget_duration,
+                    team_member_budget_duration: info.team_member_budget_table?.budget_duration,
                     team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
                     team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
                     guardrails: info.metadata?.guardrails || [],
@@ -594,6 +600,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     tooltip="This is the individual budget for a user in the team."
                   >
                     <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                  </Form.Item>
+
+                  <Form.Item label="Team Member Budget Duration" name="team_member_budget_duration">
+                    <Select placeholder="n/a">
+                      <Select.Option value="24h">daily</Select.Option>
+                      <Select.Option value="7d">weekly</Select.Option>
+                      <Select.Option value="30d">monthly</Select.Option>
+                    </Select>
                   </Form.Item>
 
                   <Form.Item

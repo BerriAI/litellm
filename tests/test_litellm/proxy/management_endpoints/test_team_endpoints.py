@@ -14,7 +14,7 @@ from litellm._uuid import uuid
 sys.path.insert(
     0, os.path.abspath("../../../")
 )  # Adds the parent directory to the system path
-from litellm.proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
+from litellm.proxy._types import BudgetNewRequest, UserAPIKeyAuth  # Import UserAPIKeyAuth
 from litellm.proxy._types import (
     LiteLLM_OrganizationTable,
     LiteLLM_TeamTable,
@@ -25,6 +25,7 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
+    TeamMemberBudgetHandler,
     user_api_key_auth,  # Assuming this dependency is needed
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
@@ -1169,7 +1170,7 @@ async def test_update_team_team_member_budget_not_passed_to_db():
 
         # Mock budget upsert to return updated_kv without team_member_budget
         def mock_upsert_side_effect(
-            team_table, user_api_key_dict, updated_kv, team_member_budget=None, team_member_rpm_limit=None, team_member_tpm_limit=None
+            team_table, user_api_key_dict, updated_kv, team_member_budget=None, team_member_budget_duration=None, team_member_rpm_limit=None, team_member_tpm_limit=None
         ):
             # Remove team_member_budget from updated_kv as the real function does
             result_kv = updated_kv.copy()
@@ -1793,3 +1794,39 @@ async def test_team_member_delete_cleans_membership(mock_db_client, mock_admin_a
     mock_db_client.db.litellm_teammembership.delete_many.assert_awaited_with(
         where={"team_id": test_team_id, "user_id": test_user_id}
     )
+
+@pytest.mark.asyncio
+async def test_team_member_budget_duration_override():
+    # Arrange
+    new_team_data_json = {}
+    user_api_key_dict = {}
+    overridden_duration = "weekly"
+    mocked_budget_id = "team-test-team-budget-123456"
+
+    mock_budget_response = AsyncMock()
+    mock_budget_response.budget_id = mocked_budget_id
+
+    mock_data = MagicMock()
+    mock_data.team_alias = "test team"
+    mock_data.budget_duration = overridden_duration  # 👈 This is the key line
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
+        return_value=mock_budget_response
+    ) as mock_new_budget:
+        # Act
+        result = await TeamMemberBudgetHandler.create_team_member_budget_table(
+            data=mock_data,
+            new_team_data_json=new_team_data_json,
+            user_api_key_dict=user_api_key_dict,
+            team_member_budget_duration=overridden_duration,
+        )
+
+        # Assert
+        assert "metadata" in result
+        assert result["metadata"]["team_member_budget_id"] == mocked_budget_id
+
+        # Ensure the budget duration passed to `new_budget` is the overridden one
+        args, kwargs = mock_new_budget.call_args
+        budget_request = kwargs["budget_obj"]
+        assert budget_request.budget_duration == overridden_duration

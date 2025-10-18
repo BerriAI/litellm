@@ -3761,6 +3761,7 @@ export interface Member {
   user_id: string | null;
   user_email?: string | null;
   max_budget_in_team?: number | null;
+  budget_duration?: string | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
 }

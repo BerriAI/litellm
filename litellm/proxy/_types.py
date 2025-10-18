@@ -1336,6 +1336,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     team_member_budget: Optional[float] = None
+    team_member_budget_duration: Optional[str] = None
     team_member_rpm_limit: Optional[int] = None
     team_member_tpm_limit: Optional[int] = None
     team_member_key_duration: Optional[str] = None
@@ -1521,6 +1522,7 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -2803,6 +2805,11 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     def safe_get_team_member_tpm_limit(self) -> Optional[int]:
         if self.litellm_budget_table is not None:
             return self.litellm_budget_table.tpm_limit
+        return None
+    
+    def safe_get_team_member_budget_duration(self) -> Optional[str]:
+        if self.litellm_budget_table is not None:
+            return self.litellm_budget_table.budget_reset_at
         return None
 
 

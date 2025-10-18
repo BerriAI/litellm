@@ -88,6 +88,7 @@ async def new_organization(
     - soft_budget: *Optional[float]* - [Not Implemented Yet] Get a slack alert when this soft budget is reached. Don't block requests.
     - model_max_budget: *Optional[dict]* - Max budget for a specific model
     - budget_duration: *Optional[str]* - Frequency of reseting org budget
+    - budget_reset_at: *Optional[datetime]* - The datetime when the budget will reset.
     - metadata: *Optional[dict]* - Metadata for organization, store information for organization. Example metadata - {"extra_info": "some info"}
     - blocked: *bool* - Flag indicating if the org is blocked or not - will stop all calls from keys with this org_id.
     - tags: *Optional[List[str]]* - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
