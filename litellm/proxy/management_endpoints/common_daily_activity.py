@@ -276,6 +276,7 @@ def _build_where_conditions(
     model: Optional[str],
     api_key: Optional[str],
     exclude_entity_ids: Optional[List[str]] = None,
+    additional_where_conditions: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build prisma where clause for daily activity queries."""
     where_conditions: Dict[str, Any] = {
@@ -295,6 +296,9 @@ def _build_where_conditions(
             where_conditions[entity_id_field] = {"in": entity_id}
         else:
             where_conditions[entity_id_field] = {"equals": entity_id}
+
+    if additional_where_conditions:
+        where_conditions.update(additional_where_conditions)
 
     if exclude_entity_ids:
         current = where_conditions.get(entity_id_field, {})
@@ -379,6 +383,7 @@ async def get_daily_activity(
     api_key: Optional[str],
     page: int,
     page_size: int,
+    additional_where_conditions: Optional[Dict[str, Any]] = None,
     exclude_entity_ids: Optional[List[str]] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     """Common function to get daily activity for any entity type."""
@@ -404,6 +409,7 @@ async def get_daily_activity(
             model=model,
             api_key=api_key,
             exclude_entity_ids=exclude_entity_ids,
+            additional_where_conditions=additional_where_conditions,
         )
 
         # Get total count for pagination
@@ -465,6 +471,7 @@ async def get_daily_activity_aggregated(
     model: Optional[str],
     api_key: Optional[str],
     exclude_entity_ids: Optional[List[str]] = None,
+    additional_where_conditions: Optional[Dict[str, Any]] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
 
@@ -491,6 +498,7 @@ async def get_daily_activity_aggregated(
             model=model,
             api_key=api_key,
             exclude_entity_ids=exclude_entity_ids,
+            additional_where_conditions=additional_where_conditions,
         )
 
         # Fetch all matching results (no pagination)

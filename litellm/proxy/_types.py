@@ -537,6 +537,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
+        "/tag/daily/activity",
         "/model/new",
         "/model/update",
         "/model/delete",
@@ -3440,6 +3441,7 @@ class DailyUserSpendTransaction(BaseDailySpendTransaction):
 
 class DailyTagSpendTransaction(BaseDailySpendTransaction):
     tag: str
+    user_id: Optional[str]
 
 
 class DBSpendUpdateTransactions(TypedDict):

@@ -412,7 +412,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         <TabList variant="solid" className="mt-1">
           {all_admin_roles.includes(userRole || "") ? <Tab>Global Usage</Tab> : <Tab>Your Usage</Tab>}
           <Tab>Team Usage</Tab>
-          {all_admin_roles.includes(userRole || "") ? <Tab>Tag Usage</Tab> : <></>}
+          <Tab>Tag Usage</Tab>
           {all_admin_roles.includes(userRole || "") ? <Tab>User Agent Activity</Tab> : <></>}
         </TabList>
         <TabPanels>

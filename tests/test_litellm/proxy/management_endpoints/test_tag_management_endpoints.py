@@ -331,3 +331,42 @@ async def test_get_deployments_by_model_not_found():
     assert result == []
     mock_router.get_deployment.assert_called_once_with(model_id="nonexistent-model")
     mock_router.get_model_list.assert_called_once_with(model_name="nonexistent-model")
+
+@pytest.mark.asyncio
+async def test_tag_daily_activity_auth():
+    """
+    Test tag daily activity authentication
+    """
+    from unittest.mock import Mock, patch
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity,
+    )
+
+    # Test that the function can be called with proper authentication
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.management_endpoints.tag_management_endpoints.get_daily_activity"
+    ) as mock_get_daily_activity:
+        # Setup prisma mocks
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+        
+        # Mock the get_daily_activity function to return a mock response
+        mock_response = Mock()
+        mock_get_daily_activity.return_value = mock_response
+        
+        # Test the function
+        result = await get_tag_daily_activity(
+            user_api_key_dict=mock_user_auth,
+            start_date="2024-01-01",
+            end_date="2024-01-02"
+        )
+        
+        # Verify the function was called
+        assert result == mock_response
+        mock_get_daily_activity.assert_called_once()
