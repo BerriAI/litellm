@@ -7,6 +7,7 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to uplo
 """
 
 import asyncio
+import re
 from datetime import datetime
 from typing import List, Optional, cast
 
@@ -47,6 +48,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_aws_sts_endpoint: Optional[str] = None,
         s3_flush_interval: Optional[int] = DEFAULT_S3_FLUSH_INTERVAL_SECONDS,
         s3_batch_size: Optional[int] = DEFAULT_S3_BATCH_SIZE,
+        s3_strip_base64_files: bool = False,
         s3_config=None,
         s3_use_team_prefix: bool = False,
         **kwargs,
@@ -80,6 +82,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_config=s3_config,
                 s3_path=s3_path,
                 s3_use_team_prefix=s3_use_team_prefix,
+                s3_strip_base64_files=s3_strip_base64_files
             )
             verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
 
@@ -124,6 +127,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_config=None,
         s3_path: Optional[str] = None,
         s3_use_team_prefix: bool = False,
+        s3_strip_base64_files: bool = False,
     ):
         """
         Initialize the s3 params for this logging callback
@@ -194,7 +198,41 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             or s3_use_team_prefix
         )
 
+        self.s3_strip_base64_files = (
+            bool(litellm.s3_callback_params.get("s3_strip_base64_files", False))
+            or s3_strip_base64_files
+        )
+
         return
+
+    def _strip_base64_from_messages(self, payload: StandardLoggingPayload):
+        """Remove any base64-encoded file data URIs in payload['messages']."""
+        verbose_logger.debug("Stripping base64 data from messages in s3 payload if any.")
+        messages = payload.get("messages")
+        if not messages:
+            return payload
+
+        base64_pattern = re.compile(
+            r"data:([a-zA-Z0-9+/.-]+);base64,[A-Za-z0-9+/=\n\r]+"
+        )
+
+        def clean_message(msg):
+            if isinstance(msg, dict):
+                return {
+                    k: self._strip_base64_from_messages(v)
+                    if isinstance(v, (dict, list))
+                    else base64_pattern.sub("[BASE64_STRIPPED]", str(v))
+                    for k, v in msg.items()
+                }
+            elif isinstance(msg, list):
+                return [clean_message(m) for m in msg]
+            elif isinstance(msg, str):
+                return base64_pattern.sub("[BASE64_STRIPPED]", msg)
+            else:
+                return msg
+
+        payload["messages"] = clean_message(messages)
+        return payload
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._async_log_event_base(
@@ -254,6 +292,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         try:
             from litellm.litellm_core_utils.asyncify import asyncify
+            if self.s3_strip_base64_files:
+                batch_logging_element.payload = self._strip_base64_from_messages(
+                    batch_logging_element.payload
+                )
 
             asyncified_get_credentials = asyncify(self.get_credentials)
             credentials = await asyncified_get_credentials(
@@ -411,6 +453,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         try:
+            if self.s3_strip_base64_files:
+                batch_logging_element.payload = self._strip_base64_from_messages(
+                    batch_logging_element.payload
+                )
             verbose_logger.debug(
                 f"s3_v2 logger - uploading data to s3 - {batch_logging_element.s3_object_key}"
             )

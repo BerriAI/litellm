@@ -275,6 +275,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
 
     def _strip_base64_from_messages(self, payload: StandardLoggingPayload):
         """Remove any base64-encoded file data URIs in payload['messages']."""
+        verbose_logger.debug("Stripping base64 data from messages in SQS if any.")
         messages = payload.get("messages")
         if not messages:
             return payload
