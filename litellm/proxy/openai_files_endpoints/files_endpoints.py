@@ -583,7 +583,6 @@ async def get_file(
     ```
     """
     from litellm.proxy.proxy_server import (
-        add_litellm_data_to_request,
         general_settings,
         proxy_config,
         proxy_logging_obj,
@@ -592,20 +591,27 @@ async def get_file(
 
     data: Dict = {}
     try:
+
         custom_llm_provider = (
             provider
             or get_custom_llm_provider_from_request_query(request=request)
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
+
         # Include original request and headers in the data
-        data = await add_litellm_data_to_request(
-            data=data,
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
             request=request,
             general_settings=general_settings,
             user_api_key_dict=user_api_key_dict,
             version=version,
+            proxy_logging_obj=proxy_logging_obj,
             proxy_config=proxy_config,
+            route_type="afile_retrieve",
         )
 
         ## check if file_id is a litellm managed file
