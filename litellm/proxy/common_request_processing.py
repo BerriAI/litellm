@@ -297,6 +297,7 @@ class ProxyBaseLLMRequestProcessing:
             "aretrieve_batch",
             "alist_batches",
             "afile_content",
+            "afile_retrieve",
             "atext_completion",
             "acreate_fine_tuning_job",
             "acancel_fine_tuning_job",
