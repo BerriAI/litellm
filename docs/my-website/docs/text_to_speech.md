@@ -4,6 +4,18 @@ import TabItem from '@theme/TabItem';
 
 # /audio/speech
 
+## Overview
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Cost Tracking | ✅ | Works with all supported models |
+| Logging | ✅ | Works across all integrations |
+| End-user Tracking | ✅ | |
+| Fallbacks | ✅ | Works between supported models |
+| Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to input text (non-streaming only) |
+| Supported Providers | OpenAI, Azure OpenAI, Vertex AI | |
+
 ## **LiteLLM Python SDK Usage**
 ### Quick Start 
 
