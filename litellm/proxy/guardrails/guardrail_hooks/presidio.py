@@ -11,16 +11,7 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import (
-    Any,
-    AsyncGenerator,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union, cast
 
 import aiohttp
 
@@ -405,6 +396,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             presidio_config = self.get_presidio_settings_from_request_data(data)
             messages = data["messages"]
             tasks = []
+
             for m in messages:
                 content = m.get("content", None)
                 if content is None:
@@ -418,6 +410,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             request_data=data,
                         )
                     )
+                elif isinstance(content, list):
+                    for c in content:
+                        text_str = c.get("text", None)
+                        if text_str is None:
+                            continue
+                        tasks.append(
+                            self.check_pii(
+                                text=text_str,
+                                output_parse_pii=self.output_parse_pii,
+                                presidio_config=presidio_config,
+                                request_data=data,
+                            )
+                        )
             responses = await asyncio.gather(*tasks)
             for index, r in enumerate(responses):
                 content = messages[index].get("content", None)
@@ -427,6 +432,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     messages[index][
                         "content"
                     ] = r  # replace content with redacted string
+                elif isinstance(content, list):
+                    for c in content:
+                        c["text"] = r
             verbose_proxy_logger.debug(
                 f"Presidio PII Masking: Redacted pii message: {data['messages']}"
             )
