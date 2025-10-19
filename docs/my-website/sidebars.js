@@ -681,7 +681,8 @@ const sidebars = {
           label: "Adding Providers",
           items: [
             "adding_provider/directory_structure",
-            "adding_provider/new_rerank_provider"],
+            "adding_provider/new_rerank_provider",
+            "adding_provider/adding_guardrail_support"],
         },
         "extras/contributing",
         "contributing",
