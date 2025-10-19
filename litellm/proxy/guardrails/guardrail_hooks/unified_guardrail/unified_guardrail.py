@@ -29,7 +29,10 @@ from litellm.caching.caching import DualCache
 from litellm.cost_calculator import _infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms import endpoint_guardrail_translation_mappings
+from litellm.llms import (
+    endpoint_guardrail_translation_mappings,
+    load_guardrail_translation_mappings,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes, GuardrailStatus, ModelResponseStream
@@ -76,6 +79,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         Runs on only Input
         Use this if you want to MODIFY the input
         """
+        global endpoint_guardrail_translation_mappings
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
@@ -97,6 +101,10 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             return data
 
+        if endpoint_guardrail_translation_mappings is None:
+            endpoint_guardrail_translation_mappings = (
+                load_guardrail_translation_mappings()
+            )
         if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
             return data
 
@@ -128,6 +136,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         Uses Enkrypt AI guardrails to check the response for policy violations, PII, and injection attacks
         """
+        global endpoint_guardrail_translation_mappings
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
@@ -153,7 +162,12 @@ class UnifiedLLMGuardrails(CustomLogger):
         if call_type is None:
             return response
 
-        if call_type not in endpoint_guardrail_translation_mappings:
+        if endpoint_guardrail_translation_mappings is None:
+            endpoint_guardrail_translation_mappings = (
+                load_guardrail_translation_mappings()
+            )
+
+        if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
             return response
 
         endpoint_translation = endpoint_guardrail_translation_mappings[

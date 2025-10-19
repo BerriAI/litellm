@@ -41,6 +41,7 @@ from litellm.types.mcp import MCPServerCostInfo
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
+from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from .llms.base import HiddenParams
 from .llms.openai import (
     Batch,
@@ -2048,11 +2049,9 @@ class GuardrailMode(TypedDict, total=False):
 
 
 GuardrailStatus = Literal[
-    "success",
-    "guardrail_intervened", 
-    "guardrail_failed_to_respond",
-    "not_run"
+    "success", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"
 ]
+
 
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
@@ -2104,7 +2103,9 @@ class CostBreakdown(TypedDict, total=False):
     """
 
     input_cost: float  # Cost of input/prompt tokens
-    output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
+    output_cost: (
+        float  # Cost of output/completion tokens (includes reasoning if applicable)
+    )
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
     original_cost: float  # Cost before discount (optional)
@@ -2114,6 +2115,7 @@ class CostBreakdown(TypedDict, total=False):
 
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     """Status fields for easy filtering and analytics"""
+
     llm_api_status: StandardLoggingPayloadStatus
     """Status of the LLM API call - 'success' if completed, 'failure' if errored"""
     guardrail_status: GuardrailStatus
@@ -2235,6 +2237,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
 
+
 class CustomPricingLiteLLMParams(BaseModel):
     ## CUSTOM PRICING ##
     input_cost_per_token: Optional[float] = None
@@ -2243,7 +2246,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_second: Optional[float] = None
     input_cost_per_pixel: Optional[float] = None
     output_cost_per_pixel: Optional[float] = None
-    
+
     # Include all ModelInfoBase fields as optional
     # This allows any model_info parameter to be set in litellm_params
     input_cost_per_token_flex: Optional[float] = None
@@ -2289,106 +2292,111 @@ class CustomPricingLiteLLMParams(BaseModel):
     citation_cost_per_token: Optional[float] = None
     tiered_pricing: Optional[List[Dict[str, Any]]] = None
 
-all_litellm_params = [
-    "metadata",
-    "litellm_metadata",
-    "litellm_trace_id",
-    "litellm_request_debug",
-    "guardrails",
-    "tags",
-    "acompletion",
-    "aimg_generation",
-    "atext_completion",
-    "text_completion",
-    "caching",
-    "mock_response",
-    "mock_timeout",
-    "disable_add_transform_inline_image_block",
-    "litellm_proxy_rate_limit_response",
-    "api_key",
-    "api_version",
-    "prompt_id",
-    "provider_specific_header",
-    "prompt_variables",
-    "prompt_version",
-    "api_base",
-    "force_timeout",
-    "logger_fn",
-    "verbose",
-    "custom_llm_provider",
-    "model_file_id_mapping",
-    "litellm_logging_obj",
-    "litellm_call_id",
-    "use_client",
-    "id",
-    "fallbacks",
-    "azure",
-    "headers",
-    "model_list",
-    "num_retries",
-    "context_window_fallback_dict",
-    "retry_policy",
-    "retry_strategy",
-    "roles",
-    "final_prompt_value",
-    "bos_token",
-    "eos_token",
-    "request_timeout",
-    "complete_response",
-    "self",
-    "client",
-    "rpm",
-    "tpm",
-    "max_parallel_requests",
-    "input_cost_per_token",
-    "output_cost_per_token",
-    "input_cost_per_second",
-    "output_cost_per_second",
-    "hf_model_name",
-    "model_info",
-    "proxy_server_request",
-    "secret_fields",
-    "preset_cache_key",
-    "caching_groups",
-    "ttl",
-    "cache",
-    "no-log",
-    "base_model",
-    "stream_timeout",
-    "supports_system_message",
-    "region_name",
-    "allowed_model_region",
-    "model_config",
-    "fastest_response",
-    "cooldown_time",
-    "cache_key",
-    "max_retries",
-    "azure_ad_token_provider",
-    "tenant_id",
-    "client_id",
-    "azure_username",
-    "azure_password",
-    "azure_scope",
-    "client_secret",
-    "user_continue_message",
-    "configurable_clientside_auth_params",
-    "weight",
-    "ensure_alternating_roles",
-    "assistant_continue_message",
-    "user_continue_message",
-    "fallback_depth",
-    "max_fallbacks",
-    "max_budget",
-    "budget_duration",
-    "use_in_pass_through",
-    "merge_reasoning_content_in_choices",
-    "litellm_credential_name",
-    "allowed_openai_params",
-    "litellm_session_id",
-    "use_litellm_proxy",
-    "prompt_label",
-    "shared_session",
-] + list(StandardCallbackDynamicParams.__annotations__.keys()) + list(CustomPricingLiteLLMParams.model_fields.keys())
+
+all_litellm_params = (
+    [
+        "metadata",
+        "litellm_metadata",
+        "litellm_trace_id",
+        "litellm_request_debug",
+        "guardrails",
+        "tags",
+        "acompletion",
+        "aimg_generation",
+        "atext_completion",
+        "text_completion",
+        "caching",
+        "mock_response",
+        "mock_timeout",
+        "disable_add_transform_inline_image_block",
+        "litellm_proxy_rate_limit_response",
+        "api_key",
+        "api_version",
+        "prompt_id",
+        "provider_specific_header",
+        "prompt_variables",
+        "prompt_version",
+        "api_base",
+        "force_timeout",
+        "logger_fn",
+        "verbose",
+        "custom_llm_provider",
+        "model_file_id_mapping",
+        "litellm_logging_obj",
+        "litellm_call_id",
+        "use_client",
+        "id",
+        "fallbacks",
+        "azure",
+        "headers",
+        "model_list",
+        "num_retries",
+        "context_window_fallback_dict",
+        "retry_policy",
+        "retry_strategy",
+        "roles",
+        "final_prompt_value",
+        "bos_token",
+        "eos_token",
+        "request_timeout",
+        "complete_response",
+        "self",
+        "client",
+        "rpm",
+        "tpm",
+        "max_parallel_requests",
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "input_cost_per_second",
+        "output_cost_per_second",
+        "hf_model_name",
+        "model_info",
+        "proxy_server_request",
+        "secret_fields",
+        "preset_cache_key",
+        "caching_groups",
+        "ttl",
+        "cache",
+        "no-log",
+        "base_model",
+        "stream_timeout",
+        "supports_system_message",
+        "region_name",
+        "allowed_model_region",
+        "model_config",
+        "fastest_response",
+        "cooldown_time",
+        "cache_key",
+        "max_retries",
+        "azure_ad_token_provider",
+        "tenant_id",
+        "client_id",
+        "azure_username",
+        "azure_password",
+        "azure_scope",
+        "client_secret",
+        "user_continue_message",
+        "configurable_clientside_auth_params",
+        "weight",
+        "ensure_alternating_roles",
+        "assistant_continue_message",
+        "user_continue_message",
+        "fallback_depth",
+        "max_fallbacks",
+        "max_budget",
+        "budget_duration",
+        "use_in_pass_through",
+        "merge_reasoning_content_in_choices",
+        "litellm_credential_name",
+        "allowed_openai_params",
+        "litellm_session_id",
+        "use_litellm_proxy",
+        "prompt_label",
+        "shared_session",
+    ]
+    + list(StandardCallbackDynamicParams.__annotations__.keys())
+    + list(CustomPricingLiteLLMParams.model_fields.keys())
+)
 
 
 class KeyGenerationConfig(TypedDict, total=False):
@@ -2731,6 +2739,7 @@ LLMResponseTypes = Union[
     OpenAIFileObject,
     LiteLLMBatch,
     LiteLLMFineTuningJob,
+    AnthropicMessagesResponse,
 ]
 
 
@@ -2775,10 +2784,10 @@ class PriorityReservationSettings(BaseModel):
         default=0.25,
         description="Priority level to assign to API keys without explicit priority metadata. Should match a key in litellm.priority_reservation.",
     )
-    
+
     saturation_threshold: float = Field(
         default=0.50,
-        description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits."
+        description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits.",
     )
 
     model_config = ConfigDict(protected_namespaces=())
