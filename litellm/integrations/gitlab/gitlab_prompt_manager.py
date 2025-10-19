@@ -452,10 +452,7 @@ class GitLabPromptManager(CustomPromptManagement):
             prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
         try:
-            verbose_proxy_logger.debug(f"GitLabPromptManager._compile_prompt_helper called with "
-                                       f"prompt_id={prompt_id}, prompt_variables={prompt_variables}, ")
             decoded_id = decode_prompt_id(prompt_id)
-            verbose_proxy_logger.debug(f"Decoded prompt_id: {decoded_id}")
             if decoded_id not in self.prompt_manager.prompts:
                 git_ref = getattr(dynamic_callback_params, "extra", {}).get("git_ref") if hasattr(dynamic_callback_params, "extra") else None
                 self.prompt_manager._load_prompt_from_gitlab(decoded_id, ref=git_ref)
@@ -464,8 +461,6 @@ class GitLabPromptManager(CustomPromptManagement):
             rendered_prompt, prompt_metadata = self.get_prompt_template(
                 prompt_id, prompt_variables
             )
-            verbose_proxy_logger.debug(f"Rendered prompt: {rendered_prompt}")
-            verbose_proxy_logger.debug(f"Prompt metadata: {prompt_metadata}")
 
             messages = self._parse_prompt_to_messages(rendered_prompt)
             template_model = prompt_metadata.get("model")
@@ -496,11 +491,6 @@ class GitLabPromptManager(CustomPromptManagement):
             prompt_label: Optional[str] = None,
             prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
-        verbose_proxy_logger.debug(f"GitLabPromptManager.get_chat_completion_prompt "
-                                   f"called with prompt_id={prompt_id},"
-                                   f" prompt_variables={prompt_variables}, "
-                                   f"dynamic_callback_params={dynamic_callback_params},"
-                                   f" prompt_label={prompt_label}, prompt_version={prompt_version}")
         return PromptManagementBase.get_chat_completion_prompt(
             self,
             model,
