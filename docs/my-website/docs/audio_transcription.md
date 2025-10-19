@@ -12,7 +12,7 @@ import TabItem from '@theme/TabItem';
 | End-user Tracking | ✅ | |
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
-| Guardrails | ✅ | Applies to output transcribed text |
+| Guardrails | ✅ | Applies to output transcribed text (non-streaming only) |
 | Supported Providers | `openai`, `azure`, `vertex_ai`, `gemini`, `deepgram`, `groq`, `fireworks_ai` | |
 
 ## Quick Start
