@@ -12,7 +12,6 @@ from litellm.integrations.prompt_management_base import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
-from litellm._logging import verbose_proxy_logger
 from litellm.integrations.gitlab.gitlab_client import GitLabClient
 
 
