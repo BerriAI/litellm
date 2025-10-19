@@ -26,11 +26,13 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.cost_calculator import _infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms import endpoint_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GuardrailStatus, ModelResponseStream
+from litellm.types.utils import CallTypes, GuardrailStatus, ModelResponseStream
 
 GUARDRAIL_NAME = "unified_llm_guardrails"
 
@@ -95,50 +97,17 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             return data
 
-        _messages = data.get("messages")
-        if _messages is None:
+        if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
             return data
-        tasks = []
-        task_mappings: List[Tuple[int, Optional[int]]] = (
-            []
-        )  # Track (message_index, content_index) for each task
 
-        for msg_idx, m in enumerate(_messages):
-            content = m.get("content", None)
-            if content is None:
-                continue
-            if isinstance(content, str):
-                tasks.append(guardrail_to_apply.apply_guardrail(text=content))
-                task_mappings.append((msg_idx, None))  # None indicates string content
-            elif isinstance(content, list):
-                for content_idx, c in enumerate(content):
-                    text_str = c.get("text", None)
-                    if text_str is None:
-                        continue
-                    tasks.append(guardrail_to_apply.apply_guardrail(text=text_str))
-                    task_mappings.append((msg_idx, int(content_idx)))
+        endpoint_translation = endpoint_guardrail_translation_mappings[
+            CallTypes(call_type)
+        ]()
 
-            responses = await asyncio.gather(*tasks)
-
-            # Map responses back to the correct message and content item
-            for task_idx, r in enumerate(responses):
-                mapping = task_mappings[task_idx]
-                msg_idx = cast(int, mapping[0])
-                content_idx_optional = cast(Optional[int], mapping[1])
-                content = _messages[msg_idx].get("content", None)
-                if content is None:
-                    continue
-                if isinstance(content, str) and content_idx_optional is None:
-                    _messages[msg_idx][
-                        "content"
-                    ] = r  # replace content with redacted string
-                elif isinstance(content, list) and content_idx_optional is not None:
-                    _messages[msg_idx]["content"][content_idx_optional]["text"] = r
-
-            verbose_proxy_logger.debug(
-                f"UnifiedLLMGuardrails: Redacted message: {_messages}"
-            )
-            data["messages"] = _messages
+        data = await endpoint_translation.process_input_messages(
+            data=data,
+            guardrail_to_apply=guardrail_to_apply,
+        )
 
         # Add guardrail to applied guardrails header
         add_guardrail_to_applied_guardrails_header(
@@ -151,7 +120,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         response,
-    ):
+    ) -> Any:
         """
         Runs on response from LLM API call
 
@@ -180,83 +149,26 @@ class UnifiedLLMGuardrails(CustomLogger):
             "async_post_call_success_hook response: %s", response
         )
 
-        # Check if the ModelResponse has text content in its choices
-        # to avoid sending empty content to EnkryptAI (e.g., during tool calls)
-        if isinstance(response, litellm.ModelResponse):
-            has_text_content = False
-            for choice in response.choices:
-                if isinstance(choice, litellm.Choices):
-                    if choice.message.content and isinstance(
-                        choice.message.content, str
-                    ):
-                        has_text_content = True
-                        break
+        call_type = _infer_call_type(call_type=None, completion_response=response)
+        if call_type is None:
+            return response
 
-            if not has_text_content:
-                verbose_proxy_logger.warning(
-                    "EnkryptAI: not running guardrail. No output text in response"
-                )
-                return
+        if call_type not in endpoint_guardrail_translation_mappings:
+            return response
 
-            tasks = []
-            task_mappings: List[Tuple[int, Optional[int]]] = (
-                []
-            )  # Track (message_index, content_index) for each task
+        endpoint_translation = endpoint_guardrail_translation_mappings[
+            CallTypes(call_type)
+        ]()
 
-            for choice in response.choices:
-                if isinstance(choice, litellm.Choices):
-                    verbose_proxy_logger.debug(
-                        "async_post_call_success_hook choice: %s", choice
-                    )
-                    if choice.message.content and isinstance(
-                        choice.message.content, str
-                    ):
-                        tasks.append(
-                            guardrail_to_apply.apply_guardrail(
-                                text=choice.message.content,
-                            )
-                        )
-                        task_mappings.append((0, None))
-                    elif choice.message.content and isinstance(
-                        choice.message.content, list
-                    ):
-                        for content_idx, c in enumerate(choice.message.content):
-                            content_text = c.get("text")
-                            if content_text:
-                                tasks.append(
-                                    guardrail_to_apply.apply_guardrail(
-                                        text=content_text,
-                                    )
-                                )
-                                task_mappings.append((0, int(content_idx)))
-                            else:
-                                continue
-
-            responses = await asyncio.gather(*tasks)
-
-            # Map responses back to the correct message and content item
-            for task_idx, r in enumerate(responses):
-                task_mapping = task_mappings[task_idx]
-                msg_idx = cast(int, task_mapping[0])
-                content_idx_optional = cast(Optional[int], task_mapping[1])
-                content = response.choices[msg_idx].get("content", None)
-                if content is None:
-                    continue
-                if isinstance(content, str) and content_idx_optional is None:
-                    response.choices[msg_idx]["content"] = r
-                elif isinstance(content, list) and content_idx_optional is not None:
-                    response.choices[msg_idx]["content"][content_idx_optional][
-                        "text"
-                    ] = r
-
-            verbose_proxy_logger.debug(
-                "UnifiedLLMGuardrails: Redacted response: %s", response
-            )
-
+        response = await endpoint_translation.process_output_response(
+            response=response,  # type: ignore
+            guardrail_to_apply=guardrail_to_apply,
+        )
         # Add guardrail to applied guardrails header
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
         )
+        return response
 
     async def async_post_call_streaming_iterator_hook(
         self,

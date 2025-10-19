@@ -1439,6 +1439,7 @@ class ProxyLogging:
 
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
+
                 if (
                     callback.should_run_guardrail(
                         data=data, event_type=GuardrailEventHooks.post_call
@@ -1447,11 +1448,19 @@ class ProxyLogging:
                 ):
                     continue
 
-                await callback.async_post_call_success_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    data=data,
-                    response=response,
-                )
+                if "apply_guardrail" in type(callback).__dict__:
+                    data["guardrail_to_apply"] = callback
+                    response = await unified_guardrail.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
+                    )
+                else:
+                    response = await callback.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
+                    )
 
             ############ Handle CustomLogger ###############################
             #################################################################

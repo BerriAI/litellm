@@ -1,5 +1,10 @@
 from typing import TYPE_CHECKING, Optional
 
+from litellm.llms.openai.chat.guardrail_translation.handler import (
+    OpenAIChatCompletionsHandler,
+)
+from litellm.types.utils import CallTypes
+
 from . import *
 
 if TYPE_CHECKING:
@@ -33,3 +38,9 @@ def get_cost_for_web_search_request(
         return cost_per_web_search_request_vertex_ai(usage=usage, model_info=model_info)
     else:
         return None
+
+
+endpoint_guardrail_translation_mappings = {
+    CallTypes.completion: OpenAIChatCompletionsHandler,
+    CallTypes.acompletion: OpenAIChatCompletionsHandler,
+}
