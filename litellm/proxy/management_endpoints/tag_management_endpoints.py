@@ -33,6 +33,7 @@ from litellm.types.tag_management import (
     TagNewRequest,
     TagUpdateRequest,
 )
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -492,6 +493,7 @@ async def delete_tag(
     tags=["tag management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+
 async def get_tag_daily_activity(
     tags: Optional[str] = None,
     start_date: Optional[str] = None,
@@ -500,6 +502,7 @@ async def get_tag_daily_activity(
     api_key: Optional[str] = None,
     page: int = 1,
     page_size: int = 10,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get daily activity for specific tags or all tags.
@@ -512,6 +515,7 @@ async def get_tag_daily_activity(
         api_key (Optional[str]): Filter by API key.
         page (int): Page number for pagination.
         page_size (int): Number of items per page.
+        user_api_key_dict (UserAPIKeyAuth): User API key dictionary.
 
     Returns:
         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
@@ -520,6 +524,12 @@ async def get_tag_daily_activity(
 
     # Convert comma-separated tags string to list if provided
     tag_list = tags.split(",") if tags else None
+
+    # Check if user has admin privileges
+    additional_where_conditions = None
+    if not _user_has_admin_view(user_api_key_dict):
+        additional_where_conditions = {"user_id": user_api_key_dict.user_id}
+
 
     return await get_daily_activity(
         prisma_client=prisma_client,
@@ -533,4 +543,5 @@ async def get_tag_daily_activity(
         api_key=api_key,
         page=page,
         page_size=page_size,
+        additional_where_conditions=additional_where_conditions,
     )

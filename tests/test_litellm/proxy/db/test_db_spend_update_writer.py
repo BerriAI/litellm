@@ -259,3 +259,56 @@ async def test_update_tag_db_without_prisma_client():
     )
 
     assert writer.spend_update_queue.add_update.call_count == 0
+
+@pytest.mark.asyncio
+async def test_update_tag_db_with_user_id():
+    """
+    Test that add_spend_log_transaction_to_daily_tag_transaction correctly handles user_id in the transaction.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    request_tags = '["tag1"]'
+    user_id = "user-123"
+
+    # Mock the daily_tag_spend_update_queue, not spend_update_queue
+    writer.daily_tag_spend_update_queue.add_update = AsyncMock()
+
+    await writer.add_spend_log_transaction_to_daily_tag_transaction(
+        payload={
+            "request_tags": request_tags,
+            "user": user_id,
+            "api_key": "api-key-123",
+            "model": "gpt-4",
+            "model_group": "gpt-4",
+            "custom_llm_provider": "openai",
+            "startTime": "2024-01-01T00:00:00Z",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "metadata": "{}",
+        },
+        prisma_client=mock_prisma,
+    )
+
+    assert writer.daily_tag_spend_update_queue.add_update.call_count == 1
+
+    call_args = writer.daily_tag_spend_update_queue.add_update.call_args_list[0][1]
+    update_data = call_args["update"]
+
+    # Check that the update contains the expected data structure
+    assert len(update_data) == 1  # Should have one transaction key
+
+    # Get the transaction key and data
+    transaction_key = list(update_data.keys())[0]
+    transaction_data = update_data[transaction_key]
+
+    # Verify the transaction key format
+    assert transaction_key.startswith("tag1_2024-01-01_api-key-123_gpt-4_openai_")
+    assert user_id in transaction_key
+
+    # Verify the transaction data contains user_id
+    assert transaction_data["user_id"] == user_id
+    assert transaction_data["tag"] == "tag1"
+    assert transaction_data["spend"] == 0.1
+    assert transaction_data["prompt_tokens"] == 10
+    assert transaction_data["completion_tokens"] == 20
