@@ -74,10 +74,25 @@ class UnifiedLLMGuardrails(CustomLogger):
         Runs on only Input
         Use this if you want to MODIFY the input
         """
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
         verbose_proxy_logger.debug("Running UnifiedLLMGuardrails pre-call hook")
 
         guardrail_to_apply: CustomGuardrail = data.pop("guardrail_to_apply", None)
         if guardrail_to_apply is None:
+            return data
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
+        if (
+            guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type)
+            is not True
+        ):
+            verbose_proxy_logger.debug(
+                "UnifiedLLMGuardrails: Pre-call scanning disabled for %s",
+                guardrail_to_apply.guardrail_name,
+            )
             return data
 
         _messages = data.get("messages")
@@ -124,6 +139,11 @@ class UnifiedLLMGuardrails(CustomLogger):
                 f"UnifiedLLMGuardrails: Redacted message: {_messages}"
             )
             data["messages"] = _messages
+
+        # Add guardrail to applied guardrails header
+        add_guardrail_to_applied_guardrails_header(
+            request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
+        )
         return data
 
     async def async_post_call_success_hook(
@@ -139,74 +159,104 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         Uses Enkrypt AI guardrails to check the response for policy violations, PII, and injection attacks
         """
-        pass
-        # from litellm.proxy.common_utils.callback_utils import (
-        #     add_guardrail_to_applied_guardrails_header,
-        # )
-        # from litellm.types.guardrails import GuardrailEventHooks
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+        from litellm.types.guardrails import GuardrailEventHooks
 
-        # if (
-        #     self.should_run_guardrail(
-        #         data=data, event_type=GuardrailEventHooks.post_call
-        #     )
-        #     is not True
-        # ):
-        #     return
+        guardrail_to_apply: CustomGuardrail = data.pop("guardrail_to_apply", None)
+        if guardrail_to_apply is None:
+            return
 
-        # verbose_proxy_logger.debug(
-        #     "async_post_call_success_hook response: %s", response
-        # )
+        if (
+            guardrail_to_apply.should_run_guardrail(
+                data=data, event_type=GuardrailEventHooks.post_call
+            )
+            is not True
+        ):
+            return
 
-        # # Check if the ModelResponse has text content in its choices
-        # # to avoid sending empty content to EnkryptAI (e.g., during tool calls)
-        # if isinstance(response, litellm.ModelResponse):
-        #     has_text_content = False
-        #     for choice in response.choices:
-        #         if isinstance(choice, litellm.Choices):
-        #             if choice.message.content and isinstance(
-        #                 choice.message.content, str
-        #             ):
-        #                 has_text_content = True
-        #                 break
+        verbose_proxy_logger.debug(
+            "async_post_call_success_hook response: %s", response
+        )
 
-        #     if not has_text_content:
-        #         verbose_proxy_logger.warning(
-        #             "EnkryptAI: not running guardrail. No output text in response"
-        #         )
-        #         return
+        # Check if the ModelResponse has text content in its choices
+        # to avoid sending empty content to EnkryptAI (e.g., during tool calls)
+        if isinstance(response, litellm.ModelResponse):
+            has_text_content = False
+            for choice in response.choices:
+                if isinstance(choice, litellm.Choices):
+                    if choice.message.content and isinstance(
+                        choice.message.content, str
+                    ):
+                        has_text_content = True
+                        break
 
-        #     for choice in response.choices:
-        #         if isinstance(choice, litellm.Choices):
-        #             verbose_proxy_logger.debug(
-        #                 "async_post_call_success_hook choice: %s", choice
-        #             )
-        #             if choice.message.content and isinstance(
-        #                 choice.message.content, str
-        #             ):
-        #                 result = await self._call_enkryptai_guardrails(
-        #                     prompt=choice.message.content,
-        #                     request_data=data,
-        #                 )
+            if not has_text_content:
+                verbose_proxy_logger.warning(
+                    "EnkryptAI: not running guardrail. No output text in response"
+                )
+                return
 
-        #                 verbose_proxy_logger.debug(
-        #                     "Guardrails async_post_call_success_hook result: %s", result
-        #                 )
+            tasks = []
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
 
-        #                 # Process the guardrails response
-        #                 processed_result = self._process_enkryptai_guardrails_response(
-        #                     result
-        #                 )
-        #                 attacks_detected = processed_result["attacks_detected"]
+            for choice in response.choices:
+                if isinstance(choice, litellm.Choices):
+                    verbose_proxy_logger.debug(
+                        "async_post_call_success_hook choice: %s", choice
+                    )
+                    if choice.message.content and isinstance(
+                        choice.message.content, str
+                    ):
+                        tasks.append(
+                            guardrail_to_apply.apply_guardrail(
+                                text=choice.message.content,
+                            )
+                        )
+                        task_mappings.append((0, None))
+                    elif choice.message.content and isinstance(
+                        choice.message.content, list
+                    ):
+                        for content_idx, c in enumerate(choice.message.content):
+                            content_text = c.get("text")
+                            if content_text:
+                                tasks.append(
+                                    guardrail_to_apply.apply_guardrail(
+                                        text=content_text,
+                                    )
+                                )
+                                task_mappings.append((0, int(content_idx)))
+                            else:
+                                continue
 
-        #                 # If any attacks are detected, raise an error
-        #                 if attacks_detected:
-        #                     error_message = self._create_error_message(processed_result)
-        #                     raise ValueError(error_message)
+            responses = await asyncio.gather(*tasks)
 
-        # # Add guardrail to applied guardrails header
-        # add_guardrail_to_applied_guardrails_header(
-        #     request_data=data, guardrail_name=self.guardrail_name
-        # )
+            # Map responses back to the correct message and content item
+            for task_idx, r in enumerate(responses):
+                task_mapping = task_mappings[task_idx]
+                msg_idx = cast(int, task_mapping[0])
+                content_idx_optional = cast(Optional[int], task_mapping[1])
+                content = response.choices[msg_idx].get("content", None)
+                if content is None:
+                    continue
+                if isinstance(content, str) and content_idx_optional is None:
+                    response.choices[msg_idx]["content"] = r
+                elif isinstance(content, list) and content_idx_optional is not None:
+                    response.choices[msg_idx]["content"][content_idx_optional][
+                        "text"
+                    ] = r
+
+            verbose_proxy_logger.debug(
+                "UnifiedLLMGuardrails: Redacted response: %s", response
+            )
+
+        # Add guardrail to applied guardrails header
+        add_guardrail_to_applied_guardrails_header(
+            request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
+        )
 
     async def async_post_call_streaming_iterator_hook(
         self,
