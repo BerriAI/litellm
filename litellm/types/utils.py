@@ -56,6 +56,7 @@ from .llms.openai import (
     OpenAIChatCompletionChunk,
     OpenAIFileObject,
     OpenAIRealtimeStreamList,
+    ResponsesAPIResponse,
     WebSearchOptions,
 )
 from .rerank import RerankResponse
@@ -2740,6 +2741,7 @@ LLMResponseTypes = Union[
     LiteLLMBatch,
     LiteLLMFineTuningJob,
     AnthropicMessagesResponse,
+    ResponsesAPIResponse,
 ]
 
 
