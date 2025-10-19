@@ -394,7 +394,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             content_safety = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)
-            messages = data["messages"]
+            messages = data.get("messages", None)
+            if messages is None:
+                return data
             tasks = []
 
             for m in messages:
