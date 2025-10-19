@@ -32,6 +32,7 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
     get_custom_llm_provider_from_request_query,
+    get_custom_llm_provider_from_request_headers,
 )
 from litellm.proxy.utils import ProxyLogging, is_known_model
 from litellm.router import Router
@@ -238,6 +239,7 @@ async def create_file(
         file_content = await file.read()
         custom_llm_provider = (
             provider
+            or get_custom_llm_provider_from_request_headers(request=request)
             or get_custom_llm_provider_from_request_query(request=request)
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
@@ -427,6 +429,7 @@ async def get_file_content(
 
         custom_llm_provider = (
             provider
+            or get_custom_llm_provider_from_request_headers(request=request)
             or get_custom_llm_provider_from_request_query(request=request)
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
@@ -594,6 +597,7 @@ async def get_file(
 
         custom_llm_provider = (
             provider
+            or get_custom_llm_provider_from_request_headers(request=request)
             or get_custom_llm_provider_from_request_query(request=request)
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
@@ -743,6 +747,7 @@ async def delete_file(
     try:
         custom_llm_provider = (
             provider
+            or get_custom_llm_provider_from_request_headers(request=request)
             or get_custom_llm_provider_from_request_query(request=request)
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
@@ -928,6 +933,7 @@ async def list_files(
         else:
             custom_llm_provider = (
                 provider
+                or get_custom_llm_provider_from_request_headers(request=request)
                 or get_custom_llm_provider_from_request_query(request=request)
                 or await get_custom_llm_provider_from_request_body(request=request)
                 or "openai"
