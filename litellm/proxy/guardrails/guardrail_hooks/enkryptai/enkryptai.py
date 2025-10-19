@@ -111,6 +111,11 @@ class EnkryptAIGuardrails(CustomGuardrail):
         )
 
         try:
+            verbose_proxy_logger.debug(
+                "EnkryptAI request to %s with payload: %s",
+                self.api_url,
+                payload,
+            )
             response = await self.async_handler.post(
                 url=self.api_url,
                 json=payload,
@@ -121,6 +126,12 @@ class EnkryptAIGuardrails(CustomGuardrail):
 
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
+
+            verbose_proxy_logger.debug(
+                "EnkryptAI response from %s with payload: %s",
+                self.api_url,
+                response_json,
+            )
 
             # Add guardrail information to request trace
             if request_data:

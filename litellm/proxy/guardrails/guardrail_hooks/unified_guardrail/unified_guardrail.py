@@ -74,13 +74,11 @@ class UnifiedLLMGuardrails(CustomLogger):
         Runs on only Input
         Use this if you want to MODIFY the input
         """
-        verbose_proxy_logger.debug("Running EnkryptAI pre-call hook")
+        verbose_proxy_logger.debug("Running UnifiedLLMGuardrails pre-call hook")
 
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
-        )
-
-        applied_guardrails: List[CustomGuardrail] = data.pop("guardrails", [])
+        guardrail_to_apply: CustomGuardrail = data.pop("guardrail_to_apply", None)
+        if guardrail_to_apply is None:
+            return data
 
         _messages = data.get("messages")
         if _messages is None:
@@ -95,19 +93,15 @@ class UnifiedLLMGuardrails(CustomLogger):
             if content is None:
                 continue
             if isinstance(content, str):
-                for guardrail in applied_guardrails:
-                    tasks.append(guardrail.apply_guardrail(text=content))
-                    task_mappings.append(
-                        (msg_idx, None)
-                    )  # None indicates string content
+                tasks.append(guardrail_to_apply.apply_guardrail(text=content))
+                task_mappings.append((msg_idx, None))  # None indicates string content
             elif isinstance(content, list):
                 for content_idx, c in enumerate(content):
                     text_str = c.get("text", None)
                     if text_str is None:
                         continue
-                    for guardrail in applied_guardrails:
-                        tasks.append(guardrail.apply_guardrail(text=text_str))
-                        task_mappings.append((msg_idx, int(content_idx)))
+                    tasks.append(guardrail_to_apply.apply_guardrail(text=text_str))
+                    task_mappings.append((msg_idx, int(content_idx)))
 
             responses = await asyncio.gather(*tasks)
 
