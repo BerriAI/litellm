@@ -10,6 +10,7 @@ import asyncio
 import base64
 import json
 import traceback
+import re
 from typing import List, Optional
 
 import litellm
@@ -54,6 +55,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             sqs_flush_interval: Optional[int] = DEFAULT_SQS_FLUSH_INTERVAL_SECONDS,
             sqs_batch_size: Optional[int] = DEFAULT_SQS_BATCH_SIZE,
             sqs_config=None,
+            sqs_strip_base64_files: bool = False,
             # --- 🔐 Application-level encryption params ---
             sqs_aws_use_application_level_encryption: bool = False,
             sqs_app_encryption_key_b64: Optional[str] = None,
@@ -84,6 +86,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 sqs_aws_role_name=sqs_aws_role_name,
                 sqs_aws_web_identity_token=sqs_aws_web_identity_token,
                 sqs_aws_sts_endpoint=sqs_aws_sts_endpoint,
+                sqs_strip_base64_files=sqs_strip_base64_files,
                 sqs_aws_use_application_level_encryption=sqs_aws_use_application_level_encryption,
                 sqs_app_encryption_key_b64=sqs_app_encryption_key_b64,
                 sqs_app_encryption_aad=sqs_app_encryption_aad,
@@ -128,6 +131,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         sqs_aws_role_name: Optional[str] = None,
         sqs_aws_web_identity_token: Optional[str] = None,
         sqs_aws_sts_endpoint: Optional[str] = None,
+        sqs_strip_base64_files: bool = False,
         sqs_aws_use_application_level_encryption: bool = False,
         sqs_app_encryption_key_b64: Optional[str] = None,
         sqs_app_encryption_aad: Optional[str] = None,
@@ -190,6 +194,10 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
 
         self.sqs_aws_sts_endpoint = (
             litellm.aws_sqs_callback_params.get("sqs_aws_sts_endpoint") or sqs_aws_sts_endpoint
+        )
+        self.sqs_strip_base64_files = (
+            litellm.aws_sqs_callback_params.get("sqs_strip_base64_files", False)
+            or sqs_strip_base64_files
         )
 
         self.sqs_aws_use_application_level_encryption = (
@@ -265,8 +273,38 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         for payload in self.log_queue:
             asyncio.create_task(self.async_send_message(payload))
 
+    def _strip_base64_from_messages(self, payload: StandardLoggingPayload):
+        """Remove any base64-encoded file data URIs in payload['messages']."""
+        messages = payload.get("messages")
+        if not messages:
+            return payload
+
+        base64_pattern = re.compile(
+            r"data:([a-zA-Z0-9+/.-]+);base64,[A-Za-z0-9+/=\n\r]+"
+        )
+
+        def clean_message(msg):
+            if isinstance(msg, dict):
+                return {
+                    k: self._strip_base64_from_messages(v)
+                    if isinstance(v, (dict, list))
+                    else base64_pattern.sub("[BASE64_STRIPPED]", str(v))
+                    for k, v in msg.items()
+                }
+            elif isinstance(msg, list):
+                return [clean_message(m) for m in msg]
+            elif isinstance(msg, str):
+                return base64_pattern.sub("[BASE64_STRIPPED]", msg)
+            else:
+                return msg
+
+        payload["messages"] = clean_message(messages)
+        return payload
+
     async def async_send_message(self, payload: StandardLoggingPayload) -> None:
         try:
+            if self.sqs_strip_base64_files:
+                payload = self._strip_base64_from_messages(payload)
             from urllib.parse import quote
 
             import requests
