@@ -219,7 +219,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             part = ContentPartDonePartOutputText(
                 type="output_text",
                 text=text,
-                annotations=response_annotations,
+                annotations=response_annotations,  # type: ignore
                 logprobs=None,
             )
 
