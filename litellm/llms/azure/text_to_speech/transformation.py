@@ -101,17 +101,6 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             or get_secret_str("AZURE_API_KEY")
         )
         
-        # Get Azure AD token if needed
-        extra_body_token = optional_params.get("extra_body", {}).pop(
-            "azure_ad_token", None
-        )
-        secret_token = get_secret_str("AZURE_AD_TOKEN")
-        azure_ad_token: Optional[str] = (
-            extra_body_token if isinstance(extra_body_token, str) else None
-        ) or (secret_token if isinstance(secret_token, str) else None)
-        
-        azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
-        
         # Convert voice to string if it's a dict (for Azure AVA, voice must be a string)
         voice_str: Optional[str] = None
         if isinstance(voice, str):
