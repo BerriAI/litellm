@@ -46,6 +46,8 @@ from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAnnotation,
+    ChatCompletionAnnotationURLCitation,
     ChatCompletionResponseMessage,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -1363,12 +1365,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _convert_grounding_metadata_to_annotations(
         grounding_metadata: List[dict],
         content_text: Optional[str],
-    ) -> List[Dict[str, Any]]:
+    ) -> List[ChatCompletionAnnotation]:
         """
         Convert Vertex AI grounding metadata to OpenAI-style annotations.
         """
 
-        annotations: List[Dict[str, Any]] = []
+        annotations: List[ChatCompletionAnnotation] = []
 
         
         for metadata in grounding_metadata:
@@ -1401,14 +1403,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     if first_chunk_idx in chunk_to_uri_map:
                         uri_info = chunk_to_uri_map[first_chunk_idx]
                         
-                        annotation: Dict[str, Any] = {
+                        url_citation: ChatCompletionAnnotationURLCitation = {
+                            "start_index": start_index,
+                            "end_index": end_index,
+                            "url": uri_info["url"],
+                            "title": uri_info["title"],
+                        }
+                        
+                        annotation: ChatCompletionAnnotation = {
                             "type": "url_citation",
-                            "url_citation": {
-                                "start_index": start_index,
-                                "end_index": end_index,
-                                "url": uri_info["url"],
-                                "title": uri_info["title"],
-                            }
+                            "url_citation": url_citation,
                         }
                         annotations.append(annotation)
         return annotations
