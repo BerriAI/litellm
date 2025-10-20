@@ -136,7 +136,7 @@ from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
-from .llms.agentcore import AgentCoreConfig
+from .llms.bedrock.agentcore import AgentCoreConfig
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
@@ -2880,7 +2880,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             ## RESPONSE OBJECT
             response = model_response
-        elif custom_llm_provider == "agentcore":
+        elif custom_llm_provider == "bedrock" and "agentcore" in model:
             response = agentcore_chat_completion.completion(
                 model=model,
                 messages=messages,

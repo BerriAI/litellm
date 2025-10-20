@@ -9,18 +9,18 @@ for AI agents built with frameworks like Strands, LangGraph, and CrewAI.
 
 Model Formats:
     1. Simple agent name:
-       model="agentcore/my-agent"
+       model="bedrock/agentcore/my-agent"
        Requires: aws_region_name
 
     2. Full ARN:
-       model="agentcore/arn:aws:bedrock-agentcore:us-west-2:123:runtime/my-agent"
+       model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:123:runtime/my-agent"
 
     3. With qualifier (version/endpoint):
-       model="agentcore/my-agent"
+       model="bedrock/agentcore/my-agent"
        qualifier="1.0" or qualifier="production"
 
     4. With session continuity:
-       model="agentcore/my-agent"
+       model="bedrock/agentcore/my-agent"
        runtime_session_id="my-session-123..."
 
 Multi-Modal Support:
@@ -37,7 +37,7 @@ Multi-Modal Support:
 Examples:
     # Basic text-only usage
     response = litellm.completion(
-        model="agentcore/my-agent",
+        model="bedrock/agentcore/my-agent",
         messages=[{"role": "user", "content": "Hello"}],
         aws_region_name="us-west-2"
     )
@@ -48,7 +48,7 @@ Examples:
         image_data = base64.b64encode(f.read()).decode('utf-8')
 
     response = litellm.completion(
-        model="agentcore/vision-agent",
+        model="bedrock/agentcore/vision-agent",
         messages=[{
             "role": "user",
             "content": [
@@ -64,7 +64,7 @@ Examples:
 
     # Multi-modal: Multiple images
     response = litellm.completion(
-        model="agentcore/vision-agent",
+        model="bedrock/agentcore/vision-agent",
         messages=[{
             "role": "user",
             "content": [
@@ -81,7 +81,7 @@ Examples:
         video_data = base64.b64encode(f.read()).decode('utf-8')
 
     response = litellm.completion(
-        model="agentcore/video-agent",
+        model="bedrock/agentcore/video-agent",
         messages=[{
             "role": "user",
             "content": [
@@ -100,7 +100,7 @@ Examples:
         audio_data = base64.b64encode(f.read()).decode('utf-8')
 
     response = litellm.completion(
-        model="agentcore/audio-agent",
+        model="bedrock/agentcore/audio-agent",
         messages=[{
             "role": "user",
             "content": [
@@ -120,7 +120,7 @@ Examples:
         doc_data = base64.b64encode(f.read()).decode('utf-8')
 
     response = litellm.completion(
-        model="agentcore/doc-agent",
+        model="bedrock/agentcore/doc-agent",
         messages=[{
             "role": "user",
             "content": [
@@ -136,7 +136,7 @@ Examples:
 
     # With qualifier (version/endpoint)
     response = litellm.completion(
-        model="agentcore/my-agent",
+        model="bedrock/agentcore/my-agent",
         messages=[{"role": "user", "content": "Hello"}],
         aws_region_name="us-west-2",
         qualifier="production"
@@ -144,7 +144,7 @@ Examples:
 
     # With session continuity
     response = litellm.completion(
-        model="agentcore/my-agent",
+        model="bedrock/agentcore/my-agent",
         messages=[{"role": "user", "content": "Hello"}],
         aws_region_name="us-west-2",
         runtime_session_id="my-session-123..."
@@ -152,7 +152,7 @@ Examples:
 
     # Streaming with SSE
     response = litellm.completion(
-        model="agentcore/my-agent",
+        model="bedrock/agentcore/my-agent",
         messages=[{"role": "user", "content": "Hello"}],
         aws_region_name="us-west-2",
         stream=True
@@ -162,7 +162,7 @@ Examples:
 
     # Streaming with multi-modal input
     response = litellm.completion(
-        model="agentcore/vision-agent",
+        model="bedrock/agentcore/vision-agent",
         messages=[{
             "role": "user",
             "content": [
@@ -701,7 +701,7 @@ class AgentCoreConfig(BaseAWSLLM):
         model: str,
         created_at: int,
         session_id: Optional[str] = None,
-        custom_llm_provider: str = "agentcore",
+        custom_llm_provider: str = "bedrock",
         prompt_text: Optional[str] = None
     ) -> ModelResponse:
         """
@@ -1187,7 +1187,7 @@ class AgentCoreConfig(BaseAWSLLM):
                                         chunk._hidden_params = {}
 
                                     # Add session ID to hidden params for session continuity
-                                    chunk._hidden_params["custom_llm_provider"] = "agentcore"
+                                    chunk._hidden_params["custom_llm_provider"] = "bedrock"
                                     chunk._hidden_params["runtime_session_id"] = actual_session_id
 
                                     yield chunk
@@ -1224,7 +1224,7 @@ class AgentCoreConfig(BaseAWSLLM):
         return CustomStreamWrapper(
             completion_stream=stream_generator(),
             model=model,
-            custom_llm_provider="agentcore",
+            custom_llm_provider="bedrock",
             logging_obj=logging_obj
         )
 

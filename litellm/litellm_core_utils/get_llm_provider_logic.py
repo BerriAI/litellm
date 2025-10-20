@@ -356,9 +356,11 @@ def get_llm_provider(  # noqa: PLR0915
         # bytez models
         elif model.startswith("bytez/"):
             custom_llm_provider = "bytez"
-        # agentcore models
-        elif model.startswith("agentcore/"):
-            custom_llm_provider = "agentcore"
+        # bedrock agentcore models
+        elif model.startswith("bedrock/agentcore/"):
+            custom_llm_provider = "bedrock"
+            # Strip the prefix for model parsing
+            model = model.replace("bedrock/agentcore/", "", 1)
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa

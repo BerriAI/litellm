@@ -1,0 +1,90 @@
+# AWS Bedrock Agent Load Balancer Configuration
+#
+# This configuration demonstrates load balancing across multiple Bedrock agents
+# with different tracing configurations for development vs production workloads.
+
+model_list:
+  # Production agents - tracing disabled for performance
+  - model_name: "bedrock-agent-prod-1"
+    litellm_params:
+      model: "bedrock/agent/PROD_AGENT_1/PROD_ALIAS_1"
+      aws_access_key_id: "os.environ/AWS_ACCESS_KEY_ID"
+      aws_secret_access_key: "os.environ/AWS_SECRET_ACCESS_KEY"
+      aws_region_name: "us-east-1"
+      enableTrace: false
+      
+  - model_name: "bedrock-agent-prod-2"
+    litellm_params:
+      model: "bedrock/agent/PROD_AGENT_2/PROD_ALIAS_2"
+      aws_access_key_id: "os.environ/AWS_ACCESS_KEY_ID"
+      aws_secret_access_key: "os.environ/AWS_SECRET_ACCESS_KEY"
+      aws_region_name: "us-east-1"
+      enableTrace: false
+
+  # Development agents - tracing enabled for debugging
+  - model_name: "bedrock-agent-dev-1"
+    litellm_params:
+      model: "bedrock/agent/DEV_AGENT_1/DEV_ALIAS_1"
+      aws_access_key_id: "os.environ/AWS_ACCESS_KEY_ID"
+      aws_secret_access_key: "os.environ/AWS_SECRET_ACCESS_KEY"
+      aws_region_name: "us-west-2"
+      enableTrace: true
+      
+  - model_name: "bedrock-agent-dev-2"
+    litellm_params:
+      model: "bedrock/agent/DEV_AGENT_2/DEV_ALIAS_2"
+      aws_access_key_id: "os.environ/AWS_ACCESS_KEY_ID"
+      aws_secret_access_key: "os.environ/AWS_SECRET_ACCESS_KEY"
+      aws_region_name: "us-west-2"
+      enableTrace: true
+
+# Load balancer configurations
+router_settings:
+  routing_strategy: "least-busy"  # Options: simple-shuffle, least-busy, usage-based-routing
+  model_group_alias:
+    # Production group - no tracing for best performance
+    "bedrock-prod": [
+      {
+        "model_name": "bedrock-agent-prod-1",
+        "tpm": 1000,
+        "rpm": 100
+      },
+      {
+        "model_name": "bedrock-agent-prod-2", 
+        "tpm": 1000,
+        "rpm": 100
+      }
+    ]
+    # Development group - with tracing for debugging
+    "bedrock-dev": [
+      {
+        "model_name": "bedrock-agent-dev-1",
+        "tpm": 500,
+        "rpm": 50
+      },
+      {
+        "model_name": "bedrock-agent-dev-2",
+        "tpm": 500,
+        "rpm": 50
+      }
+    ]
+
+  # Retry configuration
+  retry_policy:
+    max_retries: 3
+    timeout: 30
+    allowed_fails_per_minute: 5
+
+general_settings:
+  master_key: "os.environ/LITELLM_MASTER_KEY"
+  set_verbose: true  # Enable for debugging load balancer behavior
+
+# Usage:
+# 1. Production requests (no tracing):
+#    POST /chat/completions with "model": "bedrock-prod"
+#
+# 2. Development requests (with tracing):
+#    POST /chat/completions with "model": "bedrock-dev"
+#
+# 3. Override tracing at request time:
+#    POST /chat/completions with "model": "bedrock-prod" and "enableTrace": true

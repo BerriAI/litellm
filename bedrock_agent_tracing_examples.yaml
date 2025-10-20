@@ -1,0 +1,120 @@
+# AWS Bedrock Agent Tracing Configuration Examples for LiteLLM Proxy
+# 
+# This configuration demonstrates how to pass AWS Bedrock agent-specific parameters
+# including enableTrace to control tracing in InvokeAgent API calls.
+#
+# Based on research of the current LiteLLM codebase, agent parameters can be passed
+# through the litellm_params configuration due to the **optional_params mechanism
+# in the transformation.py file (line 154).
+
+model_list:
+  # Example 1: Bedrock agent with tracing ENABLED (explicit)
+  # This will enable detailed tracing for debugging and monitoring
+  - model_name: "bedrock-agent-with-tracing"
+    litellm_params:
+      model: "bedrock/agent/L1RT58GYRW/MFPSBCXYTW"
+      aws_access_key_id: "os.environ/AWS_ACCESS_KEY_ID"
+      aws_secret_access_key: "os.environ/AWS_SECRET_ACCESS_KEY"
+      aws_region_name: "us-west-2"
+      # Agent-specific parameters
+      enableTrace: true
+      
+  # Example 2: Bedrock agent with tracing DISABLED
+  # This will disable tracing for better performance in production
+  - model_name: "bedrock-agent-no-tracing"
+    litellm_params:
+      model: "bedrock/agent/L1RT58GYRW/MFPSBCXYTW"
+      aws_access_key_id: "os.environ/AWS_ACCESS_KEY_ID"
+      aws_secret_access_key: "os.environ/AWS_SECRET_ACCESS_KEY"
+      aws_region_name: "us-west-2"
+      # Agent-specific parameters
+      enableTrace: false
+
+  # Example 3: Agent with custom session ID and tracing enabled
+  - model_name: "bedrock-agent-custom-session"
+    litellm_params:
+      model: "bedrock/agent/L1RT58GYRW/MFPSBCXYTW"
+      aws_access_key_id: "os.environ/AWS_ACCESS_KEY_ID"
+      aws_secret_access_key: "os.environ/AWS_SECRET_ACCESS_KEY"
+      aws_region_name: "us-west-2"
+      # Agent-specific parameters
+      enableTrace: true
+      sessionID: "custom-session-123"
+
+  # Example 4: Agent with memory support and tracing
+  - model_name: "bedrock-agent-with-memory"
+    litellm_params:
+      model: "bedrock/agent/L1RT58GYRW/MFPSBCXYTW"
+      aws_access_key_id: "os.environ/AWS_ACCESS_KEY_ID"
+      aws_secret_access_key: "os.environ/AWS_SECRET_ACCESS_KEY"
+      aws_region_name: "us-west-2"
+      # Agent-specific parameters
+      enableTrace: true
+      memoryId: "conversation-memory-456"
+
+  # Example 5: Agent with session state attributes
+  - model_name: "bedrock-agent-with-attributes"
+    litellm_params:
+      model: "bedrock/agent/L1RT58GYRW/MFPSBCXYTW"
+      aws_access_key_id: "os.environ/AWS_ACCESS_KEY_ID"
+      aws_secret_access_key: "os.environ/AWS_SECRET_ACCESS_KEY"
+      aws_region_name: "us-west-2"
+      # Agent-specific parameters
+      enableTrace: true
+      # Note: sessionAttributes as a dict should be passed through optional_params
+      # The exact format may need testing with the current implementation
+
+  # Example 6: Production agent with tracing disabled for performance
+  - model_name: "bedrock-agent-production"
+    litellm_params:
+      model: "bedrock/agent/PROD123/ALIAS456"
+      aws_access_key_id: "os.environ/AWS_ACCESS_KEY_ID"
+      aws_secret_access_key: "os.environ/AWS_SECRET_ACCESS_KEY"
+      aws_region_name: "us-east-1"
+      # Agent-specific parameters
+      enableTrace: false  # Disabled for production performance
+
+  # Example 7: Development agent with tracing enabled for debugging
+  - model_name: "bedrock-agent-debug"
+    litellm_params:
+      model: "bedrock/agent/DEV789/TESTALIAS"
+      aws_access_key_id: "os.environ/AWS_ACCESS_KEY_ID"
+      aws_secret_access_key: "os.environ/AWS_SECRET_ACCESS_KEY"
+      aws_region_name: "us-west-2"
+      # Agent-specific parameters
+      enableTrace: true   # Enabled for debugging
+
+# General proxy settings
+general_settings:
+  master_key: "os.environ/LITELLM_MASTER_KEY"
+  # Optional: Enable detailed logging to see how parameters are processed
+  set_verbose: true
+
+# How to use these configurations:
+#
+# 1. Start LiteLLM proxy with this config:
+#    litellm --config bedrock_agent_tracing_examples.yaml
+#
+# 2. Make requests to different models:
+#    curl -X POST http://localhost:4000/chat/completions \
+#      -H "Content-Type: application/json" \
+#      -H "Authorization: Bearer YOUR_MASTER_KEY" \
+#      -d '{
+#        "model": "bedrock-agent-no-tracing",
+#        "messages": [{"role": "user", "content": "Hello"}]
+#      }'
+#
+# 3. You can also override enableTrace at request time:
+#    curl -X POST http://localhost:4000/chat/completions \
+#      -H "Content-Type: application/json" \
+#      -H "Authorization: Bearer YOUR_MASTER_KEY" \
+#      -d '{
+#        "model": "bedrock-agent-with-tracing",
+#        "messages": [{"role": "user", "content": "Hello"}],
+#        "enableTrace": false
+#      }'
+
+# Environment variables required:
+# export AWS_ACCESS_KEY_ID="your-aws-access-key"
+# export AWS_SECRET_ACCESS_KEY="your-aws-secret-key"
+# export LITELLM_MASTER_KEY="your-litellm-master-key"
