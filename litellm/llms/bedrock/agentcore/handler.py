@@ -181,7 +181,17 @@ import json
 import os
 import time
 import uuid
-from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple, Union, NoReturn
+from typing import (
+    Any,
+    AsyncIterator,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    NoReturn,
+)
 
 import boto3
 import litellm
@@ -189,12 +199,7 @@ from botocore.exceptions import ClientError, NoCredentialsError
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.llms.bedrock_agentcore import (
-    AgentCoreMetadata,
-    AgentCoreResponse,
     AgentCoreResponseUnion,
-    AgentCoreStreamChunk,
-    AgentCoreMediaItem,
-    AgentCoreMediaList,
     AgentCoreRequestPayload,
     AgentCoreInvokeParams,
 )
@@ -258,7 +263,9 @@ class AgentCoreConfig(BaseAWSLLM):
             # Check if there's a qualifier after the agent name
             # Format: arn:aws:bedrock-agentcore:region:account:runtime/agent-name OR
             #         arn:aws:bedrock-agentcore:region:account:runtime/agent-name/qualifier
-            runtime_part = parts[5]  # "runtime/agent-name" or "runtime/agent-name/qualifier"
+            runtime_part = parts[
+                5
+            ]  # "runtime/agent-name" or "runtime/agent-name/qualifier"
             runtime_segments = runtime_part.split("/")
 
             if len(runtime_segments) == 2:
@@ -273,13 +280,15 @@ class AgentCoreConfig(BaseAWSLLM):
                 raise ValueError(f"Invalid AgentCore ARN format: '{model}'")
 
             # Build ARN without qualifier
-            arn_without_qualifier = f"arn:aws:bedrock-agentcore:{parts[3]}:{parts[4]}:runtime/{agent_name}"
+            arn_without_qualifier = (
+                f"arn:aws:bedrock-agentcore:{parts[3]}:{parts[4]}:runtime/{agent_name}"
+            )
 
             return {
                 "arn": arn_without_qualifier,
                 "agent_name": agent_name,
                 "region": parts[3],
-                "qualifier": qualifier
+                "qualifier": qualifier,
             }
         else:
             # Simple agent name, possibly with qualifier
@@ -292,7 +301,7 @@ class AgentCoreConfig(BaseAWSLLM):
                     "arn": None,
                     "agent_name": parts[0],
                     "region": None,
-                    "qualifier": None
+                    "qualifier": None,
                 }
             elif len(parts) == 2:
                 # With qualifier
@@ -300,7 +309,7 @@ class AgentCoreConfig(BaseAWSLLM):
                     "arn": None,
                     "agent_name": parts[0],
                     "region": None,
-                    "qualifier": parts[1]
+                    "qualifier": parts[1],
                 }
             else:
                 raise ValueError(f"Invalid AgentCore model format: '{model}'")
@@ -329,13 +338,15 @@ class AgentCoreConfig(BaseAWSLLM):
         if cache_key in self._account_id_cache:
             cached_time = self._cache_timestamps.get(cache_key, 0)
             if current_time - cached_time < self._cache_ttl:
-                litellm.verbose_logger.debug(f"Using cached account ID for region {region}")
+                litellm.verbose_logger.debug(
+                    f"Using cached account ID for region {region}"
+                )
                 return self._account_id_cache[cache_key]
 
         # Fetch from STS
         try:
-            sts = boto3.client('sts', region_name=region)
-            account_id = sts.get_caller_identity()['Account']
+            sts = boto3.client("sts", region_name=region)
+            account_id = sts.get_caller_identity()["Account"]
 
             # Cache result
             self._account_id_cache[cache_key] = account_id
@@ -352,18 +363,22 @@ class AgentCoreConfig(BaseAWSLLM):
                     f"2) AWS profile (set aws_profile_name parameter)\n"
                     f"3) IAM role (for EC2/ECS/Lambda execution)\n"
                     f"Error: {e}"
-                )
+                ),
             ) from e
         except ClientError as e:
-            error_code = e.response.get('Error', {}).get('Code', 'Unknown')
-            error_message = e.response.get('Error', {}).get('Message', str(e))
-            http_status = e.response.get('ResponseMetadata', {}).get('HTTPStatusCode', 500)
+            error_code = e.response.get("Error", {}).get("Code", "Unknown")
+            error_message = e.response.get("Error", {}).get("Message", str(e))
+            http_status = e.response.get("ResponseMetadata", {}).get(
+                "HTTPStatusCode", 500
+            )
             raise BedrockError(
                 status_code=http_status,
-                message=f"AgentCore STS call failed ({error_code}): {error_message}. Check AWS credentials and permissions."
+                message=f"AgentCore STS call failed ({error_code}): {error_message}. Check AWS credentials and permissions.",
             ) from e
 
-    def _build_agent_arn(self, agent_name: str, region: str, client: Optional[boto3.client] = None) -> str:
+    def _build_agent_arn(
+        self, agent_name: str, region: str, client: Optional[boto3.client] = None
+    ) -> str:
         """
         Build the agent runtime ARN from agent name and region.
 
@@ -416,32 +431,34 @@ class AgentCoreConfig(BaseAWSLLM):
 
             # Create boto3 client with resolved credentials
             client = boto3.client(
-                'bedrock-agentcore',
+                "bedrock-agentcore",
                 region_name=region,
                 aws_access_key_id=credentials.access_key,
                 aws_secret_access_key=credentials.secret_key,
-                aws_session_token=credentials.token
+                aws_session_token=credentials.token,
             )
 
             return client
 
         except Exception as e:
-            litellm.verbose_logger.error(f"Failed to create AgentCore client with credentials: {e}")
+            litellm.verbose_logger.error(
+                f"Failed to create AgentCore client with credentials: {e}"
+            )
             # Fallback to default credential chain if BaseAWSLLM credentials fail
             try:
-                client = boto3.client('bedrock-agentcore', region_name=region)
-                litellm.verbose_logger.info("Using default AWS credential chain for AgentCore")
+                client = boto3.client("bedrock-agentcore", region_name=region)
+                litellm.verbose_logger.info(
+                    "Using default AWS credential chain for AgentCore"
+                )
                 return client
             except Exception as fallback_error:
                 raise BedrockError(
                     status_code=401,
-                    message=f"AgentCore: Failed to create client with both explicit credentials and default chain: {e} | {fallback_error}"
+                    message=f"AgentCore: Failed to create client with both explicit credentials and default chain: {e} | {fallback_error}",
                 )
 
-
     def _extract_text_and_media_from_content(
-        self,
-        content: Union[str, List[Dict[str, Any]]]
+        self, content: Union[str, List[Dict[str, Any]]]
     ) -> Tuple[str, Optional[List[Dict[str, Any]]]]:
         """
         Extract text prompt and media from LiteLLM message content.
@@ -508,17 +525,25 @@ class AgentCoreConfig(BaseAWSLLM):
                     if url:
                         try:
                             # Use convert_to_anthropic_image_obj for proper parsing
-                            parsed = convert_to_anthropic_image_obj(url, format=format_override)
+                            parsed = convert_to_anthropic_image_obj(
+                                url, format=format_override
+                            )
 
                             # Convert to AgentCore format
                             # AgentCore expects: {"type": "image", "format": "jpeg", "data": "..."}
-                            media_format = parsed["media_type"].split("/")[-1] if "/" in parsed["media_type"] else "jpeg"
+                            media_format = (
+                                parsed["media_type"].split("/")[-1]
+                                if "/" in parsed["media_type"]
+                                else "jpeg"
+                            )
 
-                            media_items.append({
-                                "type": "image",
-                                "format": media_format,
-                                "data": parsed["data"]
-                            })
+                            media_items.append(
+                                {
+                                    "type": "image",
+                                    "format": media_format,
+                                    "data": parsed["data"],
+                                }
+                            )
                         except ValueError as e:
                             # Expected error for invalid format
                             litellm.verbose_logger.error(
@@ -549,16 +574,24 @@ class AgentCoreConfig(BaseAWSLLM):
                     if url:
                         try:
                             # Use same parsing utility (works for video too)
-                            parsed = convert_to_anthropic_image_obj(url, format=format_override)
+                            parsed = convert_to_anthropic_image_obj(
+                                url, format=format_override
+                            )
 
                             # Convert to AgentCore format
-                            media_format = parsed["media_type"].split("/")[-1] if "/" in parsed["media_type"] else "mp4"
+                            media_format = (
+                                parsed["media_type"].split("/")[-1]
+                                if "/" in parsed["media_type"]
+                                else "mp4"
+                            )
 
-                            media_items.append({
-                                "type": "video",
-                                "format": media_format,
-                                "data": parsed["data"]
-                            })
+                            media_items.append(
+                                {
+                                    "type": "video",
+                                    "format": media_format,
+                                    "data": parsed["data"],
+                                }
+                            )
                         except Exception as e:
                             litellm.verbose_logger.error(
                                 f"Invalid video format: {e}. "
@@ -576,11 +609,13 @@ class AgentCoreConfig(BaseAWSLLM):
                         audio_format = input_audio.get("format", "mp3")
 
                         if audio_data:
-                            media_items.append({
-                                "type": "audio",
-                                "format": audio_format,
-                                "data": audio_data
-                            })
+                            media_items.append(
+                                {
+                                    "type": "audio",
+                                    "format": audio_format,
+                                    "data": audio_data,
+                                }
+                            )
                     else:
                         litellm.verbose_logger.error(
                             f"Unexpected audio format: {element}. Skipping audio."
@@ -597,14 +632,20 @@ class AgentCoreConfig(BaseAWSLLM):
                         doc_media_type = source.get("media_type", "application/pdf")
 
                         # Extract format from media type (e.g., "application/pdf" -> "pdf")
-                        doc_format = doc_media_type.split("/")[-1] if "/" in doc_media_type else "pdf"
+                        doc_format = (
+                            doc_media_type.split("/")[-1]
+                            if "/" in doc_media_type
+                            else "pdf"
+                        )
 
                         if doc_data:
-                            media_items.append({
-                                "type": "document",
-                                "format": doc_format,
-                                "data": doc_data
-                            })
+                            media_items.append(
+                                {
+                                    "type": "document",
+                                    "format": doc_format,
+                                    "data": doc_data,
+                                }
+                            )
                     else:
                         litellm.verbose_logger.error(
                             f"Unexpected document format: {element}. Skipping document."
@@ -621,9 +662,7 @@ class AgentCoreConfig(BaseAWSLLM):
         return str(content), None
 
     def _transform_messages_to_agentcore(
-        self,
-        messages: List[Dict[str, Any]],
-        session_id: Optional[str] = None
+        self, messages: List[Dict[str, Any]], session_id: Optional[str] = None
     ) -> AgentCoreRequestPayload:
         """
         Transform LiteLLM messages to AgentCore request format.
@@ -662,10 +701,7 @@ class AgentCoreConfig(BaseAWSLLM):
             session_id = str(uuid.uuid4())
 
         # Build request data
-        request_data = {
-            "prompt": prompt,
-            "runtimeSessionId": session_id
-        }
+        request_data = {"prompt": prompt, "runtimeSessionId": session_id}
 
         # Add media if present (multi-modal request)
         if media_items:
@@ -702,7 +738,7 @@ class AgentCoreConfig(BaseAWSLLM):
         created_at: int,
         session_id: Optional[str] = None,
         custom_llm_provider: str = "bedrock",
-        prompt_text: Optional[str] = None
+        prompt_text: Optional[str] = None,
     ) -> ModelResponse:
         """
         Transform AgentCore response to LiteLLM ModelResponse.
@@ -740,21 +776,21 @@ class AgentCoreConfig(BaseAWSLLM):
                 # Use actual prompt text if available, otherwise estimate
                 if prompt_text and prompt_tokens == 0:
                     prompt_tokens = token_counter(
-                        model=model,
-                        messages=[{"role": "user", "content": prompt_text}]
+                        model=model, messages=[{"role": "user", "content": prompt_text}]
                     )
                 else:
                     prompt_tokens = prompt_tokens or 10
 
                 if completion_tokens == 0:
-                    completion_tokens = token_counter(
-                        model=model,
-                        text=response_text
-                    )
+                    completion_tokens = token_counter(model=model, text=response_text)
             except Exception as e:
                 # If token counting fails, use rough estimates based on word count
-                litellm.verbose_logger.warning(f"Token counting failed: {e}. Using rough estimates.")
-                prompt_tokens = prompt_tokens or (len(prompt_text.split()) if prompt_text else 10)
+                litellm.verbose_logger.warning(
+                    f"Token counting failed: {e}. Using rough estimates."
+                )
+                prompt_tokens = prompt_tokens or (
+                    len(prompt_text.split()) if prompt_text else 10
+                )
                 completion_tokens = completion_tokens or len(response_text.split()) * 2
 
         model_response = ModelResponse(
@@ -763,10 +799,7 @@ class AgentCoreConfig(BaseAWSLLM):
                 {
                     "finish_reason": "stop",
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": response_text
-                    }
+                    "message": {"role": "assistant", "content": response_text},
                 }
             ],
             created=created_at,
@@ -776,24 +809,21 @@ class AgentCoreConfig(BaseAWSLLM):
             usage=Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens
-            )
+                total_tokens=prompt_tokens + completion_tokens,
+            ),
         )
 
         # Add AgentCore metadata to response, including session ID
         model_response._hidden_params = {
             "custom_llm_provider": custom_llm_provider,
             "runtime_session_id": session_id,
-            "agentcore_metadata": metadata
+            "agentcore_metadata": metadata,
         }
 
         return model_response
 
     def _parse_streaming_chunk(
-        self,
-        chunk: str,
-        model: str,
-        created_at: int
+        self, chunk: str, model: str, created_at: int
     ) -> Optional[ModelResponse]:
         """
         Parse Server-Sent Events (SSE) chunk from AgentCore streaming.
@@ -836,13 +866,13 @@ class AgentCoreConfig(BaseAWSLLM):
                         StreamingChoices(
                             finish_reason=data.get("finish_reason"),
                             index=0,
-                            delta={"role": "assistant", "content": token}
+                            delta={"role": "assistant", "content": token},
                         )
                     ],
                     created=created_at,
                     model=model,
                     object="chat.completion.chunk",
-                    system_fingerprint=None
+                    system_fingerprint=None,
                 )
             except json.JSONDecodeError:
                 # Log but don't fail on malformed chunks
@@ -865,7 +895,7 @@ class AgentCoreConfig(BaseAWSLLM):
         litellm_params: Optional[Dict[str, Any]] = None,
         acompletion: bool = False,
         stream: bool = False,
-        **kwargs
+        **kwargs,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         """
         Synchronous completion for AgentCore.
@@ -894,7 +924,9 @@ class AgentCoreConfig(BaseAWSLLM):
         model_region = model_info["region"]
 
         # Extract qualifier - prefer model string qualifier over optional_params
-        qualifier = model_info.get("qualifier") or optional_params.pop("qualifier", None)
+        qualifier = model_info.get("qualifier") or optional_params.pop(
+            "qualifier", None
+        )
 
         # Extract runtime_session_id if provided (for session continuity)
         runtime_session_id = optional_params.pop("runtime_session_id", None)
@@ -903,18 +935,21 @@ class AgentCoreConfig(BaseAWSLLM):
         if model_region:
             aws_region = model_region
         else:
-            aws_region = kwargs.get("aws_region") or kwargs.get("aws_region_name") or os.getenv("AWS_REGION")
+            aws_region = (
+                kwargs.get("aws_region")
+                or kwargs.get("aws_region_name")
+                or os.getenv("AWS_REGION")
+            )
             if not aws_region:
                 raise BedrockError(
                     status_code=400,
-                    message="AgentCore: aws_region_name is required when not using full ARN. Provide via aws_region_name parameter or AWS_REGION environment variable."
+                    message="AgentCore: aws_region_name is required when not using full ARN. Provide via aws_region_name parameter or AWS_REGION environment variable.",
                 )
 
         # Create boto3 client with comprehensive credential management
         try:
             client = self._create_agentcore_client(
-                region=aws_region,
-                **kwargs  # Pass all kwargs for credential resolution
+                region=aws_region, **kwargs  # Pass all kwargs for credential resolution
             )
         except BedrockError:
             # Re-raise BedrockError as-is
@@ -922,8 +957,7 @@ class AgentCoreConfig(BaseAWSLLM):
         except Exception as e:
             litellm.verbose_logger.error(f"Failed to create AgentCore client: {e}")
             raise BedrockError(
-                status_code=500,
-                message=f"AgentCore: AWS client creation failed: {e}"
+                status_code=500, message=f"AgentCore: AWS client creation failed: {e}"
             ) from e
 
         # Get or construct ARN
@@ -936,7 +970,9 @@ class AgentCoreConfig(BaseAWSLLM):
             agent_arn = self._build_agent_arn(agent_name, aws_region, client)
 
         # Build request payload with session support
-        request_data = self._transform_messages_to_agentcore(messages, session_id=runtime_session_id)
+        request_data = self._transform_messages_to_agentcore(
+            messages, session_id=runtime_session_id
+        )
 
         # Store session ID for response metadata
         response_session_id = request_data.get("runtimeSessionId")
@@ -956,7 +992,7 @@ class AgentCoreConfig(BaseAWSLLM):
                 model=model,
                 created_at=created_at,
                 session_id=response_session_id,
-                timeout=timeout
+                timeout=timeout,
             )
         else:
             return self._handle_completion(
@@ -967,14 +1003,11 @@ class AgentCoreConfig(BaseAWSLLM):
                 model=model,
                 created_at=created_at,
                 session_id=response_session_id,
-                timeout=timeout
+                timeout=timeout,
             )
 
     def _build_invoke_params(
-        self,
-        agent_arn: str,
-        qualifier: Optional[str],
-        data: Dict[str, Any]
+        self, agent_arn: str, qualifier: Optional[str], data: Dict[str, Any]
     ) -> Tuple[AgentCoreInvokeParams, Optional[str]]:
         """
         Build invoke parameters for AgentCore Runtime API.
@@ -999,7 +1032,9 @@ class AgentCoreConfig(BaseAWSLLM):
         # Official samples don't use contentType or accept headers
         invoke_params = {
             "agentRuntimeArn": agent_arn,
-            "payload": json.dumps(data)  # JSON string, not bytes (matches official samples)
+            "payload": json.dumps(
+                data
+            ),  # JSON string, not bytes (matches official samples)
         }
 
         # Add runtimeSessionId as separate boto3 parameter (not in payload)
@@ -1021,17 +1056,26 @@ class AgentCoreConfig(BaseAWSLLM):
         model: str,
         created_at: int,
         session_id: Optional[str],
-        timeout: Optional[Union[float, int]]
+        timeout: Optional[Union[float, int]],
     ) -> ModelResponse:
         """Handle non-streaming completion request using boto3 with retry logic for cold starts."""
         # Build invoke parameters using shared method
-        invoke_params, runtime_session_id = self._build_invoke_params(agent_arn, qualifier, data)
+        invoke_params, runtime_session_id = self._build_invoke_params(
+            agent_arn, qualifier, data
+        )
 
         # Retry logic for RuntimeClientError (cold start after 15min inactivity)
         # AgentCore containers scale to zero after 15 minutes of inactivity
         # Cold starts can take 30-60 seconds for ARM64 containers
         max_retries = 6
-        retry_delays = [10, 15, 20, 25, 30, 40]  # Exponential backoff: 10-15-20-25-30-40s (total: 140s)
+        retry_delays = [
+            10,
+            15,
+            20,
+            25,
+            30,
+            40,
+        ]  # Exponential backoff: 10-15-20-25-30-40s (total: 140s)
 
         for attempt in range(max_retries):
             try:
@@ -1040,33 +1084,32 @@ class AgentCoreConfig(BaseAWSLLM):
                 # Validate response structure
                 if not response:
                     raise BedrockError(
-                        status_code=500,
-                        message="AgentCore returned empty response"
+                        status_code=500, message="AgentCore returned empty response"
                     )
 
-                if 'ResponseMetadata' not in response:
+                if "ResponseMetadata" not in response:
                     raise BedrockError(
                         status_code=500,
-                        message="AgentCore response missing ResponseMetadata"
+                        message="AgentCore response missing ResponseMetadata",
                     )
 
-                http_status = response['ResponseMetadata'].get('HTTPStatusCode')
+                http_status = response["ResponseMetadata"].get("HTTPStatusCode")
                 if http_status != 200:
                     raise BedrockError(
                         status_code=http_status,
-                        message=f"AgentCore returned HTTP {http_status}"
+                        message=f"AgentCore returned HTTP {http_status}",
                     )
 
                 # Get session ID from response if available
-                response_session_id = response.get('runtimeSessionId', session_id)
+                response_session_id = response.get("runtimeSessionId", session_id)
 
                 # Read response payload
-                if 'response' in response:
+                if "response" in response:
                     # AgentCore returns 'response' key with StreamingBody
-                    payload_data = response['response']
+                    payload_data = response["response"]
                     # Handle streaming response body
-                    if hasattr(payload_data, 'read'):
-                        response_text = payload_data.read().decode('utf-8')
+                    if hasattr(payload_data, "read"):
+                        response_text = payload_data.read().decode("utf-8")
                     else:
                         response_text = str(payload_data)
 
@@ -1083,15 +1126,15 @@ class AgentCoreConfig(BaseAWSLLM):
                     model=model,
                     created_at=created_at,
                     session_id=response_session_id,
-                    prompt_text=data.get("prompt", "")
+                    prompt_text=data.get("prompt", ""),
                 )
 
             except ClientError as e:
-                error_code = e.response.get('Error', {}).get('Code', 'Unknown')
-                error_message = e.response.get('Error', {}).get('Message', str(e))
+                error_code = e.response.get("Error", {}).get("Code", "Unknown")
+                error_message = e.response.get("Error", {}).get("Message", str(e))
 
                 # Retry only RuntimeClientError (cold start)
-                if error_code == 'RuntimeClientError' and attempt < max_retries - 1:
+                if error_code == "RuntimeClientError" and attempt < max_retries - 1:
                     retry_delay = retry_delays[attempt]
                     litellm.print_verbose(
                         f"RuntimeClientError on attempt {attempt + 1}/{max_retries}. "
@@ -1104,14 +1147,13 @@ class AgentCoreConfig(BaseAWSLLM):
                     self._handle_boto3_error(error_code, error_message)
             except Exception as e:
                 raise BedrockError(
-                    status_code=500,
-                    message=f"AgentCore: API request failed: {str(e)}"
+                    status_code=500, message=f"AgentCore: API request failed: {str(e)}"
                 ) from e
 
         # Should not reach here, but just in case
         raise BedrockError(
             status_code=500,
-            message="AgentCore: API request failed after all retries (cold start timeout)"
+            message="AgentCore: API request failed after all retries (cold start timeout)",
         )
 
     def _handle_streaming(
@@ -1123,7 +1165,7 @@ class AgentCoreConfig(BaseAWSLLM):
         model: str,
         created_at: int,
         session_id: Optional[str],
-        timeout: Optional[Union[float, int]]
+        timeout: Optional[Union[float, int]],
     ) -> CustomStreamWrapper:
         """Handle streaming completion request with proper SSE parsing."""
         # Variable to store the actual session ID from response
@@ -1134,35 +1176,37 @@ class AgentCoreConfig(BaseAWSLLM):
 
             try:
                 # Build invoke parameters using shared method
-                invoke_params, runtime_session_id = self._build_invoke_params(agent_arn, qualifier, data)
+                invoke_params, runtime_session_id = self._build_invoke_params(
+                    agent_arn, qualifier, data
+                )
 
                 response = client.invoke_agent_runtime(**invoke_params)
 
                 # Get session ID from response if available and update nonlocal
-                actual_session_id = response.get('runtimeSessionId', session_id)
+                actual_session_id = response.get("runtimeSessionId", session_id)
 
                 # AgentCore returns StreamingBody in 'response' key for SSE streaming
-                stream_body = response.get('response')
+                stream_body = response.get("response")
                 if not stream_body:
                     return
 
                 # Parse SSE stream line by line
                 for line in stream_body.iter_lines():
                     if line:
-                        decoded = line.decode('utf-8').strip()
+                        decoded = line.decode("utf-8").strip()
 
                         # Parse SSE format: "data: {...}"
-                        if decoded.startswith('data: '):
+                        if decoded.startswith("data: "):
                             json_str = decoded[6:]  # Remove "data: " prefix
 
                             # Handle SSE end marker
-                            if json_str == '[DONE]':
+                            if json_str == "[DONE]":
                                 break
 
                             try:
                                 data_chunk = json.loads(json_str)
-                                token = data_chunk.get('token', '')
-                                finish_reason = data_chunk.get('finish_reason')
+                                token = data_chunk.get("token", "")
+                                finish_reason = data_chunk.get("finish_reason")
 
                                 # Yield chunk only if it has token content or finish_reason
                                 # Skip empty chunks without finish_reason
@@ -1173,41 +1217,50 @@ class AgentCoreConfig(BaseAWSLLM):
                                             StreamingChoices(
                                                 finish_reason=finish_reason,
                                                 index=0,
-                                                delta={"role": "assistant", "content": token}
+                                                delta={
+                                                    "role": "assistant",
+                                                    "content": token,
+                                                },
                                             )
                                         ],
                                         created=created_at,
                                         model=model,
                                         object="chat.completion.chunk",
-                                        system_fingerprint=None
+                                        system_fingerprint=None,
                                     )
 
                                     # Initialize _hidden_params if it doesn't exist
-                                    if not hasattr(chunk, '_hidden_params'):
+                                    if not hasattr(chunk, "_hidden_params"):
                                         chunk._hidden_params = {}
 
                                     # Add session ID to hidden params for session continuity
-                                    chunk._hidden_params["custom_llm_provider"] = "bedrock"
-                                    chunk._hidden_params["runtime_session_id"] = actual_session_id
+                                    chunk._hidden_params[
+                                        "custom_llm_provider"
+                                    ] = "bedrock"
+                                    chunk._hidden_params[
+                                        "runtime_session_id"
+                                    ] = actual_session_id
 
                                     yield chunk
 
-                            except json.JSONDecodeError as e:
-                                litellm.verbose_logger.warning(f"Failed to parse SSE chunk: {decoded}")
+                            except json.JSONDecodeError:
+                                litellm.verbose_logger.warning(
+                                    f"Failed to parse SSE chunk: {decoded}"
+                                )
                                 continue
 
             except ClientError as e:
-                error_code = e.response.get('Error', {}).get('Code', 'Unknown')
-                error_message = e.response.get('Error', {}).get('Message', str(e))
+                error_code = e.response.get("Error", {}).get("Code", "Unknown")
+                error_message = e.response.get("Error", {}).get("Message", str(e))
                 self._handle_boto3_error(error_code, error_message)
             except Exception as e:
                 raise BedrockError(
-                    status_code=500,
-                    message=f"AgentCore: Streaming failed: {str(e)}"
+                    status_code=500, message=f"AgentCore: Streaming failed: {str(e)}"
                 ) from e
 
         # Create a minimal logging object for CustomStreamWrapper
         from litellm.litellm_core_utils.litellm_logging import Logging
+
         logging_obj = Logging(
             model=model,
             messages=[],
@@ -1215,7 +1268,7 @@ class AgentCoreConfig(BaseAWSLLM):
             call_type="completion",
             litellm_call_id="",
             start_time=time.time(),
-            function_id=""
+            function_id="",
         )
         logging_obj.model_call_details = {"litellm_params": {}}
 
@@ -1225,7 +1278,7 @@ class AgentCoreConfig(BaseAWSLLM):
             completion_stream=stream_generator(),
             model=model,
             custom_llm_provider="bedrock",
-            logging_obj=logging_obj
+            logging_obj=logging_obj,
         )
 
     async def acompletion(
@@ -1241,7 +1294,7 @@ class AgentCoreConfig(BaseAWSLLM):
         timeout: Optional[Union[float, int]] = None,
         litellm_params: Optional[Dict[str, Any]] = None,
         stream: bool = False,
-        **kwargs
+        **kwargs,
     ) -> Union[ModelResponse, AsyncIterator[ModelResponse]]:
         """
         Asynchronous completion for AgentCore.
@@ -1266,7 +1319,7 @@ class AgentCoreConfig(BaseAWSLLM):
                 litellm_params=litellm_params,
                 acompletion=False,  # Mark as sync internally
                 stream=stream,
-                **kwargs
+                **kwargs,
             )
 
         # Run synchronous call in thread pool to avoid blocking event loop
@@ -1278,6 +1331,7 @@ class AgentCoreConfig(BaseAWSLLM):
             async def async_stream_wrapper():
                 for chunk in result:
                     yield chunk
+
             return async_stream_wrapper()
         else:
             return result
@@ -1318,8 +1372,7 @@ class AgentCoreConfig(BaseAWSLLM):
 
         status_code = status_code_map.get(error_code, 500)
         formatted_message = error_message_map.get(
-            error_code,
-            f"AgentCore: API Error ({error_code}) - {error_message}"
+            error_code, f"AgentCore: API Error ({error_code}) - {error_message}"
         )
 
         raise BedrockError(status_code=status_code, message=formatted_message)
@@ -1338,7 +1391,7 @@ def completion(
     litellm_params: Optional[Dict[str, Any]] = None,
     acompletion: bool = False,
     stream: bool = False,
-    **kwargs
+    **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
     Main entry point for AgentCore completions (sync).
@@ -1359,7 +1412,7 @@ def completion(
         litellm_params=litellm_params,
         acompletion=acompletion,
         stream=stream,
-        **kwargs
+        **kwargs,
     )
 
 
@@ -1375,7 +1428,7 @@ async def acompletion(
     timeout: Optional[Union[float, int]] = None,
     litellm_params: Optional[Dict[str, Any]] = None,
     stream: bool = False,
-    **kwargs
+    **kwargs,
 ) -> Union[ModelResponse, AsyncIterator[ModelResponse]]:
     """
     Main entry point for AgentCore completions (async).
@@ -1395,5 +1448,5 @@ async def acompletion(
         timeout=timeout,
         litellm_params=litellm_params,
         stream=stream,
-        **kwargs
+        **kwargs,
     )
