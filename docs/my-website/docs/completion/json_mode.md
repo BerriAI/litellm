@@ -309,33 +309,30 @@ curl http://0.0.0.0:4000/v1/chat/completions \
         {"role": "user", "content": "Alice and Bob are going to a science fair on Friday."},
     ],
     "response_format": { 
-        "type": "json_object",
-        "response_schema": { 
-            "type": "json_schema",
-            "json_schema": {
-              "name": "math_reasoning",
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "steps": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "explanation": { "type": "string" },
-                        "output": { "type": "string" }
-                      },
-                      "required": ["explanation", "output"],
-                      "additionalProperties": false
-                    }
+        "type": "json_schema",
+        "json_schema": {
+          "name": "math_reasoning",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "explanation": { "type": "string" },
+                    "output": { "type": "string" }
                   },
-                  "final_answer": { "type": "string" }
-                },
-                "required": ["steps", "final_answer"],
-                "additionalProperties": false
+                  "required": ["explanation", "output"],
+                  "additionalProperties": false
+                }
               },
-              "strict": true
+              "final_answer": { "type": "string" }
             },
+            "required": ["steps", "final_answer"],
+            "additionalProperties": false
+          },
+          "strict": true
         }
     },
   }'
