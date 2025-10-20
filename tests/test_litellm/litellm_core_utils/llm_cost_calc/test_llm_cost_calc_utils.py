@@ -626,3 +626,28 @@ def test_service_tier_fallback_pricing():
     
     assert abs(std_cost[0] - expected_standard_prompt) < 1e-10, f"Standard prompt cost mismatch: {std_cost[0]} vs {expected_standard_prompt}"
     assert abs(std_cost[1] - expected_standard_completion) < 1e-10, f"Standard completion cost mismatch: {std_cost[1]} vs {expected_standard_completion}"
+
+
+def test_bedrock_anthropic_prompt_caching():
+    """Test Bedrock Anthropic models with prompt caching return correct costs."""
+    model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    usage = Usage(
+        prompt_tokens=52123,
+        completion_tokens=497,
+        total_tokens=52620,
+        cache_creation_input_tokens=7183,
+        cache_read_input_tokens=22465,
+    )
+
+    custom_llm_provider = "bedrock"
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert prompt_cost >= 0
+    assert completion_cost >= 0
+    assert round(prompt_cost, 3) == 0.111
+    assert round(completion_cost, 5) == 0.00820

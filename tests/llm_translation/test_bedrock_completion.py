@@ -3233,6 +3233,60 @@ async def test_bedrock_passthrough(sync_mode: bool):
 
 
 @pytest.mark.asyncio
+async def test_bedrock_passthrough_router():
+    """
+    Test bedrock passthrough using litellm.Router with async mode.
+    Tests that the router:
+    1. Resolves the router model name to the actual deployment
+    2. Replaces the router model name in the endpoint with the actual deployment model
+    """
+    import litellm
+    from litellm import Router
+
+    litellm._turn_on_debug()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "special-bedrock-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+                },
+            }
+        ]
+    )
+
+    data = {
+        "max_tokens": 512,
+        "messages": [{"role": "user", "content": "Hey"}],
+        "system": [
+            {
+                "type": "text",
+                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
+            }
+        ],
+        "temperature": 0,
+        "metadata": {
+            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
+        },
+        "anthropic_version": "bedrock-2023-05-31",
+        "anthropic_beta": ["claude-code-20250219"],
+    }
+
+    # Endpoint uses the router model name which should be replaced with actual deployment
+    response = await router.allm_passthrough_route(
+        model="special-bedrock-model",
+        method="POST",
+        endpoint="/model/special-bedrock-model/invoke",
+        data=data,
+    )
+
+    print(response.text)
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_bedrock_converse__streaming_passthrough(monkeypatch):
     import litellm
     from litellm.integrations.custom_logger import CustomLogger

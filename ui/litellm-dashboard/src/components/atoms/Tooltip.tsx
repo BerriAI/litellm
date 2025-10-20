@@ -1,33 +1,33 @@
-import React, { useState, useRef } from "react"
-import { QuestionCircleOutlined } from "@ant-design/icons"
+import React, { useState, useRef } from "react";
+import { QuestionCircleOutlined } from "@ant-design/icons";
 
 interface TooltipProps {
-  content: React.ReactNode
-  children?: React.ReactNode
-  width?: string
-  className?: string
+  content: React.ReactNode;
+  children?: React.ReactNode;
+  width?: string;
+  className?: string;
 }
 
 export const Tooltip: React.FC<TooltipProps> = ({ content, children, width = "auto", className = "" }) => {
-  const [showTooltip, setShowTooltip] = useState(false)
-  const [tooltipPosition, setTooltipPosition] = useState<"top" | "bottom">("top")
-  const tooltipRef = useRef<HTMLDivElement>(null)
+  const [showTooltip, setShowTooltip] = useState(false);
+  const [tooltipPosition, setTooltipPosition] = useState<"top" | "bottom">("top");
+  const tooltipRef = useRef<HTMLDivElement>(null);
 
   // Function to check if tooltip would fit above
   const checkTooltipPosition = () => {
     if (tooltipRef.current) {
-      const rect = tooltipRef.current.getBoundingClientRect()
-      const tooltipHeight = 300 // Approximate height of the tooltip
-      const spaceAbove = rect.top
-      const spaceBelow = window.innerHeight - rect.bottom
+      const rect = tooltipRef.current.getBoundingClientRect();
+      const tooltipHeight = 300; // Approximate height of the tooltip
+      const spaceAbove = rect.top;
+      const spaceBelow = window.innerHeight - rect.bottom;
 
       if (spaceAbove < tooltipHeight && spaceBelow > tooltipHeight) {
-        setTooltipPosition("bottom")
+        setTooltipPosition("bottom");
       } else {
-        setTooltipPosition("top")
+        setTooltipPosition("top");
       }
     }
-  }
+  };
 
   return (
     <div className="relative inline-block" ref={tooltipRef}>
@@ -35,8 +35,8 @@ export const Tooltip: React.FC<TooltipProps> = ({ content, children, width = "au
         <QuestionCircleOutlined
           className="ml-1 text-gray-500 cursor-help"
           onMouseEnter={() => {
-            checkTooltipPosition()
-            setShowTooltip(true)
+            checkTooltipPosition();
+            setShowTooltip(true);
           }}
           onMouseLeave={() => setShowTooltip(false)}
         />
@@ -66,5 +66,5 @@ export const Tooltip: React.FC<TooltipProps> = ({ content, children, width = "au
         </div>
       )}
     </div>
-  )
-}
+  );
+};

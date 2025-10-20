@@ -247,12 +247,12 @@ class OpenTelemetry(CustomLogger):
         metrics.set_meter_provider(meter_provider)
 
         self._operation_duration_histogram = meter.create_histogram(
-            name="gen_ai.client.operation.duration", # Replace with semconv constant in otel 1.38
+            name="gen_ai.client.operation.duration",  # Replace with semconv constant in otel 1.38
             description="GenAI operation duration",
             unit="s",
         )
         self._token_usage_histogram = meter.create_histogram(
-            name="gen_ai.client.token.usage", # Replace with semconv constant in otel 1.38
+            name="gen_ai.client.token.usage",  # Replace with semconv constant in otel 1.38
             description="GenAI token usage",
             unit="{token}",
         )
@@ -480,9 +480,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params")
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params")
+        )
 
         if not standard_callback_dynamic_params:
             return None
@@ -543,7 +543,7 @@ class OpenTelemetry(CustomLogger):
         # 4. Metrics & cost recording
         self._record_metrics(kwargs, response_obj, start_time, end_time)
 
-        # 5. Semantic logs. 
+        # 5. Semantic logs.
         if self.config.enable_events:
             self._emit_semantic_logs(kwargs, response_obj, span)
 
@@ -580,7 +580,6 @@ class OpenTelemetry(CustomLogger):
         generation_name = metadata.get("generation_name")
 
         raw_span_name = generation_name if generation_name else RAW_REQUEST_SPAN_NAME
-
 
         otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
         raw_span = otel_tracer.start_span(
@@ -626,6 +625,13 @@ class OpenTelemetry(CustomLogger):
             if md.get(key) is not None:
                 common_attrs[f"metadata.{key}"] = str(md[key])
 
+        # get hidden params
+        hidden_params = getattr(std_log, "hidden_params", None) or (std_log or {}).get(
+            "hidden_params", {}
+        )
+        if hidden_params:
+            common_attrs["hidden_params"] = safe_dumps(hidden_params)
+
         if self._operation_duration_histogram:
             self._operation_duration_histogram.record(
                 duration_s, attributes=common_attrs
@@ -653,6 +659,7 @@ class OpenTelemetry(CustomLogger):
             return
 
         from opentelemetry._logs import LogRecord, get_logger
+
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
 
         parent_ctx = span.get_span_context()
@@ -707,7 +714,6 @@ class OpenTelemetry(CustomLogger):
                     trace_flags=parent_ctx.trace_flags,
                 )
             )
-
 
     def _create_guardrail_span(
         self, kwargs: Optional[dict], context: Optional[Context]
@@ -920,6 +926,14 @@ class OpenTelemetry(CustomLogger):
                     span=span, key="metadata.{}".format(key), value=value
                 )
 
+            # get hidden params
+            hidden_params = getattr(
+                standard_logging_payload, "hidden_params", None
+            ) or (standard_logging_payload or {}).get("hidden_params", {})
+            if hidden_params:
+                self.safe_set_attribute(
+                    span=span, key="hidden_params", value=safe_dumps(hidden_params)
+                )
             #############################################
             ########## LLM Request Attributes ###########
             #############################################

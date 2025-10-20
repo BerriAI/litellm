@@ -251,6 +251,7 @@ async def create_guardrail(request: CreateGuardrailRequest):
     }
     ```
     """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -260,6 +261,22 @@ async def create_guardrail(request: CreateGuardrailRequest):
         result = await GUARDRAIL_REGISTRY.add_guardrail_to_db(
             guardrail=request.guardrail, prisma_client=prisma_client
         )
+
+        guardrail_name = result.get("guardrail_name", "Unknown")
+        guardrail_id = result.get("guardrail_id", "Unknown")
+
+        try:
+            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+                guardrail=cast(Guardrail, result)
+            )
+            verbose_proxy_logger.info(
+                f"Immediate sync: Successfully initialized guardrail '{guardrail_name}' (ID: {guardrail_id})"
+            )
+        except Exception as init_error:
+            verbose_proxy_logger.warning(
+                f"Immediate sync: Failed to initialize guardrail '{guardrail_name}' (ID: {guardrail_id}) in memory: {init_error}"
+            )
+
         return result
     except Exception as e:
         verbose_proxy_logger.exception(f"Error adding guardrail to db: {e}")
@@ -323,6 +340,7 @@ async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
     }
     ```
     """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -344,6 +362,21 @@ async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
             guardrail=request.guardrail,
             prisma_client=prisma_client,
         )
+
+        guardrail_name = result.get("guardrail_name", "Unknown")
+
+        try:
+            IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
+                guardrail_id=guardrail_id, guardrail=cast(Guardrail, result)
+            )
+            verbose_proxy_logger.info(
+                f"Immediate sync: Successfully updated guardrail '{guardrail_name}' (ID: {guardrail_id})"
+            )
+        except Exception as update_error:
+            verbose_proxy_logger.warning(
+                f"Immediate sync: Failed to update '{guardrail_name}' (ID: {guardrail_id}) in memory: {update_error}"
+            )
+
         return result
     except HTTPException as e:
         raise e
@@ -396,10 +429,20 @@ async def delete_guardrail(guardrail_id: str):
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
 
-        # delete in memory guardrail
-        IN_MEMORY_GUARDRAIL_HANDLER.delete_in_memory_guardrail(
-            guardrail_id=guardrail_id,
-        )
+        guardrail_name = result.get("guardrail_name", "Unknown")
+
+        try:
+            IN_MEMORY_GUARDRAIL_HANDLER.delete_in_memory_guardrail(
+                guardrail_id=guardrail_id,
+            )
+            verbose_proxy_logger.info(
+                f"Immediate sync: Successfully removed guardrail '{guardrail_name}' (ID: {guardrail_id}) from memory"
+            )
+        except Exception as delete_error:
+            verbose_proxy_logger.warning(
+                f"Immediate sync: Failed to remove guardrail '{guardrail_name}' (ID: {guardrail_id}) from memory: {delete_error}"
+            )
+
         return result
     except HTTPException as e:
         raise e
@@ -514,11 +557,21 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
             prisma_client=prisma_client,
         )
 
-        # update in memory guardrail
-        IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
-            guardrail_id=guardrail_id,
-            guardrail=guardrail,
-        )
+        guardrail_name = result.get("guardrail_name", "Unknown")
+
+        try:
+            IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
+                guardrail_id=guardrail_id,
+                guardrail=guardrail,
+            )
+            verbose_proxy_logger.info(
+                f"Immediate sync: Successfully updated guardrail '{guardrail_name}' (ID: {guardrail_id})"
+            )
+        except Exception as update_error:
+            verbose_proxy_logger.warning(
+                f"Immediate sync: Failed to update '{guardrail_name}' (ID: {guardrail_id}) in memory: {update_error}"
+            )
+
         return result
     except HTTPException as e:
         raise e
@@ -760,7 +813,6 @@ def _extract_fields_recursive(
     model: Type[BaseModel],
     depth: int = 0,
 ) -> Dict[str, Any]:
-
     # Check if we've exceeded the maximum recursion depth
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise HTTPException(

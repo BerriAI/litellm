@@ -11,11 +11,10 @@ For batching specific details see CustomBatchLogger class
 
 import asyncio
 import os
-from litellm._uuid import uuid
-from typing import Any, Dict, Optional
-
+from typing import Any, Dict, Optional, Tuple
 
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
@@ -26,7 +25,7 @@ from litellm.types.integrations.posthog import (
     POSTHOG_MAX_BATCH_SIZE,
     PostHogEventPayload,
 )
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
 
 
 class PostHogLogger(CustomBatchLogger):
@@ -72,17 +71,21 @@ class PostHogLogger(CustomBatchLogger):
             verbose_logger.debug(
                 "PostHog: Sync logging - Enters logging function for model %s", kwargs
             )
-            
+
+            api_key, api_url = self._get_credentials_for_request(kwargs)
+            if api_key is None or api_url is None:
+                raise Exception("PostHog credentials not found in kwargs")
             event_payload = self.create_posthog_event_payload(kwargs)
 
             headers = {
                 "Content-Type": "application/json",
             }
 
-            payload = self._create_posthog_payload([event_payload])
+            payload = self._create_posthog_payload([event_payload], api_key)
+            capture_url = f"{api_url.rstrip('/')}/batch/"
 
             response = self.sync_client.post(
-                url=self.capture_url,
+                url=capture_url,
                 json=payload,
                 headers=headers,
             )
@@ -92,9 +95,9 @@ class PostHogLogger(CustomBatchLogger):
                 raise Exception(
                     f"Response from PostHog API status_code: {response.status_code}, text: {response.text}"
                 )
-            
+
             verbose_logger.debug("PostHog: Sync event successfully sent")
-            
+
         except Exception as e:
             verbose_logger.exception(f"PostHog Sync Layer Error - {str(e)}")
 
@@ -122,9 +125,15 @@ class PostHogLogger(CustomBatchLogger):
 
     async def _log_async_event(self, kwargs, response_obj=None, start_time=0.0, end_time=0.0):
         # Note: response_obj, start_time, end_time not used - all data comes from kwargs
+        api_key, api_url = self._get_credentials_for_request(kwargs)
         event_payload = self.create_posthog_event_payload(kwargs)
 
-        self.log_queue.append(event_payload)
+        # Store event with its credentials for batch sending
+        self.log_queue.append({
+            "event": event_payload,
+            "api_key": api_key,
+            "api_url": api_url
+        })
         verbose_logger.debug(
             f"PostHog, event added to queue. Will flush in {self.flush_interval} seconds..."
         )
@@ -257,15 +266,41 @@ class PostHogLogger(CustomBatchLogger):
         metadata = self._extract_metadata(kwargs)
         user_id = self._safe_get(metadata, "user_id")
         if user_id:
-            return str(user_id)            
+            return str(user_id)
         end_user = self._safe_get(standard_logging_object, "end_user")
         if end_user:
             return str(end_user)
         trace_id = self._safe_get(standard_logging_object, "trace_id")
         if trace_id:
-            return str(trace_id)            
-        
+            return str(trace_id)
+
         return self._safe_uuid()
+
+    def _get_credentials_for_request(self, kwargs: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Get PostHog credentials for this request.
+
+        Checks for per-request credentials in standard_callback_dynamic_params,
+        falls back to instance defaults from environment variables.
+
+        Args:
+            kwargs: Request kwargs containing standard_callback_dynamic_params
+
+        Returns:
+            tuple[str, str]: (api_key, api_url)
+        """
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params", None)
+        )
+
+        if standard_callback_dynamic_params is not None:
+            api_key = standard_callback_dynamic_params.get("posthog_api_key") or self.POSTHOG_API_KEY
+            api_url = standard_callback_dynamic_params.get("posthog_api_url") or self.posthog_host
+        else:
+            api_key = self.POSTHOG_API_KEY
+            api_url = self.posthog_host
+
+        return api_key, api_url
 
     async def async_send_batch(self):
         """
@@ -282,23 +317,34 @@ class PostHogLogger(CustomBatchLogger):
                 f"PostHog: Sending batch of {len(self.log_queue)} events"
             )
 
-            headers = {
-                "Content-Type": "application/json",
-            }
+            # Group events by credentials for batch sending
+            batches_by_credentials: Dict[tuple[str, str], list] = {}
+            for item in self.log_queue:
+                key = (item["api_key"], item["api_url"])
+                if key not in batches_by_credentials:
+                    batches_by_credentials[key] = []
+                batches_by_credentials[key].append(item["event"])
 
-            payload = self._create_posthog_payload(list(self.log_queue))
+            # Send each batch to its respective PostHog instance
+            for (api_key, api_url), events in batches_by_credentials.items():
+                headers = {
+                    "Content-Type": "application/json",
+                }
 
-            response = await self.async_client.post(
-                url=self.capture_url,
-                json=payload,
-                headers=headers,
-            )
-            response.raise_for_status()
+                payload = self._create_posthog_payload(events, api_key)
+                capture_url = f"{api_url.rstrip('/')}/batch/"
 
-            if response.status_code != 200:
-                raise Exception(
-                    f"Response from PostHog API status_code: {response.status_code}, text: {response.text}"
+                response = await self.async_client.post(
+                    url=capture_url,
+                    json=payload,
+                    headers=headers,
                 )
+                response.raise_for_status()
+
+                if response.status_code != 200:
+                    raise Exception(
+                        f"Response from PostHog API status_code: {response.status_code}, text: {response.text}"
+                    )
 
             verbose_logger.debug(
                 f"PostHog: Batch of {len(self.log_queue)} events successfully sent"
@@ -324,8 +370,8 @@ class PostHogLogger(CustomBatchLogger):
     def _safe_uuid(self) -> str:
         return str(uuid.uuid4())
 
-    def _create_posthog_payload(self, events: list) -> Dict[str, Any]:
-        return {"api_key": self.POSTHOG_API_KEY, "batch": events}
+    def _create_posthog_payload(self, events: list, api_key: str) -> Dict[str, Any]:
+        return {"api_key": api_key, "batch": events}
 
     def _safe_get(self, obj: Any, key: str, default: Any = None) -> Any:
         if obj is None or not hasattr(obj, 'get'):

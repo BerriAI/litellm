@@ -422,6 +422,82 @@ async def test_key_generation_with_object_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
+    """
+    Test that /key/generate correctly handles mcp_tool_permissions in object_permission.
+
+    This test verifies that:
+    1. mcp_tool_permissions is accepted in the object_permission field
+    2. The field is properly stored in the LiteLLM_ObjectPermissionTable
+    3. The key is correctly linked to the object_permission record
+    """
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    # Track what data is passed to create
+    created_permission_data = {}
+
+    async def mock_create(**kwargs):
+        created_permission_data.update(kwargs.get("data", {}))
+        return MagicMock(object_permission_id="objperm_mcp_123")
+
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = mock_create
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        table_name = kwargs.get("table_name")
+        if table_name == "user":
+            return MagicMock(models=[], spend=0)
+        elif table_name == "key":
+            return MagicMock(
+                token="hashed_token_789",
+                litellm_budget_table=None,
+                object_permission=None,
+            )
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    from litellm.proxy._types import (
+        GenerateKeyRequest,
+        LiteLLM_ObjectPermissionBase,
+        LitellmUserRoles,
+    )
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    # Create request with mcp_tool_permissions
+    request_data = GenerateKeyRequest(
+        object_permission=LiteLLM_ObjectPermissionBase(
+            mcp_servers=["server_1"],
+            mcp_tool_permissions={"server_1": ["tool1", "tool2", "tool3"]},
+        )
+    )
+
+    await generate_key_fn(
+        data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="user-mcp-1",
+        ),
+    )
+
+    # Verify mcp_tool_permissions was stored (serialized to JSON string for GraphQL compatibility)
+    assert "mcp_tool_permissions" in created_permission_data
+    import json
+
+    assert json.loads(created_permission_data["mcp_tool_permissions"]) == {
+        "server_1": ["tool1", "tool2", "tool3"]
+    }
+    assert created_permission_data["mcp_servers"] == ["server_1"]
+
+
+@pytest.mark.asyncio
 async def test_key_update_object_permissions_existing_permission(monkeypatch):
     """
     Test updating object permissions when a key already has an existing object_permission_id.
@@ -1739,3 +1815,247 @@ def test_check_team_key_model_specific_limits_rpm_overallocation():
         "Allocated RPM limit=800 + Key RPM limit=300 is greater than team RPM limit=1000"
         in str(exc_info.value.detail)
     )
+
+
+def test_check_team_key_model_specific_limits_team_model_rpm_overallocation():
+    """
+    Test check_team_key_model_specific_limits when team has model-specific RPM limits
+    in metadata and key allocation would exceed those limits.
+
+    This tests the scenario where team_table.metadata["model_rpm_limit"] is set
+    with per-model limits, not just a global team RPM limit.
+    """
+    # Create existing keys with model-specific RPM limits
+    existing_key1 = LiteLLM_VerificationToken(
+        token="test-token-1",
+        user_id="test-user-1",
+        team_id="test-team-789",
+        metadata={
+            "model_rpm_limit": {
+                "gpt-4": 300,
+                "gpt-3.5-turbo": 200,
+            }
+        },
+    )
+
+    existing_key2 = LiteLLM_VerificationToken(
+        token="test-token-2",
+        user_id="test-user-2",
+        team_id="test-team-789",
+        metadata={
+            "model_rpm_limit": {
+                "gpt-4": 250,
+            }
+        },
+    )
+
+    keys = [existing_key1, existing_key2]
+
+    # Create team table with model-specific RPM limits in metadata
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-789",
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+        metadata={
+            "model_rpm_limit": {
+                "gpt-4": 700,  # Team-level model-specific limit for gpt-4
+                "gpt-3.5-turbo": 500,
+            }
+        },
+    )
+
+    # Create request that would exceed team's model-specific RPM limits
+    # Existing gpt-4: 300 + 250 = 550, New: 200, Total: 750 > 700 (team model-specific limit)
+    data = GenerateKeyRequest(
+        model_rpm_limit={
+            "gpt-4": 200,  # This would cause overallocation against team model-specific limit
+        },
+        model_tpm_limit=None,
+    )
+
+    # Should raise HTTPException for team model-specific RPM overallocation
+    with pytest.raises(HTTPException) as exc_info:
+        check_team_key_model_specific_limits(
+            keys=keys,
+            team_table=team_table,
+            data=data,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "Allocated RPM limit=550 + Key RPM limit=200 is greater than team RPM limit=700"
+        in str(exc_info.value.detail)
+    )
+
+
+def test_check_team_key_model_specific_limits_team_model_tpm_overallocation():
+    """
+    Test check_team_key_model_specific_limits when team has model-specific TPM limits
+    in metadata and key allocation would exceed those limits.
+
+    This tests the scenario where team_table.metadata["model_tpm_limit"] is set
+    with per-model limits, not just a global team TPM limit.
+    """
+    # Create existing keys with model-specific TPM limits
+    existing_key1 = LiteLLM_VerificationToken(
+        token="test-token-1",
+        user_id="test-user-1",
+        team_id="test-team-101",
+        metadata={
+            "model_tpm_limit": {
+                "gpt-4": 5000,
+                "claude-3": 3000,
+            }
+        },
+    )
+
+    existing_key2 = LiteLLM_VerificationToken(
+        token="test-token-2",
+        user_id="test-user-2",
+        team_id="test-team-101",
+        metadata={
+            "model_tpm_limit": {
+                "gpt-4": 3500,
+            }
+        },
+    )
+
+    keys = [existing_key1, existing_key2]
+
+    # Create team table with model-specific TPM limits in metadata
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-101",
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+        metadata={
+            "model_tpm_limit": {
+                "gpt-4": 10000,  # Team-level model-specific limit for gpt-4
+                "claude-3": 8000,
+            }
+        },
+    )
+
+    # Create request that would exceed team's model-specific TPM limits
+    # Existing gpt-4: 5000 + 3500 = 8500, New: 2000, Total: 10500 > 10000 (team model-specific limit)
+    data = GenerateKeyRequest(
+        model_rpm_limit=None,
+        model_tpm_limit={
+            "gpt-4": 2000,  # This would cause overallocation against team model-specific limit
+        },
+    )
+
+    # Should raise HTTPException for team model-specific TPM overallocation
+    with pytest.raises(HTTPException) as exc_info:
+        check_team_key_model_specific_limits(
+            keys=keys,
+            team_table=team_table,
+            data=data,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "Allocated TPM limit=8500 + Key TPM limit=2000 is greater than team TPM limit=10000"
+        in str(exc_info.value.detail)
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_key_with_object_permission():
+    """
+    Test that /key/generate correctly handles object_permission by:
+    1. Creating a record in litellm_objectpermissiontable
+    2. Passing the returned object_permission_id into the key insert payload
+    3. NOT passing the object_permission dict to the key table
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy._types import (
+        GenerateKeyRequest,
+        LiteLLM_ObjectPermissionBase,
+        LitellmUserRoles,
+    )
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _common_key_generation_helper,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.jsonify_object = lambda x: x
+
+    # Mock object permission creation
+    mock_object_perm_create = AsyncMock(
+        return_value=MagicMock(object_permission_id="objperm_key_456")
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = mock_object_perm_create
+
+    # Mock key insertion
+    mock_key_insert = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123",
+            litellm_budget_table=None,
+            created_at="2024-01-01T00:00:00Z",
+            updated_at="2024-01-01T00:00:00Z",
+        )
+    )
+    mock_prisma_client.insert_data = mock_key_insert
+
+    # Create request with object_permission
+    key_request = GenerateKeyRequest(
+        models=["gpt-4"],
+        object_permission=LiteLLM_ObjectPermissionBase(
+            vector_stores=["vector_store_1"],
+            mcp_servers=["mcp_server_1"],
+        ),
+    )
+
+    mock_admin_auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user",
+    )
+
+    # Patch the prisma_client and other dependencies
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client,
+    ), patch("litellm.proxy.proxy_server.llm_router", None), patch(
+        "litellm.proxy.proxy_server.premium_user",
+        False,
+    ), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name",
+        "admin",
+    ):
+        # Execute
+        result = await _common_key_generation_helper(
+            data=key_request,
+            user_api_key_dict=mock_admin_auth,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    # Verify object permission creation was called
+    mock_object_perm_create.assert_awaited_once()
+
+    # Verify key insertion was called
+    assert mock_key_insert.call_count == 1
+    key_insert_kwargs = mock_key_insert.call_args.kwargs
+    key_data = key_insert_kwargs["data"]
+
+    # Verify object_permission_id is in the key data
+    assert key_data.get("object_permission_id") == "objperm_key_456"
+
+    # Verify object_permission dict is NOT in the key data
+    assert "object_permission" not in key_data

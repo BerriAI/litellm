@@ -22,10 +22,10 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
 }) => {
   // Predefined intervals
   const predefinedIntervals = ["7d", "30d", "90d", "180d", "365d"];
-  
+
   // Check if current interval is custom
   const isCustomInterval = rotationInterval && !predefinedIntervals.includes(rotationInterval);
-  
+
   const [showCustomInput, setShowCustomInput] = useState(isCustomInterval);
   const [customInterval, setCustomInterval] = useState(isCustomInterval ? rotationInterval : "");
 
@@ -58,11 +58,7 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
               <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
             </Tooltip>
           </label>
-          <TextInput
-            name="duration"
-            placeholder="e.g., 30d"
-            className="w-full"
-          />
+          <TextInput name="duration" placeholder="e.g., 30d" className="w-full" />
         </div>
       </div>
 
@@ -110,7 +106,7 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
                   <Option value="365d">365 days</Option>
                   <Option value="custom">Custom interval</Option>
                 </Select>
-                
+
                 {showCustomInput && (
                   <div className="space-y-1">
                     <TextInput
@@ -130,7 +126,8 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
 
         {autoRotationEnabled && (
           <div className="bg-blue-50 p-3 rounded-md text-sm text-blue-700">
-            When rotation occurs, you&apos;ll receive a notification with the new key. The old key will be deactivated after a brief grace period.
+            When rotation occurs, you&apos;ll receive a notification with the new key. The old key will be deactivated
+            after a brief grace period.
           </div>
         )}
       </div>

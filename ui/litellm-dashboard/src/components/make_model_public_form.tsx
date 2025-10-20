@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from "react";
-import { Modal, Form, Steps, Button, message, Checkbox } from "antd";
+import { Modal, Form, Steps, Button, Checkbox } from "antd";
 import { Text, Title, Badge } from "@tremor/react";
 import { makeModelGroupPublic } from "./networking";
 import ModelFilters from "./model_filters";
@@ -82,7 +82,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      const allModelGroups = filteredData.map(model => model.model_group);
+      const allModelGroups = filteredData.map((model) => model.model_group);
       setSelectedModels(new Set(allModelGroups));
     } else {
       setSelectedModels(new Set());
@@ -98,12 +98,12 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   useEffect(() => {
     if (visible && modelHubData.length > 0) {
       setFilteredData(modelHubData);
-      
+
       // Preselect models that are already public
       const alreadyPublicModels = modelHubData
-        .filter(model => model.is_public_model_group === true)
-        .map(model => model.model_group);
-      
+        .filter((model) => model.is_public_model_group === true)
+        .map((model) => model.model_group);
+
       setSelectedModels(new Set(alreadyPublicModels));
     }
   }, [visible, modelHubData]);
@@ -118,7 +118,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
     try {
       const modelGroupsToMakePublic = Array.from(selectedModels);
       await makeModelGroupPublic(accessToken, modelGroupsToMakePublic);
-      
+
       NotificationsManager.success(`Successfully made ${modelGroupsToMakePublic.length} model group(s) public!`);
       handleClose();
       onSuccess();
@@ -131,7 +131,8 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   };
 
   const renderStep1Content = () => {
-    const allModelsSelected = filteredData.length > 0 && filteredData.every(model => selectedModels.has(model.model_group));
+    const allModelsSelected =
+      filteredData.length > 0 && filteredData.every((model) => selectedModels.has(model.model_group));
     const isIndeterminate = selectedModels.size > 0 && !allModelsSelected;
 
     return (
@@ -151,7 +152,8 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
         </div>
 
         <Text className="text-sm text-gray-600">
-          Select the models you want to be visible on the public model hub. Users will still require a valid API key to use these models.
+          Select the models you want to be visible on the public model hub. Users will still require a valid API key to
+          use these models.
         </Text>
 
         {/* Filters */}
@@ -170,7 +172,10 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
               </div>
             ) : (
               filteredData.map((model) => (
-                <div key={model.model_group} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50">
+                <div
+                  key={model.model_group}
+                  className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50"
+                >
                   <Checkbox
                     checked={selectedModels.has(model.model_group)}
                     onChange={(e) => handleModelSelection(model.model_group, e.target.checked)}
@@ -179,12 +184,16 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
                     <div className="flex items-center space-x-2">
                       <Text className="font-medium">{model.model_group}</Text>
                       {model.mode && (
-                        <Badge color="green" size="sm">{model.mode}</Badge>
+                        <Badge color="green" size="sm">
+                          {model.mode}
+                        </Badge>
                       )}
                     </div>
                     <div className="flex flex-wrap gap-1 mt-1">
-                      {model.providers.map(provider => (
-                        <Badge key={provider} color="blue" size="xs">{provider}</Badge>
+                      {model.providers.map((provider) => (
+                        <Badge key={provider} color="blue" size="xs">
+                          {provider}
+                        </Badge>
                       ))}
                     </div>
                   </div>
@@ -197,7 +206,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
         {selectedModels.size > 0 && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
             <Text className="text-sm text-blue-800">
-              <strong>{selectedModels.size}</strong> model{selectedModels.size !== 1 ? 's' : ''} selected
+              <strong>{selectedModels.size}</strong> model{selectedModels.size !== 1 ? "s" : ""} selected
             </Text>
           </div>
         )}
@@ -209,10 +218,11 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
     return (
       <div className="space-y-4">
         <Title>Confirm Making Models Public</Title>
-        
+
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
           <Text className="text-sm text-yellow-800">
-            <strong>Warning:</strong> Once you make these models public, anyone who can go to the <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.
+            <strong>Warning:</strong> Once you make these models public, anyone who can go to the{" "}
+            <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.
           </Text>
         </div>
 
@@ -221,15 +231,17 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
           <div className="max-h-48 overflow-y-auto border rounded-lg p-3">
             <div className="space-y-2">
               {Array.from(selectedModels).map((modelGroup) => {
-                const model = modelHubData.find(m => m.model_group === modelGroup);
+                const model = modelHubData.find((m) => m.model_group === modelGroup);
                 return (
                   <div key={modelGroup} className="flex items-center justify-between p-2 bg-gray-50 rounded">
                     <div>
                       <Text className="font-medium">{modelGroup}</Text>
                       {model && (
                         <div className="flex flex-wrap gap-1 mt-1">
-                          {model.providers.map(provider => (
-                            <Badge key={provider} color="blue" size="xs">{provider}</Badge>
+                          {model.providers.map((provider) => (
+                            <Badge key={provider} color="blue" size="xs">
+                              {provider}
+                            </Badge>
                           ))}
                         </div>
                       )}
@@ -243,7 +255,8 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
           <Text className="text-sm text-blue-800">
-            Total: <strong>{selectedModels.size}</strong> model{selectedModels.size !== 1 ? 's' : ''} will be made public
+            Total: <strong>{selectedModels.size}</strong> model{selectedModels.size !== 1 ? "s" : ""} will be made
+            public
           </Text>
         </div>
       </div>
@@ -264,27 +277,19 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   const renderStepButtons = () => {
     return (
       <div className="flex justify-between mt-6">
-        <Button
-          onClick={currentStep === 0 ? handleClose : handlePrevious}
-        >
+        <Button onClick={currentStep === 0 ? handleClose : handlePrevious}>
           {currentStep === 0 ? "Cancel" : "Previous"}
         </Button>
-        
+
         <div className="flex space-x-2">
           {currentStep === 0 && (
-            <Button
-              onClick={handleNext}
-              disabled={selectedModels.size === 0}
-            >
+            <Button onClick={handleNext} disabled={selectedModels.size === 0}>
               Next
             </Button>
           )}
-          
+
           {currentStep === 1 && (
-            <Button
-              onClick={handleSubmit}
-              loading={loading}
-            >
+            <Button onClick={handleSubmit} loading={loading}>
               Make Public
             </Button>
           )}
@@ -307,7 +312,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
           <Step title="Select Models" />
           <Step title="Confirm" />
         </Steps>
-        
+
         {renderStepContent()}
         {renderStepButtons()}
       </Form>
@@ -315,4 +320,4 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   );
 };
 
-export default MakeModelPublicForm; 
+export default MakeModelPublicForm;

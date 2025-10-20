@@ -16,11 +16,7 @@ const colorNameToHex: { [key: string]: string } = {
   purple: "#8b5cf6",
 };
 
-export const CustomTooltip = ({
-  active,
-  payload,
-  label,
-}: CustomTooltipProps) => {
+export const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
   if (active && payload && payload.length) {
     const formatCategoryName = (name: string): string => {
       return name
@@ -31,14 +27,9 @@ export const CustomTooltip = ({
         .join(" ");
     };
 
-    const getRawValue = (
-      dataPoint: ChartDataPoint,
-      key: string
-    ): number | undefined => {
+    const getRawValue = (dataPoint: ChartDataPoint, key: string): number | undefined => {
       // key is like "metrics.total_tokens"
-      const metricKey = key.substring(
-        key.indexOf(".") + 1
-      ) as keyof SpendMetrics;
+      const metricKey = key.substring(key.indexOf(".") + 1) as keyof SpendMetrics;
       if (dataPoint.metrics && metricKey in dataPoint.metrics) {
         return dataPoint.metrics[metricKey];
       }
@@ -64,10 +55,7 @@ export const CustomTooltip = ({
           const colorName = item.color as keyof typeof colorNameToHex;
           const hexColor = colorNameToHex[colorName] || item.color;
           return (
-            <div
-              key={dataKey}
-              className="flex items-center justify-between space-x-4"
-            >
+            <div key={dataKey} className="flex items-center justify-between space-x-4">
               <div className="flex items-center space-x-2">
                 <span
                   className={`h-2 w-2 shrink-0 rounded-full ring-2 ring-white drop-shadow-md`}
@@ -89,13 +77,7 @@ export const CustomTooltip = ({
   return null;
 };
 
-export const CustomLegend = ({
-  categories,
-  colors,
-}: {
-  categories: string[];
-  colors: string[];
-}) => {
+export const CustomLegend = ({ categories, colors }: { categories: string[]; colors: string[] }) => {
   const formatCategoryName = (name: string): string => {
     return name
       .replace("metrics.", "")
@@ -112,13 +94,8 @@ export const CustomLegend = ({
         const hexColor = colorNameToHex[colorName] || colors[idx];
         return (
           <div key={category} className="flex items-center space-x-2">
-            <span
-              className={`h-2 w-2 shrink-0 rounded-full ring-4 ring-white`}
-              style={{ backgroundColor: hexColor }}
-            />
-            <p className="text-sm text-tremor-content dark:text-dark-tremor-content">
-              {formatCategoryName(category)}
-            </p>
+            <span className={`h-2 w-2 shrink-0 rounded-full ring-4 ring-white`} style={{ backgroundColor: hexColor }} />
+            <p className="text-sm text-tremor-content dark:text-dark-tremor-content">{formatCategoryName(category)}</p>
           </div>
         );
       })}

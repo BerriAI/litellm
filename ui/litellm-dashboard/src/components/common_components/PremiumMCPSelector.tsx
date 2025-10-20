@@ -1,4 +1,4 @@
-import React from 'react';
+import React from "react";
 import { Text } from "@tremor/react";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 
@@ -15,7 +15,7 @@ export function PremiumMCPSelector({
   value,
   accessToken,
   placeholder = "Select MCP servers",
-  premiumUser = false
+  premiumUser = false,
 }: PremiumMCPSelectorProps) {
   if (!premiumUser) {
     return (
@@ -30,21 +30,18 @@ export function PremiumMCPSelector({
         </div>
         <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
           <Text className="text-sm text-yellow-800">
-            MCP server access control is a LiteLLM Enterprise feature. Get a trial key <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer" className="underline">here</a>.
+            MCP server access control is a LiteLLM Enterprise feature. Get a trial key{" "}
+            <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer" className="underline">
+              here
+            </a>
+            .
           </Text>
         </div>
       </div>
     );
   }
 
-  return (
-    <MCPServerSelector
-      onChange={onChange}
-      value={value}
-      accessToken={accessToken}
-      placeholder={placeholder}
-    />
-  );
+  return <MCPServerSelector onChange={onChange} value={value} accessToken={accessToken} placeholder={placeholder} />;
 }
 
-export default PremiumMCPSelector; 
+export default PremiumMCPSelector;

@@ -16,17 +16,15 @@ interface LoggingSettingsViewProps {
   className?: string;
 }
 
-export function LoggingSettingsView({ 
-  loggingConfigs = [], 
+export function LoggingSettingsView({
+  loggingConfigs = [],
   disabledCallbacks = [],
   variant = "card",
-  className = ""
+  className = "",
 }: LoggingSettingsViewProps) {
   const getLoggingDisplayName = (callbackName: string) => {
     // Find the display name for the callback
-    const callbackDisplayName = Object.entries(callback_map).find(
-      ([_, value]) => value === callbackName
-    )?.[0];
+    const callbackDisplayName = Object.entries(callback_map).find(([_, value]) => value === callbackName)?.[0];
     return callbackDisplayName || callbackName;
   };
 
@@ -67,13 +65,13 @@ export function LoggingSettingsView({
             {loggingConfigs.length}
           </Badge>
         </div>
-        
+
         {loggingConfigs.length > 0 ? (
           <div className="space-y-3">
             {loggingConfigs.map((config, index) => {
               const displayName = getLoggingDisplayName(config.callback_name);
               const logoUrl = callbackInfo[displayName]?.logo;
-              
+
               return (
                 <div
                   key={index}
@@ -81,11 +79,7 @@ export function LoggingSettingsView({
                 >
                   <div className="flex items-center gap-3">
                     {logoUrl ? (
-                      <img 
-                        src={logoUrl} 
-                        alt={displayName} 
-                        className="w-5 h-5 object-contain" 
-                      />
+                      <img src={logoUrl} alt={displayName} className="w-5 h-5 object-contain" />
                     ) : (
                       <CogIcon className="h-5 w-5 text-gray-400" />
                     )}
@@ -96,10 +90,7 @@ export function LoggingSettingsView({
                       </Text>
                     </div>
                   </div>
-                  <Badge 
-                    color={getEventTypeColor(config.callback_type)}
-                    size="sm"
-                  >
+                  <Badge color={getEventTypeColor(config.callback_type)} size="sm">
                     {getEventTypeLabel(config.callback_type)}
                   </Badge>
                 </div>
@@ -123,14 +114,14 @@ export function LoggingSettingsView({
             {disabledCallbacks.length}
           </Badge>
         </div>
-        
+
         {disabledCallbacks.length > 0 ? (
           <div className="space-y-3">
             {disabledCallbacks.map((callbackName, index) => {
               // Handle both display names and internal values
               const displayName = reverse_callback_map[callbackName] || callbackName;
               const logoUrl = callbackInfo[displayName]?.logo;
-              
+
               return (
                 <div
                   key={index}
@@ -138,25 +129,16 @@ export function LoggingSettingsView({
                 >
                   <div className="flex items-center gap-3">
                     {logoUrl ? (
-                      <img 
-                        src={logoUrl} 
-                        alt={displayName} 
-                        className="w-5 h-5 object-contain" 
-                      />
+                      <img src={logoUrl} alt={displayName} className="w-5 h-5 object-contain" />
                     ) : (
                       <BanIcon className="h-5 w-5 text-gray-400" />
                     )}
                     <div>
                       <Text className="font-medium text-red-800">{displayName}</Text>
-                      <Text className="text-xs text-red-600">
-                        Disabled for this key
-                      </Text>
+                      <Text className="text-xs text-red-600">Disabled for this key</Text>
                     </div>
                   </div>
-                  <Badge 
-                    color="red"
-                    size="sm"
-                  >
+                  <Badge color="red" size="sm">
                     Disabled
                   </Badge>
                 </div>
@@ -197,4 +179,4 @@ export function LoggingSettingsView({
   );
 }
 
-export default LoggingSettingsView; 
+export default LoggingSettingsView;

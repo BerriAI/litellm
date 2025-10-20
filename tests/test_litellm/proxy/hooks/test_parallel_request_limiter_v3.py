@@ -955,6 +955,93 @@ async def test_team_member_rate_limits_v3():
 
 
 @pytest.mark.asyncio
+async def test_dynamic_rate_limiting_v3():
+    """
+    Test that dynamic rate limiting only enforces limits when model has failures.
+    
+    When rpm_limit_type is set to "dynamic":
+    - If model has no failures, rate limits should NOT be enforced (allow exceeding)
+    - If model has failures above threshold, rate limits SHOULD be enforced
+    """
+    _api_key = "sk-12345"
+    _api_key_hash = hash_token(_api_key)
+    model = "gpt-3.5-turbo"
+    
+    # Set a low RPM limit to make testing easier
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key_hash,
+        rpm_limit=2,
+        metadata={"rpm_limit_type": "dynamic"},
+    )
+    
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    
+    # Mock should_rate_limit to track if limits are enforced
+    captured_descriptors = []
+    
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.clear()
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+    
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+    
+    # Test 1: No failures - rate limits should NOT be enforced (rpm_limit should be None)
+    async def mock_check_no_failures(*args, **kwargs):
+        return False
+    
+    parallel_request_handler._check_model_has_recent_failures = mock_check_no_failures
+    
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": model},
+        call_type="",
+    )
+    
+    # Find the API key descriptor
+    api_key_descriptor = None
+    for descriptor in captured_descriptors:
+        if descriptor["key"] == "api_key":
+            api_key_descriptor = descriptor
+            break
+    
+    assert api_key_descriptor is not None, "API key descriptor should be present"
+    assert (
+        api_key_descriptor["rate_limit"]["requests_per_unit"] is None
+    ), "RPM limit should be None when dynamic mode and no failures"
+    
+    # Test 2: With failures - rate limits SHOULD be enforced (rpm_limit should be set)
+    async def mock_check_with_failures(*args, **kwargs):
+        return True
+    
+    parallel_request_handler._check_model_has_recent_failures = mock_check_with_failures
+    captured_descriptors.clear()
+    
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": model},
+        call_type="",
+    )
+    
+    # Find the API key descriptor again
+    api_key_descriptor = None
+    for descriptor in captured_descriptors:
+        if descriptor["key"] == "api_key":
+            api_key_descriptor = descriptor
+            break
+    
+    assert api_key_descriptor is not None, "API key descriptor should be present"
+    assert (
+        api_key_descriptor["rate_limit"]["requests_per_unit"] == 2
+    ), "RPM limit should be enforced when dynamic mode and failures detected"
+
+
+@pytest.mark.asyncio
 async def test_async_increment_tokens_with_ttl_preservation():
     """
     Test TTL preservation functionality for token increment operations.

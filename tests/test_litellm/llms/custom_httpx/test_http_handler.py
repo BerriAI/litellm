@@ -399,3 +399,41 @@ async def test_session_validation():
     mock_valid_session = MockClientSession()
     transport3 = AsyncHTTPHandler._create_aiohttp_transport(shared_session=mock_valid_session)  # type: ignore
     assert transport3.client is mock_valid_session  # Should reuse session
+
+
+@pytest.mark.parametrize(
+    "env_curve,litellm_curve,expected_curve,should_call",
+    [
+        # env_curve: SSL_ECDH_CURVE env var | litellm_curve: litellm.ssl_ecdh_curve variable
+        # expected_curve: curve that should be set | should_call: whether set_ecdh_curve() should be called
+        
+        # Valid configurations
+        ("X25519", None, "X25519", True),           # Env var only
+        ("prime256v1", None, "prime256v1", True),   # Different valid curve
+        (None, "secp384r1", "secp384r1", True),     # litellm variable only
+        ("X25519", "secp521r1", "X25519", True),    # Env var takes precedence
+        # Empty/None configurations - should skip
+        ("", None, None, False),                     # Empty string - skip configuration
+        (None, None, None, False),                   # None value - skip configuration
+    ]
+)
+def test_ssl_ecdh_curve(env_curve, litellm_curve, expected_curve, should_call, monkeypatch):
+    """Test SSL ECDH curve configuration with valid curves and precedence"""
+    with patch.dict(os.environ, clear=True):
+        if env_curve:
+            monkeypatch.setenv("SSL_ECDH_CURVE", env_curve)
+        
+        original_value = litellm.ssl_ecdh_curve
+        try:
+            litellm.ssl_ecdh_curve = litellm_curve
+            
+            with patch.object(ssl.SSLContext, 'set_ecdh_curve') as mock_set_curve:
+                ssl_context = get_ssl_configuration()
+                
+                if should_call:
+                    mock_set_curve.assert_called_once_with(expected_curve)
+                else:
+                    mock_set_curve.assert_not_called()
+                assert isinstance(ssl_context, ssl.SSLContext)
+        finally:
+            litellm.ssl_ecdh_curve = original_value

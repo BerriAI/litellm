@@ -265,7 +265,7 @@ class TestLiteLLMCompletionResponsesConfig:
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
 
         reasoning_item = reasoning_items[0]
-        assert reasoning_item.id == "test-response-id_reasoning"
+        assert reasoning_item.id.startswith("rs_"), f"Expected ID to start with 'rs_', got: {reasoning_item.id}"
         assert reasoning_item.status == "stop"
         assert reasoning_item.role == "assistant"
         assert len(reasoning_item.content) == 1

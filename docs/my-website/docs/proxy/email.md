@@ -141,6 +141,7 @@ LiteLLM allows you to customize various aspects of your email notifications. Bel
 | Email Signature | `EMAIL_SIGNATURE` | string (HTML) | Standard LiteLLM footer | `"<p>Best regards,<br/>Your Team</p><p><a href='https://your-company.com'>Visit us</a></p>"` | HTML-formatted footer for all emails |
 | Invitation Subject | `EMAIL_SUBJECT_INVITATION` | string | "LiteLLM: New User Invitation" | `"Welcome to Your Company!"` | Subject line for invitation emails |
 | Key Creation Subject | `EMAIL_SUBJECT_KEY_CREATED` | string | "LiteLLM: API Key Created" | `"Your New API Key is Ready"` | Subject line for key creation emails |
+| Proxy Base URL | `PROXY_BASE_URL` | string | http://0.0.0.0:4000 | `"https://proxy.your-company.com"` | Base URL for the LiteLLM Proxy (used in email links) |
 
 
 ## HTML Support in Email Signature
@@ -180,6 +181,9 @@ EMAIL_SIGNATURE="<p>Best regards,<br/>Your Company Team</p><p><a href='https://y
 # Email Subject Lines
 EMAIL_SUBJECT_INVITATION="Welcome to Your Company!"  # Subject for invitation emails
 EMAIL_SUBJECT_KEY_CREATED="Your API Key is Ready"    # Subject for key creation emails
+
+# Proxy Configuration
+PROXY_BASE_URL="https://proxy.your-company.com"      # Base URL for the LiteLLM Proxy (used in email links)
 ```
 
 ## HTML Support in Email Signature
@@ -225,3 +229,17 @@ EMAIL_SUBJECT_KEY_CREATED="Your \{company_name\} API Key"
 ```
 
 The system will automatically replace `\{event_message\}` and other template variables with their actual values when sending emails.
+
+## FAQ 
+
+### Why do I see "http://0.0.0.0:4000" in the email links?
+
+The `PROXY_BASE_URL` environment variable is used to construct email links. If you are using the LiteLLM Proxy in a local environment, you will see "http://0.0.0.0:4000" in the email links.
+
+If you are using the LiteLLM Proxy in a production environment, you will see the actual base URL of the LiteLLM Proxy.
+
+You can set the `PROXY_BASE_URL` environment variable to the actual base URL of the LiteLLM Proxy.
+
+```bash
+PROXY_BASE_URL="https://proxy.your-company.com"
+```

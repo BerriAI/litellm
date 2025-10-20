@@ -174,6 +174,7 @@ class AporiaGuardrail(CustomGuardrail):
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ):
         from litellm.proxy.common_utils.callback_utils import (

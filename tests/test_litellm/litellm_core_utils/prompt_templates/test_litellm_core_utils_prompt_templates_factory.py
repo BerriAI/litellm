@@ -148,40 +148,38 @@ def test_bedrock_validate_format_image_or_video():
     }
     for mime, expected in valid_document_formats.items():
         print("testing mime", mime, "expected", expected)
-        result = BedrockImageProcessor._validate_format(
-            mime, mime.split("/")[1]
-        )
+        result = BedrockImageProcessor._validate_format(mime, mime.split("/")[1])
         assert result == expected, f"Expected {expected}, got {result}"
 
 
 def test_bedrock_get_document_format_fallback_mimes():
     """
     Test the _get_document_format method with fallback MIME types for DOCX and XLSX.
-    
+
     This tests the fallback mechanism when mimetypes.guess_all_extensions returns empty results,
     which can happen in Docker containers where mimetypes depends on OS-installed MIME types.
     """
     from unittest.mock import patch
 
     # Test DOCX fallback
-    docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    docx_mime = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
     supported_formats = ["pdf", "docx", "xlsx", "csv"]
-    
+
     # Mock mimetypes.guess_all_extensions to return empty list (simulating Docker container scenario)
-    with patch('mimetypes.guess_all_extensions', return_value=[]):
+    with patch("mimetypes.guess_all_extensions", return_value=[]):
         result = BedrockImageProcessor._get_document_format(
-            mime_type=docx_mime,
-            supported_doc_formats=supported_formats
+            mime_type=docx_mime, supported_doc_formats=supported_formats
         )
         assert result == "docx", f"Expected 'docx', got '{result}'"
-    
-    # Test XLSX fallback  
+
+    # Test XLSX fallback
     xlsx_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    
-    with patch('mimetypes.guess_all_extensions', return_value=[]):
+
+    with patch("mimetypes.guess_all_extensions", return_value=[]):
         result = BedrockImageProcessor._get_document_format(
-            mime_type=xlsx_mime,
-            supported_doc_formats=supported_formats
+            mime_type=xlsx_mime, supported_doc_formats=supported_formats
         )
         assert result == "xlsx", f"Expected 'xlsx', got '{result}'"
 
@@ -190,18 +188,16 @@ def test_bedrock_get_document_format_mimetypes_success():
     """
     Test the _get_document_format method when mimetypes.guess_all_extensions works normally.
     """
-    docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    docx_mime = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
     supported_formats = ["pdf", "docx", "xlsx", "csv"]
-    
+
     # Test normal mimetypes behavior (should not hit fallback)
     result = BedrockImageProcessor._get_document_format(
-        mime_type=docx_mime,
-        supported_doc_formats=supported_formats
+        mime_type=docx_mime, supported_doc_formats=supported_formats
     )
     assert result == "docx", f"Expected 'docx', got '{result}'"
-
-
-
 
 
 # def test_ollama_pt_consecutive_system_messages():
@@ -571,3 +567,42 @@ def test_bedrock_tools_unpack_defs():
     _bedrock_tools_pt(tools=tools)
 
 
+def test_bedrock_tools_pt_empty_description():
+    """
+    Test that _bedrock_tools_pt handles empty string descriptions correctly.
+
+    When a tool has an empty string description, Bedrock doesn't accept it,
+    so the function should fall back to using the function name as the description.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "",  # Empty string description
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        }
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    result = _bedrock_tools_pt(tools=tools)
+
+    # Verify that the result is a list with one tool
+    assert len(result) == 1
+
+    # Verify that the description falls back to the function name
+    tool_spec = result[0].get("toolSpec")
+    assert tool_spec is not None
+    assert tool_spec.get("name") == "get_weather"
+    assert tool_spec.get("description") == "get_weather"

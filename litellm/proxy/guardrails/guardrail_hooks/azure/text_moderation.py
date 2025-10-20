@@ -21,7 +21,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from .base import AzureGuardrailBase
 
 if TYPE_CHECKING:
-
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
@@ -189,7 +188,6 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             and self.severity_threshold_by_category is None
         ):
             for category in response["categoriesAnalysis"]:
-
                 if category["severity"] >= self.default_severity_threshold:
                     raise HTTPException(
                         status_code=400,
@@ -230,25 +228,24 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             "Azure Prompt Shield: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
-        if call_type == "acompletion":
-            new_messages: Optional[List[AllMessageValues]] = data.get("messages")
-            if new_messages is None:
-                verbose_proxy_logger.warning(
-                    "Lakera AI: not running guardrail. No messages in data"
-                )
-                return data
-            user_prompt = self.get_user_prompt(new_messages)
+        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        if new_messages is None:
+            verbose_proxy_logger.warning(
+                "Lakera AI: not running guardrail. No messages in data"
+            )
+            return data
+        user_prompt = self.get_user_prompt(new_messages)
 
-            if user_prompt:
-                verbose_proxy_logger.info(
-                    f"Azure Text Moderation: User prompt: {user_prompt}"
-                )
-                azure_text_moderation_response = await self.async_make_request(
-                    text=user_prompt,
-                )
-                self.check_severity_threshold(response=azure_text_moderation_response)
-            else:
-                verbose_proxy_logger.warning("Azure Text Moderation: No text found")
+        if user_prompt:
+            verbose_proxy_logger.info(
+                f"Azure Text Moderation: User prompt: {user_prompt}"
+            )
+            azure_text_moderation_response = await self.async_make_request(
+                text=user_prompt,
+            )
+            self.check_severity_threshold(response=azure_text_moderation_response)
+        else:
+            verbose_proxy_logger.warning("Azure Text Moderation: No text found")
         return None
 
     async def async_post_call_success_hook(

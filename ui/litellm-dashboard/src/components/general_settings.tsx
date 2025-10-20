@@ -2,7 +2,6 @@ import React, { useState, useEffect } from "react";
 import {
   Card,
   Title,
-  Subtitle,
   Table,
   TableHead,
   TableRow,
@@ -10,7 +9,6 @@ import {
   TableHeaderCell,
   TableCell,
   TableBody,
-  Metric,
   Text,
   Grid,
   Button,
@@ -21,48 +19,20 @@ import {
   Accordion,
   AccordionBody,
   AccordionHeader,
-  AccordionList,
 } from "@tremor/react";
-import {
-  TabPanel,
-  TabPanels,
-  TabGroup,
-  TabList,
-  Tab,
-  Icon,
-} from "@tremor/react";
+import { TabPanel, TabPanels, TabGroup, TabList, Tab, Icon } from "@tremor/react";
 import {
   getCallbacksCall,
   setCallbacksCall,
   getGeneralSettingsCall,
-  serviceHealthCheck,
   updateConfigFieldSetting,
   deleteConfigFieldSetting,
 } from "./networking";
-import {
-  Modal,
-  Form,
-  Input,
-  Select,
-  Button as Button2,
-  message,
-  InputNumber,
-} from "antd";
-import {
-  InformationCircleIcon,
-  PencilAltIcon,
-  PencilIcon,
-  StatusOnlineIcon,
-  TrashIcon,
-  RefreshIcon,
-  CheckCircleIcon,
-  XCircleIcon,
-  QuestionMarkCircleIcon,
-} from "@heroicons/react/outline";
+import { Form, InputNumber } from "antd";
+import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
 
 import AddFallbacks from "./add_fallbacks";
 import openai from "openai";
-import Paragraph from "antd/es/skeleton/Paragraph";
 import NotificationsManager from "./molecules/notifications_manager";
 interface GeneralSettingsPageProps {
   accessToken: string | null;
@@ -71,19 +41,14 @@ interface GeneralSettingsPageProps {
   modelData: any;
 }
 
-async function testFallbackModelResponse(
-  selectedModel: string,
-  accessToken: string
-) {
+async function testFallbackModelResponse(selectedModel: string, accessToken: string) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
   if (isLocal != true) {
-    console.log = function() {};
+    console.log = function () {};
   }
   console.log("isLocal:", isLocal);
-  const proxyBaseUrl = isLocal
-    ? "http://localhost:4000"
-    : window.location.origin;
+  const proxyBaseUrl = isLocal ? "http://localhost:4000" : window.location.origin;
   const client = new openai.OpenAI({
     apiKey: accessToken, // Replace with your OpenAI API key
     baseURL: proxyBaseUrl, // Replace with your OpenAI API base URL
@@ -109,17 +74,12 @@ async function testFallbackModelResponse(
         <strong>{response.model}</strong>. See{" "}
         <a
           href="#"
-          onClick={() =>
-            window.open(
-              "https://docs.litellm.ai/docs/proxy/reliability",
-              "_blank"
-            )
-          }
+          onClick={() => window.open("https://docs.litellm.ai/docs/proxy/reliability", "_blank")}
           style={{ textDecoration: "underline", color: "blue" }}
         >
           curl
         </a>
-      </span>
+      </span>,
     );
   } catch (error) {
     NotificationsManager.fromBackend(
@@ -152,11 +112,7 @@ const defaultLowestLatencyArgs: routingStrategyArgs = {
   lowest_latency_buffer: 0,
 };
 
-export const AccordionHero: React.FC<AccordionHeroProps> = ({
-  selectedStrategy,
-  strategyArgs,
-  paramExplanation,
-}) => (
+export const AccordionHero: React.FC<AccordionHeroProps> = ({ selectedStrategy, strategyArgs, paramExplanation }) => (
   <Accordion>
     <AccordionHeader className="text-sm font-medium text-tremor-content-strong dark:text-dark-tremor-content-strong">
       Routing Strategy Specific Args
@@ -190,11 +146,7 @@ export const AccordionHero: React.FC<AccordionHeroProps> = ({
                   <TableCell>
                     <TextInput
                       name={param}
-                      defaultValue={
-                        typeof value === "object"
-                          ? JSON.stringify(value, null, 2)
-                          : value.toString()
-                      }
+                      defaultValue={typeof value === "object" ? JSON.stringify(value, null, 2) : value.toString()}
                     />
                   </TableCell>
                 </TableRow>
@@ -209,35 +161,23 @@ export const AccordionHero: React.FC<AccordionHeroProps> = ({
   </Accordion>
 );
 
-const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
-  accessToken,
-  userRole,
-  userID,
-  modelData,
-}) => {
-  const [routerSettings, setRouterSettings] = useState<{ [key: string]: any }>(
-    {}
-  );
+const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID, modelData }) => {
+  const [routerSettings, setRouterSettings] = useState<{ [key: string]: any }>({});
   const [generalSettingsDict, setGeneralSettingsDict] = useState<{
     [key: string]: any;
   }>({});
-  const [generalSettings, setGeneralSettings] = useState<generalSettingsItem[]>(
-    []
-  );
+  const [generalSettings, setGeneralSettings] = useState<generalSettingsItem[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(null);
-  const [strategySettings, setStrategySettings] =
-    useState<routingStrategyArgs | null>(null);
+  const [strategySettings, setStrategySettings] = useState<routingStrategyArgs | null>(null);
 
   let paramExplanation: { [key: string]: string } = {
     routing_strategy_args: "(dict) Arguments to pass to the routing strategy",
     routing_strategy: "(string) Routing strategy to use",
-    allowed_fails:
-      "(int) Number of times a deployment can fail before being added to cooldown",
-    cooldown_time:
-      "(int) time in seconds to cooldown a deployment after failure",
+    allowed_fails: "(int) Number of times a deployment can fail before being added to cooldown",
+    cooldown_time: "(int) time in seconds to cooldown a deployment after failure",
     num_retries: "(int) Number of retries for failed requests. Defaults to 0.",
     timeout: "(float) Timeout for requests. Defaults to None.",
     retry_after: "(int) Minimum time to wait before retrying a failed request",
@@ -288,19 +228,18 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
     console.log(`routerSettings['fallbacks']: ${routerSettings["fallbacks"]}`);
 
     const updatedFallbacks = routerSettings["fallbacks"]
-        .map((dict: { [key: string]: any }) => {
-            if (key in dict) {
-                delete dict[key];
-            }
-            return dict;
-        })
-        .filter((dict: { [key: string]: any }) => Object.keys(dict).length > 0);
-      
+      .map((dict: { [key: string]: any }) => {
+        if (key in dict) {
+          delete dict[key];
+        }
+        return dict;
+      })
+      .filter((dict: { [key: string]: any }) => Object.keys(dict).length > 0);
+
     const updatedSettings = {
-        ...routerSettings,
-        fallbacks: updatedFallbacks
+      ...routerSettings,
+      fallbacks: updatedFallbacks,
     };
-  
 
     const payload = {
       router_settings: updatedSettings,
@@ -318,9 +257,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
   const handleInputChange = (fieldName: string, newValue: any) => {
     // Update the value in the state
     const updatedSettings = generalSettings.map((setting) =>
-      setting.field_name === fieldName
-        ? { ...setting, field_value: newValue }
-        : setting
+      setting.field_name === fieldName ? { ...setting, field_value: newValue } : setting,
     );
     setGeneralSettings(updatedSettings);
   };
@@ -340,9 +277,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
       // update value in state
 
       const updatedSettings = generalSettings.map((setting) =>
-        setting.field_name === fieldName
-          ? { ...setting, stored_in_db: true }
-          : setting
+        setting.field_name === fieldName ? { ...setting, stored_in_db: true } : setting,
       );
       setGeneralSettings(updatedSettings);
     } catch (error) {
@@ -360,9 +295,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
       // update value in state
 
       const updatedSettings = generalSettings.map((setting) =>
-        setting.field_name === fieldName
-          ? { ...setting, stored_in_db: null, field_value: null }
-          : setting
+        setting.field_name === fieldName ? { ...setting, stored_in_db: null, field_value: null } : setting,
       );
       setGeneralSettings(updatedSettings);
     } catch (error) {
@@ -377,37 +310,55 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
 
     console.log("router_settings", router_settings);
 
+    const numberKeys = new Set(["allowed_fails", "cooldown_time", "num_retries", "timeout", "retry_after"]);
+    const jsonKeys = new Set(["model_group_alias", "retry_policy"]);
+
+    const parseInputValue = (key: string, raw: string | undefined, fallback: unknown) => {
+      if (raw === undefined) return fallback;
+
+      const v = raw.trim();
+
+      if (v.toLowerCase() === "null") return null;
+
+      if (numberKeys.has(key)) {
+        const n = Number(v);
+        return Number.isNaN(n) ? fallback : n;
+      }
+
+      if (jsonKeys.has(key)) {
+        if (v === "") return null;
+        try {
+          return JSON.parse(v);
+        } catch {
+          return fallback;
+        }
+      }
+
+      if (v.toLowerCase() === "true") return true;
+      if (v.toLowerCase() === "false") return false;
+
+      return v;
+    };
+
     const updatedVariables = Object.fromEntries(
       Object.entries(router_settings)
         .map(([key, value]) => {
           if (key !== "routing_strategy_args" && key !== "routing_strategy") {
-            return [
-              key,
-              (
-                document.querySelector(
-                  `input[name="${key}"]`
-                ) as HTMLInputElement
-              )?.value || value,
-            ];
-          } else if (key == "routing_strategy") {
+            const inputEl = document.querySelector(`input[name="${key}"]`) as HTMLInputElement | null;
+            const parsed = parseInputValue(key, inputEl?.value, value);
+            return [key, parsed];
+          } else if (key === "routing_strategy") {
             return [key, selectedStrategy];
-          } else if (
-            key == "routing_strategy_args" &&
-            selectedStrategy == "latency-based-routing"
-          ) {
+          } else if (key === "routing_strategy_args" && selectedStrategy === "latency-based-routing") {
             let setRoutingStrategyArgs: routingStrategyArgs = {};
 
             const lowestLatencyBufferElement = document.querySelector(
-              `input[name="lowest_latency_buffer"]`
+              `input[name="lowest_latency_buffer"]`,
             ) as HTMLInputElement;
-            const ttlElement = document.querySelector(
-              `input[name="ttl"]`
-            ) as HTMLInputElement;
+            const ttlElement = document.querySelector(`input[name="ttl"]`) as HTMLInputElement;
 
             if (lowestLatencyBufferElement?.value) {
-              setRoutingStrategyArgs["lowest_latency_buffer"] = Number(
-                lowestLatencyBufferElement.value
-              );
+              setRoutingStrategyArgs["lowest_latency_buffer"] = Number(lowestLatencyBufferElement.value);
             }
 
             if (ttlElement?.value) {
@@ -419,9 +370,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
           }
           return null;
         })
-        .filter((entry) => entry !== null && entry !== undefined) as Iterable<
-        [string, unknown]
-      >
+        .filter((entry) => entry !== null && entry !== undefined) as Iterable<[string, unknown]>,
     );
     console.log("updatedVariables", updatedVariables);
 
@@ -468,7 +417,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
                         ([param, value]) =>
                           param != "fallbacks" &&
                           param != "context_window_fallbacks" &&
-                          param != "routing_strategy_args"
+                          param != "routing_strategy_args",
                       )
                       .map(([param, value]) => (
                         <TableRow key={param}>
@@ -492,23 +441,15 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
                                 className="w-full max-w-md"
                                 onValueChange={setSelectedStrategy}
                               >
-                                <SelectItem value="usage-based-routing">
-                                  usage-based-routing
-                                </SelectItem>
-                                <SelectItem value="latency-based-routing">
-                                  latency-based-routing
-                                </SelectItem>
-                                <SelectItem value="simple-shuffle">
-                                  simple-shuffle
-                                </SelectItem>
+                                <SelectItem value="usage-based-routing">usage-based-routing</SelectItem>
+                                <SelectItem value="latency-based-routing">latency-based-routing</SelectItem>
+                                <SelectItem value="simple-shuffle">simple-shuffle</SelectItem>
                               </Select2>
                             ) : (
                               <TextInput
                                 name={param}
                                 defaultValue={
-                                  typeof value === "object"
-                                    ? JSON.stringify(value, null, 2)
-                                    : value.toString()
+                                  typeof value === "object" ? JSON.stringify(value, null, 2) : value.toString()
                                 }
                               />
                             )}
@@ -522,8 +463,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
                   strategyArgs={
                     routerSettings &&
                     routerSettings["routing_strategy_args"] &&
-                    Object.keys(routerSettings["routing_strategy_args"])
-                      .length > 0
+                    Object.keys(routerSettings["routing_strategy_args"]).length > 0
                       ? routerSettings["routing_strategy_args"]
                       : defaultLowestLatencyArgs // default value when keys length is 0
                   }
@@ -531,10 +471,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
                 />
               </Card>
               <Col>
-                <Button
-                  className="mt-2"
-                  onClick={() => handleSaveChanges(routerSettings)}
-                >
+                <Button className="mt-2" onClick={() => handleSaveChanges(routerSettings)}>
                   Save Changes
                 </Button>
               </Col>
@@ -551,41 +488,24 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
 
               <TableBody>
                 {routerSettings["fallbacks"] &&
-                  routerSettings["fallbacks"].map(
-                    (item: Object, index: number) =>
-                      Object.entries(item).map(([key, value]) => (
-                        <TableRow key={index.toString() + key}>
-                          <TableCell>{key}</TableCell>
-                          <TableCell>
-                            {Array.isArray(value) ? value.join(", ") : value}
-                          </TableCell>
-                          <TableCell>
-                            <Button
-                              onClick={() =>
-                                testFallbackModelResponse(key, accessToken)
-                              }
-                            >
-                              Test Fallback
-                            </Button>
-                          </TableCell>
-                          <TableCell>
-                            <Icon
-                              icon={TrashIcon}
-                              size="sm"
-                              onClick={() => deleteFallbacks(key)}
-                            />
-                          </TableCell>
-                        </TableRow>
-                      ))
+                  routerSettings["fallbacks"].map((item: object, index: number) =>
+                    Object.entries(item).map(([key, value]) => (
+                      <TableRow key={index.toString() + key}>
+                        <TableCell>{key}</TableCell>
+                        <TableCell>{Array.isArray(value) ? value.join(", ") : value}</TableCell>
+                        <TableCell>
+                          <Button onClick={() => testFallbackModelResponse(key, accessToken)}>Test Fallback</Button>
+                        </TableCell>
+                        <TableCell>
+                          <Icon icon={TrashIcon} size="sm" onClick={() => deleteFallbacks(key)} />
+                        </TableCell>
+                      </TableRow>
+                    )),
                   )}
               </TableBody>
             </Table>
             <AddFallbacks
-              models={
-                modelData?.data
-                  ? modelData.data.map((data: any) => data.model_name)
-                  : []
-              }
+              models={modelData?.data ? modelData.data.map((data: any) => data.model_name) : []}
               accessToken={accessToken}
               routerSettings={routerSettings}
               setRouterSettings={setRouterSettings}
@@ -603,67 +523,51 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {generalSettings.filter((value) => value.field_type !== "TypedDictionary").map((value, index) => (
-                    <TableRow key={index}>
-                      <TableCell>
-                        <Text>{value.field_name}</Text>
-                        <p
-                          style={{
-                            fontSize: "0.65rem",
-                            color: "#808080",
-                            fontStyle: "italic",
-                          }}
-                          className="mt-1"
-                        >
-                          {value.field_description}
-                        </p>
-                      </TableCell>
-                      <TableCell>
-                        {value.field_type == "Integer" ? (
-                          <InputNumber
-                            step={1}
-                            value={value.field_value}
-                            onChange={(newValue) =>
-                              handleInputChange(value.field_name, newValue)
-                            } // Handle value change
-                          />
-                        ) : null}
-                      </TableCell>
-                      <TableCell>
-                        {value.stored_in_db == true ? (
-                          <Badge icon={CheckCircleIcon} className="text-white">
-                            In DB
-                          </Badge>
-                        ) : value.stored_in_db == false ? (
-                          <Badge className="text-gray bg-white outline">
-                            In Config
-                          </Badge>
-                        ) : (
-                          <Badge className="text-gray bg-white outline">
-                            Not Set
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          onClick={() =>
-                            handleUpdateField(value.field_name, index)
-                          }
-                        >
-                          Update
-                        </Button>
-                        <Icon
-                          icon={TrashIcon}
-                          color="red"
-                          onClick={() =>
-                            handleResetField(value.field_name, index)
-                          }
-                        >
-                          Reset
-                        </Icon>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {generalSettings
+                    .filter((value) => value.field_type !== "TypedDictionary")
+                    .map((value, index) => (
+                      <TableRow key={index}>
+                        <TableCell>
+                          <Text>{value.field_name}</Text>
+                          <p
+                            style={{
+                              fontSize: "0.65rem",
+                              color: "#808080",
+                              fontStyle: "italic",
+                            }}
+                            className="mt-1"
+                          >
+                            {value.field_description}
+                          </p>
+                        </TableCell>
+                        <TableCell>
+                          {value.field_type == "Integer" ? (
+                            <InputNumber
+                              step={1}
+                              value={value.field_value}
+                              onChange={(newValue) => handleInputChange(value.field_name, newValue)} // Handle value change
+                            />
+                          ) : null}
+                        </TableCell>
+                        <TableCell>
+                          {value.stored_in_db == true ? (
+                            <Badge icon={CheckCircleIcon} className="text-white">
+                              In DB
+                            </Badge>
+                          ) : value.stored_in_db == false ? (
+                            <Badge className="text-gray bg-white outline">In Config</Badge>
+                          ) : (
+                            <Badge className="text-gray bg-white outline">Not Set</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Button onClick={() => handleUpdateField(value.field_name, index)}>Update</Button>
+                          <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name, index)}>
+                            Reset
+                          </Icon>
+                        </TableCell>
+                      </TableRow>
+                    ))}
                 </TableBody>
               </Table>
             </Card>

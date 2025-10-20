@@ -43,7 +43,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioAnalyzeRequest,
     PresidioAnalyzeResponseItem,
 )
-from litellm.types.utils import CallTypes as LitellmCallTypes
 from litellm.types.utils import GuardrailStatus
 from litellm.utils import (
     EmbeddingResponse,
@@ -68,7 +67,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         output_parse_pii: Optional[bool] = False,
         presidio_ad_hoc_recognizers: Optional[str] = None,
         logging_only: Optional[bool] = None,
-        pii_entities_config: Optional[Dict[Union[PiiEntityType, str], PiiAction]] = None,
+        pii_entities_config: Optional[
+            Dict[Union[PiiEntityType, str], PiiAction]
+        ] = None,
         presidio_language: Optional[str] = None,
         **kwargs,
     ):
@@ -402,46 +403,34 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             content_safety = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)
-            if (
-                call_type
-                in [
-                    LitellmCallTypes.completion.value,
-                    LitellmCallTypes.acompletion.value,
-                ]
-                or call_type == "mcp_call"
-            ):
-                messages = data["messages"]
-                tasks = []
-                for m in messages:
-                    content = m.get("content", None)
-                    if content is None:
-                        continue
-                    if isinstance(content, str):
-                        tasks.append(
-                            self.check_pii(
-                                text=content,
-                                output_parse_pii=self.output_parse_pii,
-                                presidio_config=presidio_config,
-                                request_data=data,
-                            )
+            messages = data["messages"]
+            tasks = []
+            for m in messages:
+                content = m.get("content", None)
+                if content is None:
+                    continue
+                if isinstance(content, str):
+                    tasks.append(
+                        self.check_pii(
+                            text=content,
+                            output_parse_pii=self.output_parse_pii,
+                            presidio_config=presidio_config,
+                            request_data=data,
                         )
-                responses = await asyncio.gather(*tasks)
-                for index, r in enumerate(responses):
-                    content = messages[index].get("content", None)
-                    if content is None:
-                        continue
-                    if isinstance(content, str):
-                        messages[index][
-                            "content"
-                        ] = r  # replace content with redacted string
-                verbose_proxy_logger.debug(
-                    f"Presidio PII Masking: Redacted pii message: {data['messages']}"
-                )
-                data["messages"] = messages
-            else:
-                verbose_proxy_logger.debug(
-                    f"Not running async_pre_call_hook for call_type={call_type}"
-                )
+                    )
+            responses = await asyncio.gather(*tasks)
+            for index, r in enumerate(responses):
+                content = messages[index].get("content", None)
+                if content is None:
+                    continue
+                if isinstance(content, str):
+                    messages[index][
+                        "content"
+                    ] = r  # replace content with redacted string
+            verbose_proxy_logger.debug(
+                f"Presidio PII Masking: Redacted pii message: {data['messages']}"
+            )
+            data["messages"] = messages
             return data
         except Exception as e:
             raise e

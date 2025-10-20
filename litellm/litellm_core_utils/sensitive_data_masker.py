@@ -75,7 +75,7 @@ class SensitiveDataMasker:
                     masked_data[k] = self._mask_value(str_value)
                 else:
                     masked_data[k] = (
-                        v if isinstance(v, (int, float, bool, str)) else str(v)
+                        v if isinstance(v, (int, float, bool, str, list)) else str(v)
                     )
             except Exception:
                 masked_data[k] = "<unable to serialize>"
@@ -89,12 +89,14 @@ masker = SensitiveDataMasker()
 data = {
     "api_key": "sk-1234567890abcdef",
     "redis_password": "very_secret_pass",
-    "port": 6379
+    "port": 6379,
+    "tags": ["East US 2", "production", "test"]
 }
 masked = masker.mask_dict(data)
 # Result: {
 #    "api_key": "sk-1****cdef",
 #    "redis_password": "very****pass",
-#    "port": 6379
+#    "port": 6379,
+#    "tags": ["East US 2", "production", "test"]
 # }
 """

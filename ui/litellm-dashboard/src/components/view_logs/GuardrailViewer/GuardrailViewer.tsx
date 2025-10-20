@@ -47,15 +47,14 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
 
   if (!data) return null;
 
-  const isSuccess =
-    typeof data.guardrail_status === "string" &&
-    data.guardrail_status.toLowerCase() === "success";
+  const isSuccess = typeof data.guardrail_status === "string" && data.guardrail_status.toLowerCase() === "success";
 
   const tooltipTitle = isSuccess ? null : "Guardrail failed to run.";
 
   // Calculate total masked entities
-  const totalMaskedEntities = data.masked_entity_count ? 
-    Object.values(data.masked_entity_count).reduce((sum, count) => sum + count, 0) : 0;
+  const totalMaskedEntities = data.masked_entity_count
+    ? Object.values(data.masked_entity_count).reduce((sum, count) => sum + count, 0)
+    : 0;
 
   const formatTime = (timestamp: number): string => {
     const date = new Date(timestamp * 1000);
@@ -69,10 +68,10 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
         onClick={() => setSectionExpanded(!sectionExpanded)}
       >
         <div className="flex items-center">
-          <svg 
-            className={`w-5 h-5 mr-2 text-gray-600 transition-transform ${sectionExpanded ? 'transform rotate-90' : ''}`}
-            fill="none" 
-            stroke="currentColor" 
+          <svg
+            className={`w-5 h-5 mr-2 text-gray-600 transition-transform ${sectionExpanded ? "transform rotate-90" : ""}`}
+            fill="none"
+            stroke="currentColor"
             viewBox="0 0 24 24"
           >
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -92,11 +91,11 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
 
           {totalMaskedEntities > 0 && (
             <span className="ml-3 px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
-              {totalMaskedEntities} masked {totalMaskedEntities === 1 ? 'entity' : 'entities'}
+              {totalMaskedEntities} masked {totalMaskedEntities === 1 ? "entity" : "entities"}
             </span>
           )}
         </div>
-        <span className="text-sm text-gray-500">{sectionExpanded ? 'Click to collapse' : 'Click to expand'}</span>
+        <span className="text-sm text-gray-500">{sectionExpanded ? "Click to collapse" : "Click to expand"}</span>
       </div>
 
       {sectionExpanded && (
@@ -148,7 +147,10 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
                 <h4 className="font-medium mb-2">Masked Entity Summary</h4>
                 <div className="flex flex-wrap gap-2">
                   {Object.entries(data.masked_entity_count).map(([entityType, count]) => (
-                    <span key={entityType} className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
+                    <span
+                      key={entityType}
+                      className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md text-xs font-medium"
+                    >
                       {entityType}: {count}
                     </span>
                   ))}

@@ -453,6 +453,22 @@ def get_key_model_tpm_limit(
     return None
 
 
+def get_team_model_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.team_metadata:
+        return user_api_key_dict.team_metadata.get("model_rpm_limit")
+    return None
+
+
+def get_team_model_tpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.team_metadata:
+        return user_api_key_dict.team_metadata.get("model_tpm_limit")
+    return None
+
+
 def is_pass_through_provider_route(route: str) -> bool:
     PROVIDER_SPECIFIC_PASS_THROUGH_ROUTES = [
         "vertex-ai",

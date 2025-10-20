@@ -1,5 +1,4 @@
 import copy
-from litellm._uuid import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -7,10 +6,12 @@ from fastapi import Request, status
 from fastapi.responses import StreamingResponse
 
 import litellm
+from litellm._uuid import uuid
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
+    _get_cost_breakdown_from_logging_obj,
     _parse_event_data_for_error,
     create_streaming_response,
 )
@@ -163,6 +164,170 @@ class TestProxyBaseLLMRequestProcessing:
         # Verify that the original test data is preserved
         assert result_data["model"] == "gpt-3.5-turbo"
         assert result_data["messages"] == [{"role": "user", "content": "Hello"}]
+
+    def test_get_custom_headers_with_discount_info(self):
+        """
+        Test that discount information is correctly extracted from logging object
+        and included in response headers.
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        # Create mock user API key dict
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+        
+        # Create logging object with cost breakdown including discount
+        logging_obj = LiteLLMLoggingObj(
+            model="vertex_ai/gemini-pro",
+            messages=[{"role": "user", "content": "test"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        )
+        
+        # Set cost breakdown with discount information
+        logging_obj.set_cost_breakdown(
+            input_cost=0.00005,
+            output_cost=0.00005,
+            total_cost=0.000095,  # After 5% discount
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            original_cost=0.0001,
+            discount_percent=0.05,
+            discount_amount=0.000005,
+        )
+        
+        # Call get_custom_headers with discount info
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            response_cost=0.000095,
+            litellm_logging_obj=logging_obj,
+        )
+        
+        # Verify discount headers are present
+        assert "x-litellm-response-cost" in headers
+        assert float(headers["x-litellm-response-cost"]) == 0.000095
+        
+        assert "x-litellm-response-cost-original" in headers
+        assert float(headers["x-litellm-response-cost-original"]) == 0.0001
+        
+        assert "x-litellm-response-cost-discount-amount" in headers
+        assert float(headers["x-litellm-response-cost-discount-amount"]) == 0.000005
+
+    def test_get_custom_headers_without_discount_info(self):
+        """
+        Test that when no discount is applied, discount headers are not included.
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        # Create mock user API key dict
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+        
+        # Create logging object without discount
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "test"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        )
+        
+        # Set cost breakdown without discount information
+        logging_obj.set_cost_breakdown(
+            input_cost=0.00005,
+            output_cost=0.00005,
+            total_cost=0.0001,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+        )
+        
+        # Call get_custom_headers
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            response_cost=0.0001,
+            litellm_logging_obj=logging_obj,
+        )
+        
+        # Verify discount headers are NOT present
+        assert "x-litellm-response-cost" in headers
+        assert float(headers["x-litellm-response-cost"]) == 0.0001
+        
+        # Discount headers should not be in the final dict
+        assert "x-litellm-response-cost-original" not in headers
+        assert "x-litellm-response-cost-discount-amount" not in headers
+
+    def test_get_cost_breakdown_from_logging_obj_helper(self):
+        """
+        Test the helper function that extracts cost breakdown information.
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        # Test with discount info
+        logging_obj = LiteLLMLoggingObj(
+            model="vertex_ai/gemini-pro",
+            messages=[{"role": "user", "content": "test"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        )
+        logging_obj.set_cost_breakdown(
+            input_cost=0.00005,
+            output_cost=0.00005,
+            total_cost=0.000095,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            original_cost=0.0001,
+            discount_percent=0.05,
+            discount_amount=0.000005,
+        )
+        
+        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(logging_obj)
+        assert original_cost == 0.0001
+        assert discount_amount == 0.000005
+        
+        # Test with no discount info
+        logging_obj_no_discount = LiteLLMLoggingObj(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "test"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-2",
+            function_id="test-function-id-2",
+        )
+        logging_obj_no_discount.set_cost_breakdown(
+            input_cost=0.00005,
+            output_cost=0.00005,
+            total_cost=0.0001,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+        )
+        
+        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(logging_obj_no_discount)
+        assert original_cost is None
+        assert discount_amount is None
+        
+        # Test with None logging object
+        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(None)
+        assert original_cost is None
+        assert discount_amount is None
 
 
 @pytest.mark.asyncio

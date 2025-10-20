@@ -9,22 +9,19 @@ import {
   Card,
   Text,
   Badge,
-  Button
+  Button,
 } from "@tremor/react";
-import {
-  InformationCircleIcon,
-  PencilAltIcon,
-  PencilIcon,
-  RefreshIcon,
-  StatusOnlineIcon,
-  TrashIcon,
-} from "@heroicons/react/outline";
+import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { UploadProps } from "antd/es/upload";
-import { PlusIcon } from "@heroicons/react/solid";
-import { credentialListCall, credentialCreateCall, credentialDeleteCall, credentialUpdateCall, CredentialItem, CredentialsResponse } from "@/components/networking"; // Assume this is your networking function
+import {
+  credentialCreateCall,
+  credentialDeleteCall,
+  credentialUpdateCall,
+  CredentialItem,
+} from "@/components/networking"; // Assume this is your networking function
 import AddCredentialsTab from "./add_credentials_tab";
 import CredentialDeleteModal from "./CredentialDeleteModal";
-import { Form, message } from "antd";
+import { Form } from "antd";
 import NotificationsManager from "../molecules/notifications_manager";
 interface CredentialsPanelProps {
   accessToken: string | null;
@@ -33,16 +30,19 @@ interface CredentialsPanelProps {
   fetchCredentials: (accessToken: string) => Promise<void>;
 }
 
-
-
-const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, uploadProps, credentialList, fetchCredentials }) => {
+const CredentialsPanel: React.FC<CredentialsPanelProps> = ({
+  accessToken,
+  uploadProps,
+  credentialList,
+  fetchCredentials,
+}) => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [selectedCredential, setSelectedCredential] = useState<CredentialItem | null>(null);
   const [credentialToDelete, setCredentialToDelete] = useState<string | null>(null);
   const [form] = Form.useForm();
 
-  const restrictedFields = ['credential_name', 'custom_llm_provider'];
+  const restrictedFields = ["credential_name", "custom_llm_provider"];
   const handleUpdateCredential = async (values: any) => {
     if (!accessToken) {
       return;
@@ -57,14 +57,14 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
       credential_values: filter_credential_values,
       credential_info: {
         custom_llm_provider: values.custom_llm_provider,
-      }
+      },
     };
 
     const response = await credentialUpdateCall(accessToken, values.credential_name, newCredential);
-    NotificationsManager.success('Credential updated successfully');
+    NotificationsManager.success("Credential updated successfully");
     setIsUpdateModalOpen(false);
     fetchCredentials(accessToken);
-  }
+  };
 
   const handleAddCredential = async (values: any) => {
     if (!accessToken) {
@@ -80,17 +80,15 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
       credential_values: filter_credential_values,
       credential_info: {
         custom_llm_provider: values.custom_llm_provider,
-      }
+      },
     };
 
     // Add to list and close modal
     const response = await credentialCreateCall(accessToken, newCredential);
-    NotificationsManager.success('Credential added successfully');
+    NotificationsManager.success("Credential added successfully");
     setIsAddModalOpen(false);
     fetchCredentials(accessToken);
   };
-
-  
 
   useEffect(() => {
     if (!accessToken) {
@@ -101,13 +99,13 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
 
   const renderProviderBadge = (provider: string) => {
     const providerColors: Record<string, string> = {
-      'openai': 'blue',
-      'azure': 'indigo',
-      'anthropic': 'purple',
-      'default': 'gray'
+      openai: "blue",
+      azure: "indigo",
+      anthropic: "purple",
+      default: "gray",
     };
 
-    const color = providerColors[provider.toLowerCase()] || providerColors['default'];
+    const color = providerColors[provider.toLowerCase()] || providerColors["default"];
     return (
       <Badge color={color as any} size="xs">
         {provider}
@@ -115,13 +113,12 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
     );
   };
 
-
   const handleDeleteCredential = async (credentialName: string) => {
     if (!accessToken) {
       return;
     }
     const response = await credentialDeleteCall(accessToken, credentialName);
-    NotificationsManager.success('Credential deleted successfully');
+    NotificationsManager.success("Credential deleted successfully");
     setCredentialToDelete(null);
     fetchCredentials(accessToken);
   };
@@ -137,9 +134,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <div className="flex justify-between items-center mb-4">
-        <Text>
-          Configured credentials for different AI providers. Add and manage your API credentials.
-        </Text>
+        <Text>Configured credentials for different AI providers. Add and manage your API credentials.</Text>
       </div>
 
       <Card>
@@ -152,7 +147,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
             </TableRow>
           </TableHead>
           <TableBody>
-            {(!credentialList || credentialList.length === 0) ? (
+            {!credentialList || credentialList.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={4} className="text-center py-4 text-gray-500">
                   No credentials configured
@@ -163,13 +158,13 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
                 <TableRow key={index}>
                   <TableCell>{credential.credential_name}</TableCell>
                   <TableCell>
-                    {renderProviderBadge(credential.credential_info?.custom_llm_provider as string || '-')}
+                    {renderProviderBadge((credential.credential_info?.custom_llm_provider as string) || "-")}
                   </TableCell>
-                  <TableCell>{credential.credential_info?.description || '-'}</TableCell>
+                  <TableCell>{credential.credential_info?.description || "-"}</TableCell>
                   <TableCell>
                     <Button
                       icon={PencilAltIcon}
-                      variant="light" 
+                      variant="light"
                       size="sm"
                       onClick={() => {
                         setSelectedCredential(credential);
@@ -189,14 +184,9 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
           </TableBody>
         </Table>
       </Card>
-      <Button 
-        onClick={() => setIsAddModalOpen(true)}
-        className="mt-4"
-      >
+      <Button onClick={() => setIsAddModalOpen(true)} className="mt-4">
         Add Credential
       </Button>
-
-      
 
       {isAddModalOpen && (
         <AddCredentialsTab
@@ -210,7 +200,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
         />
       )}
       {isUpdateModalOpen && (
-        <AddCredentialsTab 
+        <AddCredentialsTab
           onAddCredential={handleAddCredential}
           isVisible={isUpdateModalOpen}
           existingCredential={selectedCredential}
@@ -220,7 +210,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
           addOrEdit="edit"
         />
       )}
-      
+
       {credentialToDelete && (
         <CredentialDeleteModal
           isVisible={true}

@@ -686,3 +686,111 @@ def test_gemini_25_explicit_caching_cost_direct_usage():
     print(f"Expected actual cost: {expected_actual_cost}")
 
     assert expected_actual_cost == total_cost
+
+
+def test_cost_discount_vertex_ai():
+    """
+    Test that cost discount is applied correctly for Vertex AI provider
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Usage
+
+    # Save original config
+    original_discount_config = litellm.cost_discount_config.copy()
+    
+    # Create mock response
+    response = ModelResponse(
+        id="test-id",
+        choices=[],
+        created=1234567890,
+        model="gemini-pro",
+        object="chat.completion",
+        usage=Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150
+        )
+    )
+    
+    # Calculate cost without discount
+    litellm.cost_discount_config = {}
+    cost_without_discount = completion_cost(
+        completion_response=response,
+        model="vertex_ai/gemini-pro",
+        custom_llm_provider="vertex_ai",
+    )
+    
+    # Set 5% discount for vertex_ai
+    litellm.cost_discount_config = {"vertex_ai": 0.05}
+    
+    # Calculate cost with discount
+    cost_with_discount = completion_cost(
+        completion_response=response,
+        model="vertex_ai/gemini-pro",
+        custom_llm_provider="vertex_ai",
+    )
+    
+    # Restore original config
+    litellm.cost_discount_config = original_discount_config
+    
+    # Verify discount is applied (5% off means 95% of original cost)
+    expected_cost = cost_without_discount * 0.95
+    assert cost_with_discount == pytest.approx(expected_cost, rel=1e-9)
+    
+    print(f"✓ Cost discount test passed:")
+    print(f"  - Original cost: ${cost_without_discount:.6f}")
+    print(f"  - Discounted cost (5% off): ${cost_with_discount:.6f}")
+    print(f"  - Savings: ${cost_without_discount - cost_with_discount:.6f}")
+
+
+def test_cost_discount_not_applied_to_other_providers():
+    """
+    Test that cost discount only applies to configured providers
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Usage
+
+    # Save original config
+    original_discount_config = litellm.cost_discount_config.copy()
+    
+    # Create mock response for OpenAI
+    response = ModelResponse(
+        id="test-id",
+        choices=[],
+        created=1234567890,
+        model="gpt-4",
+        object="chat.completion",
+        usage=Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150
+        )
+    )
+    
+    # Set discount only for vertex_ai (not openai)
+    litellm.cost_discount_config = {"vertex_ai": 0.05}
+    
+    # Calculate cost for OpenAI - should NOT have discount applied
+    cost_with_selective_discount = completion_cost(
+        completion_response=response,
+        model="gpt-4",
+        custom_llm_provider="openai",
+    )
+    
+    # Clear discount config
+    litellm.cost_discount_config = {}
+    cost_without_discount = completion_cost(
+        completion_response=response,
+        model="gpt-4",
+        custom_llm_provider="openai",
+    )
+    
+    # Restore original config
+    litellm.cost_discount_config = original_discount_config
+    
+    # Costs should be the same (no discount applied to OpenAI)
+    assert cost_with_selective_discount == cost_without_discount
+    
+    print(f"✓ Selective discount test passed:")
+    print(f"  - OpenAI cost (no discount configured): ${cost_without_discount:.6f}")
+    print(f"  - Cost remains unchanged: ${cost_with_selective_discount:.6f}")

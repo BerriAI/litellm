@@ -1,19 +1,5 @@
-import React, { useState } from "react";
-import { 
-  Card, 
-  Form, 
-  Button, 
-  Tooltip, 
-  Typography, 
-  Select as AntdSelect, 
-  Input, 
-  Switch, 
-  Modal 
-} from "antd";
-import type { UploadProps } from "antd/es/upload";
-import { Providers, providerLogoMap } from "../provider_info_helpers";
-import type { FormInstance } from "antd";
-import ProviderSpecificFields from "../add_model/provider_specific_fields";
+import React from "react";
+import { Form, Button, Tooltip, Typography, Modal } from "antd";
 import { TextInput } from "@tremor/react";
 import { CredentialItem } from "../networking";
 const { Title, Link } = Typography;
@@ -31,7 +17,7 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
   onCancel,
   onAddCredential,
   existingCredential,
-  setIsCredentialModalOpen
+  setIsCredentialModalOpen,
 }) => {
   const [form] = Form.useForm();
 
@@ -54,11 +40,7 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
       footer={null}
       width={600}
     >
-      <Form
-        form={form}
-        onFinish={handleSubmit}
-        layout="vertical"
-      >
+      <Form form={form} onFinish={handleSubmit} layout="vertical">
         {/* Credential Name */}
         <Form.Item
           label="Credential Name:"
@@ -66,49 +48,33 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
           rules={[{ required: true, message: "Credential name is required" }]}
           initialValue={existingCredential?.credential_name}
         >
-          <TextInput 
-            placeholder="Enter a friendly name for these credentials"
-          />
+          <TextInput placeholder="Enter a friendly name for these credentials" />
         </Form.Item>
 
         {/* Display Credential Values of existingCredential, don't allow user to edit. Credential values is a dictionary */}
         {Object.entries(existingCredential?.credential_values || {}).map(([key, value]) => (
-          <Form.Item
-            key={key}
-            label={key}
-            name={key}
-            initialValue={value}    
-          >
-            <TextInput 
-              placeholder={`Enter ${key}`}
-              disabled={true}
-            />
+          <Form.Item key={key} label={key} name={key} initialValue={value}>
+            <TextInput placeholder={`Enter ${key}`} disabled={true} />
           </Form.Item>
         ))}
 
         {/* Modal Footer */}
         <div className="flex justify-between items-center">
           <Tooltip title="Get help on our github">
-            <Link href="https://github.com/BerriAI/litellm/issues">
-              Need Help?
-            </Link>
+            <Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Link>
           </Tooltip>
-          
+
           <div>
-            <Button 
+            <Button
               onClick={() => {
                 onCancel();
                 form.resetFields();
-              }} 
+              }}
               style={{ marginRight: 10 }}
             >
               Cancel
             </Button>
-            <Button 
-              htmlType="submit"
-            >
-              Reuse Credentials
-            </Button>
+            <Button htmlType="submit">Reuse Credentials</Button>
           </div>
         </div>
       </Form>
