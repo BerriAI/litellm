@@ -560,7 +560,7 @@ class AgentCoreConfig(BaseAWSLLM):
                                 "data": parsed["data"]
                             })
                         except Exception as e:
-                            litellm.verbose_logger.warning(
+                            litellm.verbose_logger.error(
                                 f"Invalid video format: {e}. "
                                 f"URL: {url[:100]}{'...' if len(url) > 100 else ''}"
                             )
@@ -582,7 +582,7 @@ class AgentCoreConfig(BaseAWSLLM):
                                 "data": audio_data
                             })
                     else:
-                        litellm.verbose_logger.warning(
+                        litellm.verbose_logger.error(
                             f"Unexpected audio format: {element}. Skipping audio."
                         )
                         continue
@@ -606,7 +606,7 @@ class AgentCoreConfig(BaseAWSLLM):
                                 "data": doc_data
                             })
                     else:
-                        litellm.verbose_logger.warning(
+                        litellm.verbose_logger.error(
                             f"Unexpected document format: {element}. Skipping document."
                         )
                         continue
@@ -903,7 +903,12 @@ class AgentCoreConfig(BaseAWSLLM):
         if model_region:
             aws_region = model_region
         else:
-            aws_region = kwargs.get("aws_region") or kwargs.get("aws_region_name") or os.getenv("AWS_REGION", "us-east-1")
+            aws_region = kwargs.get("aws_region") or kwargs.get("aws_region_name") or os.getenv("AWS_REGION")
+            if not aws_region:
+                raise BedrockError(
+                    status_code=400,
+                    message="AgentCore: aws_region_name is required when not using full ARN. Provide via aws_region_name parameter or AWS_REGION environment variable."
+                )
 
         # Create boto3 client with comprehensive credential management
         try:
@@ -1001,8 +1006,9 @@ class AgentCoreConfig(BaseAWSLLM):
         if runtime_session_id:
             invoke_params["runtimeSessionId"] = runtime_session_id
 
-        # Add qualifier (defaults to "DEFAULT" if not provided)
-        invoke_params["qualifier"] = qualifier if qualifier else "DEFAULT"
+        # Add qualifier only if provided (no default)
+        if qualifier:
+            invoke_params["qualifier"] = qualifier
 
         return invoke_params, runtime_session_id
 
