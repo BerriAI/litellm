@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 from unittest.mock import MagicMock, call, patch
@@ -10,6 +11,7 @@ sys.path.insert(
 
 import litellm
 from litellm.llms.openai.common_utils import BaseOpenAILLM
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 # Test parameters for different API functions
 API_FUNCTION_PARAMS = [
@@ -129,3 +131,36 @@ async def test_openai_client_reuse(function_name, is_async, args):
 
         # Verify we tried to get from cache 10 times (once per request)
         assert mock_get_cache.call_count == 10, "Should check cache for each request"
+
+
+def test_openai_transform_request_should_not_mutate_messages_in_place():
+    """Demonstrate that OpenAI transform presently mutates the caller's messages."""
+
+    config = OpenAIGPTConfig()
+    original_messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this meal."},
+                {
+                    "type": "image_url",
+                    "image_url": "data:image/png;base64,AAAABBBB",
+                },
+            ],
+        }
+    ]
+
+    # Simulate the payload the router hands to the provider
+    routed_messages = copy.deepcopy(original_messages)
+
+    config.transform_request(
+        model="gpt-4.1-mini",
+        messages=routed_messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    # Expectation: provider adapters should not mutate caller-owned structures.
+    # Assertion intentionally fails today, documenting the regression the user observed.
+    assert routed_messages == original_messages
