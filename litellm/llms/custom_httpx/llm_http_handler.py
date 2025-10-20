@@ -4418,9 +4418,9 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
 
-        # Extract SSML body and updated headers from request_data
-        ssml_body = request_data.get("ssml_body", input)
-        headers = request_data.get("headers", headers)
+        # Merge provider-specific headers
+        if "headers" in request_data:
+            headers.update(request_data["headers"])
 
         ## LOGGING
         logging_obj.pre_call(
@@ -4434,12 +4434,25 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                data=ssml_body,
-                timeout=timeout,
-            )
+            # Determine request body type and send appropriately
+            if "dict_body" in request_data:
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=request_data["dict_body"],
+                    timeout=timeout,
+                )
+            elif "ssml_body" in request_data:
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=request_data["ssml_body"],
+                    timeout=timeout,
+                )
+            else:
+                raise ValueError(
+                    "No body found in request_data. Must provide one of: dict_body, ssml_body, text_body, binary_body"
+                )
 
         except Exception as e:
             raise self._handle_error(
@@ -4504,9 +4517,9 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
 
-        # Extract SSML body and updated headers from request_data
-        ssml_body = request_data.get("ssml_body", input)
-        headers = request_data.get("headers", headers)
+        # Merge provider-specific headers
+        if "headers" in request_data:
+            headers.update(request_data["headers"])
 
         ## LOGGING
         logging_obj.pre_call(
@@ -4520,12 +4533,25 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = await async_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                data=ssml_body,
-                timeout=timeout,
-            )
+            # Determine request body type and send appropriately
+            if "dict_body" in request_data:
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=request_data["dict_body"],
+                    timeout=timeout,
+                )
+            elif "ssml_body" in request_data:
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=request_data["ssml_body"],
+                    timeout=timeout,
+                )
+            else:
+                raise ValueError(
+                    "No body found in request_data. Must provide one of: dict_body, ssml_body, text_body, binary_body"
+                )
 
         except Exception as e:
             raise self._handle_error(
