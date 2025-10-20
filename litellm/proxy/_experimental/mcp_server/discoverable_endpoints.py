@@ -98,6 +98,7 @@ async def authorize(
         "redirect_uri": f"{request_base_url}/callback",
         "scope": " ".join(mcp_server.scopes),
         "state": encoded_state,
+        "response_type": "code",
     }
     return RedirectResponse(f"{mcp_server.authorization_url}?{urlencode(params)}")
 
