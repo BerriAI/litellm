@@ -88,10 +88,12 @@ class SAMLAuthenticationHandler:
             )
 
         # Optional settings with defaults
-        saml_entity_id = os.getenv("SAML_ENTITY_ID", f"{proxy_base_url}/sso/saml/metadata")
+        saml_entity_id = os.getenv(
+            "SAML_ENTITY_ID", f"{proxy_base_url}/sso/saml/metadata"
+        )
         saml_name_id_format = os.getenv(
             "SAML_NAME_ID_FORMAT",
-            "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
+            "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
         )
 
         # optional service provider (SP) certificate and key for signing/encryption
@@ -110,11 +112,11 @@ class SAMLAuthenticationHandler:
                 "entityId": saml_entity_id,
                 "assertionConsumerService": {
                     "url": acs_url,
-                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST",
                 },
                 "singleLogoutService": {
                     "url": f"{proxy_base_url}/sso/saml/sls",
-                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect",
                 },
                 "NameIDFormat": saml_name_id_format,
                 "x509cert": saml_sp_x509_cert,
@@ -124,11 +126,11 @@ class SAMLAuthenticationHandler:
                 "entityId": saml_idp_entity_id,
                 "singleSignOnService": {
                     "url": saml_idp_sso_url,
-                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect",
                 },
                 "singleLogoutService": {
                     "url": os.getenv("SAML_IDP_SLO_URL", ""),
-                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect",
                 },
                 "x509cert": saml_idp_x509_cert,
             },
@@ -148,7 +150,7 @@ class SAMLAuthenticationHandler:
                 "requestedAuthnContextComparison": "exact",
                 "signatureAlgorithm": "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
                 "digestAlgorithm": "http://www.w3.org/2001/04/xmlenc#sha256",
-            }
+            },
         }
 
         verbose_proxy_logger.debug(
@@ -169,7 +171,8 @@ class SAMLAuthenticationHandler:
         return {
             "https": "on" if request.url.scheme == "https" else "off",
             "http_host": request.url.hostname,
-            "server_port": request.url.port or (443 if request.url.scheme == "https" else 80),
+            "server_port": request.url.port
+            or (443 if request.url.scheme == "https" else 80),
             "script_name": request.url.path,
             "get_data": dict(request.query_params),
             "post_data": {},
@@ -232,7 +235,9 @@ class SAMLAuthenticationHandler:
             )
 
         if not auth.is_authenticated():
-            verbose_proxy_logger.error("SAML authentication failed - User not authenticated")
+            verbose_proxy_logger.error(
+                "SAML authentication failed - User not authenticated"
+            )
             raise ProxyException(
                 message="SAML authentication failed: User not authenticated",
                 type=ProxyErrorTypes.auth_error,
@@ -261,7 +266,9 @@ class SAMLAuthenticationHandler:
         user_email_attr = os.getenv("SAML_USER_EMAIL_ATTRIBUTE", "email")
         user_first_name_attr = os.getenv("SAML_USER_FIRST_NAME_ATTRIBUTE", "firstName")
         user_last_name_attr = os.getenv("SAML_USER_LAST_NAME_ATTRIBUTE", "lastName")
-        user_display_name_attr = os.getenv("SAML_USER_DISPLAY_NAME_ATTRIBUTE", "displayName")
+        user_display_name_attr = os.getenv(
+            "SAML_USER_DISPLAY_NAME_ATTRIBUTE", "displayName"
+        )
 
         def get_attr_value(attr_name: str) -> Optional[str]:
             """Get first value from SAML attribute list, or None if not present"""
@@ -310,7 +317,9 @@ class SAMLAuthenticationHandler:
         """
         # Create a dummy request for settings generation
         request_data = {
-            "https": "on" if os.getenv("PROXY_BASE_URL", "").startswith("https") else "off",
+            "https": "on"
+            if os.getenv("PROXY_BASE_URL", "").startswith("https")
+            else "off",
             "http_host": "localhost",
             "server_port": 443,
             "script_name": "/",
@@ -344,7 +353,7 @@ class SAMLAuthenticationHandler:
             True if SAML is configured, False otherwise
         """
         return bool(
-            os.getenv("SAML_IDP_ENTITY_ID") and
-            os.getenv("SAML_IDP_SSO_URL") and
-            os.getenv("SAML_IDP_X509_CERT")
+            os.getenv("SAML_IDP_ENTITY_ID")
+            and os.getenv("SAML_IDP_SSO_URL")
+            and os.getenv("SAML_IDP_X509_CERT")
         )

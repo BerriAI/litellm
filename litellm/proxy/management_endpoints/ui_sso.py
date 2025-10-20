@@ -220,7 +220,9 @@ async def google_login(
     ):
         verbose_proxy_logger.info(f"Redirecting to SSO login for {redirect_url}")
         if saml_enabled:
-            saml_login_url = SAMLAuthenticationHandler.get_login_url(request, state=cli_state)
+            saml_login_url = SAMLAuthenticationHandler.get_login_url(
+                request, state=cli_state
+            )
             return RedirectResponse(url=saml_login_url)
         else:
             return await SSOAuthenticationHandler.get_sso_login_redirect(
@@ -890,9 +892,9 @@ async def insert_sso_user(
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            user_defined_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -1090,7 +1092,7 @@ class SSOAuthenticationHandler:
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
         )
-    
+
     @staticmethod
     async def get_generic_sso_redirect_response(
         generic_sso: Any,
@@ -1103,16 +1105,18 @@ class SSOAuthenticationHandler:
         from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
         from litellm.proxy.proxy_server import user_api_key_cache
+
         with generic_sso:
             # TODO: state should be a random string and added to the user session with cookie
             # or a cryptographicly signed state that we can verify stateless
             # For simplification we are using a static state, this is not perfect but some
             # SSO providers do not allow stateless verification
-            redirect_params, code_verifier = (
-                SSOAuthenticationHandler._get_generic_sso_redirect_params(
-                    state=state,
-                    generic_authorization_endpoint=generic_authorization_endpoint,
-                )
+            (
+                redirect_params,
+                code_verifier,
+            ) = SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                state=state,
+                generic_authorization_endpoint=generic_authorization_endpoint,
             )
 
             # Separate PKCE params from state params (fastapi-sso doesn't accept code_challenge)
@@ -1129,7 +1133,6 @@ class SSOAuthenticationHandler:
 
             # If PKCE is enabled, add PKCE parameters to the redirect URL
             if code_verifier and "state" in redirect_params:
-
                 # Store code_verifier in cache (10 min TTL)
                 cache_key = f"pkce_verifier:{redirect_params['state']}"
                 user_api_key_cache.set_cache(
@@ -1142,22 +1145,24 @@ class SSOAuthenticationHandler:
                 if pkce_params:
                     parsed_url = urlparse(str(redirect_response.headers["location"]))
                     query_params = parse_qs(parsed_url.query)
-                    
+
                     # Add PKCE parameters
                     for key, value in pkce_params.items():
                         query_params[key] = [value]
-                    
+
                     # Reconstruct the URL with PKCE parameters
                     new_query = urlencode(query_params, doseq=True)
-                    new_url = urlunparse((
-                        parsed_url.scheme,
-                        parsed_url.netloc,
-                        parsed_url.path,
-                        parsed_url.params,
-                        new_query,
-                        parsed_url.fragment
-                    ))
-                    
+                    new_url = urlunparse(
+                        (
+                            parsed_url.scheme,
+                            parsed_url.netloc,
+                            parsed_url.path,
+                            parsed_url.params,
+                            new_query,
+                            parsed_url.fragment,
+                        )
+                    )
+
                     # Update the redirect response
                     redirect_response.headers["location"] = new_url
                     verbose_proxy_logger.debug(
@@ -1184,7 +1189,7 @@ class SSOAuthenticationHandler:
             generic_authorization_endpoint: Authorization endpoint URL
 
         Returns:
-            Tuple[dict, Optional[str]]: 
+            Tuple[dict, Optional[str]]:
                 - Redirect parameters for SSO login (may include PKCE params)
                 - code_verifier (if PKCE is enabled, None otherwise)
         """
@@ -1203,15 +1208,18 @@ class SSOAuthenticationHandler:
                 generic_authorization_endpoint
                 and "okta" in generic_authorization_endpoint
             ):
-                redirect_params["state"] = (
-                    uuid.uuid4().hex
-                )  # set state param for okta - required
+                redirect_params[
+                    "state"
+                ] = uuid.uuid4().hex  # set state param for okta - required
 
         # Handle PKCE (Proof Key for Code Exchange) if enabled
         # Set GENERIC_CLIENT_USE_PKCE=true to enable PKCE for enhanced OAuth security
         use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
         if use_pkce:
-            code_verifier, code_challenge = SSOAuthenticationHandler.generate_pkce_params()
+            (
+                code_verifier,
+                code_challenge,
+            ) = SSOAuthenticationHandler.generate_pkce_params()
             redirect_params["code_challenge"] = code_challenge
             redirect_params["code_challenge_method"] = "S256"
             verbose_proxy_logger.debug(
@@ -1704,11 +1712,10 @@ class SSOAuthenticationHandler:
         redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
         redirect_response.set_cookie(key="token", value=jwt_token)
         return redirect_response
-    
 
     @staticmethod
     def prepare_token_exchange_parameters(
-        request: Request, 
+        request: Request,
         generic_include_client_id: bool,
     ) -> dict:
         """
@@ -1723,50 +1730,54 @@ class SSOAuthenticationHandler:
         """
         # Prepare token exchange parameters
         token_params = {"include_client_id": generic_include_client_id}
-        
+
         # Retrieve PKCE code_verifier if PKCE was used in authorization
         query_params = dict(request.query_params)
         state = query_params.get("state")
         if state:
             from litellm.proxy.proxy_server import user_api_key_cache
-            
+
             cache_key = f"pkce_verifier:{state}"
             code_verifier = user_api_key_cache.get_cache(key=cache_key)
-            
+
             if code_verifier:
                 # Add code_verifier to token exchange parameters
                 token_params["code_verifier"] = code_verifier
                 verbose_proxy_logger.debug(
                     "PKCE code_verifier retrieved and will be included in token exchange"
                 )
-                
+
                 # Clean up the cache entry (single-use verifier)
                 user_api_key_cache.delete_cache(key=cache_key)
         return token_params
-    
 
     @staticmethod
     def generate_pkce_params() -> Tuple[str, str]:
         """
         Generate PKCE (Proof Key for Code Exchange) parameters for OAuth 2.0.
-        
+
         Returns:
             Tuple[str, str]: (code_verifier, code_challenge)
             - code_verifier: Random 43-128 character string (we use 43 for efficiency)
             - code_challenge: Base64-URL-encoded SHA256 hash of the code_verifier
-        
+
         Reference: https://datatracker.ietf.org/doc/html/rfc7636
         """
         # Generate a cryptographically random code_verifier (43 characters)
         # Using 32 random bytes which becomes 43 characters when base64-url-encoded
-        code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
-        
-        # Generate code_challenge using S256 method (SHA256)
-        code_challenge_bytes = hashlib.sha256(code_verifier.encode('utf-8')).digest()
-        code_challenge = base64.urlsafe_b64encode(code_challenge_bytes).decode('utf-8').rstrip('=')
-        
-        return code_verifier, code_challenge
+        code_verifier = (
+            base64.urlsafe_b64encode(secrets.token_bytes(32))
+            .decode("utf-8")
+            .rstrip("=")
+        )
 
+        # Generate code_challenge using S256 method (SHA256)
+        code_challenge_bytes = hashlib.sha256(code_verifier.encode("utf-8")).digest()
+        code_challenge = (
+            base64.urlsafe_b64encode(code_challenge_bytes).decode("utf-8").rstrip("=")
+        )
+
+        return code_verifier, code_challenge
 
 
 class MicrosoftSSOHandler:
@@ -1860,9 +1871,9 @@ class MicrosoftSSOHandler:
 
         # if user is trying to get the raw sso response for debugging, return the raw sso response
         if return_raw_sso_response:
-            original_msft_result[MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY] = (
-                user_team_ids
-            )
+            original_msft_result[
+                MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY
+            ] = user_team_ids
             original_msft_result["app_roles"] = app_roles
             return original_msft_result or {}
 
@@ -1979,9 +1990,9 @@ class MicrosoftSSOHandler:
 
             # Fetch user membership from Microsoft Graph API
             all_group_ids = []
-            next_link: Optional[str] = (
-                MicrosoftSSOHandler.graph_api_user_groups_endpoint
-            )
+            next_link: Optional[
+                str
+            ] = MicrosoftSSOHandler.graph_api_user_groups_endpoint
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 
@@ -2353,8 +2364,11 @@ async def debug_sso_callback(request: Request):
 
     return HTMLResponse(content=html_content)
 
+
 @router.post("/sso/saml/acs", tags=["experimental"], include_in_schema=False)
-@router.post("/saml/acs", tags=["experimental"], include_in_schema=False)  # alias for IdP compatibility
+@router.post(
+    "/saml/acs", tags=["experimental"], include_in_schema=False
+)  # alias for IdP compatibility
 async def saml_acs_callback(request: Request):
     """
     SAML Assertion Consumer Service (ACS) endpoint.
@@ -2374,21 +2388,25 @@ async def saml_acs_callback(request: Request):
 
     try:
         # Process SAML response and extract user information
-        verbose_proxy_logger.debug("Calling SAMLAuthenticationHandler.process_saml_response")
+        verbose_proxy_logger.debug(
+            "Calling SAMLAuthenticationHandler.process_saml_response"
+        )
         result = await SAMLAuthenticationHandler.process_saml_response(request)
-        verbose_proxy_logger.info(f"SAML response processed successfully for user: {result.email}")
+        verbose_proxy_logger.info(
+            f"SAML response processed successfully for user: {result.email}"
+        )
 
         # Check if this is a CLI login by looking at RelayState
         form_data = await request.form()
         relay_state = form_data.get("RelayState")
 
-        if relay_state and relay_state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
+        if relay_state and relay_state.startswith(
+            f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"
+        ):
             # Extract the key ID from the relay state
             key_id = relay_state.split(":", 1)[1]
 
-            verbose_proxy_logger.info(
-                f"CLI SSO callback detected for key: {key_id}"
-            )
+            verbose_proxy_logger.info(f"CLI SSO callback detected for key: {key_id}")
             return await cli_sso_callback(
                 request=request, key=key_id, existing_key=None, result=result
             )
