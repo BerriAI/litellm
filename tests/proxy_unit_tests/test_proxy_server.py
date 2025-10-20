@@ -2203,6 +2203,69 @@ async def test_get_ui_settings_spend_logs_threshold():
 
 
 @pytest.mark.asyncio
+async def test_get_ui_settings_api_reference_config():
+    """
+    Test that get_ui_settings correctly returns API_REFERENCE_BASE_URL and API_REFERENCE_MODEL
+    when the environment variables are set, for control plane setups.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import get_ui_settings
+    from litellm.proxy.proxy_server import proxy_state
+    from fastapi import Request
+
+    # Create a mock request
+    mock_request = Request(
+        scope={
+            "type": "http",
+            "headers": [],
+            "method": "GET",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "path": "/sso/get/ui_settings",
+            "query_string": b"",
+        }
+    )
+
+    # Initialize proxy state
+    proxy_state.set_proxy_state_variable("spend_logs_row_count", 0)
+
+    # Test case 1: API_REFERENCE_BASE_URL and API_REFERENCE_MODEL are set
+    os.environ["API_REFERENCE_BASE_URL"] = "https://data-plane.example.com"
+    os.environ["API_REFERENCE_MODEL"] = "gpt-4"
+    os.environ["PROXY_BASE_URL"] = "https://control-plane.example.com"
+
+    response = await get_ui_settings(mock_request)
+    print("response from get_ui_settings with API_REFERENCE settings", json.dumps(response, indent=4))
+    
+    assert response["API_REFERENCE_BASE_URL"] == "https://data-plane.example.com"
+    assert response["API_REFERENCE_MODEL"] == "gpt-4"
+    assert response["PROXY_BASE_URL"] == "https://control-plane.example.com"
+
+    # Test case 2: Only PROXY_BASE_URL is set (fallback case)
+    del os.environ["API_REFERENCE_BASE_URL"]
+    del os.environ["API_REFERENCE_MODEL"]
+    
+    response = await get_ui_settings(mock_request)
+    print("response from get_ui_settings without API_REFERENCE settings", json.dumps(response, indent=4))
+    
+    # When API_REFERENCE_BASE_URL is not set, it should fall back to PROXY_BASE_URL
+    assert response["API_REFERENCE_BASE_URL"] == "https://control-plane.example.com"
+    assert response["API_REFERENCE_MODEL"] is None
+
+    # Test case 3: Neither is set
+    del os.environ["PROXY_BASE_URL"]
+    
+    response = await get_ui_settings(mock_request)
+    print("response from get_ui_settings with no URLs set", json.dumps(response, indent=4))
+    
+    assert response["API_REFERENCE_BASE_URL"] is None
+    assert response["PROXY_BASE_URL"] is None
+    assert response["API_REFERENCE_MODEL"] is None
+
+    # Clean up
+    proxy_state.set_proxy_state_variable("spend_logs_row_count", 0)
+
+
+@pytest.mark.asyncio
 async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
     """
     Test that _run_background_health_check reflects changes to llm_model_list in each health check iteration.
