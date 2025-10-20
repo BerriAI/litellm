@@ -17,7 +17,6 @@ import os
 from typing import Dict, Optional
 
 from onelogin.saml2.auth import OneLogin_Saml2_Auth
-from onelogin.saml2.idp_metadata_parser import OneLogin_Saml2_IdPMetadataParser
 from onelogin.saml2.settings import OneLogin_Saml2_Settings
 
 from litellm._logging import verbose_proxy_logger
@@ -248,7 +247,6 @@ class SAMLAuthenticationHandler:
         # Extract user attributes from SAML assertion
         attributes = auth.get_attributes()
         name_id = auth.get_nameid()
-        session_index = auth.get_session_index()
 
         # Log what we received
         if attributes:
