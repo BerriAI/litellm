@@ -28,7 +28,6 @@ os.environ["SILICONFLOW_API_KEY"] = "your-api-key"
 - stream
 - stream_options
 - n
-- seed
 - frequency_penalty
 - presence_penalty
 - repetition_penalty
@@ -37,12 +36,8 @@ os.environ["SILICONFLOW_API_KEY"] = "your-api-key"
 - top_p
 - top_k
 - min_p
-- logit_bias
-- logprobs
-- top_logprobs
 - tools
 - response_format
-- separate_reasoning
 
 ## Sample Usage
 
