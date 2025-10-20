@@ -212,6 +212,7 @@ if MCP_AVAILABLE:
 
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
 
         try:
             data = await request.json()
@@ -221,6 +222,24 @@ if MCP_AVAILABLE:
                 user_api_key_dict=user_api_key_dict,
                 proxy_config=proxy_config,
             )
+            
+            # FIX: Extract MCP auth headers from request
+            # The UI sends bearer token in x-mcp-auth header, but it wasn't being extracted
+            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(request.headers)
+            mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(request.headers)
+            
+            verbose_logger.error(
+                f"[MCP DEBUG] REST endpoint extracted headers - "
+                f"has_mcp_auth_header: {mcp_auth_header is not None}, "
+                f"has_mcp_server_auth_headers: {mcp_server_auth_headers is not None}"
+            )
+            
+            # Add extracted headers to data
+            if mcp_auth_header:
+                data["mcp_auth_header"] = mcp_auth_header
+            if mcp_server_auth_headers:
+                data["mcp_server_auth_headers"] = mcp_server_auth_headers
+            
             return await call_mcp_tool(**data)
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
