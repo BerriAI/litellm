@@ -393,7 +393,11 @@ class AgentCoreConfig(BaseAWSLLM):
             Agent runtime ARN
         """
         # AgentCore ARN format: arn:aws:bedrock-agentcore:region:account:runtime/agent-name
-        account_id = self._get_account_id(region)
+        try:
+            account_id = self._get_account_id(region)
+        except Exception:
+            # Fall back to wildcard if STS call fails
+            account_id = "*"
         return f"arn:aws:bedrock-agentcore:{region}:{account_id}:runtime/{agent_name}"
 
     def _create_agentcore_client(self, region: str, **optional_params) -> boto3.client:
@@ -500,7 +504,6 @@ class AgentCoreConfig(BaseAWSLLM):
                 f"Unexpected error parsing image at index {len(media_items)}: "
                 f"{type(e).__name__}: {e}"
             )
-            raise
 
     def _process_video_element(
         self, element: Dict[str, Any], media_items: List[Dict[str, Any]]
@@ -974,8 +977,8 @@ class AgentCoreConfig(BaseAWSLLM):
         provided_arn = model_info["arn"]
         model_region = model_info["region"]
 
-        qualifier = model_info.get("qualifier") or optional_params.pop(
-            "qualifier", None
+        qualifier = optional_params.pop("qualifier", None) or model_info.get(
+            "qualifier"
         )
         runtime_session_id = optional_params.pop("runtime_session_id", None)
 
