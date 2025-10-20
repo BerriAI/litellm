@@ -6258,6 +6258,18 @@ def stream_chunk_builder(  # noqa: PLR0915
                 processor.get_combined_reasoning_content(reasoning_chunks)
             )
 
+        annotation_chunks = [
+            chunk
+            for chunk in chunks
+            if len(chunk["choices"]) > 0
+            and "annotations" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["annotations"] is not None
+        ]
+
+        if len(annotation_chunks) > 0:
+            annotations = annotation_chunks[0]["choices"][0]["delta"]["annotations"]
+            response["choices"][0]["message"]["annotations"] = annotations
+
         audio_chunks = [
             chunk
             for chunk in chunks
