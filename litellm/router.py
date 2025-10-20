@@ -2736,10 +2736,33 @@ class Router:
             )
             raise e
     
+    def _get_replacement_model_name(
+        self, kwargs: Dict[str, Any], litellm_model_name: str
+    ) -> str:
+        """
+        Get the replacement model name by stripping the provider prefix.
+        
+        e.g., "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0" 
+              -> "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        """
+        from litellm import get_llm_provider
+        
+        try:
+            # get_llm_provider returns (model_without_prefix, provider, api_key, api_base)
+            stripped_model_name, _, _, _ = get_llm_provider(
+                model=litellm_model_name,
+                custom_llm_provider=kwargs.get("custom_llm_provider"),
+                api_base=kwargs.get("api_base"),
+            )
+            return stripped_model_name
+        except Exception:
+            # If get_llm_provider fails, fall back to using model_name as-is
+            return litellm_model_name
+    
     def _add_deployment_model_to_endpoint_for_llm_passthrough_route(
         self, kwargs: Dict[str, Any], 
         model: str, 
-        model_name: str
+        litellm_model_name: str
     ) -> Dict[str, Any]:
         """
         Add the deployment model to the endpoint for LLM passthrough route.
@@ -2748,23 +2771,25 @@ class Router:
           it should be actually sent as /model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke
         """
         if "endpoint" in kwargs and kwargs["endpoint"]:
-            # For provider-specific endpoints, strip the provider prefix from model_name
-            # e.g., "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0" -> "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
-            from litellm import get_llm_provider
-            
-            try:
-                # get_llm_provider returns (model_without_prefix, provider, api_key, api_base)
-                stripped_model_name, _, _, _ = get_llm_provider(
-                    model=model_name,
-                    custom_llm_provider=kwargs.get("custom_llm_provider"),
-                    api_base=kwargs.get("api_base"),
-                )
-                replacement_model_name = stripped_model_name
-            except Exception:
-                # If get_llm_provider fails, fall back to using model_name as-is
-                replacement_model_name = model_name
-            
+            replacement_model_name = self._get_replacement_model_name(
+                kwargs=kwargs, litellm_model_name=litellm_model_name
+            )
             kwargs["endpoint"] = kwargs["endpoint"].replace(model, replacement_model_name)
+        return kwargs
+    
+    def _update_query_params_with_deployment(
+        self, kwargs: Dict[str, Any], model: str, litellm_model_name: str
+    ) -> Dict[str, Any]:
+        """
+        Update the query params with the deployment model.
+        """
+        if "query_params" in kwargs and kwargs["query_params"] and isinstance(kwargs["query_params"], dict):
+            replacement_model_name = self._get_replacement_model_name(
+                kwargs=kwargs, litellm_model_name=litellm_model_name
+            )
+            if "model" in kwargs["query_params"]:
+                kwargs["query_params"]["model"] = replacement_model_name
+
         return kwargs
 
     async def _ageneric_api_call_with_fallbacks_helper(
@@ -2798,7 +2823,9 @@ class Router:
             model_name = data["model"]
             self.total_calls[model_name] += 1
 
-            self._add_deployment_model_to_endpoint_for_llm_passthrough_route(kwargs=kwargs, model=model, model_name=model_name)
+            # Non chat completions endpoints sometimes maintain the model name in query_params or custom field, this handles that
+            self._add_deployment_model_to_endpoint_for_llm_passthrough_route(kwargs=kwargs, model=model, litellm_model_name=model_name)
+            self._update_query_params_with_deployment(kwargs=kwargs, model=model, litellm_model_name=model_name)
             ### get custom
             response = original_generic_function(
                 **{
