@@ -14,7 +14,7 @@ Flow:
 """
 
 import os
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from onelogin.saml2.auth import OneLogin_Saml2_Auth
 from onelogin.saml2.settings import OneLogin_Saml2_Settings
