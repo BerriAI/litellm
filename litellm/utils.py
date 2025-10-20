@@ -1115,11 +1115,15 @@ def client(original_function):  # noqa: PLR0915
 
         # Prints Exactly what was passed to litellm function - don't execute any logic here - it should just print
         print_args_passed_to_litellm(original_function, args, kwargs)
-        start_time = datetime.datetime.now()
-        result = None
+        
+        # Check if logging_obj was already created (e.g., by proxy with correct timing)
         logging_obj: Optional[LiteLLMLoggingObject] = kwargs.get(
             "litellm_logging_obj", None
         )
+        # Use existing start_time from logging_obj if available (includes proxy overhead),
+        # otherwise create new one
+        start_time = logging_obj.start_time if logging_obj is not None else datetime.datetime.now()
+        result = None
 
         # only set litellm_call_id if its not in kwargs
         if "litellm_call_id" not in kwargs:
@@ -1372,11 +1376,15 @@ def client(original_function):  # noqa: PLR0915
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):  # noqa: PLR0915
         print_args_passed_to_litellm(original_function, args, kwargs)
-        start_time = datetime.datetime.now()
-        result = None
+        
+        # Check if logging_obj was already created (e.g., by proxy with correct timing)
         logging_obj: Optional[LiteLLMLoggingObject] = kwargs.get(
             "litellm_logging_obj", None
         )
+        # Use existing start_time from logging_obj if available (includes proxy overhead),
+        # otherwise create new one
+        start_time = logging_obj.start_time if logging_obj is not None else datetime.datetime.now()
+        result = None
         _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
             original_function=original_function,
             request_kwargs=kwargs,

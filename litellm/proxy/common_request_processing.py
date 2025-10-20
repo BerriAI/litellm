@@ -320,7 +320,9 @@ class ProxyBaseLLMRequestProcessing:
         user_api_base: Optional[str] = None,
         model: Optional[str] = None,
     ) -> Tuple[dict, LiteLLMLoggingObj]:
-        start_time = datetime.now()  # start before calling guardrail hooks
+        # ALWAYS use proxy start time from middleware (includes auth overhead)
+        # This is set by ProxyTimingMiddleware before any processing
+        start_time = request.state.proxy_start_time
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
