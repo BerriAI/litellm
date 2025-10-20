@@ -800,12 +800,15 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_chat_message_to_response_output_text(
         message: Message,
     ) -> OutputText:
+        annotations = getattr(message, "annotations", None)
+        transformed_annotations = LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+            annotations=annotations
+        )
+        
         return OutputText(
             type="output_text",
             text=message.content,
-            annotations=LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
-                annotations=getattr(message, "annotations", None)
-            ),
+            annotations=transformed_annotations,
         )
 
     @staticmethod

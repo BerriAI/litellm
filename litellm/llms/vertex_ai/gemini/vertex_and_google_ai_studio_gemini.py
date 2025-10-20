@@ -54,6 +54,7 @@ from litellm.types.llms.openai import (
     ImageURLListItem,
     ImageURLObject,
     OpenAIChatCompletionFinishReason,
+    ChatCompletionAnnotation
 )
 from litellm.types.llms.vertex_ai import (
     VERTEX_CREDENTIALS_TYPES,
@@ -1298,6 +1299,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         from litellm.types.utils import Delta, StreamingChoices
 
+        annotations = chat_completion_message.get("annotations")  # type: ignore
         # create a streaming choice object
         choice = StreamingChoices(
             finish_reason=VertexGeminiConfig._check_finish_reason(
@@ -1310,6 +1312,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 tool_calls=tools,
                 images=image_response,
                 function_call=functions,
+                annotations=annotations,  # type: ignore
             ),
             logprobs=chat_completion_logprobs,
             enhancements=None,
@@ -1356,6 +1359,62 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             safety_ratings,
             citation_metadata,
         )
+
+    @staticmethod
+    def _convert_grounding_metadata_to_annotations(
+        grounding_metadata: List[dict],
+        content_text: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert Vertex AI grounding metadata to OpenAI-style annotations.
+        """
+
+        annotations: List[Dict[str, Any]] = []
+
+        
+        for metadata in grounding_metadata:
+            # Extract groundingSupports - these map text segments to sources
+            grounding_supports = metadata.get("groundingSupports", [])
+            grounding_chunks = metadata.get("groundingChunks", [])
+
+            # Build a map of chunk indices to web URIs
+            chunk_to_uri_map: Dict[int, Dict[str, str]] = {}
+            for idx, chunk in enumerate(grounding_chunks):
+                if "web" in chunk:
+                    web_data = chunk["web"]
+                    chunk_to_uri_map[idx] = {
+                        "url": web_data.get("uri", ""),
+                        "title": web_data.get("title", ""),
+                    }
+                    print(f"[VERTEX_ANNOTATION_DEBUG] Chunk {idx} -> URL: {web_data.get('uri', '')}, Title: {web_data.get('title', '')}")
+
+            # Process each grounding support to create annotations
+            for support in grounding_supports:
+                segment = support.get("segment", {})
+                start_index = segment.get("startIndex")
+                end_index = segment.get("endIndex")
+                text = segment.get("text", "")
+                
+                # Get the chunk indices for this support
+                chunk_indices = support.get("groundingChunkIndices", [])
+                
+                if start_index is not None and end_index is not None and chunk_indices:
+                    # Use the first chunk's URL for the annotation
+                    first_chunk_idx = chunk_indices[0]
+                    if first_chunk_idx in chunk_to_uri_map:
+                        uri_info = chunk_to_uri_map[first_chunk_idx]
+                        
+                        annotation: Dict[str, Any] = {
+                            "type": "url_citation",
+                            "url_citation": {
+                                "start_index": start_index,
+                                "end_index": end_index,
+                                "url": uri_info["url"],
+                                "title": uri_info["title"],
+                            }
+                        }
+                        annotations.append(annotation)
+        return annotations
 
     @staticmethod
     def _process_candidates(
@@ -1446,6 +1505,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
                 if reasoning_content is not None:
                     chat_completion_message["reasoning_content"] = reasoning_content
+
+                if candidate_grounding_metadata:
+                    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+                        grounding_metadata=candidate_grounding_metadata,
+                        content_text=content,
+                    )
+                    if annotations:
+                        chat_completion_message["annotations"] = annotations  # type: ignore
                 (
                     functions,
                     tools,
