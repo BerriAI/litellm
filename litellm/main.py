@@ -5690,8 +5690,7 @@ def speech(  # noqa: PLR0915
         optional_params["speed"] = speed  # type: ignore
     if instructions is not None:
         optional_params["instructions"] = instructions
-    if voice is not None:
-        optional_params["voice"] = voice
+
     if timeout is None:
         timeout = litellm.request_timeout
 
