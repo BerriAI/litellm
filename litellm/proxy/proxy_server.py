@@ -4065,7 +4065,7 @@ class ProxyStartupEvent:
         ### CHECK BATCH COST ###
         if llm_router is not None:
             try:
-                from enterprise.litellm_enterprise.proxy.common_utils.check_batch_cost import (
+                from litellm_enterprise.proxy.common_utils.check_batch_cost import (
                     CheckBatchCost,
                 )
 
