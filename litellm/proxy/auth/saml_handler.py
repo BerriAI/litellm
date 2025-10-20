@@ -314,7 +314,7 @@ class SAMLAuthenticationHandler:
             XML string containing SP metadata
         """
         # Create a dummy request for settings generation
-        request_data = {
+        request_data: Dict[str, Any] = {
             "https": "on"
             if os.getenv("PROXY_BASE_URL", "").startswith("https")
             else "off",

@@ -2301,7 +2301,7 @@ async def debug_sso_callback(request: Request):
     else:
         redirect_url += "/sso/debug/callback"
 
-    result = None
+    result: Optional[Union[CustomOpenID, OpenID, dict]] = None
     if saml_enabled:
         # Handle SAML POST callback
         result = await SAMLAuthenticationHandler.process_saml_response(request)
@@ -2399,8 +2399,10 @@ async def saml_acs_callback(request: Request):
         form_data = await request.form()
         relay_state = form_data.get("RelayState")
 
-        if relay_state and relay_state.startswith(
-            f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"
+        if (
+            relay_state
+            and isinstance(relay_state, str)
+            and relay_state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:")
         ):
             # Extract the key ID from the relay state
             key_id = relay_state.split(":", 1)[1]
