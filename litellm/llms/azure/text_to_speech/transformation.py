@@ -14,7 +14,7 @@ from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
 )
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret_str
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -68,6 +68,8 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         extra_headers: Optional[Dict[str, Any]],
         base_llm_http_handler: Any,
         aspeech: bool,
+        api_base: Optional[str],
+        api_key: Optional[str],
         **kwargs: Any,
     ) -> Union[
         "HttpxBinaryResponseContent",
@@ -83,25 +85,27 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         """
         # Resolve api_base from multiple sources
         api_base = (
-            litellm_params_dict.get("api_base")
+            api_base
+            or litellm_params_dict.get("api_base")
             or litellm.api_base
-            or get_secret("AZURE_API_BASE")
+            or get_secret_str("AZURE_API_BASE")
         )
         
         # Resolve api_key from multiple sources (Azure-specific)
         api_key = (
-            litellm_params_dict.get("api_key")
+            api_key
+            or litellm_params_dict.get("api_key")
             or litellm.api_key
             or litellm.azure_key
-            or get_secret("AZURE_OPENAI_API_KEY")
-            or get_secret("AZURE_API_KEY")
+            or get_secret_str("AZURE_OPENAI_API_KEY")
+            or get_secret_str("AZURE_API_KEY")
         )
         
         # Get Azure AD token if needed
         extra_body_token = optional_params.get("extra_body", {}).pop(
             "azure_ad_token", None
         )
-        secret_token = get_secret("AZURE_AD_TOKEN")
+        secret_token = get_secret_str("AZURE_AD_TOKEN")
         azure_ad_token: Optional[str] = (
             extra_body_token if isinstance(extra_body_token, str) else None
         ) or (secret_token if isinstance(secret_token, str) else None)

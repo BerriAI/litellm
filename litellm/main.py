@@ -5814,6 +5814,8 @@ def speech(  # noqa: PLR0915
                 extra_headers=extra_headers,
                 base_llm_http_handler=base_llm_http_handler,
                 aspeech=aspeech or False,
+                api_base=api_base,
+                api_key=api_key,
                 **kwargs,
             )
         else:
