@@ -25,7 +25,7 @@ os.environ["COHERE_API_KEY"] = "cohere key"
 
 # cohere v1 call
 response = completion(
-    model="command-r", 
+    model="command-a-03-2025", 
     messages = [{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -59,7 +59,7 @@ os.environ["COHERE_API_KEY"] = "cohere key"
 
 # cohere v1 streaming
 response = completion(
-    model="command-r", 
+    model="command-a-03-2025", 
     messages = [{ "content": "Hello, how are you?","role": "user"}],
     stream=True
 )
@@ -115,9 +115,9 @@ model_list:
 **For Cohere v2 models:**
 ```yaml showLineNumbers
 model_list:
-  - model_name: command-r-plus-v2
+  - model_name: command-a-03-2025-v2
     litellm_params:
-      model: cohere_chat/v2/command-r-plus
+      model: cohere_chat/v2/command-a-03-2025
       api_key: "os.environ/COHERE_API_KEY"
 ```
 
@@ -154,7 +154,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --header 'Authorization: Bearer <your-litellm-api-key>' \
 --data ' {
-      "model": "command-r-plus-v2",
+      "model": "command-a-03-2025-v2",
       "messages": [
         {
           "role": "user",
@@ -195,7 +195,7 @@ client = openai.OpenAI(
 )
 
 # request sent to cohere v2 model
-response = client.chat.completions.create(model="command-r-plus-v2", messages = [
+response = client.chat.completions.create(model="command-a-03-2025-v2", messages = [
     {
         "role": "user",
         "content": "this is a test request, write a short poem"
