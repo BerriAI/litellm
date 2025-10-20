@@ -51,6 +51,10 @@ The admin instance handles all management operations and provides the UI.
 DISABLE_LLM_API_ENDPOINTS=true      # LLM APIs disabled
 DATABASE_URL=postgresql://user:pass@global-db:5432/litellm
 LITELLM_MASTER_KEY=your-master-key
+
+# Configure API Reference page to show data plane URL
+API_REFERENCE_BASE_URL=https://us.company.com  # Data plane URL to display in API Reference
+API_REFERENCE_MODEL=gpt-4                       # Optional: Default model to show in examples
 ```
 
 ### Worker Instance Configuration
@@ -162,6 +166,42 @@ DISABLE_LLM_API_ENDPOINTS=true
 - `/team/*` - Team management
 - `/config/*` - Configuration updates
 - All other administrative endpoints
+
+
+### `API_REFERENCE_BASE_URL`
+
+:::info
+
+✨ This is useful for Control Plane setups.
+
+:::
+
+Overrides the URL displayed on the API Reference page in the admin UI.
+
+- **Default**: Uses `PROXY_BASE_URL` value
+- **Control Plane Use Case**: Set to your data plane URL
+
+```bash
+# Admin instance (control plane)
+PROXY_BASE_URL=https://admin.company.com
+API_REFERENCE_BASE_URL=https://us.company.com  # Data plane URL for LLM requests
+```
+
+**Effect**: The API Reference page will show code examples using `https://us.company.com` instead of the control plane URL.
+
+
+### `API_REFERENCE_MODEL`
+
+Overrides the model name displayed in API Reference code examples.
+
+- **Default**: `gpt-3.5-turbo`
+- **Control Plane Use Case**: Set to your preferred model name
+
+```bash
+API_REFERENCE_MODEL=gpt-4
+```
+
+**Effect**: The API Reference code examples will show `model="gpt-4"` instead of the default model.
 
 
 ## Usage Patterns
