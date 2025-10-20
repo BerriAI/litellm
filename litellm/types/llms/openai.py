@@ -43,9 +43,7 @@ from openai.types.responses.response import (
 
 # Handle OpenAI SDK version compatibility for Text type
 try:
-    from openai.types.responses.response_create_params import (
-        Text as ResponseText,  # type: ignore
-    )
+    from openai.types.responses.response_create_params import ( Text as ResponseText ) # type: ignore[attr-defined] # fmt: skip # isort: skip
 except (ImportError, AttributeError):
     # Fall back to the concrete config type available in all SDK versions
     from openai.types.responses.response_text_config_param import (
@@ -676,7 +674,7 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
 
 class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total=False):
     cache_control: ChatCompletionCachedContent
-    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]]
+    thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]]
 
 
 class ChatCompletionToolMessage(TypedDict):
@@ -989,6 +987,9 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     prompt_cache_key: Optional[str]
     stream_options: Optional[dict]
     top_logprobs: Optional[int]
+    partial_images: Optional[
+        int
+    ]  # Number of partial images to generate (1-3) for streaming image generation
 
 
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
@@ -1030,6 +1031,9 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     total_tokens: int
     """The total number of tokens used."""
 
+    cost: Optional[float] = None
+    """The cost of the request."""
+
     model_config = {"extra": "allow"}
 
 
@@ -1046,11 +1050,13 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
         List[Union[ResponseOutputItem, Dict]],
         List[Union[GenericResponseOutputItem, OutputFunctionToolCall]],
     ]
-    parallel_tool_calls: bool
+    parallel_tool_calls: Optional[bool] = None
     temperature: Optional[float] = None
-    tool_choice: ToolChoice
-    tools: Union[List[Tool], List[ResponseFunctionToolCall], List[Dict[str, Any]]]
-    top_p: Optional[float]
+    tool_choice: Optional[ToolChoice] = None
+    tools: Optional[
+        Union[List[Tool], List[ResponseFunctionToolCall], List[Dict[str, Any]]]
+    ] = None
+    top_p: Optional[float] = None
     max_output_tokens: Optional[int] = None
     previous_response_id: Optional[str] = None
     reasoning: Optional[Reasoning] = None
@@ -1123,6 +1129,9 @@ class ResponsesAPIStreamEvents(str, Enum):
     MCP_CALL_COMPLETED = "response.mcp_call.completed"
     MCP_CALL_FAILED = "response.mcp_call.failed"
 
+    # Image generation events
+    IMAGE_GENERATION_PARTIAL_IMAGE = "image_generation.partial_image"
+
     # Error event
     ERROR = "error"
 
@@ -1170,13 +1179,27 @@ class ReasoningSummaryTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
 class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     output_index: int
-    item: Optional[dict]
+    item: Optional[BaseLiteLLMOpenAIResponseObject]
 
 
 class OutputItemDoneEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
     output_index: int
-    item: dict
+    sequence_number: int = 1
+    item: BaseLiteLLMOpenAIResponseObject
+
+
+class OpenAIChatCompletionLogprobsContentTopLogprobs(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+
+
+class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+    top_logprobs: List[OpenAIChatCompletionLogprobsContentTopLogprobs]
 
 
 class ContentPartAddedEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1184,7 +1207,31 @@ class ContentPartAddedEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     content_index: int
-    part: dict
+    part: BaseLiteLLMOpenAIResponseObject
+
+
+class ContentPartDonePartOutputText(BaseLiteLLMOpenAIResponseObject):
+    type: Literal["output_text"]
+    text: str
+    annotations: List[BaseLiteLLMOpenAIResponseObject]
+    logprobs: Optional[List[OpenAIChatCompletionLogprobsContent]]
+
+
+class ContentPartDonePartRefusal(BaseLiteLLMOpenAIResponseObject):
+    type: Literal["refusal"]
+    refusal: str
+
+
+class ContentPartDonePartReasoningText(BaseLiteLLMOpenAIResponseObject):
+    type: Literal["reasoning_text"]
+    reasoning: str
+
+
+PART_UNION_TYPES = Union[
+    ContentPartDonePartOutputText,
+    ContentPartDonePartRefusal,
+    ContentPartDonePartReasoningText,
+]
 
 
 class ContentPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1192,7 +1239,7 @@ class ContentPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     content_index: int
-    part: dict
+    part: PART_UNION_TYPES
 
 
 class OutputTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1308,7 +1355,7 @@ class MCPListToolsFailedEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
 
 
-# MCP Call Events  
+# MCP Call Events
 class MCPCallInProgressEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS]
     sequence_number: int
@@ -1344,6 +1391,12 @@ class MCPCallFailedEvent(BaseLiteLLMOpenAIResponseObject):
     sequence_number: int
     item_id: str
     output_index: int
+
+
+class ImageGenerationPartialImageEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE]
+    partial_image_index: int
+    b64_json: str
 
 
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1394,8 +1447,10 @@ ResponsesAPIStreamingResponse = Annotated[
         MCPCallArgumentsDoneEvent,
         MCPCallCompletedEvent,
         MCPCallFailedEvent,
+        ImageGenerationPartialImageEvent,
         ErrorEvent,
         GenericEvent,
+        BaseLiteLLMOpenAIResponseObject,
     ],
     Discriminator("type"),
 ]
@@ -1712,19 +1767,6 @@ class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
-
-
-class OpenAIChatCompletionLogprobsContentTopLogprobs(TypedDict, total=False):
-    bytes: List
-    logprob: Required[float]
-    token: Required[str]
-
-
-class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
-    bytes: List
-    logprob: Required[float]
-    token: Required[str]
-    top_logprobs: List[OpenAIChatCompletionLogprobsContentTopLogprobs]
 
 
 class OpenAIChatCompletionLogprobs(TypedDict, total=False):

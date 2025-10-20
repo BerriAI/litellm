@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --turbo",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
     "test": "vitest",
-    "test:watch": "vitest -w"
+    "test:watch": "vitest -w",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.54.0",
@@ -36,7 +38,7 @@
     "react-copy-to-clipboard": "^5.1.0",
     "react-dom": "^18",
     "react-markdown": "^9.0.1",
-    "react-syntax-highlighter": "^15.6.1",
+    "react-syntax-highlighter": "^15.6.6",
     "tailwind-merge": "^3.2.0",
     "uuid": "^11.1.0"
   },
@@ -53,11 +55,14 @@
     "@types/react-dom": "^18",
     "@types/react-syntax-highlighter": "^15.5.11",
     "@types/uuid": "^10.0.0",
+    "@vitejs/plugin-react": "^5.0.4",
     "@vitest/coverage-v8": "^3.2.4",
     "@vitest/ui": "^3.2.4",
     "autoprefixer": "^10.4.17",
     "eslint": "^8",
     "eslint-config-next": "14.2.32",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-unused-imports": "^4.2.0",
     "jsdom": "^27.0.0",
     "postcss": "^8.4.33",
     "prettier": "3.2.5",

@@ -18,6 +18,8 @@ from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
+    ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicMessageValues,
     AllAnthropicToolsValues,
     AnthropicCodeExecutionTool,
@@ -50,7 +52,10 @@ from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
 )
 from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
+from litellm.types.utils import (
+    PromptTokensDetailsWrapper,
+    ServerToolUse,
+)
 from litellm.utils import (
     ModelResponse,
     Usage,
@@ -68,9 +73,6 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
-
-
-ANTHROPIC_HOSTED_TOOLS = ["web_search", "bash", "text_editor", "code_execution"]
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
@@ -639,6 +641,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
             )
         return tools
+    
+    def update_headers_with_optional_anthropic_beta(self, headers: dict, optional_params: dict) -> dict:
+        """Update headers with optional anthropic beta."""
+        _tools = optional_params.get("tools", [])
+        for tool in _tools:
+            if tool.get("type", None) and tool.get("type").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_FETCH.value):
+                headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value
+        return headers
 
     def transform_request(
         self,
@@ -674,6 +684,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     model="",
                     llm_provider="anthropic",
                 )
+
+        headers = self.update_headers_with_optional_anthropic_beta(headers=headers, optional_params=optional_params)
 
         # Separate system prompt from rest of message
         anthropic_system_message_list = self.translate_system_message(messages=messages)
@@ -804,7 +816,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if content.get("citations") is not None:
                 if citations is None:
                     citations = []
-                citations.append(content["citations"])
+                citations.append(
+                    [
+                        {
+                            **citation,
+                            "supported_text": content.get("text", ""),
+                        }
+                        for citation in content["citations"]
+                    ]
+                )
         if thinking_blocks is not None:
             reasoning_content = ""
             for block in thinking_blocks:
@@ -858,7 +878,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
-            cache_creation_tokens=cache_read_input_tokens,
+            cache_creation_tokens=cache_creation_input_tokens,
             cache_creation_token_details=cache_creation_token_details,
         )
         completion_token_details = (

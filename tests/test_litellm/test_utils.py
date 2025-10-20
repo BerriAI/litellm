@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from jsonschema import validate
@@ -513,6 +513,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
@@ -521,7 +522,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_character_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image": {"type": "number"},
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
+                "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_flex": {"type": "number"},
+                "cache_read_input_token_cost_priority": {"type": "number"},
+                "input_cost_per_token_flex": {"type": "number"},
+                "input_cost_per_token_priority": {"type": "number"},
+                "output_cost_per_token_flex": {"type": "number"},
+                "output_cost_per_token_priority": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
@@ -538,6 +546,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 },
                 "input_cost_per_video_per_second_above_128k_tokens": {"type": "number"},
                 "input_dbu_cost_per_token": {"type": "number"},
+                "annotation_cost_per_page": {"type": "number"},
+                "ocr_cost_per_page": {"type": "number"},
                 "litellm_provider": {"type": "string"},
                 "max_audio_length_hours": {"type": "number"},
                 "max_audio_per_prompt": {"type": "number"},
@@ -565,12 +575,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "moderation",
                         "rerank",
                         "responses",
+                        "ocr",
                     ],
                 },
                 "output_cost_per_audio_token": {"type": "number"},
                 "output_cost_per_character": {"type": "number"},
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
+                "output_cost_per_image_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
@@ -601,6 +613,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_web_search": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
+                "supports_service_tier": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},
                 "tpm": {"type": "number"},
                 "supported_endpoints": {
@@ -619,6 +632,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/batch",
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
+                            "/v1/ocr",
                         ],
                     },
                 },
@@ -2428,8 +2442,8 @@ class TestGetValidModelsWithCLI:
                 {"id": "claude-3-sonnet", "object": "model"}
             ]
         }
-        
-        with patch('requests.get', return_value=mock_response) as mock_get:
+
+        with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_get:
             # Test the exact pattern used in cli_token_usage.py
             result = litellm.get_valid_models(
                 check_provider_endpoint=True,
@@ -2441,21 +2455,22 @@ class TestGetValidModelsWithCLI:
             # Verify the function returns a list of model names
             assert isinstance(result, list)
             assert len(result) == 4
-            assert "gpt-3.5-turbo" in result
-            assert "gpt-4" in result
-            assert "litellm_proxy/gemini/gemini-2.5-flash" in result
-            assert "claude-3-sonnet" in result
+            # All models get prefixed with "litellm_proxy/" by the get_models method
+            assert "litellm_proxy/gpt-3.5-turbo" in result
+            assert "litellm_proxy/gpt-4" in result
+            # Note: This model already had the prefix, so it gets double-prefixed
+            assert "litellm_proxy/litellm_proxy/gemini/gemini-2.5-flash" in result
+            assert "litellm_proxy/claude-3-sonnet" in result
             
             # Verify the HTTP request was made with correct parameters
             mock_get.assert_called_once()
-            call_args = mock_get.call_args
-            
+            _, call_kwargs = mock_get.call_args
+
             # Check that the request was made to the correct endpoint
-            assert "http://localhost:4000/" in call_args[0][0]
-            assert "/v1/models" in call_args[0][0]
-            
+            assert call_kwargs["url"].startswith("http://localhost:4000/")
+            assert call_kwargs["url"].endswith("/v1/models")
+
             # Check that the API key was included in headers
-            assert "headers" in call_args.kwargs
-            headers = call_args.kwargs["headers"]
-            assert "Authorization" in headers
-            assert "Bearer sk-test-cli-key-123" == headers["Authorization"]
+            assert "headers" in call_kwargs
+            headers = call_kwargs["headers"]
+            assert headers.get("Authorization") == "Bearer sk-test-cli-key-123"

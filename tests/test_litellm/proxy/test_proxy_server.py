@@ -126,6 +126,74 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
         assert len(mock_scheduler_calls) > 0
 
 
+def test_update_config_fields_deep_merge_db_wins():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    current_config = {
+        "router_settings": {
+            "routing_mode": "cost_optimized",
+            "model_group_alias": {
+                # Existing alias with older model + different hidden flag
+                "claude-sonnet-4": {
+                    "model": "claude-sonnet-4-20240219",
+                    "hidden": True,
+                },
+                # An extra alias that should remain untouched unless DB overrides it
+                "legacy-sonnet": {
+                    "model": "claude-2.1",
+                    "hidden": True,
+                },
+            },
+        }
+    }
+
+    db_param_value = {
+        "model_group_alias": {
+            # Conflict: DB should win (both 'model' and 'hidden')
+            "claude-sonnet-4": {
+                "model": "claude-sonnet-4-20250514",
+                "hidden": False,
+            },
+            # New alias to be added by the merge
+            "claude-sonnet-latest": {
+                "model": "claude-sonnet-4-20250514",
+                "hidden": True,
+            },
+            # Demonstrate that None values from DB are skipped (preserve existing)
+            "legacy-sonnet": {
+                "hidden": None  # should not clobber current True
+            },
+        }
+    }
+
+    updated = proxy_config._update_config_fields(
+        current_config=current_config,
+        param_name="router_settings",
+        db_param_value=db_param_value,
+    )
+
+    rs = updated["router_settings"]
+    aliases = rs["model_group_alias"]
+
+    # DB wins on conflicts (deep) for existing alias
+    assert aliases["claude-sonnet-4"]["model"] == "claude-sonnet-4-20250514"
+    assert aliases["claude-sonnet-4"]["hidden"] is False
+
+    # New alias introduced by DB is present with its values
+    assert "claude-sonnet-latest" in aliases
+    assert aliases["claude-sonnet-latest"]["model"] == "claude-sonnet-4-20250514"
+    assert aliases["claude-sonnet-latest"]["hidden"] is True
+
+    # None in DB does not overwrite existing values
+    assert aliases["legacy-sonnet"]["model"] == "claude-2.1"
+    assert aliases["legacy-sonnet"]["hidden"] is True
+
+    # Unrelated router_settings keys are preserved
+    assert rs["routing_mode"] == "cost_optimized"
+
+
 # Mock Prisma
 class MockPrisma:
     def __init__(self, database_url=None, proxy_logging_obj=None, http_client=None):
@@ -1886,3 +1954,337 @@ async def test_add_router_settings_shallow_merge_behavior():
 
     assert merged_settings["nested_setting"] == expected_nested
     assert merged_settings["top_level"] == "db_top"
+
+
+@pytest.mark.asyncio
+async def test_model_info_v1_oci_secrets_not_leaked():
+    """
+    Test that model_info_v1 endpoint properly masks OCI sensitive parameters and does not leak secrets.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import model_info_v1
+
+    # Mock user authentication
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "test-key"
+    mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.models = ["oci-grok-test"]
+    
+    # Mock model data with OCI sensitive information
+    mock_model_data = {
+        "model_name": "oci-grok-test",
+        "litellm_params": {
+            "model": "oci/xai.grok-4",
+            "oci_key": "ocid1.api_key.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "oci_region": "us-phoenix-1",
+            "oci_user": "ocid1.user.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "oci_fingerprint": "aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:77:88:99:00",
+            "oci_tenancy": "ocid1.tenancy.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "oci_key_file": "/path/to/oci_api_key.pem",
+            "oci_compartment_id": "ocid1.compartment.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "drop_params": True
+        },
+        "model_info": {
+            "mode": "completion",
+            "id": "test-model-id"
+        }
+    }
+    
+    # Mock the llm_router to return our test data
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = ["oci-grok-test"]
+    mock_router.get_model_access_groups.return_value = {}
+    mock_router.get_model_list.return_value = [mock_model_data]
+    
+    # Mock global variables
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router), \
+         patch("litellm.proxy.proxy_server.llm_model_list", [mock_model_data]), \
+         patch("litellm.proxy.proxy_server.general_settings", {"infer_model_from_keys": False}), \
+         patch("litellm.proxy.proxy_server.user_model", None):
+        
+        # Call the model_info_v1 endpoint
+        result = await model_info_v1(
+            user_api_key_dict=mock_user_api_key_dict,
+            litellm_model_id=None
+        )
+        
+        # Verify the result structure
+        assert "data" in result
+        assert len(result["data"]) == 1
+        
+        model_info = result["data"][0]
+        litellm_params = model_info["litellm_params"]
+        
+        # Verify that sensitive OCI fields are masked
+        assert "****" in litellm_params["oci_key"], "oci_key should be masked"
+        assert "****" in litellm_params["oci_fingerprint"], "oci_fingerprint should be masked"
+        assert "****" in litellm_params["oci_tenancy"], "oci_tenancy should be masked"
+        assert "****" in litellm_params["oci_key_file"], "oci_key_file should be masked"
+        
+        # Verify that non-sensitive fields are NOT masked
+        assert litellm_params["model"] == "oci/xai.grok-4", "model field should not be masked"
+        assert litellm_params["oci_region"] == "us-phoenix-1", "oci_region should not be masked"
+        assert litellm_params["drop_params"] is True, "drop_params should not be masked"
+        
+        # Verify the model field specifically is not masked (this was the original issue)
+        assert "****" not in litellm_params["model"], "model field should never be masked"
+        assert litellm_params["model"].startswith("oci/"), "model should retain its full value"
+        
+        # Verify that actual secret values are not present in the response
+        result_str = str(result)
+        assert "ocid1.api_key.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk" not in result_str
+        assert "aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:77:88:99:00" not in result_str
+        assert "ocid1.tenancy.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk" not in result_str
+        assert "/path/to/oci_api_key.pem" not in result_str
+
+
+def test_add_callback_from_db_to_in_memory_litellm_callbacks():
+    """
+    Test that _add_callback_from_db_to_in_memory_litellm_callbacks correctly adds callbacks
+    for success, failure, and combined event types.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+    
+    proxy_config = ProxyConfig()
+    
+    # Mock the callback manager
+    mock_callback_manager = MagicMock()
+    
+    with patch("litellm.proxy.proxy_server.litellm") as mock_litellm:
+        # Set up mock litellm attributes
+        mock_litellm._known_custom_logger_compatible_callbacks = []
+        mock_litellm.logging_callback_manager = mock_callback_manager
+        
+        # Test Case 1: Add success callback
+        mock_success_callbacks = []
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="prometheus",
+            event_types=["success"],
+            existing_callbacks=mock_success_callbacks,
+        )
+        mock_callback_manager.add_litellm_success_callback.assert_called_once_with("prometheus")
+        mock_callback_manager.reset_mock()
+        
+        # Test Case 2: Add failure callback
+        mock_failure_callbacks = []
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="langfuse",
+            event_types=["failure"],
+            existing_callbacks=mock_failure_callbacks,
+        )
+        mock_callback_manager.add_litellm_failure_callback.assert_called_once_with("langfuse")
+        mock_callback_manager.reset_mock()
+        
+        # Test Case 3: Add callback for both success and failure
+        mock_callbacks = []
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="s3",
+            event_types=["success", "failure"],
+            existing_callbacks=mock_callbacks,
+        )
+        mock_callback_manager.add_litellm_callback.assert_called_once_with("s3")
+        mock_callback_manager.reset_mock()
+        
+        # Test Case 4: Don't add callback if it already exists
+        existing_callbacks_with_item = ["prometheus"]
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="prometheus",
+            event_types=["success"],
+            existing_callbacks=existing_callbacks_with_item,
+        )
+        mock_callback_manager.add_litellm_success_callback.assert_not_called()
+
+
+def test_should_load_db_object_with_supported_db_objects():
+    """
+    Test _should_load_db_object method with supported_db_objects configuration.
+    
+    Verifies that when supported_db_objects is set, only specified object types
+    are loaded from the database.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Test Case 1: supported_db_objects not set - all objects should be loaded
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+
+    # Test Case 2: supported_db_objects set to only load MCP
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": ["mcp"]},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is False
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is False
+        assert proxy_config._should_load_db_object(object_type="prompts") is False
+
+    # Test Case 3: supported_db_objects set to load multiple types
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": ["mcp", "guardrails", "vector_stores"]},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+        assert proxy_config._should_load_db_object(object_type="prompts") is False
+
+    # Test Case 4: supported_db_objects is not a list (should default to loading all)
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": "invalid_type"},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+
+    # Test Case 5: supported_db_objects is an empty list (nothing should be loaded)
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": []},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is False
+        assert proxy_config._should_load_db_object(object_type="guardrails") is False
+
+    # Test Case 6: Test all available object types
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "supported_db_objects": [
+                "models",
+                "mcp",
+                "guardrails",
+                "vector_stores",
+                "pass_through_endpoints",
+                "prompts",
+                "model_cost_map",
+            ]
+        },
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+        assert (
+            proxy_config._should_load_db_object(object_type="pass_through_endpoints")
+            is True
+        )
+        assert proxy_config._should_load_db_object(object_type="prompts") is True
+        assert proxy_config._should_load_db_object(object_type="model_cost_map") is True
+
+
+@pytest.mark.asyncio
+async def test_tag_cache_update_called():
+    """
+    Test that update_cache updates tag cache when tags are provided.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    cache = DualCache()
+
+    setattr(
+        litellm.proxy.proxy_server,
+        "user_api_key_cache",
+        cache,
+    )
+
+    mock_tag_obj = {
+        "tag_name": "test-tag",
+        "spend": 10.0,
+    }
+
+    with patch.object(cache, "async_get_cache", new=AsyncMock(return_value=mock_tag_obj)) as mock_get_cache:
+        with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+            await litellm.proxy.proxy_server.update_cache(
+                token=None,
+                user_id=None,
+                end_user_id=None,
+                team_id=None,
+                response_cost=5.0,
+                parent_otel_span=None,
+                tags=["test-tag"],
+            )
+
+            await asyncio.sleep(0.1)
+
+            mock_get_cache.assert_awaited_once_with(key="tag:test-tag")
+            mock_set_cache.assert_awaited_once()
+
+            call_args = mock_set_cache.call_args
+            cache_list = call_args.kwargs["cache_list"]
+
+            assert len(cache_list) == 1
+            cache_key, cache_value = cache_list[0]
+            assert cache_key == "tag:test-tag"
+            assert cache_value["spend"] == 15.0
+
+
+@pytest.mark.asyncio
+async def test_tag_cache_update_multiple_tags():
+    """
+    Test that multiple tags are updated in cache.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    cache = DualCache()
+
+    setattr(
+        litellm.proxy.proxy_server,
+        "user_api_key_cache",
+        cache,
+    )
+
+    mock_tag1_obj = {"tag_name": "tag1", "spend": 10.0}
+    mock_tag2_obj = {"tag_name": "tag2", "spend": 20.0}
+
+    async def mock_get_cache_side_effect(key):
+        if key == "tag:tag1":
+            return mock_tag1_obj
+        elif key == "tag:tag2":
+            return mock_tag2_obj
+        return None
+
+    with patch.object(cache, "async_get_cache", new=AsyncMock(side_effect=mock_get_cache_side_effect)) as mock_get_cache:
+        with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+            await litellm.proxy.proxy_server.update_cache(
+                token=None,
+                user_id=None,
+                end_user_id=None,
+                team_id=None,
+                response_cost=5.0,
+                parent_otel_span=None,
+                tags=["tag1", "tag2"],
+            )
+
+            await asyncio.sleep(0.1)
+
+            assert mock_get_cache.call_count == 2
+            mock_set_cache.assert_awaited_once()
+
+            call_args = mock_set_cache.call_args
+            cache_list = call_args.kwargs["cache_list"]
+
+            assert len(cache_list) == 2
+
+            tag_updates = {cache_key: cache_value for cache_key, cache_value in cache_list}
+            assert "tag:tag1" in tag_updates
+            assert "tag:tag2" in tag_updates
+            assert tag_updates["tag:tag1"]["spend"] == 15.0
+            assert tag_updates["tag:tag2"]["spend"] == 25.0
+
+

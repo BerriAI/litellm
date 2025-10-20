@@ -84,7 +84,7 @@ def show_commands():
         ("whoami", "Show current authentication status"),
         ("models", "Manage and view model configurations"),
         ("credentials", "Manage API credentials"),
-        ("chat", "Interactive chat with models"),
+        ("chat", "Interactive streaming chat with models"),
         ("http", "Make HTTP requests to the proxy"),
         ("keys", "Manage API keys"),
         ("teams", "Manage teams and team assignments"),
