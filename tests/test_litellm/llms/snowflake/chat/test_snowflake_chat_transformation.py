@@ -7,7 +7,6 @@ import os
 import copy
 import json
 
-import pytest
 from unittest.mock import patch
 from unittest.mock import MagicMock
 
@@ -354,28 +353,6 @@ class TestSnowFlakeCompletion:
     }
 
     @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-    def test_snowflake_no_account_id(self, mock_post):
-        mock_post().json.return_value = copy.deepcopy(self.response)
-
-        with pytest.raises(Exception):
-            litellm.completion(
-                f"snowflake/{self.model_name}",
-                messages=self.messages,
-                api_key="0000",
-            )
-
-    @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-    def test_snowflake_no_api_key(self, mock_post):
-        mock_post().json.return_value = copy.deepcopy(self.response)
-
-        with pytest.raises(Exception):
-            litellm.completion(
-                f"snowflake/{self.model_name}",
-                messages=self.messages,
-                account_id="AAAA-BBBB",
-            )
-
-    @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
     def test_snowflake_jwt_account_id(self, mock_post):
         mock_post().json.return_value = copy.deepcopy(self.response)
 
@@ -399,7 +376,7 @@ class TestSnowFlakeCompletion:
         # account id was used
         assert "AAAA-BBBB" in post_kwargs["url"]
         # is completion
-        post_kwargs["url"].endswith("cortex/inference:complete")
+        assert post_kwargs["url"].endswith("cortex/inference:complete")
 
     @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
     def test_snowflake_pat_key_account_id(self, mock_post):

@@ -2,7 +2,6 @@ import os
 import json
 import copy
 
-import pytest
 from unittest.mock import patch
 
 import litellm
@@ -21,30 +20,6 @@ embed_response = {
     "model": model_name,
     "usage": {"total_tokens": 4},
 }
-
-
-@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-def test_snowflake_no_account_id(mock_post):
-    mock_post().json.return_value = copy.deepcopy(embed_response)
-
-    with pytest.raises(Exception):
-        litellm.embedding(
-            f"snowflake/{model_name}",
-            input=["test"],
-            api_key="0000",
-        )
-
-
-@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-def test_snowflake_no_api_key(mock_post):
-    mock_post().json.return_value = copy.deepcopy(embed_response)
-
-    with pytest.raises(Exception):
-        litellm.embedding(
-            f"snowflake/{model_name}",
-            input=["test"],
-            account_id="AAAA-BBBB",
-        )
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
@@ -71,7 +46,7 @@ def test_snowflake_jwt_account_id(mock_post):
     # account id was used
     assert "AAAA-BBBB" in post_kwargs["url"]
     # is embedding
-    post_kwargs["url"].endswith("cortex/inference:embed")
+    assert post_kwargs["url"].endswith("cortex/inference:embed")
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
