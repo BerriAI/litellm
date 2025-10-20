@@ -59,7 +59,6 @@ class OpenAIRealtime(OpenAIChatCompletion):
                 url,
                 extra_headers={
                     "Authorization": f"Bearer {api_key}",  # type: ignore
-                    "OpenAI-Beta": "realtime=v1",
                 },
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
             ) as backend_ws:
