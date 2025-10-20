@@ -4,9 +4,11 @@ from typing import Any, Optional, cast
 
 import litellm
 from litellm import get_llm_provider
+from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -15,7 +17,6 @@ from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
 from ..llms.openai.realtime.handler import OpenAIRealtime
-from litellm.types.realtime import RealtimeQueryParams
 from ..utils import client as wrapper_client
 
 azure_realtime = AzureOpenAIRealtime()
@@ -182,5 +183,6 @@ async def _realtime_health_check(
         extra_headers={
             "api-key": api_key,  # type: ignore
         },
+        max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
     ):
         return True
