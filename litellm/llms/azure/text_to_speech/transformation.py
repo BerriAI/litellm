@@ -208,13 +208,15 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             .replace("'", "&apos;")
         )
         
-        ssml_body = f"""<speak version='1.0' xml:lang='en-US'>
-    <voice name='{azure_voice}'>
-        <prosody rate='{rate}'>
-            {escaped_input}
-        </prosody>
-    </voice>
-</speak>"""
+        ssml_body = f"""
+        <speak version='1.0' xml:lang='en-US'>
+            <voice name='{azure_voice}'>
+                <prosody rate='{rate}'>
+                    {escaped_input}
+                </prosody>
+            </voice>
+        </speak>
+        """
         
         return {
             "ssml_body": ssml_body,
