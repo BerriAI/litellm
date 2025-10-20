@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import httpx
 
-from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
+from litellm.llms.base_llm.text_to_speech.transformation import (
+    BaseTextToSpeechConfig,
+    TextToSpeechRequestData,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -175,20 +178,19 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         optional_params: Dict,
         litellm_params: Dict,
         headers: dict,
-    ) -> Dict:
+    ) -> TextToSpeechRequestData:
         """
         Transform OpenAI TTS request to Azure AVA TTS SSML format
         
         Note: optional_params should already be mapped via map_openai_params in main.py
         
-        Returns dict with:
-        - ssml_body: str (the SSML XML body)
-        - headers: dict (updated headers with output format)
+        Returns:
+            TextToSpeechRequestData: Contains SSML body and Azure-specific headers
         """
         # Get voice (already mapped in main.py, or use default)
         azure_voice = optional_params.get("voice", "en-US-AriaNeural")
         
-        # Set output format in header (already mapped in main.py)
+        # Get output format (already mapped in main.py)
         output_format = optional_params.get(
             "output_format", "audio-24khz-48kbitrate-mono-mp3"
         )
