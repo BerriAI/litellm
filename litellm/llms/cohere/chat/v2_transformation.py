@@ -11,7 +11,7 @@ from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.utils import ModelResponse, Usage
 
 from ..common_utils import CohereError
-from ..common_utils import ModelResponseIterator as CohereModelResponseIterator
+from ..common_utils import CohereV2ModelResponseIterator
 from ..common_utils import validate_environment as cohere_validate_environment
 
 if TYPE_CHECKING:
@@ -249,7 +249,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         sync_stream: bool,
         json_mode: Optional[bool] = False,
     ):
-        return CohereModelResponseIterator(
+        return CohereV2ModelResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
             json_mode=json_mode,

@@ -161,6 +161,60 @@ class ModelResponseIterator:
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
 
+    # Sync iterator
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            chunk = self.response_iterator.__next__()
+        except StopIteration:
+            raise StopIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+
+        try:
+            return self.convert_str_chunk_to_generic_chunk(chunk=chunk)
+        except StopIteration:
+            raise StopIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+
+    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> GenericStreamingChunk:
+        """
+        Convert a string chunk to a GenericStreamingChunk
+
+        Note: This is used for Cohere pass through streaming logging
+        """
+        str_line = chunk
+        if isinstance(chunk, bytes):  # Handle binary data
+            str_line = chunk.decode("utf-8")  # Convert bytes to string
+            index = str_line.find("data:")
+            if index != -1:
+                str_line = str_line[index:]
+
+        data_json = json.loads(str_line)
+        return self.chunk_parser(chunk=data_json)
+
+    # Async iterator
+    def __aiter__(self):
+        self.async_response_iterator = self.streaming_response.__aiter__()
+        return self
+
+    async def __anext__(self):
+        try:
+            chunk = await self.async_response_iterator.__anext__()
+        except StopAsyncIteration:
+            raise StopAsyncIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+
+        try:
+            return self.convert_str_chunk_to_generic_chunk(chunk=chunk)
+        except StopAsyncIteration:
+            raise StopAsyncIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
 class CohereV2ModelResponseIterator:
     """V2-specific response iterator for Cohere streaming"""
