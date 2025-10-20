@@ -12,7 +12,7 @@ Azure AI Speech is Azure's Cognitive Services text-to-speech API, separate from 
 | Property | Details |
 |-------|-------|
 | Description | Azure AI Speech is Azure's Cognitive Services text-to-speech API, separate from Azure OpenAI. It provides high-quality neural voices with broader language support and advanced speech customization. |
-| Provider Route on LiteLLM | `azure/speech` |
+| Provider Route on LiteLLM | `azure/speech/` |
 
 ## Quick Start
 
