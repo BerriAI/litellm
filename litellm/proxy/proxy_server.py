@@ -1673,7 +1673,6 @@ class ProxyConfig:
                 "environment_variables" in config_to_save
                 and config_to_save["environment_variables"]
             ):
-
                 # decrypt the environment_variables - in case a caller function has already encrypted the environment_variables
                 decrypted_env_vars = self._decrypt_and_set_db_env_variables(
                     environment_variables=config_to_save["environment_variables"],

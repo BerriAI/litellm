@@ -43,7 +43,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         Handle reasoning items to filter out the status field.
         Issue: https://github.com/BerriAI/litellm/issues/13484
-        
+
         Azure OpenAI API does not accept 'status' field in reasoning input items.
         """
         if item.get("type") == "reasoning":
@@ -80,7 +80,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 }
                 return filtered_item
         return item
-    
+
     def _validate_input_param(
         self, input: Union[str, ResponseInputParam]
     ) -> Union[str, ResponseInputParam]:
@@ -92,7 +92,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # First call parent's validation
         validated_input = super()._validate_input_param(input)
-        
+
         # Then filter out status from message items
         if isinstance(validated_input, list):
             filtered_input: List[Any] = []
@@ -104,7 +104,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 else:
                     filtered_input.append(item)
             return cast(ResponseInputParam, filtered_input)
-        
+
         return validated_input
 
     def transform_responses_api_request(

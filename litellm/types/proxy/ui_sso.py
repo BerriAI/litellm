@@ -23,6 +23,7 @@ class ParsedOpenIDResult(TypedDict, total=False):
     """
     Parsed OpenID result
     """
+
     user_email: Optional[str]
     user_id: Optional[str]
     user_role: Optional[str]

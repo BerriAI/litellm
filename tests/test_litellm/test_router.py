@@ -1053,7 +1053,6 @@ async def test_acompletion_streaming_iterator():
         "async_function_with_fallbacks_common_utils",
         return_value=mock_fallback_response,
     ) as mock_fallback_utils:
-
         collected_chunks = []
         result = await router._acompletion_streaming_iterator(
             model_response=mock_error_response,
@@ -1150,7 +1149,6 @@ async def test_acompletion_streaming_iterator_edge_cases():
         "async_function_with_fallbacks_common_utils",
         return_value=mock_fallback_response,
     ) as mock_fallback_utils:
-
         collected_chunks = []
         iterator = await router._acompletion_streaming_iterator(
             model_response=mock_response,
@@ -1576,7 +1574,8 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
         model_name="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
     )
     assert (
-        result["endpoint"] == "/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke"
+        result["endpoint"]
+        == "/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke"
     ), f"Expected '/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke', got '{result['endpoint']}'"
 
     # Test Case 2: Bedrock invoke-with-response-stream endpoint
@@ -1590,7 +1589,8 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
         model_name="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
     )
     assert (
-        result["endpoint"] == "/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream"
+        result["endpoint"]
+        == "/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream"
     ), f"Expected streaming endpoint with stripped prefix, got '{result['endpoint']}'"
 
     # Test Case 3: Bedrock converse endpoint

@@ -141,7 +141,6 @@ class OpenTelemetry(CustomLogger):
         meter_provider: Optional[Any] = None,
         **kwargs,
     ):
-
         if config is None:
             config = OpenTelemetryConfig.from_env()
 
@@ -480,9 +479,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params")
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params")
 
         if not standard_callback_dynamic_params:
             return None
@@ -523,7 +522,6 @@ class OpenTelemetry(CustomLogger):
     #########################################################
 
     def _handle_success(self, kwargs, response_obj, start_time, end_time):
-
         verbose_logger.debug(
             "OpenTelemetry Logger: Logging kwargs: %s, OTEL config settings=%s",
             kwargs,

@@ -519,7 +519,6 @@ async def test_openai_codex_stream(sync_mode):
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_openai_codex(sync_mode):
-
     from litellm import Router
 
     router = Router(
@@ -755,7 +754,9 @@ async def test_openai_service_tier_parameter():
         # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
         # Verify service_tier is correctly sent to the API
-        assert request_body["service_tier"] == "priority", "service_tier should be 'priority'"
+        assert (
+            request_body["service_tier"] == "priority"
+        ), "service_tier should be 'priority'"
 
 
 def test_openai_service_tier_parameter_sync():
@@ -784,7 +785,9 @@ def test_openai_service_tier_parameter_sync():
         # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
         # Verify service_tier is correctly sent to the API
-        assert request_body["service_tier"] == "priority", "service_tier should be 'priority'"
+        assert (
+            request_body["service_tier"] == "priority"
+        ), "service_tier should be 'priority'"
 
 
 def test_gpt_5_reasoning_streaming():

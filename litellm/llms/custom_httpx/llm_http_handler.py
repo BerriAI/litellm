@@ -1305,8 +1305,10 @@ class BaseLLMHTTPHandler:
 
         # Data is always a dict for Mistral OCR format
         if not isinstance(transformed_result.data, dict):
-            raise ValueError(f"Expected dict data for OCR request, got {type(transformed_result.data)}")
-        
+            raise ValueError(
+                f"Expected dict data for OCR request, got {type(transformed_result.data)}"
+            )
+
         data = transformed_result.data
 
         ## LOGGING
@@ -1369,8 +1371,10 @@ class BaseLLMHTTPHandler:
 
         # Data is always a dict for Mistral OCR format
         if not isinstance(transformed_result.data, dict):
-            raise ValueError(f"Expected dict data for OCR request, got {type(transformed_result.data)}")
-        
+            raise ValueError(
+                f"Expected dict data for OCR request, got {type(transformed_result.data)}"
+            )
+
         data = transformed_result.data
 
         ## LOGGING
@@ -3391,10 +3395,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
         """
 
         Handles image edit requests.
@@ -3584,10 +3585,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
         """
         Handles image generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.

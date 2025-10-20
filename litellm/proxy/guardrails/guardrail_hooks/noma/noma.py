@@ -36,9 +36,9 @@ MessageRole = Literal["user", "assistant"]
 LLMResponse = Union[Any, ModelResponse, EmbeddingResponse, ImageResponse]
 
 if TYPE_CHECKING:
-  from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
-  
+
 class NomaBlockedMessage(HTTPException):
     """Exception raised when Noma guardrail blocks a message"""
 
@@ -220,13 +220,13 @@ class NomaGuardrail(CustomGuardrail):
             user_auth=user_auth,
             extra_data=extra_data,
         )
-        
+
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
 
         # Determine guardrail status based on response
         guardrail_status = self._determine_guardrail_status(response_json)
-        
+
         # Always log guardrail information for consistency
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider="noma",
@@ -267,7 +267,7 @@ class NomaGuardrail(CustomGuardrail):
         user_auth: UserAPIKeyAuth,
     ) -> Optional[str]:
         """Shared logic for processing LLM response checks"""
-        
+
         start_time = datetime.now()
         extra_data = self.get_guardrail_dynamic_request_body_params(request_data)
 
@@ -292,13 +292,13 @@ class NomaGuardrail(CustomGuardrail):
             user_auth=user_auth,
             extra_data=extra_data,
         )
-        
+
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
 
         # Determine guardrail status based on response
         guardrail_status = self._determine_guardrail_status(response_json)
-        
+
         # Always log guardrail information for consistency
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider="noma",
@@ -335,10 +335,10 @@ class NomaGuardrail(CustomGuardrail):
     def _determine_guardrail_status(self, response_json: dict) -> GuardrailStatus:
         """
         Determine the guardrail status based on NOMA API response.
-        
+
         Args:
             response_json: Response from NOMA API
-            
+
         Returns:
             "success": Content allowed through with no violations
             "guardrail_intervened": Content blocked due to policy violations
@@ -348,23 +348,25 @@ class NomaGuardrail(CustomGuardrail):
             # Check if we got a valid response structure
             if not isinstance(response_json, dict):
                 return "guardrail_failed_to_respond"
-            
+
             # Get the verdict from the response
             verdict = response_json.get("verdict", True)
-            
+
             # If verdict is True, content is allowed
             if verdict is True:
                 return "success"
-            
+
             # If verdict is False, content is blocked/flagged
             if verdict is False:
                 return "guardrail_intervened"
-                
+
             # If verdict is missing or invalid, treat as failure
             return "guardrail_failed_to_respond"
-            
+
         except Exception as e:
-            verbose_proxy_logger.error(f"Error determining NOMA guardrail status: {str(e)}")
+            verbose_proxy_logger.error(
+                f"Error determining NOMA guardrail status: {str(e)}"
+            )
             return "guardrail_failed_to_respond"
 
     def _should_only_sensitive_data_failed(self, classification_obj: dict) -> bool:
@@ -618,6 +620,7 @@ class NomaGuardrail(CustomGuardrail):
         except Exception as e:
             # Log technical failures
             from datetime import datetime
+
             start_time = datetime.now()
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider="noma",
@@ -628,7 +631,7 @@ class NomaGuardrail(CustomGuardrail):
                 end_time=start_time.timestamp(),
                 duration=0.0,
             )
-            
+
             verbose_proxy_logger.error(f"Noma pre-call hook failed: {str(e)}")
 
             if self.block_failures:
@@ -674,6 +677,7 @@ class NomaGuardrail(CustomGuardrail):
         except Exception as e:
             # Log technical failures
             from datetime import datetime
+
             start_time = datetime.now()
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider="noma",
@@ -684,7 +688,7 @@ class NomaGuardrail(CustomGuardrail):
                 end_time=start_time.timestamp(),
                 duration=0.0,
             )
-            
+
             verbose_proxy_logger.error(f"Noma moderation hook failed: {str(e)}")
 
             if self.block_failures:
@@ -723,6 +727,7 @@ class NomaGuardrail(CustomGuardrail):
         except Exception as e:
             # Log technical failures
             from datetime import datetime
+
             start_time = datetime.now()
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider="noma",
@@ -733,7 +738,7 @@ class NomaGuardrail(CustomGuardrail):
                 end_time=start_time.timestamp(),
                 duration=0.0,
             )
-            
+
             verbose_proxy_logger.error(f"Noma post-call hook failed: {str(e)}")
             if self.block_failures:
                 raise
@@ -850,7 +855,7 @@ class NomaGuardrail(CustomGuardrail):
                 verbose_proxy_logger.info(msg)
             else:
                 verbose_proxy_logger.debug(msg)
-    
+
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
         from litellm.types.proxy.guardrails.guardrail_hooks.noma import (
@@ -858,4 +863,3 @@ class NomaGuardrail(CustomGuardrail):
         )
 
         return NomaGuardrailConfigModel
-

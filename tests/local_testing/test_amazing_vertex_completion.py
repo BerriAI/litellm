@@ -215,7 +215,6 @@ def test_vertex_ai_anthropic_streaming():
 async def test_aavertex_ai_anthropic_async():
     # load_vertex_ai_credentials()
     try:
-
         model = "claude-3-5-sonnet@20240620"
 
         vertex_ai_project = "pathrise-convert-1606954137718"
@@ -764,7 +763,9 @@ def test_gemini_pro_grounding(value_in_dict):
 
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
-@pytest.mark.parametrize("model", ["vertex_ai_beta/gemini-2.5-flash-lite"])  # "vertex_ai",
+@pytest.mark.parametrize(
+    "model", ["vertex_ai_beta/gemini-2.5-flash-lite"]
+)  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
@@ -1427,7 +1428,6 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
                     ]
                 )
         elif resp is not None:
-
             assert resp.model == model.split("/")[1]
 
 
@@ -2327,8 +2327,6 @@ def test_prompt_factory_nested():
         assert isinstance(
             message["parts"][0]["text"], str
         ), "'text' value not a string."
-
-
 
 
 @pytest.mark.asyncio
@@ -3855,7 +3853,16 @@ def test_gemini_google_maps_tool_simple():
     litellm._turn_on_debug()
 
     tools = [{"googleMaps": {"enableWidget": True}}]
-    tools_with_location = [{"googleMaps": {"enableWidget": True, "latitude": 37.7749, "longitude": -122.4194, "languageCode": "en_US"}}]
+    tools_with_location = [
+        {
+            "googleMaps": {
+                "enableWidget": True,
+                "latitude": 37.7749,
+                "longitude": -122.4194,
+                "languageCode": "en_US",
+            }
+        }
+    ]
     try:
         for tools in [tools, tools_with_location]:
             response = completion(
@@ -3874,4 +3881,3 @@ def test_gemini_google_maps_tool_simple():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-

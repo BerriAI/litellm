@@ -35,6 +35,7 @@ TEST_OCI_PARAMS_KEY_FILE = {
     "oci_key_file": "<private_key.pem as a Path>",
 }
 
+
 @pytest.fixture(params=[TEST_OCI_PARAMS_KEY, TEST_OCI_PARAMS_KEY_FILE])
 def supplied_params(request):
     """Fixture for passing in optional_parameters"""
@@ -87,7 +88,7 @@ class TestOCIChatConfig:
         optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
         transformed_request = config.transform_request(
             model=TEST_MODEL_NAME,
-            messages=TEST_MESSAGES, # type: ignore
+            messages=TEST_MESSAGES,  # type: ignore
             optional_params=optional_params,
             litellm_params={},
             headers={},
@@ -139,15 +140,21 @@ class TestOCIChatConfig:
         }
         transformed_request = config.transform_request(
             model=TEST_MODEL_NAME,
-            messages=TEST_MESSAGES, # type: ignore
+            messages=TEST_MESSAGES,  # type: ignore
             optional_params=optional_params,
             litellm_params={},
             headers={},
         )
         assert "tools" in transformed_request["chatRequest"]
-        assert transformed_request["chatRequest"]["tools"][0]["name"] == "get_current_weather"
+        assert (
+            transformed_request["chatRequest"]["tools"][0]["name"]
+            == "get_current_weather"
+        )
         assert transformed_request["chatRequest"]["tools"][0]["type"] == "FUNCTION"
-        assert transformed_request["chatRequest"]["tools"][0]["description"] == "Get the current weather in a given location"
+        assert (
+            transformed_request["chatRequest"]["tools"][0]["description"]
+            == "Get the current weather in a given location"
+        )
         assert transformed_request["chatRequest"]["tools"][0]["parameters"] is not None
 
     def test_transform_response_simple_text(self):
@@ -155,7 +162,11 @@ class TestOCIChatConfig:
         Tests if a simple text response is transformed correctly.
         """
         config = OCIChatConfig()
-        created_time = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        created_time = (
+            datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
         mock_oci_response = {
             "modelId": TEST_MODEL_NAME,
             "modelVersion": "1.0",
@@ -166,7 +177,9 @@ class TestOCIChatConfig:
                         "index": 0,
                         "message": {
                             "role": "ASSISTANT",
-                            "content": [{"type": "TEXT", "text": "I am doing well, thank you!"}],
+                            "content": [
+                                {"type": "TEXT", "text": "I am doing well, thank you!"}
+                            ],
                         },
                         "finishReason": "STOP",
                     }
@@ -187,7 +200,9 @@ class TestOCIChatConfig:
             },
         }
         response = httpx.Response(
-            status_code=200, json=mock_oci_response, headers={"Content-Type": "application/json"}
+            status_code=200,
+            json=mock_oci_response,
+            headers={"Content-Type": "application/json"},
         )
         result = config.transform_response(
             model=TEST_MODEL_NAME,
@@ -209,10 +224,10 @@ class TestOCIChatConfig:
         assert result.choices[0].finish_reason == "stop"
         assert result.model == TEST_MODEL_NAME
         assert hasattr(result, "usage")
-        assert isinstance(result.usage, litellm.Usage) # type: ignore
-        assert result.usage.prompt_tokens == 10 # type: ignore
-        assert result.usage.completion_tokens == 20 # type: ignore
-        assert result.usage.total_tokens == 30 # type: ignore
+        assert isinstance(result.usage, litellm.Usage)  # type: ignore
+        assert result.usage.prompt_tokens == 10  # type: ignore
+        assert result.usage.completion_tokens == 20  # type: ignore
+        assert result.usage.total_tokens == 30  # type: ignore
         # These are not handled in the transformer, TBH no idea why they are here
         # but, for now, they seem to be always None
         assert result.usage.completion_tokens_details is None
@@ -223,7 +238,11 @@ class TestOCIChatConfig:
         Tests if a response with tool calls is transformed correctly.
         """
         config = OCIChatConfig()
-        created_time = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        created_time = (
+            datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
         mock_oci_response = {
             "modelId": TEST_MODEL_NAME,
             "modelVersion": "1.0",
@@ -304,8 +323,8 @@ class TestOCIChatConfig:
 
         # Usage assertions
         assert hasattr(result, "usage")
-        usage = result.usage # type: ignore
-        assert isinstance(usage, litellm.Usage) # type: ignore
-        assert usage.prompt_tokens == 10 # type: ignore
-        assert usage.completion_tokens == 20 # type: ignore
-        assert usage.total_tokens == 30 # type: ignore
+        usage = result.usage  # type: ignore
+        assert isinstance(usage, litellm.Usage)  # type: ignore
+        assert usage.prompt_tokens == 10  # type: ignore
+        assert usage.completion_tokens == 20  # type: ignore
+        assert usage.total_tokens == 30  # type: ignore

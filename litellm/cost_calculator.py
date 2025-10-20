@@ -340,7 +340,9 @@ def cost_per_token(  # noqa: PLR0915
     elif custom_llm_provider == "bedrock":
         return bedrock_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "openai":
-        return openai_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
+        return openai_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier
+        )
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "fireworks_ai":
@@ -363,6 +365,7 @@ def cost_per_token(  # noqa: PLR0915
         from litellm.llms.dashscope.cost_calculator import (
             cost_per_token as dashscope_cost_per_token,
         )
+
         return dashscope_cost_per_token(model=model, usage=usage_block)
     else:
         model_info = _cached_get_model_info_helper(
@@ -602,30 +605,30 @@ def _apply_cost_discount(
 ) -> Tuple[float, float, float]:
     """
     Apply provider-specific cost discount from module-level config.
-    
+
     Args:
         base_cost: The base cost before discount
         custom_llm_provider: The LLM provider name
-        
+
     Returns:
         Tuple of (final_cost, discount_percent, discount_amount)
     """
     original_cost = base_cost
     discount_percent = 0.0
     discount_amount = 0.0
-    
+
     if custom_llm_provider and custom_llm_provider in litellm.cost_discount_config:
         discount_percent = litellm.cost_discount_config[custom_llm_provider]
         discount_amount = original_cost * discount_percent
         final_cost = original_cost - discount_amount
-        
+
         verbose_logger.debug(
             f"Applied {discount_percent*100}% discount to {custom_llm_provider}: "
             f"${original_cost:.6f} -> ${final_cost:.6f} (saved ${discount_amount:.6f})"
         )
-        
+
         return final_cost, discount_percent, discount_amount
-    
+
     return base_cost, discount_percent, discount_amount
 
 
@@ -641,7 +644,7 @@ def _store_cost_breakdown_in_logging_obj(
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
-    
+
     Args:
         litellm_logging_obj: The logging object to store breakdown in
         prompt_tokens_cost_usd_dollar: Cost of input tokens
@@ -652,9 +655,9 @@ def _store_cost_breakdown_in_logging_obj(
         discount_percent: Discount percentage applied (0.05 = 5%)
         discount_amount: Discount amount in USD
     """
-    if (litellm_logging_obj is None):
+    if litellm_logging_obj is None:
         return
-    
+
     try:
         # Store the cost breakdown
         litellm_logging_obj.set_cost_breakdown(
@@ -666,7 +669,7 @@ def _store_cost_breakdown_in_logging_obj(
             discount_percent=discount_percent,
             discount_amount=discount_amount,
         )
-        
+
     except Exception as breakdown_error:
         verbose_logger.debug(f"Error storing cost breakdown: {str(breakdown_error)}")
         # Don't fail the main cost calculation if breakdown storage fails
@@ -752,7 +755,7 @@ def completion_cost(  # noqa: PLR0915
             completion_response=completion_response
         )
         rerank_billed_units: Optional[RerankBilledUnits] = None
-        
+
         # Extract service_tier from optional_params if not provided directly
         if service_tier is None and optional_params is not None:
             service_tier = optional_params.get("service_tier")
@@ -1023,14 +1026,14 @@ def completion_cost(  # noqa: PLR0915
                     )
                 )
                 _final_cost += cost_for_built_in_tools
-                
+
                 # Apply discount from module-level config if configured
                 original_cost = _final_cost
                 _final_cost, discount_percent, discount_amount = _apply_cost_discount(
                     base_cost=_final_cost,
                     custom_llm_provider=custom_llm_provider,
                 )
-                
+
                 # Store cost breakdown in logging object if available
                 _store_cost_breakdown_in_logging_obj(
                     litellm_logging_obj=litellm_logging_obj,
@@ -1042,7 +1045,7 @@ def completion_cost(  # noqa: PLR0915
                     discount_percent=discount_percent,
                     discount_amount=discount_amount,
                 )
-                
+
                 return _final_cost
             except Exception as e:
                 verbose_logger.debug(
@@ -1188,15 +1191,17 @@ def ocr_cost(
     # validate it's an OCR response
     #########################################################
     if response is None or not isinstance(response, OCRResponse):
-        raise ValueError(f"response must be of type OCRResponse got type={type(response)}")
-    
+        raise ValueError(
+            f"response must be of type OCRResponse got type={type(response)}"
+        )
+
     if response.usage_info is None:
         raise ValueError("OCR response usage_info is None")
-    
+
     pages_processed = response.usage_info.pages_processed
     if pages_processed is None:
         raise ValueError("OCR response pages_processed is None")
-    
+
     try:
         model_info: Optional[ModelInfo] = litellm.get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
@@ -1207,7 +1212,7 @@ def ocr_cost(
     ocr_cost_per_page: float = 0.0
     if model_info is not None:
         ocr_cost_per_page = model_info.get("ocr_cost_per_page") or 0.0
-    
+
     total_ocr_processing_cost: float = ocr_cost_per_page * pages_processed
     return total_ocr_processing_cost, 0.0
 

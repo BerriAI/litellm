@@ -678,11 +678,12 @@ def test_vertex_filter_format_uri():
 
     assert "uri" not in json.dumps(new_parameters)
 
+
 def test_convert_schema_types_type_array_conversion():
     """
     Test _convert_schema_types function handles type arrays and case conversion.
-    
-    This test verifies the fix for the issue where type arrays like ["string", "number"] 
+
+    This test verifies the fix for the issue where type arrays like ["string", "number"]
     would raise an exception in Vertex AI schema validation.
 
     Relevant issue: https://github.com/BerriAI/litellm/issues/14091
@@ -695,12 +696,12 @@ def test_convert_schema_types_type_array_conversion():
         "properties": {
             "studio": {
                 "type": ["string", "number"],
-                "description": "The studio ID or name"
+                "description": "The studio ID or name",
             }
         },
         "required": ["studio"],
         "additionalProperties": False,
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "http://json-schema.org/draft-07/schema#",
     }
 
     # Expected output: Vertex AI compatible schema with anyOf and uppercase types
@@ -708,16 +709,13 @@ def test_convert_schema_types_type_array_conversion():
         "type": "object",
         "properties": {
             "studio": {
-                "anyOf": [
-                    {"type": "string"}, 
-                    {"type": "number"}
-                ],
-                "description": "The studio ID or name"
+                "anyOf": [{"type": "string"}, {"type": "number"}],
+                "description": "The studio ID or name",
             }
         },
         "required": ["studio"],
         "additionalProperties": False,
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "http://json-schema.org/draft-07/schema#",
     }
 
     # Apply the transformation
@@ -740,15 +738,17 @@ def test_convert_schema_types_type_array_conversion():
     assert anyof_types[1]["type"] == "number"
 
     # 4. Other properties preserved
-    assert input_schema["properties"]["studio"]["description"] == "The studio ID or name"
+    assert (
+        input_schema["properties"]["studio"]["description"] == "The studio ID or name"
+    )
     assert input_schema["required"] == ["studio"]
 
 
 def test_fix_enum_empty_strings():
     """
     Test _fix_enum_empty_strings function replaces empty strings with None in enum arrays.
-    
-    This test verifies the fix for the issue where Gemini rejects tool definitions 
+
+    This test verifies the fix for the issue where Gemini rejects tool definitions
     with empty strings in enum values, causing API failures.
 
     Relevant issue: Gemini does not accept empty strings in enum values
@@ -762,23 +762,23 @@ def test_fix_enum_empty_strings():
             "user_agent_type": {
                 "enum": ["", "desktop", "mobile", "tablet"],
                 "type": "string",
-                "description": "Device type for user agent"
+                "description": "Device type for user agent",
             }
         },
-        "required": ["user_agent_type"]
+        "required": ["user_agent_type"],
     }
 
     # Expected output: Empty strings replaced with None
     expected_output = {
-        "type": "object", 
+        "type": "object",
         "properties": {
             "user_agent_type": {
                 "enum": [None, "desktop", "mobile", "tablet"],
                 "type": "string",
-                "description": "Device type for user agent"
+                "description": "Device type for user agent",
             }
         },
-        "required": ["user_agent_type"]
+        "required": ["user_agent_type"],
     }
 
     # Apply the transformation
@@ -800,7 +800,10 @@ def test_fix_enum_empty_strings():
 
     # 3. Other properties preserved
     assert input_schema["properties"]["user_agent_type"]["type"] == "string"
-    assert input_schema["properties"]["user_agent_type"]["description"] == "Device type for user agent"
+    assert (
+        input_schema["properties"]["user_agent_type"]["description"]
+        == "Device type for user agent"
+    )
 
 
 def test_get_token_url():
@@ -831,8 +834,6 @@ def test_get_token_url():
     )
 
     print("url=", url)
-
-
 
     should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
         optional_params={"temperature": 0.1}

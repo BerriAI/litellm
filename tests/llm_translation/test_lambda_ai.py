@@ -20,21 +20,30 @@ def test_lambda_ai_config_initialization():
 def test_lambda_ai_get_openai_compatible_provider_info():
     """Test Lambda AI provider info retrieval"""
     config = LambdaAIChatConfig()
-    
+
     # Test with default values (no env vars set)
     with mock.patch.dict(os.environ, {}, clear=True):
         api_base, api_key = config._get_openai_compatible_provider_info(None, None)
         assert api_base == "https://api.lambda.ai/v1"
         assert api_key is None
-    
+
     # Test with environment variables
-    with mock.patch.dict(os.environ, {"LAMBDA_API_KEY": "test-key", "LAMBDA_API_BASE": "https://custom.lambda.ai/v1"}):
+    with mock.patch.dict(
+        os.environ,
+        {
+            "LAMBDA_API_KEY": "test-key",
+            "LAMBDA_API_BASE": "https://custom.lambda.ai/v1",
+        },
+    ):
         api_base, api_key = config._get_openai_compatible_provider_info(None, None)
         assert api_base == "https://custom.lambda.ai/v1"
         assert api_key == "test-key"
-    
+
     # Test with explicit parameters (should override env vars)
-    with mock.patch.dict(os.environ, {"LAMBDA_API_KEY": "env-key", "LAMBDA_API_BASE": "https://env.lambda.ai/v1"}):
+    with mock.patch.dict(
+        os.environ,
+        {"LAMBDA_API_KEY": "env-key", "LAMBDA_API_BASE": "https://env.lambda.ai/v1"},
+    ):
         api_base, api_key = config._get_openai_compatible_provider_info(
             "https://param.lambda.ai/v1", "param-key"
         )
@@ -45,12 +54,14 @@ def test_lambda_ai_get_openai_compatible_provider_info():
 def test_get_llm_provider_lambda_ai():
     """Test that get_llm_provider correctly identifies Lambda AI"""
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-    
+
     # Test with lambda_ai/model-name format
-    model, provider, api_key, api_base = get_llm_provider("lambda_ai/llama3.1-8b-instruct")
+    model, provider, api_key, api_base = get_llm_provider(
+        "lambda_ai/llama3.1-8b-instruct"
+    )
     assert model == "llama3.1-8b-instruct"
     assert provider == "lambda_ai"
-    
+
     # Test with api_base containing Lambda AI endpoint
     model, provider, api_key, api_base = get_llm_provider(
         "llama3.1-8b-instruct", api_base="https://api.lambda.ai/v1"
@@ -73,7 +84,7 @@ async def test_lambda_ai_completion_call():
     # Skip if no API key is available
     if not os.getenv("LAMBDA_API_KEY"):
         pytest.skip("LAMBDA_API_KEY not set")
-    
+
     try:
         response = await litellm.acompletion(
             model="lambda_ai/llama3.1-8b-instruct",
@@ -94,15 +105,15 @@ async def test_lambda_ai_completion_call():
 def test_lambda_ai_models_configuration():
     """Test that Lambda AI models are configured correctly"""
     from litellm import get_model_info
-    
+
     # Reload model cost map to pick up local changes
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    
+
     # Clear and repopulate lambda_ai_models list after reloading model_cost
     litellm.lambda_ai_models = set()
     litellm.add_known_models()
-    
+
     # Some Lambda AI models to test
     lambda_ai_models = [
         "lambda_ai/deepseek-llama3.3-70b",
@@ -111,18 +122,26 @@ def test_lambda_ai_models_configuration():
         "lambda_ai/llama3.2-11b-vision-instruct",
         "lambda_ai/qwen25-coder-32b-instruct",
     ]
-    
+
     for model in lambda_ai_models:
         model_info = get_model_info(model)
         assert model_info is not None, f"Model info not found for {model}"
-        assert model_info.get("litellm_provider") == "lambda_ai", f"{model} should have lambda_ai as provider"
+        assert (
+            model_info.get("litellm_provider") == "lambda_ai"
+        ), f"{model} should have lambda_ai as provider"
         assert model_info.get("mode") == "chat", f"{model} should be in chat mode"
-        assert model_info.get("supports_function_calling") is True, f"{model} should support function calling"
-        assert model_info.get("supports_system_messages") is True, f"{model} should support system messages"
-        
+        assert (
+            model_info.get("supports_function_calling") is True
+        ), f"{model} should support function calling"
+        assert (
+            model_info.get("supports_system_messages") is True
+        ), f"{model} should support system messages"
+
         # Check vision support for vision models
         if "vision" in model:
-            assert model_info.get("supports_vision") is True, f"{model} should support vision"
+            assert (
+                model_info.get("supports_vision") is True
+            ), f"{model} should support vision"
 
 
 def test_lambda_ai_model_list_populated():
@@ -130,24 +149,30 @@ def test_lambda_ai_model_list_populated():
     # Ensure we're using local model cost map and repopulate models
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    
+
     # Clear and repopulate all model lists after reloading model_cost
     litellm.lambda_ai_models = set()
     litellm.add_known_models()
-    
+
     # This should be populated by the add_known_models function
-    assert len(litellm.lambda_ai_models) > 0, "lambda_ai_models list should not be empty"
-    
+    assert (
+        len(litellm.lambda_ai_models) > 0
+    ), "lambda_ai_models list should not be empty"
+
     # Check that all models in the list are Lambda AI models
     for model in litellm.lambda_ai_models:
-        assert model.startswith("lambda_ai/"), f"Model {model} should start with 'lambda_ai/'"
-    
+        assert model.startswith(
+            "lambda_ai/"
+        ), f"Model {model} should start with 'lambda_ai/'"
+
     # Check some expected models are in the list
     expected_models = [
         "lambda_ai/llama3.1-8b-instruct",
         "lambda_ai/hermes3-405b",
         "lambda_ai/deepseek-v3-0324",
     ]
-    
+
     for model in expected_models:
-        assert model in litellm.lambda_ai_models, f"{model} should be in lambda_ai_models list"
+        assert (
+            model in litellm.lambda_ai_models
+        ), f"{model} should be in lambda_ai_models list"

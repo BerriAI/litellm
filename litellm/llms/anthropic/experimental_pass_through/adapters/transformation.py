@@ -232,7 +232,9 @@ class LiteLLMAnthropicMessagesAdapter:
             ## ASSISTANT MESSAGE ##
             assistant_message_str: Optional[str] = None
             tool_calls: List[ChatCompletionAssistantToolCall] = []
-            thinking_blocks: List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] = []
+            thinking_blocks: List[
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+            ] = []
             if m["role"] == "assistant":
                 if isinstance(m.get("content"), str):
                     assistant_message_str = str(m.get("content", ""))
@@ -264,23 +266,30 @@ class LiteLLMAnthropicMessagesAdapter:
                                     type="thinking",
                                     thinking=content.get("thinking") or "",
                                     signature=content.get("signature") or "",
-                                    cache_control=content.get("cache_control", {})
+                                    cache_control=content.get("cache_control", {}),
                                 )
                                 thinking_blocks.append(thinking_block)
                             elif content.get("type") == "redacted_thinking":
-                                redacted_thinking_block = ChatCompletionRedactedThinkingBlock(
-                                    type="redacted_thinking",
-                                    data=content.get("data") or "",
-                                    cache_control=content.get("cache_control", {})
+                                redacted_thinking_block = (
+                                    ChatCompletionRedactedThinkingBlock(
+                                        type="redacted_thinking",
+                                        data=content.get("data") or "",
+                                        cache_control=content.get("cache_control", {}),
+                                    )
                                 )
                                 thinking_blocks.append(redacted_thinking_block)
 
-
-            if assistant_message_str is not None or len(tool_calls) > 0 or len(thinking_blocks) > 0:
+            if (
+                assistant_message_str is not None
+                or len(tool_calls) > 0
+                or len(thinking_blocks) > 0
+            ):
                 assistant_message = ChatCompletionAssistantMessage(
                     role="assistant",
                     content=assistant_message_str,
-                    thinking_blocks=thinking_blocks if len(thinking_blocks) > 0 else None,
+                    thinking_blocks=thinking_blocks
+                    if len(thinking_blocks) > 0
+                    else None,
                 )
                 if len(tool_calls) > 0:
                     assistant_message["tool_calls"] = tool_calls
@@ -386,10 +395,10 @@ class LiteLLMAnthropicMessagesAdapter:
         if "tool_choice" in anthropic_message_request:
             tool_choice = anthropic_message_request["tool_choice"]
             if tool_choice:
-                new_kwargs["tool_choice"] = (
-                    self.translate_anthropic_tool_choice_to_openai(
-                        tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
-                    )
+                new_kwargs[
+                    "tool_choice"
+                ] = self.translate_anthropic_tool_choice_to_openai(
+                    tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
                 )
         ## CONVERT TOOLS
         if "tools" in anthropic_message_request:
@@ -409,16 +418,27 @@ class LiteLLMAnthropicMessagesAdapter:
     def _translate_openai_content_to_anthropic(
         self, choices: List[Choices]
     ) -> List[
-        Union[AnthropicResponseContentBlockText, AnthropicResponseContentBlockToolUse, AnthropicResponseContentBlockThinking, AnthropicResponseContentBlockRedactedThinking]
+        Union[
+            AnthropicResponseContentBlockText,
+            AnthropicResponseContentBlockToolUse,
+            AnthropicResponseContentBlockThinking,
+            AnthropicResponseContentBlockRedactedThinking,
+        ]
     ]:
         new_content: List[
             Union[
-                AnthropicResponseContentBlockText, AnthropicResponseContentBlockToolUse, AnthropicResponseContentBlockThinking, AnthropicResponseContentBlockRedactedThinking
+                AnthropicResponseContentBlockText,
+                AnthropicResponseContentBlockToolUse,
+                AnthropicResponseContentBlockThinking,
+                AnthropicResponseContentBlockRedactedThinking,
             ]
         ] = []
         for choice in choices:
             # Handle thinking blocks first
-            if hasattr(choice.message, 'thinking_blocks') and choice.message.thinking_blocks:
+            if (
+                hasattr(choice.message, "thinking_blocks")
+                and choice.message.thinking_blocks
+            ):
                 for thinking_block in choice.message.thinking_blocks:
                     if thinking_block.get("type") == "thinking":
                         thinking_value = thinking_block.get("thinking", "")
@@ -426,8 +446,12 @@ class LiteLLMAnthropicMessagesAdapter:
                         new_content.append(
                             AnthropicResponseContentBlockThinking(
                                 type="thinking",
-                                thinking=str(thinking_value) if thinking_value is not None else "",
-                                signature=str(signature_value) if signature_value is not None else None,
+                                thinking=str(thinking_value)
+                                if thinking_value is not None
+                                else "",
+                                signature=str(signature_value)
+                                if signature_value is not None
+                                else None,
                             )
                         )
                     elif thinking_block.get("type") == "redacted_thinking":
@@ -438,7 +462,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 data=str(data_value) if data_value is not None else "",
                             )
                         )
-            
+
             # Handle tool calls
             if (
                 choice.message.tool_calls is not None
@@ -450,7 +474,9 @@ class LiteLLMAnthropicMessagesAdapter:
                             type="tool_use",
                             id=tool_call.id,
                             name=tool_call.function.name or "",
-                            input=json.loads(tool_call.function.arguments) if tool_call.function.arguments else {},
+                            input=json.loads(tool_call.function.arguments)
+                            if tool_call.function.arguments
+                            else {},
                         )
                     )
             # Handle text content
@@ -525,8 +551,8 @@ class LiteLLMAnthropicMessagesAdapter:
                     name=choice.delta.tool_calls[0].function.name or "",
                     input={},
                 )
-            elif (
-                isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks")
+            elif isinstance(choice, StreamingChoices) and hasattr(
+                choice.delta, "thinking_blocks"
             ):
                 thinking_blocks = choice.delta.thinking_blocks or []
                 if len(thinking_blocks) > 0:
@@ -539,14 +565,13 @@ class LiteLLMAnthropicMessagesAdapter:
                         assert isinstance(signature, str)
 
                         if thinking and signature:
-                            raise ValueError("Both `thinking` and `signature` in a single streaming chunk isn't supported.")
+                            raise ValueError(
+                                "Both `thinking` and `signature` in a single streaming chunk isn't supported."
+                            )
 
                         return "thinking", ChatCompletionThinkingBlock(
-                            type="thinking",
-                            thinking=thinking,
-                            signature=signature
+                            type="thinking", thinking=thinking, signature=signature
                         )
-
 
         return "text", TextBlock(type="text", text="")
 
@@ -554,9 +579,13 @@ class LiteLLMAnthropicMessagesAdapter:
         self, choices: List[Union[OpenAIStreamingChoice, StreamingChoices]]
     ) -> Tuple[
         Literal["text_delta", "input_json_delta", "thinking_delta", "signature_delta"],
-        Union[ContentTextBlockDelta, ContentJsonBlockDelta, ContentThinkingBlockDelta, ContentThinkingSignatureBlockDelta],
+        Union[
+            ContentTextBlockDelta,
+            ContentJsonBlockDelta,
+            ContentThinkingBlockDelta,
+            ContentThinkingSignatureBlockDelta,
+        ],
     ]:
-
         text: str = ""
         reasoning_content: str = ""
         reasoning_signature: str = ""
@@ -572,7 +601,9 @@ class LiteLLMAnthropicMessagesAdapter:
                         and tool.function.arguments is not None
                     ):
                         partial_json = (partial_json or "") + tool.function.arguments
-            elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
+            elif isinstance(choice, StreamingChoices) and hasattr(
+                choice.delta, "thinking_blocks"
+            ):
                 thinking_blocks = choice.delta.thinking_blocks or []
                 if len(thinking_blocks) > 0:
                     for thinking_block in thinking_blocks:
@@ -585,19 +616,24 @@ class LiteLLMAnthropicMessagesAdapter:
 
                             reasoning_content += thinking
                             reasoning_signature += signature
-        
-        if reasoning_content and reasoning_signature:
-            raise ValueError("Both `reasoning` and `signature` in a single streaming chunk isn't supported.")
 
+        if reasoning_content and reasoning_signature:
+            raise ValueError(
+                "Both `reasoning` and `signature` in a single streaming chunk isn't supported."
+            )
 
         if partial_json is not None:
             return "input_json_delta", ContentJsonBlockDelta(
                 type="input_json_delta", partial_json=partial_json
             )
         elif reasoning_content:
-            return "thinking_delta", ContentThinkingBlockDelta(type="thinking_delta", thinking=reasoning_content)
+            return "thinking_delta", ContentThinkingBlockDelta(
+                type="thinking_delta", thinking=reasoning_content
+            )
         elif reasoning_signature:
-            return "signature_delta", ContentThinkingSignatureBlockDelta(type="signature_delta", signature=reasoning_signature)
+            return "signature_delta", ContentThinkingSignatureBlockDelta(
+                type="signature_delta", signature=reasoning_signature
+            )
         else:
             return "text_delta", ContentTextBlockDelta(type="text_delta", text=text)
 

@@ -333,7 +333,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         breakdown = lakera_response.get("breakdown", []) or []
         if not breakdown:
             return False
-        
+
         has_violations = False
         for item in breakdown:
             if item.get("detected", False):
@@ -341,7 +341,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                 detector_type = item.get("detector_type", "") or ""
                 if not detector_type.startswith("pii/"):
                     return False
-        
+
         # Return True only if there are violations and they are all PII
         return has_violations
 

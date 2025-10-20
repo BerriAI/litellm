@@ -26,7 +26,7 @@ def model_list():
                 "model": "gpt-3.5-turbo",
                 "api_key": os.getenv("OPENAI_API_KEY"),
                 "tpm": 1000,  # Add TPM limit so async method doesn't return early
-                "rpm": 100,   # Add RPM limit so async method doesn't return early
+                "rpm": 100,  # Add RPM limit so async method doesn't return early
             },
             "model_info": {
                 "access_groups": ["group1", "group2"],
@@ -420,9 +420,11 @@ async def test_deployment_callback_on_success(sync_mode):
     ]
     router = Router(model_list=model_list)
     # Get the actual deployment ID that was generated
-    gpt_deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-3.5-turbo")
+    gpt_deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-3.5-turbo"
+    )
     deployment_id = gpt_deployment["model_info"]["id"]
-    
+
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["total_tokens"] = 100
     standard_logging_payload["model_id"] = "100"
@@ -1412,7 +1414,9 @@ def test_generate_model_id_with_deployment_model_name(model_list):
         )
     except TypeError as e:
         # After optimization, error message changed but still fails appropriately on None
-        assert "unsupported operand type(s) for +=" in str(e) or "expected str instance, NoneType found" in str(e)
+        assert "unsupported operand type(s) for +=" in str(
+            e
+        ) or "expected str instance, NoneType found" in str(e)
         print(f"✓ Correctly failed with None model_group (as expected): {e}")
     except Exception as e:
         pytest.fail(f"Unexpected error with None model_group: {e}")
@@ -1725,31 +1729,31 @@ def test_get_metadata_variable_name_from_kwargs(model_list):
     Test _get_metadata_variable_name_from_kwargs method returns correct metadata variable name based on kwargs content.
     """
     router = Router(model_list=model_list)
-    
+
     # Test case 1: kwargs contains litellm_metadata - should return "litellm_metadata"
     kwargs_with_litellm_metadata = {
         "litellm_metadata": {"user": "test"},
-        "metadata": {"other": "data"}
+        "metadata": {"other": "data"},
     }
-    result = router._get_metadata_variable_name_from_kwargs(kwargs_with_litellm_metadata)
+    result = router._get_metadata_variable_name_from_kwargs(
+        kwargs_with_litellm_metadata
+    )
     assert result == "litellm_metadata"
-    
+
     # Test case 2: kwargs only contains metadata - should return "metadata"
-    kwargs_with_metadata_only = {
-        "metadata": {"user": "test"}
-    }
+    kwargs_with_metadata_only = {"metadata": {"user": "test"}}
     result = router._get_metadata_variable_name_from_kwargs(kwargs_with_metadata_only)
     assert result == "metadata"
-    
+
     # Test case 3: kwargs contains neither - should return "metadata" (default)
     kwargs_empty = {}
     result = router._get_metadata_variable_name_from_kwargs(kwargs_empty)
     assert result == "metadata"
-    
+
     # Test case 4: kwargs contains other keys but no metadata keys - should return "metadata"
     kwargs_other = {
         "model": "gpt-4",
-        "messages": [{"role": "user", "content": "hello"}]
+        "messages": [{"role": "user", "content": "hello"}],
     }
     result = router._get_metadata_variable_name_from_kwargs(kwargs_other)
     assert result == "metadata"

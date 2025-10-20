@@ -498,26 +498,26 @@ BEDROCK_STREAMING_ACTIONS = {"invoke-with-response-stream", "converse-stream"}
 def _extract_model_from_bedrock_endpoint(endpoint: str) -> str:
     """
     Extract model name from Bedrock endpoint path.
-    
+
     Handles model names with slashes (e.g., aws/anthropic/bedrock-claude-3-5-sonnet-v1)
     by finding the action in the endpoint and extracting everything between "model" and the action.
-    
+
     Args:
         endpoint: The endpoint path (e.g., "/model/aws/anthropic/model-name/invoke")
-        
+
     Returns:
         The extracted model name (e.g., "aws/anthropic/model-name")
-        
+
     Raises:
         ValueError: If model cannot be extracted from endpoint
     """
     try:
         endpoint_parts = endpoint.split("/")
-        
+
         if "application-inference-profile" in endpoint:
             # Format: model/application-inference-profile/{profile-id}/{action}
             return "/".join(endpoint_parts[1:3])
-        
+
         # Format: model/{modelId}/{action}
         # Find the index of the action in the endpoint parts
         action_index = None
@@ -525,14 +525,14 @@ def _extract_model_from_bedrock_endpoint(endpoint: str) -> str:
             if part in BEDROCK_ENDPOINT_ACTIONS:
                 action_index = idx
                 break
-        
+
         if action_index is not None and action_index > 1:
             # Join all parts between "model" and the action
             return "/".join(endpoint_parts[1:action_index])
-        
+
         # Fallback to taking everything after "model" if no action found
         return "/".join(endpoint_parts[1:])
-        
+
     except Exception as e:
         raise ValueError(
             f"Model missing from endpoint. Expected format: /model/{{modelId}}/{{action}}. Got: {endpoint}"
@@ -548,27 +548,27 @@ async def handle_bedrock_passthrough_router_model(
 ) -> Union[Response, StreamingResponse]:
     """
     Handle Bedrock passthrough for router models (models defined in config.yaml).
-    
+
     This helper delegates to llm_router.allm_passthrough_route for proper credential
     and configuration management from the router.
-    
+
     Args:
         model: The router model name (e.g., "aws/anthropic/bedrock-claude-3-5-sonnet-v1")
         endpoint: The Bedrock endpoint path (e.g., "/model/{modelId}/invoke")
         request: The FastAPI request object
         request_body: The parsed request body
         llm_router: The LiteLLM router instance
-        
+
     Returns:
         Response or StreamingResponse depending on endpoint type
     """
     # Detect streaming based on endpoint
     is_streaming = any(action in endpoint for action in BEDROCK_STREAMING_ACTIONS)
-    
+
     verbose_proxy_logger.debug(
         f"Bedrock router passthrough: model='{model}', endpoint='{endpoint}', streaming={is_streaming}"
     )
-    
+
     # Call router passthrough
     try:
         result = await llm_router.allm_passthrough_route(
@@ -594,7 +594,7 @@ async def handle_bedrock_passthrough_router_model(
         # Handle HTTP errors from the provider by converting to HTTPException
         error_body = await e.response.aread()
         error_text = error_body.decode("utf-8")
-        
+
         raise HTTPException(
             status_code=e.response.status_code,
             detail={"error": error_text},
@@ -610,11 +610,11 @@ async def handle_bedrock_passthrough_router_model(
             )
         # Re-raise any other exceptions
         raise e
-    
+
     # Handle streaming response
     if is_streaming:
         import inspect
-        
+
         if inspect.isasyncgen(result):
             # AsyncGenerator case
             return StreamingResponse(
@@ -633,11 +633,11 @@ async def handle_bedrock_passthrough_router_model(
                     custom_headers=None,
                 ),
             )
-    
+
     # Handle non-streaming response
     result = cast(httpx.Response, result)
     content = await result.aread()
-    
+
     return Response(
         content=content,
         status_code=result.status_code,
@@ -726,9 +726,9 @@ async def bedrock_llm_proxy_route(
 ):
     """
     Handles Bedrock LLM API calls.
-    
+
     Supports both direct Bedrock models and router models from config.yaml.
-    
+
     Endpoints:
     - /model/{modelId}/invoke
     - /model/{modelId}/invoke-with-response-stream
@@ -791,10 +791,10 @@ async def bedrock_llm_proxy_route(
     verbose_proxy_logger.debug(
         f"Bedrock passthrough: Using direct Bedrock model '{model}' for endpoint '{endpoint}'"
     )
-    
+
     data: Dict[str, Any] = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
-    
+
     data["method"] = request.method
     data["endpoint"] = endpoint
     data["data"] = request_body

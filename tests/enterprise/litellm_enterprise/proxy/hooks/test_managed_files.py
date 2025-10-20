@@ -389,7 +389,7 @@ async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
 
     # Use AsyncMock instead of real database connection
     prisma_client = AsyncMock()
-    
+
     batch = LiteLLMBatch(
         id="bGl0ZWxsbV9wcm94eTttb2RlbF9pZDoxMjM0NTY3OTtsbG1fYmF0Y2hfaWQ6YmF0Y2hfNjg1YzVlNWQ2Mzk4ODE5MGI4NWJkYjIxNDdiYTEzMWQ",
         completion_window="24h",
@@ -417,8 +417,10 @@ async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
     # first retrieve batch
     tasks = []
     first_create_task = asyncio.create_task
-    with patch('asyncio.create_task') as mock_create_task:
-        mock_create_task.side_effect = lambda coro: tasks.append(first_create_task(coro)) or tasks[-1]
+    with patch("asyncio.create_task") as mock_create_task:
+        mock_create_task.side_effect = (
+            lambda coro: tasks.append(first_create_task(coro)) or tasks[-1]
+        )
 
         response = await proxy_managed_files.async_post_call_success_hook(
             data={},
@@ -439,8 +441,10 @@ async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
     # second retrieve batch
     tasks = []
     second_create_task = asyncio.create_task
-    with patch('asyncio.create_task') as mock_create_task:
-        mock_create_task.side_effect = lambda coro: tasks.append(second_create_task(coro)) or tasks[-1]
+    with patch("asyncio.create_task") as mock_create_task:
+        mock_create_task.side_effect = (
+            lambda coro: tasks.append(second_create_task(coro)) or tasks[-1]
+        )
 
         await proxy_managed_files.async_post_call_success_hook(
             data={},

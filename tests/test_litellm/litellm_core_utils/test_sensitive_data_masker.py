@@ -19,13 +19,13 @@ def test_lists_are_preserved_not_converted_to_strings():
     Previously, tags field in /model/info was returned as "['tag1', 'tag2']" instead of ["tag1", "tag2"]
     """
     masker = SensitiveDataMasker()
-    
+
     data = {
         "tags": ["East US 2", "production", "test"],
     }
-    
+
     masked = masker.mask_dict(data)
-    
+
     # Must be a list, not a string
     assert isinstance(masked["tags"], list)
     assert masked["tags"] == ["East US 2", "production", "test"]

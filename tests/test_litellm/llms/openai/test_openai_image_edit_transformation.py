@@ -45,7 +45,9 @@ def test_transform_image_edit_request_basic(image_edit_config: OpenAIImageEditCo
     assert "image/png" in files[0][1][2]  # content type
 
 
-def test_transform_image_edit_request_with_mask(image_edit_config: OpenAIImageEditConfig):
+def test_transform_image_edit_request_with_mask(
+    image_edit_config: OpenAIImageEditConfig,
+):
     """Test transformation with mask parameter"""
     model = "dall-e-2"
     prompt = "Make the background blue"
@@ -73,37 +75,39 @@ def test_transform_image_edit_request_with_mask(image_edit_config: OpenAIImageEd
 
     # Check that files contains both image and mask
     assert len(files) == 2
-    
+
     # Find image and mask in files
     image_file = next(f for f in files if f[0] == "image[]")
     mask_file = next(f for f in files if f[0] == "mask")
-    
+
     assert image_file[1][0] == "image.png"
     assert image_file[1][1] == image
     assert "image/png" in image_file[1][2]
-    
+
     assert mask_file[1][0] == "mask.png"
     assert mask_file[1][1] == mask
     assert "image/png" in mask_file[1][2]
 
 
-def test_transform_image_edit_request_with_buffered_reader(image_edit_config: OpenAIImageEditConfig):
+def test_transform_image_edit_request_with_buffered_reader(
+    image_edit_config: OpenAIImageEditConfig,
+):
     """Test transformation with BufferedReader as image input"""
     import os
     import tempfile
-    
+
     model = "dall-e-2"
     prompt = "Make the background blue"
-    
+
     # Create a real file to get a proper BufferedReader
     image_data = b"fake_image_data"
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
         temp_file.write(image_data)
         temp_file_path = temp_file.name
-    
+
     try:
         # Open the file as BufferedReader
-        with open(temp_file_path, 'rb') as image_buffer:
+        with open(temp_file_path, "rb") as image_buffer:
             image_edit_optional_request_params = {}
             litellm_params = GenericLiteLLMParams()
             headers = {}
@@ -135,7 +139,9 @@ def test_transform_image_edit_request_with_buffered_reader(image_edit_config: Op
         os.unlink(temp_file_path)
 
 
-def test_transform_image_edit_request_with_optional_params(image_edit_config: OpenAIImageEditConfig):
+def test_transform_image_edit_request_with_optional_params(
+    image_edit_config: OpenAIImageEditConfig,
+):
     """Test transformation with optional parameters like size, quality, etc."""
     model = "dall-e-2"
     prompt = "Make the background blue"
@@ -144,7 +150,7 @@ def test_transform_image_edit_request_with_optional_params(image_edit_config: Op
         "size": "512x512",
         "response_format": "b64_json",
         "n": 2,
-        "user": "test_user"
+        "user": "test_user",
     }
     litellm_params = GenericLiteLLMParams()
     headers = {}
@@ -174,7 +180,9 @@ def test_transform_image_edit_request_with_optional_params(image_edit_config: Op
     assert files[0][1][1] == image
 
 
-def test_transform_image_edit_request_with_multiple_images(image_edit_config: OpenAIImageEditConfig):
+def test_transform_image_edit_request_with_multiple_images(
+    image_edit_config: OpenAIImageEditConfig,
+):
     """Test transformation with multiple images and no mask"""
     model = "dall-e-2"
     prompt = "Make the background blue"
@@ -205,24 +213,26 @@ def test_transform_image_edit_request_with_multiple_images(image_edit_config: Op
 
     # Check that files contains all three images and no mask
     assert len(files) == 3
-    
+
     # All files should be image entries with image[] key
     image_files = [f for f in files if f[0] == "image[]"]
     assert len(image_files) == 3
-    
+
     # Check that all image data is present
     image_data_in_files = [f[1][1] for f in image_files]
     assert image1 in image_data_in_files
     assert image2 in image_data_in_files
     assert image3 in image_data_in_files
-    
+
     # Check that all files have proper content type
     for file_entry in image_files:
         assert file_entry[1][0] == "image.png"  # filename
         assert file_entry[1][2].startswith("image/")  # content type
 
 
-def test_transform_image_edit_request_with_mask_list(image_edit_config: OpenAIImageEditConfig):
+def test_transform_image_edit_request_with_mask_list(
+    image_edit_config: OpenAIImageEditConfig,
+):
     """Test transformation with mask as list (should take first element)"""
     model = "dall-e-2"
     prompt = "Make the background blue"
@@ -250,7 +260,6 @@ def test_transform_image_edit_request_with_mask_list(image_edit_config: OpenAIIm
 
     # Check that files contains image and only the first mask
     assert len(files) == 2
-    
+
     mask_file = next(f for f in files if f[0] == "mask")
     assert mask_file[1][1] == mask1  # Should be the first mask, not the second
-

@@ -239,7 +239,6 @@ def test_assemble_complete_response_from_streaming_chunks_2(is_async):
 
 @pytest.mark.parametrize("is_async", [True, False])
 def test_assemble_complete_response_from_streaming_chunks_3(is_async):
-
     request_kwargs = {
         "model": "test_model",
         "messages": [{"role": "user", "content": "Hello, world!"}],

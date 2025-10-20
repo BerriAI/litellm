@@ -41,7 +41,9 @@ class BedrockPassthroughConfig(
             model_id=None,
         )
 
-        aws_bedrock_runtime_endpoint = optional_params.get("aws_bedrock_runtime_endpoint")
+        aws_bedrock_runtime_endpoint = optional_params.get(
+            "aws_bedrock_runtime_endpoint"
+        )
         endpoint_url, _ = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
@@ -49,7 +51,10 @@ class BedrockPassthroughConfig(
             endpoint_type="runtime",
         )
 
-        return self.format_url(endpoint, endpoint_url, request_query_params or {}), endpoint_url
+        return (
+            self.format_url(endpoint, endpoint_url, request_query_params or {}),
+            endpoint_url,
+        )
 
     def sign_request(
         self,

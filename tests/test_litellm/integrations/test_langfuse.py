@@ -13,18 +13,22 @@ from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
 sys.path.insert(0, os.path.abspath("../.."))
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
+
 # Import LangfuseUsageDetails directly from the module where it's defined
 from litellm.types.integrations.langfuse import *
 
-class TestLangfuseUsageDetails(unittest.TestCase):
 
+class TestLangfuseUsageDetails(unittest.TestCase):
     def setUp(self):
         # Set up environment variables for testing
-        self.env_patcher = patch.dict('os.environ', {
-            'LANGFUSE_SECRET_KEY': 'test-secret-key',
-            'LANGFUSE_PUBLIC_KEY': 'test-public-key',
-            'LANGFUSE_HOST': 'https://test.langfuse.com'
-        })
+        self.env_patcher = patch.dict(
+            "os.environ",
+            {
+                "LANGFUSE_SECRET_KEY": "test-secret-key",
+                "LANGFUSE_PUBLIC_KEY": "test-public-key",
+                "LANGFUSE_HOST": "https://test.langfuse.com",
+            },
+        )
         self.env_patcher.start()
 
         # Create mock objects
@@ -37,21 +41,25 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
 
         # Mock the langfuse module that's imported locally in methods
-        self.langfuse_module_patcher = patch.dict('sys.modules', {'langfuse': MagicMock()})
+        self.langfuse_module_patcher = patch.dict(
+            "sys.modules", {"langfuse": MagicMock()}
+        )
         self.mock_langfuse_module = self.langfuse_module_patcher.start()
 
         # Create a mock for the langfuse module with version
         self.mock_langfuse = MagicMock()
         self.mock_langfuse.version = MagicMock()
-        self.mock_langfuse.version.__version__ = "3.0.0"  # Set a version that supports all features
+        self.mock_langfuse.version.__version__ = (
+            "3.0.0"  # Set a version that supports all features
+        )
 
         # Mock the Langfuse class
         self.mock_langfuse_class = MagicMock()
         self.mock_langfuse_class.return_value = self.mock_langfuse_client
 
         # Set up the sys.modules['langfuse'] mock
-        sys.modules['langfuse'] = self.mock_langfuse
-        sys.modules['langfuse'].Langfuse = self.mock_langfuse_class
+        sys.modules["langfuse"] = self.mock_langfuse
+        sys.modules["langfuse"].Langfuse = self.mock_langfuse_class
 
         # Mock the Langfuse client
         self.mock_langfuse_client = MagicMock()
@@ -71,7 +79,16 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.logger = LangFuseLogger()
 
         # Add the log_event_on_langfuse method to the instance
-        def log_event_on_langfuse(self, kwargs, response_obj, start_time=None, end_time=None, user_id=None, level="DEFAULT", status_message=None):
+        def log_event_on_langfuse(
+            self,
+            kwargs,
+            response_obj,
+            start_time=None,
+            end_time=None,
+            user_id=None,
+            level="DEFAULT",
+            status_message=None,
+        ):
             # This implementation calls _log_langfuse_v2 directly
             return self._log_langfuse_v2(
                 user_id=user_id,
@@ -86,12 +103,15 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 response_obj=response_obj,
                 level=level,
                 litellm_call_id=kwargs.get("litellm_call_id", None),
-                print_verbose=True  # Add the missing parameter
+                print_verbose=True,  # Add the missing parameter
             )
 
         # Bind the method to the instance
         import types
-        self.logger.log_event_on_langfuse = types.MethodType(log_event_on_langfuse, self.logger)
+
+        self.logger.log_event_on_langfuse = types.MethodType(
+            log_event_on_langfuse, self.logger
+        )
 
         # Make sure _is_langfuse_v2 returns True
         def mock_is_langfuse_v2(self):
@@ -111,7 +131,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             "output": 20,
             "total": 30,
             "cache_creation_input_tokens": 5,
-            "cache_read_input_tokens": 3
+            "cache_read_input_tokens": 3,
         }
 
         # Verify all fields are present
@@ -127,7 +147,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             "output": 20,
             "total": 30,
             "cache_creation_input_tokens": 0,
-            "cache_read_input_tokens": 0
+            "cache_read_input_tokens": 0,
         }
 
         self.assertEqual(minimal_usage_details["input"], 10)
@@ -144,9 +164,9 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
         # Add the cache token attributes using get method
         def mock_get(key, default=None):
-            if key == 'cache_creation_input_tokens':
+            if key == "cache_creation_input_tokens":
                 return 7
-            elif key == 'cache_read_input_tokens':
+            elif key == "cache_read_input_tokens":
                 return 4
             return default
 
@@ -156,7 +176,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         kwargs = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Hello"}],
-            "litellm_params": {"metadata": {}}
+            "litellm_params": {"metadata": {}},
         }
 
         # Create start and end times
@@ -164,12 +184,12 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         end_time = start_time + datetime.timedelta(seconds=1)
 
         # Call the log_event method
-        with patch.object(self.logger, '_log_langfuse_v2') as mock_log_langfuse_v2:
+        with patch.object(self.logger, "_log_langfuse_v2") as mock_log_langfuse_v2:
             self.logger.log_event_on_langfuse(
                 kwargs=kwargs,
                 response_obj=response_obj,
                 start_time=start_time,
-                end_time=end_time
+                end_time=end_time,
             )
 
             # Check if _log_langfuse_v2 was called
@@ -189,7 +209,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             "output": 20,
             "total": 30,
             "cache_creation_input_tokens": None,
-            "cache_read_input_tokens": None
+            "cache_read_input_tokens": None,
         }
 
         # Verify fields can be None
@@ -210,7 +230,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             "output": 25,
             "total": 40,
             "cache_creation_input_tokens": 7,
-            "cache_read_input_tokens": 4
+            "cache_read_input_tokens": 4,
         }
 
         # Verify the structure matches what we expect
@@ -226,6 +246,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.assertEqual(usage_details["total"], 40)
         self.assertEqual(usage_details["cache_creation_input_tokens"], 7)
         self.assertEqual(usage_details["cache_read_input_tokens"], 4)
+
 
 def test_max_langfuse_clients_limit():
     """

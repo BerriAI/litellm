@@ -27,22 +27,22 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
     reasoning_tokens = 0
     if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
-        reasoning_tokens = int(getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0)
+        reasoning_tokens = int(
+            getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0
+        )
 
     total_completion_tokens = completion_tokens + reasoning_tokens
-    
+
     modified_usage = Usage(
         prompt_tokens=usage.prompt_tokens,
         completion_tokens=total_completion_tokens,
         total_tokens=usage.total_tokens,
         prompt_tokens_details=usage.prompt_tokens_details,
-        completion_tokens_details=None 
+        completion_tokens_details=None,
     )
-    
+
     prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
-        usage=modified_usage,
-        custom_llm_provider="xai"
+        model=model, usage=modified_usage, custom_llm_provider="xai"
     )
 
     return prompt_cost, completion_cost

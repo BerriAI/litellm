@@ -3,7 +3,7 @@ Unit tests for prometheus metric labels configuration
 """
 from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
-    UserAPIKeyLabelNames
+    UserAPIKeyLabelNames,
 )
 
 
@@ -26,12 +26,14 @@ def test_user_email_in_required_metrics():
         "litellm_input_tokens_metric",
         "litellm_output_tokens_metric",
         "litellm_requests_metric",
-        "litellm_spend_metric"
+        "litellm_spend_metric",
     ]
 
     for metric_name in metrics_with_user_email:
         labels = PrometheusMetricLabels.get_labels(metric_name)
-        assert user_email_label in labels, f"Metric {metric_name} should contain user_email label"
+        assert (
+            user_email_label in labels
+        ), f"Metric {metric_name} should contain user_email label"
         print(f"✅ {metric_name} contains user_email label")
 
 
@@ -51,12 +53,14 @@ def test_prometheus_metric_labels_structure():
         "litellm_proxy_failed_requests_metric",
         "litellm_input_tokens_metric",
         "litellm_output_tokens_metric",
-        "litellm_spend_metric"
+        "litellm_spend_metric",
     ]
 
     for metric_name in test_metrics:
         # Check metric is in DEFINED_PROMETHEUS_METRICS
-        assert metric_name in get_args(DEFINED_PROMETHEUS_METRICS), f"{metric_name} should be in DEFINED_PROMETHEUS_METRICS"
+        assert metric_name in get_args(
+            DEFINED_PROMETHEUS_METRICS
+        ), f"{metric_name} should be in DEFINED_PROMETHEUS_METRICS"
 
         # Check labels can be retrieved
         labels = PrometheusMetricLabels.get_labels(metric_name)

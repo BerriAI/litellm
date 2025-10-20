@@ -284,23 +284,25 @@ class DualCache(BaseCache):
                     redis_result = await self.redis_cache.async_batch_get_cache(
                         sublist_keys, parent_otel_span=parent_otel_span
                     )
-                    
+
                     # Update the last access time for ALL queried keys
                     # This includes keys with None values to throttle repeated Redis queries
                     for key in sublist_keys:
                         self.last_redis_batch_access_time[key] = current_time
-                    
+
                     # Short-circuit if redis_result is None or contains only None values
-                    if redis_result is None or all(v is None for v in redis_result.values()):
+                    if redis_result is None or all(
+                        v is None for v in redis_result.values()
+                    ):
                         return result
 
                     # Pre-compute key-to-index mapping for O(1) lookup
                     key_to_index = {key: i for i, key in enumerate(keys)}
-                    
+
                     # Update both result and in-memory cache in a single loop
                     for key, value in redis_result.items():
                         result[key_to_index[key]] = value
-                        
+
                         if value is not None and self.in_memory_cache is not None:
                             await self.in_memory_cache.async_set_cache(
                                 key, value, **kwargs
