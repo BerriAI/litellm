@@ -2258,6 +2258,7 @@ class LlmProviders(str, Enum):
     SAGEMAKER = "sagemaker"
     SAGEMAKER_CHAT = "sagemaker_chat"
     BEDROCK = "bedrock"
+    AGENTCORE = "agentcore"
     VLLM = "vllm"
     NLP_CLOUD = "nlp_cloud"
     PETALS = "petals"

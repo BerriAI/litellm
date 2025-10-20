@@ -795,6 +795,7 @@ models_by_provider: dict = {
     + vertex_language_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models + bedrock_converse_models,
+    "agentcore": [],  # AgentCore supports dynamic agent models
     "petals": petals_models,
     "ollama": ollama_models,
     "ollama_chat": ollama_models,
