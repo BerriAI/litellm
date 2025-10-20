@@ -790,6 +790,57 @@ def test_cohere_v2_error_handling():
 
 
 @pytest.mark.asyncio
+async def test_cohere_documents_citation_options_in_request_body():
+    """
+    Test that documents and citation_options parameters are properly included 
+    in the request body after transformation (sent via extra_body).
+    """
+    # Create a mock response
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "text": "Test response with citations",
+        "generation_id": "mock-generation-id",
+        "finish_reason": "COMPLETE"
+    }
+
+    # Mock the AsyncHTTPHandler.post method
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post", return_value=mock_response) as mock_post:
+        try:
+            # Test documents and citation_options parameters
+            test_documents = [
+                {"title": "Test Document 1", "text": "This is test content 1"},
+                {"title": "Test Document 2", "text": "This is test content 2"}
+            ]
+            test_citation_options = {
+                "return_citations": True,
+                "return_confidence": True
+            }
+            
+            await litellm.acompletion(
+                model="cohere_chat/command-r",
+                messages=[{"role": "user", "content": "Test message"}],
+                documents=test_documents,
+                citation_options=test_citation_options
+            )
+        except Exception:
+            pass  # We only care about the request body validation
+
+        # Verify the API call was made
+        mock_post.assert_called_once()
+        
+        # Get and parse the request body
+        request_data = json.loads(mock_post.call_args.kwargs["data"])
+        print(f"Request body: {request_data}")
+        
+        # Validate that documents and citation_options are in the request body
+        assert "documents" in request_data
+        assert request_data["documents"] == test_documents
+        assert "citation_options" in request_data
+        assert request_data["citation_options"] == test_citation_options
+
+
+@pytest.mark.asyncio
 async def test_cohere_v2_conversation_history():
     """Test Cohere v2 with conversation history."""
     try:
