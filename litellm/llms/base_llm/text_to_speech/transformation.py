@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, TypedDict, Union
 
 import httpx
 
@@ -19,6 +19,18 @@ else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
     HttpxBinaryResponseContent = Any
+
+
+class TextToSpeechRequestData(TypedDict, total=False):
+    """
+    Structured return type for text-to-speech transformations.
+    
+    This ensures a consistent interface across all TTS providers.
+    Providers should set ONE of: dict_body, ssml_body, or text_body.
+    """
+    dict_body: Dict[str, Any]  # JSON request body (e.g., OpenAI TTS)
+    ssml_body: str  # SSML/XML string body (e.g., Azure AVA TTS)
+    headers: Dict[str, str]  # Provider-specific headers to merge with base headers
 
 
 class BaseTextToSpeechConfig(ABC):
@@ -99,9 +111,14 @@ class BaseTextToSpeechConfig(ABC):
         optional_params: Dict,
         litellm_params: Dict,
         headers: dict,
-    ) -> Dict:
+    ) -> TextToSpeechRequestData:
         """
-        Transform request to provider-specific format
+        Transform request to provider-specific format.
+        
+        Returns:
+            TextToSpeechRequestData: A structured dict containing:
+                - body: The request body (JSON dict, XML string, or binary data)
+                - headers: Provider-specific headers to merge with base headers
         """
         pass
 
