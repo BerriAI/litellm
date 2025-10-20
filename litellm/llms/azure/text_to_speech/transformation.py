@@ -5,6 +5,7 @@ Maps OpenAI TTS spec to Azure Cognitive Services TTS API
 """
 
 from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Union
+from urllib.parse import urlparse
 
 import httpx
 
@@ -29,6 +30,11 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
     
     Reference: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/rest-text-to-speech
     """
+
+    # Azure endpoint domains
+    COGNITIVE_SERVICES_DOMAIN = "api.cognitive.microsoft.com"
+    TTS_SPEECH_DOMAIN = "tts.speech.microsoft.com"
+    TTS_ENDPOINT_PATH = "/cognitiveservices/v1"
 
     # Voice name mappings from OpenAI voices to Azure voices
     VOICE_MAPPINGS = {
@@ -138,6 +144,24 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         """
         return ["voice", "response_format", "speed"]
 
+    def _convert_speed_to_azure_rate(self, speed: float) -> str:
+        """
+        Convert OpenAI speed value to Azure SSML prosody rate percentage
+        
+        Args:
+            speed: OpenAI speed value (0.25-4.0, default 1.0)
+        
+        Returns:
+            Azure rate string with percentage (e.g., "+50%", "-50%", "+0%")
+        
+        Examples:
+            speed=1.0 -> "+0%" (default)
+            speed=2.0 -> "+100%"
+            speed=0.5 -> "-50%"
+        """
+        rate_percentage = int((speed - 1.0) * 100)
+        return f"{rate_percentage:+d}%"
+
     def map_openai_params(
         self,
         model: str,
@@ -176,13 +200,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         if "speed" in optional_params:
             speed = optional_params["speed"]
             if speed is not None:
-                # Convert speed to percentage for Azure SSML
-                # OpenAI default is 1.0, so we convert to percentage
-                # speed=1.0 -> 0% (default)
-                # speed=2.0 -> +100%
-                # speed=0.5 -> -50%
-                rate_percentage = int((speed - 1.0) * 100)
-                mapped_params["rate"] = f"{rate_percentage:+d}%"  # Format with sign
+                mapped_params["rate"] = self._convert_speed_to_azure_rate(speed=speed)
         
         return mapped_params
 
@@ -231,28 +249,64 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         """
         if api_base is None:
             raise ValueError(
-                "api_base is required for Azure AVA TTS. "
-                "Format: https://{region}.api.cognitive.microsoft.com or "
-                "https://{region}.tts.speech.microsoft.com"
+                f"api_base is required for Azure AVA TTS. "
+                f"Format: https://{{region}}.{self.COGNITIVE_SERVICES_DOMAIN} or "
+                f"https://{{region}}.{self.TTS_SPEECH_DOMAIN}"
             )
         
-        # Remove trailing slash
+        # Remove trailing slash and parse URL
         api_base = api_base.rstrip("/")
+        parsed_url = urlparse(api_base)
+        hostname = parsed_url.hostname or ""
         
-        # If it's the general cognitive services endpoint, convert to TTS endpoint
-        if "api.cognitive.microsoft.com" in api_base:
-            # Extract region from URL
-            # e.g., https://eastus.api.cognitive.microsoft.com -> eastus
-            region = api_base.split("//")[1].split(".")[0]
-            return f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
-        elif "tts.speech.microsoft.com" in api_base:
-            # Already a TTS endpoint
-            if not api_base.endswith("/cognitiveservices/v1"):
-                return f"{api_base}/cognitiveservices/v1"
+        # Check if it's a Cognitive Services endpoint (convert to TTS endpoint)
+        if self._is_cognitive_services_endpoint(hostname=hostname):
+            region = self._extract_region_from_hostname(
+                hostname=hostname, 
+                domain=self.COGNITIVE_SERVICES_DOMAIN
+            )
+            return self._build_tts_url(region=region)
+        
+        # Check if it's already a TTS endpoint
+        if self._is_tts_endpoint(hostname=hostname):
+            if not api_base.endswith(self.TTS_ENDPOINT_PATH):
+                return f"{api_base}{self.TTS_ENDPOINT_PATH}"
             return api_base
-        else:
-            # Assume it's a custom endpoint, append the path
-            return f"{api_base}/cognitiveservices/v1"
+        
+        # Assume it's a custom endpoint, append the path
+        return f"{api_base}{self.TTS_ENDPOINT_PATH}"
+
+    def _is_cognitive_services_endpoint(self, hostname: str) -> bool:
+        """Check if hostname is a Cognitive Services endpoint"""
+        return (
+            hostname == self.COGNITIVE_SERVICES_DOMAIN 
+            or hostname.endswith(f".{self.COGNITIVE_SERVICES_DOMAIN}")
+        )
+
+    def _is_tts_endpoint(self, hostname: str) -> bool:
+        """Check if hostname is a TTS endpoint"""
+        return (
+            hostname == self.TTS_SPEECH_DOMAIN 
+            or hostname.endswith(f".{self.TTS_SPEECH_DOMAIN}")
+        )
+
+    def _extract_region_from_hostname(self, hostname: str, domain: str) -> str:
+        """
+        Extract region from hostname
+        
+        Examples:
+            eastus.api.cognitive.microsoft.com -> eastus
+            api.cognitive.microsoft.com -> ""
+        """
+        if hostname.endswith(f".{domain}"):
+            return hostname[:-len(f".{domain}")]
+        return ""
+
+    def _build_tts_url(self, region: str) -> str:
+        """Build the complete TTS URL with region"""
+        if region:
+            return f"https://{region}.{self.TTS_SPEECH_DOMAIN}{self.TTS_ENDPOINT_PATH}"
+        return f"https://{self.TTS_SPEECH_DOMAIN}{self.TTS_ENDPOINT_PATH}"
 
     def transform_text_to_speech_request(
         self,
