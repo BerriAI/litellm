@@ -224,23 +224,21 @@ if MCP_AVAILABLE:
             )
             
             # FIX: Extract MCP auth headers from request
-            # The UI sends bearer token in x-mcp-auth header, but it wasn't being extracted
+            # The UI sends bearer token in x-mcp-auth header and server-specific headers,
+            # but they weren't being extracted and passed to call_mcp_tool.
+            # This fix ensures auth headers are properly extracted from the HTTP request
+            # and passed through to the MCP server for authentication.
             mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(request.headers)
             mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(request.headers)
             
-            verbose_logger.error(
-                f"[MCP DEBUG] REST endpoint extracted headers - "
-                f"has_mcp_auth_header: {mcp_auth_header is not None}, "
-                f"has_mcp_server_auth_headers: {mcp_server_auth_headers is not None}"
-            )
-            
-            # Add extracted headers to data
+            # Add extracted headers to data dict to pass to call_mcp_tool
             if mcp_auth_header:
                 data["mcp_auth_header"] = mcp_auth_header
             if mcp_server_auth_headers:
                 data["mcp_server_auth_headers"] = mcp_server_auth_headers
             
-            return await call_mcp_tool(**data)
+            result = await call_mcp_tool(**data)
+            return result
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
             raise HTTPException(
