@@ -158,6 +158,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "parallel_tool_calls",
             "audio",
             "web_search_options",
+            "service_tier",
             "safety_identifier",
         ]  # works across all models
 

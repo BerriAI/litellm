@@ -9,6 +9,8 @@ import TabItem from '@theme/TabItem';
 **Team budgets**: Add team_id to virtual keys to utilize a team's shared budget
 
 **Team member budgets**: Set individual spending limits within the team's shared budget
+
+***If a key belongs to a team, the team budget is applied, not the user's personal budget.***
 :::
 
 Requirements: 

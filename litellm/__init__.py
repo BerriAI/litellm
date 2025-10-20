@@ -767,6 +767,9 @@ azure_llms = {
     "gpt-35-turbo": "azure/gpt-35-turbo",
     "gpt-35-turbo-16k": "azure/gpt-35-turbo-16k",
     "gpt-35-turbo-instruct": "azure/gpt-35-turbo-instruct",
+    "azure/gpt-41":"gpt-4.1", 
+    "azure/gpt-41-mini":"gpt-4.1-mini",
+    "azure/gpt-41-nano":"gpt-4.1-nano"
 }
 
 azure_embedding_models = {
@@ -1071,6 +1074,7 @@ from .llms.infinity.rerank.transformation import InfinityRerankConfig
 from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
 from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
+from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
 from .llms.meta_llama.chat.transformation import LlamaAPIConfig
