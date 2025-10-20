@@ -6,7 +6,7 @@ Convert text to natural-sounding speech using Azure OpenAI's Text to Speech mode
 
 **LiteLLM SDK**
 
-```python 
+```python showLineNumbers title="SDK Usage"
 from litellm import speech
 from pathlib import Path
 import os
@@ -28,7 +28,7 @@ response.stream_to_file(speech_file_path)
 
 **LiteLLM PROXY**
 
-```yaml
+```yaml showLineNumbers title="proxy_config.yaml"
 model_list:
  - model_name: azure/tts-1
     litellm_params:
@@ -50,7 +50,7 @@ Azure OpenAI supports the following voices:
 
 ## Supported Parameters
 
-```python
+```python showLineNumbers title="All Parameters"
 response = speech(
     model="azure/<your-deployment-name>",
     voice="alloy",                    # Required: Voice selection

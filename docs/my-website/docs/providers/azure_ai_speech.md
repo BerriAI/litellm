@@ -6,11 +6,19 @@ Azure AI Speech is Azure's Cognitive Services text-to-speech API, separate from 
 - **Azure AI Speech** - More languages, neural voices, SSML support, speech customization
 - **Azure OpenAI TTS** - OpenAI models, integrated with Azure OpenAI services
 
+
+## Overview
+
+| Property | Details |
+|-------|-------|
+| Description | Azure AI Speech is Azure's Cognitive Services text-to-speech API, separate from Azure OpenAI. It provides high-quality neural voices with broader language support and advanced speech customization. |
+| Provider Route on LiteLLM | `azure/speech` |
+
 ## Quick Start
 
 **LiteLLM SDK**
 
-```python
+```python showLineNumbers title="SDK Usage"
 from litellm import speech
 from pathlib import Path
 import os
@@ -30,7 +38,7 @@ response.stream_to_file(speech_file_path)
 
 **LiteLLM Proxy**
 
-```yaml
+```yaml showLineNumbers title="proxy_config.yaml"
 model_list:
   - model_name: azure-speech
     litellm_params:
@@ -61,7 +69,7 @@ LiteLLM automatically maps OpenAI voice names to Azure Neural voices:
 
 ## Supported Parameters
 
-```python
+```python showLineNumbers title="All Parameters"
 response = speech(
     model="azure/speech/azure-tts",
     voice="alloy",                    # Required: Voice selection
@@ -84,7 +92,7 @@ response = speech(
 
 ## Async Support
 
-```python
+```python showLineNumbers title="Async Usage"
 import asyncio
 from litellm import aspeech
 from pathlib import Path
@@ -121,7 +129,7 @@ Replace `{region}` with your Azure resource region:
 
 You can use any Azure Neural voice by passing the full voice name:
 
-```python
+```python showLineNumbers title="Custom Voice"
 response = speech(
     model="azure/speech/azure-tts",
     voice="en-US-AriaNeural",  # Direct Azure voice name
@@ -135,7 +143,7 @@ Browse available voices in the [Azure Speech Gallery](https://speech.microsoft.c
 
 ## Error Handling
 
-```python
+```python showLineNumbers title="Error Handling"
 from litellm import speech
 from litellm.exceptions import APIError
 
