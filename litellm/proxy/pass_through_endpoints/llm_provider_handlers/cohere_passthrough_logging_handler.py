@@ -4,7 +4,7 @@ from litellm import stream_chunk_builder
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseConfig
-from litellm.llms.cohere.chat.v2_passthrough_transformation import CohereV2ChatPassthroughConfig
+from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
 from litellm.llms.cohere.common_utils import (
     ModelResponseIterator as CohereModelResponseIterator,
 )
@@ -19,7 +19,7 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         return LlmProviders.COHERE
 
     def get_provider_config(self, model: str) -> BaseConfig:
-        return CohereV2ChatPassthroughConfig()
+        return CohereV2ChatConfig()
 
     def _build_complete_streaming_response(
         self,
