@@ -69,6 +69,7 @@ def validate_stream_chunk(chunk):
     assert hasattr(chunk, "created")
     assert isinstance(chunk.created, int)
 
+
 @pytest.mark.flaky(retries=3, delay=2)
 def test_basic_response():
     client = get_test_client()
@@ -80,7 +81,6 @@ def test_basic_response():
     # get the response
     response = client.responses.retrieve(response.id)
     print("GET response=", response)
-
 
     # delete the response
     delete_response = client.responses.delete(response.id)
@@ -120,10 +120,11 @@ def test_bad_request_bad_param_error():
             model="gpt-4o", input="This should fail", temperature=2000
         )
 
+
 def test_anthropic_with_responses_api():
     client = get_test_client()
     response = client.responses.create(
-        model="anthropic/claude-3-5-sonnet-20240620", 
+        model="anthropic/claude-3-5-sonnet-20240620",
         input="just respond with the word 'ping'",
         previous_response_id="hi",
     )
@@ -134,6 +135,7 @@ def test_cancel_response():
     try:
         client = get_test_client()
         from litellm.types.llms.openai import ResponsesAPIResponse
+
         response = client.responses.create(
             model="gpt-4o", input="just respond with the word 'ping'", background=True
         )
@@ -142,7 +144,7 @@ def test_cancel_response():
         # cancel the response
         cancel_response = client.responses.cancel(response.id)
         print("CANCEL response=", cancel_response)
-        
+
         # verify cancel response structure
         assert hasattr(cancel_response, "id")
     except Exception as e:
@@ -156,8 +158,12 @@ def test_cancel_streaming_response():
     try:
         client = get_test_client()
         from litellm.types.llms.openai import ResponsesAPIResponse
+
         stream = client.responses.create(
-            model="gpt-4o", input="just respond with the word 'ping'", stream=True, background=True
+            model="gpt-4o",
+            input="just respond with the word 'ping'",
+            stream=True,
+            background=True,
         )
 
         collected_chunks = []
@@ -166,11 +172,15 @@ def test_cancel_streaming_response():
             print("stream chunk=", chunk)
             collected_chunks.append(chunk)
             # Extract response ID from the first chunk that has it
-            if response_id is None and hasattr(chunk, 'response') and hasattr(chunk.response, 'id'):
+            if (
+                response_id is None
+                and hasattr(chunk, "response")
+                and hasattr(chunk.response, "id")
+            ):
                 response_id = chunk.response.id
 
         assert len(collected_chunks) > 0
-        
+
         # cancel the response if we got a response ID
         if response_id:
             cancel_response = client.responses.cancel(response_id)

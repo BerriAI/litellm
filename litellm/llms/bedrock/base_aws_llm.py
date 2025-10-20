@@ -337,10 +337,10 @@ class BaseAWSLLM:
     ) -> Optional[BEDROCK_EMBEDDING_PROVIDERS_LITERAL]:
         """
         Helper function to get the bedrock embedding provider from the model
-        
+
         Handles scenarios like:
         1. model=cohere.embed-english-v3:0 -> Returns `cohere`
-        2. model=amazon.titan-embed-text-v1 -> Returns `amazon`  
+        2. model=amazon.titan-embed-text-v1 -> Returns `amazon`
         3. model=us.twelvelabs.marengo-embed-2-7-v1:0 -> Returns `twelvelabs`
         4. model=twelvelabs.marengo-embed-2-7-v1:0 -> Returns `twelvelabs`
         """
@@ -349,20 +349,24 @@ class BaseAWSLLM:
             parts = model.split(".")
             # Check if the second part (after potential region) is a known provider
             if len(parts) >= 2:
-                potential_provider = parts[1]  # e.g., "twelvelabs" from "us.twelvelabs.marengo-embed-2-7-v1:0"
+                potential_provider = parts[
+                    1
+                ]  # e.g., "twelvelabs" from "us.twelvelabs.marengo-embed-2-7-v1:0"
                 if potential_provider in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
                     return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, potential_provider)
-            
+
             # Check if the first part is a known provider (standard format)
-            potential_provider = parts[0]  # e.g., "cohere" from "cohere.embed-english-v3:0"
+            potential_provider = parts[
+                0
+            ]  # e.g., "cohere" from "cohere.embed-english-v3:0"
             if potential_provider in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
                 return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, potential_provider)
-        
+
         # Fallback: check if any provider name appears in the model string
         for provider in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
             if provider in model:
                 return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, provider)
-        
+
         return None
 
     def _get_aws_region_name(
@@ -984,20 +988,23 @@ class BaseAWSLLM:
                 raise ImportError(
                     "Missing boto3 to call bedrock. Run 'pip install boto3'."
                 )
-            
+
             # Filter headers for AWS signature calculation
             # AWS SigV4 only includes specific headers in signature calculation
             aws_signature_headers = self._filter_headers_for_aws_signature(headers)
             sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
             request = AWSRequest(
-                method="POST", url=endpoint_url, data=data, headers=aws_signature_headers
+                method="POST",
+                url=endpoint_url,
+                data=data,
+                headers=aws_signature_headers,
             )
             sigv4.add_auth(request)
-            
+
             # Add back all original headers (including forwarded ones) after signature calculation
             for header_name, header_value in headers.items():
                 request.headers[header_name] = header_value
-            
+
             if (
                 extra_headers is not None and "Authorization" in extra_headers
             ):  # prevent sigv4 from overwriting the auth header
@@ -1013,16 +1020,27 @@ class BaseAWSLLM:
         """
         aws_signature_headers = {}
         aws_headers = {
-            'host', 'content-type', 'date', 'x-amz-date', 'x-amz-security-token',
-            'x-amz-content-sha256', 'x-amz-algorithm', 'x-amz-credential',
-            'x-amz-signedheaders', 'x-amz-signature'
+            "host",
+            "content-type",
+            "date",
+            "x-amz-date",
+            "x-amz-security-token",
+            "x-amz-content-sha256",
+            "x-amz-algorithm",
+            "x-amz-credential",
+            "x-amz-signedheaders",
+            "x-amz-signature",
         }
-        
+
         for header_name, header_value in headers.items():
             header_lower = header_name.lower()
-            if header_lower in aws_headers or header_lower.startswith('x-amz-') or header_lower.startswith('x-amzn-'):
+            if (
+                header_lower in aws_headers
+                or header_lower.startswith("x-amz-")
+                or header_lower.startswith("x-amzn-")
+            ):
                 aws_signature_headers[header_name] = header_value
-        
+
         return aws_signature_headers
 
     def _sign_request(

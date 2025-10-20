@@ -18,18 +18,18 @@ from litellm.litellm_core_utils.app_crypto import AppCrypto
 async def test_async_sqs_logger_flush():
     expected_queue_url = "https://sqs.us-east-1.amazonaws.com/123456789012/test-queue"
     expected_region = "us-east-1"
-    
+
     sqs_logger = SQSLogger(
         sqs_queue_url=expected_queue_url,
         sqs_region_name=expected_region,
         sqs_flush_interval=1,
     )
-    
+
     # Mock the httpx client
     mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()
     sqs_logger.async_httpx_client.post = AsyncMock(return_value=mock_response)
-    
+
     litellm.callbacks = [sqs_logger]
 
     await litellm.acompletion(
@@ -42,31 +42,33 @@ async def test_async_sqs_logger_flush():
 
     # Verify that httpx post was called
     sqs_logger.async_httpx_client.post.assert_called()
-    
+
     # Get the call arguments
     call_args = sqs_logger.async_httpx_client.post.call_args
-    
+
     # Verify the URL is correct
     called_url = call_args[0][0]  # First positional argument
-    assert called_url == expected_queue_url, f"Expected URL {expected_queue_url}, got {called_url}"
-    
+    assert (
+        called_url == expected_queue_url
+    ), f"Expected URL {expected_queue_url}, got {called_url}"
+
     # Verify the payload contains StandardLoggingPayload data
-    called_data = call_args.kwargs['data']
-    
+    called_data = call_args.kwargs["data"]
+
     # Extract the MessageBody from the URL-encoded data
     # Format: "Action=SendMessage&Version=2012-11-05&MessageBody=<url_encoded_json>"
     assert "Action=SendMessage" in called_data
     assert "Version=2012-11-05" in called_data
     assert "MessageBody=" in called_data
-    
+
     # Extract and decode the message body
     message_body_start = called_data.find("MessageBody=") + len("MessageBody=")
     message_body_encoded = called_data[message_body_start:]
     message_body_json = unquote(message_body_encoded)
-    
+
     # Parse the JSON to verify it's a StandardLoggingPayload
     payload_data = json.loads(message_body_json)
-    
+
     # Verify it has the expected StandardLoggingPayload structure
     assert "model" in payload_data
     assert "messages" in payload_data
@@ -98,7 +100,7 @@ async def test_async_sqs_logger_error_flush():
     await litellm.acompletion(
         model="gpt-4o",
         messages=[{"role": "user", "content": "hello"}],
-        mock_response="Error occurred"
+        mock_response="Error occurred",
     )
 
     await asyncio.sleep(2)
@@ -111,10 +113,12 @@ async def test_async_sqs_logger_error_flush():
 
     # Verify the URL is correct
     called_url = call_args[0][0]  # First positional argument
-    assert called_url == expected_queue_url, f"Expected URL {expected_queue_url}, got {called_url}"
+    assert (
+        called_url == expected_queue_url
+    ), f"Expected URL {expected_queue_url}, got {called_url}"
 
     # Verify the payload contains StandardLoggingPayload data
-    called_data = call_args.kwargs['data']
+    called_data = call_args.kwargs["data"]
 
     # Extract the MessageBody from the URL-encoded data
     # Format: "Action=SendMessage&Version=2012-11-05&MessageBody=<url_encoded_json>"
@@ -140,10 +144,10 @@ async def test_async_sqs_logger_error_flush():
     assert payload_data["messages"][0]["content"] == "hello"
 
 
-
 # =============================================================================
 # 📥 Logging Queue Tests
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_async_log_success_event_adds_to_queue(monkeypatch):
@@ -169,10 +173,10 @@ async def test_async_log_failure_event_adds_to_queue(monkeypatch):
     assert fake_payload in logger.log_queue
 
 
-
 # =============================================================================
 # 🧾 async_send_batch Tests
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_async_send_batch_triggers_tasks(monkeypatch):
@@ -186,10 +190,10 @@ async def test_async_send_batch_triggers_tasks(monkeypatch):
     assert logger.async_send_message.await_count == 0  # uses create_task internally
 
 
-
 # =============================================================================
 # 🔐 AppCrypto Tests
 # =============================================================================
+
 
 def test_appcrypto_encrypt_decrypt_roundtrip():
     key = os.urandom(32)
@@ -209,6 +213,7 @@ def test_appcrypto_invalid_key_length():
 # =============================================================================
 # 🪣 SQSLogger Initialization Tests
 # =============================================================================
+
 
 def test_sqs_logger_init_without_encryption(monkeypatch):
     monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
@@ -250,6 +255,7 @@ def test_sqs_logger_init_with_encryption_missing_key(monkeypatch):
 # 📥 Logging Queue Tests
 # =============================================================================
 
+
 @pytest.mark.asyncio
 async def test_async_log_success_event_adds_to_queue(monkeypatch):
     monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
@@ -279,6 +285,7 @@ async def test_async_log_failure_event_adds_to_queue(monkeypatch):
 # =============================================================================
 # 🧾 async_send_batch Tests
 # =============================================================================
+
 
 @pytest.mark.asyncio
 async def test_async_send_batch_triggers_tasks(monkeypatch):

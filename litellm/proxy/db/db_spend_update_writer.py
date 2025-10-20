@@ -341,7 +341,7 @@ class DBSpendUpdateWriter:
     ):
         """
         Update spend for all tags in the request.
-        
+
         Args:
             response_cost: Cost of the request
             request_tags: JSON string of tags list e.g. '["prod-tag", "test-tag"]'
@@ -855,7 +855,7 @@ class DBSpendUpdateWriter:
     ):
         """
         Helper function to update spend for any entity type (team, org, tag, etc).
-        
+
         Args:
             entity_name: Name of entity for logging (e.g., "Team", "Org", "Tag")
             transactions: Dictionary of {entity_id: response_cost}
@@ -867,9 +867,7 @@ class DBSpendUpdateWriter:
         """
         from litellm.proxy.utils import _raise_failed_update_spend_exception
 
-        verbose_proxy_logger.debug(
-            f"{entity_name} Spend transactions: {transactions}"
-        )
+        verbose_proxy_logger.debug(f"{entity_name} Spend transactions: {transactions}")
         if transactions is not None and len(transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
@@ -1018,7 +1016,8 @@ class DBSpendUpdateWriter:
                                 "model_group": transaction.get("model_group"),
                                 "mcp_namespaced_tool_name": transaction.get(
                                     "mcp_namespaced_tool_name"
-                                ) or "",
+                                )
+                                or "",
                                 "custom_llm_provider": transaction.get(
                                     "custom_llm_provider"
                                 ),
@@ -1034,13 +1033,13 @@ class DBSpendUpdateWriter:
 
                             # Add cache-related fields if they exist
                             if "cache_read_input_tokens" in transaction:
-                                common_data["cache_read_input_tokens"] = (
-                                    transaction.get("cache_read_input_tokens", 0)
-                                )
+                                common_data[
+                                    "cache_read_input_tokens"
+                                ] = transaction.get("cache_read_input_tokens", 0)
                             if "cache_creation_input_tokens" in transaction:
-                                common_data["cache_creation_input_tokens"] = (
-                                    transaction.get("cache_creation_input_tokens", 0)
-                                )
+                                common_data[
+                                    "cache_creation_input_tokens"
+                                ] = transaction.get("cache_creation_input_tokens", 0)
 
                             # Create update data structure
                             update_data = {

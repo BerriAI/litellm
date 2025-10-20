@@ -1157,15 +1157,13 @@ async def test_end_user_jwt_auth(monkeypatch):
     # use generated key to auth in
     from litellm import Router
     from litellm.types.router import RouterGeneralSettings
-    
+
     # Create a router with pass_through_all_models enabled
     router = Router(
         model_list=[],
-        router_general_settings=RouterGeneralSettings(
-            pass_through_all_models=True
-        ),
+        router_general_settings=RouterGeneralSettings(pass_through_all_models=True),
     )
-    
+
     setattr(
         litellm.proxy.proxy_server,
         "general_settings",
@@ -1182,7 +1180,7 @@ async def test_end_user_jwt_auth(monkeypatch):
 
     cost_tracking()
     result = await user_api_key_auth(request=request, api_key=bearer_token)
-    
+
     # Assert that end_user_id is correctly extracted from JWT token's 'sub' field
     assert result.end_user_id == "81b3e52a-67a6-4efb-9645-70527e101479"
 
@@ -1214,7 +1212,9 @@ async def test_end_user_jwt_auth(monkeypatch):
         ),
     )
 
-    with patch("litellm.acompletion", new=AsyncMock(return_value=mock_response)) as mock_completion:
+    with patch(
+        "litellm.acompletion", new=AsyncMock(return_value=mock_response)
+    ) as mock_completion:
         resp = await chat_completion(
             request=request,
             fastapi_response=temp_response,
@@ -1229,10 +1229,13 @@ async def test_end_user_jwt_auth(monkeypatch):
         # Verify the completion was called with correct end_user_id
         mock_completion.assert_called_once()
         call_kwargs = mock_completion.call_args.kwargs
-        
+
         # end_user_id is passed in metadata as 'user_api_key_end_user_id'
         metadata = call_kwargs.get("metadata", {})
-        assert metadata.get("user_api_key_end_user_id") == "81b3e52a-67a6-4efb-9645-70527e101479"
+        assert (
+            metadata.get("user_api_key_end_user_id")
+            == "81b3e52a-67a6-4efb-9645-70527e101479"
+        )
 
 
 def test_can_rbac_role_call_route():
@@ -1264,13 +1267,13 @@ def test_user_api_key_auth_jwt_hashing():
     """
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.auth.handle_jwt import JWTHandler
-    
+
     # Test with a JWT token (3 parts separated by dots)
     jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
-    
+
     # Create UserAPIKeyAuth instance with JWT
     user_auth = UserAPIKeyAuth(api_key=jwt_token)
-    
+
     # Verify that the API key is hashed with "hashed-jwt-" prefix
     # critical - the raw JWT token should not be in the api_key or token
     assert user_auth.api_key.startswith("hashed-jwt-")
@@ -1278,19 +1281,18 @@ def test_user_api_key_auth_jwt_hashing():
     assert jwt_token not in user_auth.api_key
     assert jwt_token not in user_auth.token
 
-    
     # Test with a regular API key (should not be hashed)
     regular_api_key = "sk-1234567890abcdef"
     user_auth_regular = UserAPIKeyAuth(api_key=regular_api_key)
-    
+
     # Verify that regular API key is hashed normally (without "hashed-jwt-" prefix)
     assert not user_auth_regular.api_key.startswith("hashed-jwt-")
     assert not user_auth_regular.token.startswith("hashed-jwt-")
-    
+
     # Test with a non-JWT, non-sk string (should not be hashed)
     non_jwt_key = "some-random-key"
     user_auth_non_jwt = UserAPIKeyAuth(api_key=non_jwt_key)
-    
+
     # Verify that non-JWT key is not hashed
     assert user_auth_non_jwt.api_key == non_jwt_key
     assert user_auth_non_jwt.token == non_jwt_key
@@ -1301,19 +1303,19 @@ def test_jwt_handler_is_jwt_static_method():
     Test that JWTHandler.is_jwt is a static method and works correctly
     """
     from litellm.proxy.auth.handle_jwt import JWTHandler
-    
+
     # Test with valid JWT format
     valid_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
     assert JWTHandler.is_jwt(valid_jwt) == True
-    
+
     # Test with invalid JWT format (only 2 parts)
     invalid_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ"
     assert JWTHandler.is_jwt(invalid_jwt) == False
-    
+
     # Test with regular API key
     regular_key = "sk-1234567890abcdef"
     assert JWTHandler.is_jwt(regular_key) == False
-    
+
     # Test with empty string
     assert JWTHandler.is_jwt("") == False
 
@@ -1442,7 +1444,13 @@ async def test_auth_jwt_es256_jwk_path(monkeypatch):
 
     now = int(time.time())
     token = jwt.encode(
-        {"sub": "alice", "aud": "litellm-proxy", "iss": "http://example", "iat": now, "exp": now + 300},
+        {
+            "sub": "alice",
+            "aud": "litellm-proxy",
+            "iss": "http://example",
+            "iat": now,
+            "exp": now + 300,
+        },
         ec_priv_pem,
         algorithm="ES256",
         headers={"kid": "ec1"},
@@ -1489,7 +1497,13 @@ async def test_auth_jwt_rs256_regression(monkeypatch):
 
     now = int(time.time())
     token = jwt.encode(
-        {"sub": "bob", "aud": "litellm-proxy", "iss": "http://example", "iat": now, "exp": now + 300},
+        {
+            "sub": "bob",
+            "aud": "litellm-proxy",
+            "iss": "http://example",
+            "iat": now,
+            "exp": now + 300,
+        },
         rsa_priv_pem,
         algorithm="RS256",
         headers={"kid": "rsa1"},
@@ -1521,7 +1535,13 @@ async def test_auth_jwt_mismatched_key_fails(monkeypatch):
     )
     now = int(time.time())
     token = jwt.encode(
-        {"sub": "mallory", "aud": "litellm-proxy", "iss": "http://example", "iat": now, "exp": now + 300},
+        {
+            "sub": "mallory",
+            "aud": "litellm-proxy",
+            "iss": "http://example",
+            "iat": now,
+            "exp": now + 300,
+        },
         ec_priv_pem,
         algorithm="ES256",
         headers={"kid": "ec1"},

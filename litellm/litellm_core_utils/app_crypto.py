@@ -4,6 +4,7 @@ import os
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+
 class AppCrypto:
     def __init__(self, master_key: bytes):
         if len(master_key) != 32:

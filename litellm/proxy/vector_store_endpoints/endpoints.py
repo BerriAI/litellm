@@ -15,6 +15,7 @@ router = APIRouter()
 # OpenAI Compatible Endpoints
 ########################################################
 
+
 def _update_request_data_with_litellm_managed_vector_store_registry(
     data: Dict,
     vector_store_id: str,
@@ -24,23 +25,35 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
     """
     if litellm.vector_store_registry is not None:
-        vector_store_to_run: Optional[LiteLLM_ManagedVectorStore] = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
+        vector_store_to_run: Optional[
+            LiteLLM_ManagedVectorStore
+        ] = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
             vector_store_id=vector_store_id
         )
         if vector_store_to_run is not None:
             if "custom_llm_provider" in vector_store_to_run:
-                data["custom_llm_provider"] = vector_store_to_run.get("custom_llm_provider")
-            
+                data["custom_llm_provider"] = vector_store_to_run.get(
+                    "custom_llm_provider"
+                )
+
             if "litellm_credential_name" in vector_store_to_run:
-                data["litellm_credential_name"] = vector_store_to_run.get("litellm_credential_name")
+                data["litellm_credential_name"] = vector_store_to_run.get(
+                    "litellm_credential_name"
+                )
 
             if "litellm_params" in vector_store_to_run:
                 litellm_params = vector_store_to_run.get("litellm_params", {}) or {}
                 data.update(litellm_params)
     return data
 
-@router.post("/v1/vector_stores/{vector_store_id}/search", dependencies=[Depends(user_api_key_auth)])
-@router.post("/vector_stores/{vector_store_id}/search", dependencies=[Depends(user_api_key_auth)])
+
+@router.post(
+    "/v1/vector_stores/{vector_store_id}/search",
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/vector_stores/{vector_store_id}/search", dependencies=[Depends(user_api_key_auth)]
+)
 async def vector_store_search(
     request: Request,
     vector_store_id: str,
@@ -71,12 +84,11 @@ async def vector_store_search(
     data = await _read_request_body(request=request)
     if "vector_store_id" not in data:
         data["vector_store_id"] = vector_store_id
-    
+
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data,
-        vector_store_id=vector_store_id
+        data=data, vector_store_id=vector_store_id
     )
-    
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -104,7 +116,6 @@ async def vector_store_search(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-
 
 
 @router.post("/v1/vector_stores", dependencies=[Depends(user_api_key_auth)])

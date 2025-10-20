@@ -269,7 +269,6 @@ async def test_guardrails_with_team_controls():
     - Request with Key 2 -> should error since team guardrails are triggered
     """
     async with aiohttp.ClientSession() as session:
-
         # Create team with guardrails
         team = await create_team(
             session=session,

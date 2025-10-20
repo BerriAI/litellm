@@ -245,7 +245,6 @@ def test_usage_merging_behavior():
             chunk.get("type") == "message_delta"
             and chunk.get("delta", {}).get("stop_reason") is not None
         ):
-
             usage = chunk.get("usage", {})
             assert (
                 usage.get("input_tokens") is not None

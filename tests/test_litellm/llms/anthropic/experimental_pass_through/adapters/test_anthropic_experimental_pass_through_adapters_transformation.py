@@ -211,7 +211,7 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(
             role="user",
-            content=[{"type": "text", "text": "What's the weather in Boston?"}]
+            content=[{"type": "text", "text": "What's the weather in Boston?"}],
         ),
         AnthopicMessagesAssistantMessageParam(
             role="assistant",
@@ -219,7 +219,7 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
                 {
                     "type": "thinking",
                     "thinking": "I will call the get_weather tool.",
-                    "signature": "sigsig"
+                    "signature": "sigsig",
                 },
                 {
                     "type": "redacted_thinking",
@@ -229,9 +229,9 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
                     "type": "tool_use",
                     "id": "toolu_01234",
                     "name": "get_weather",
-                    "input": {"location": "Boston"} 
-                }
-            ]
+                    "input": {"location": "Boston"},
+                },
+            ],
         ),
     ]
 
@@ -243,7 +243,10 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert "thinking_blocks" in result[1]
     assert len(result[1]["thinking_blocks"]) == 2
     assert result[1]["thinking_blocks"][0]["type"] == "thinking"
-    assert result[1]["thinking_blocks"][0]["thinking"] == "I will call the get_weather tool."
+    assert (
+        result[1]["thinking_blocks"][0]["thinking"]
+        == "I will call the get_weather tool."
+    )
     assert result[1]["thinking_blocks"][0]["signature"] == "sigsig"
     assert result[1]["thinking_blocks"][1]["type"] == "redacted_thinking"
     assert result[1]["thinking_blocks"][1]["data"] == "REDACTED"
@@ -258,7 +261,7 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(
             role="user",
-            content=[{"type": "text", "text": "What's the weather in Boston?"}]
+            content=[{"type": "text", "text": "What's the weather in Boston?"}],
         ),
         AnthopicMessagesAssistantMessageParam(
             role="assistant",
@@ -267,9 +270,9 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
                     "type": "tool_use",
                     "id": "toolu_01234",
                     "name": "get_weather",
-                    "input": {"location": "Boston"}
+                    "input": {"location": "Boston"},
                 }
-            ]
+            ],
         ),
         AnthropicMessagesUserMessageParam(
             role="user",
@@ -277,11 +280,11 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
                 {
                     "type": "tool_result",
                     "tool_use_id": "toolu_01234",
-                    "content": "Sunny, 75°F"
+                    "content": "Sunny, 75°F",
                 },
-                {"type": "text", "text": "What about tomorrow?"}
-            ]
-        )
+                {"type": "text", "text": "What about tomorrow?"},
+            ],
+        ),
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
@@ -294,13 +297,19 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
     for i, msg in enumerate(result):
         if isinstance(msg, dict) and msg.get("role") == "tool":
             tool_message_idx = i
-        elif isinstance(msg, dict) and msg.get("role") == "user" and "What about tomorrow?" in str(msg.get("content", "")):
+        elif (
+            isinstance(msg, dict)
+            and msg.get("role") == "user"
+            and "What about tomorrow?" in str(msg.get("content", ""))
+        ):
             user_message_idx = i
             break
 
     assert tool_message_idx is not None, "Tool message not found"
     assert user_message_idx is not None, "User message not found"
-    assert tool_message_idx < user_message_idx, "Tool message should be placed before user message"
+    assert (
+        tool_message_idx < user_message_idx
+    ), "Tool message should be placed before user message"
 
 
 def test_translate_openai_content_to_anthropic_empty_function_arguments():
@@ -316,11 +325,10 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
                         id="call_empty_args",
                         type="function",
                         function=Function(
-                            name="test_function",
-                            arguments=""  # empty arguments string
-                        )
+                            name="test_function", arguments=""  # empty arguments string
+                        ),
                     )
-                ]
+                ],
             )
         )
     ]
@@ -335,7 +343,6 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     assert result[0].input == {}, "Empty function arguments should result in empty dict"
 
 
-
 def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():
     """Test that partial tool arguments are correctly handled as input_json_delta."""
     choices = [
@@ -344,15 +351,15 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():
             index=1,
             delta=Delta(
                 provider_specific_fields=None,
-                content='',
-                role='assistant',
+                content="",
+                role="assistant",
                 function_call=None,
                 tool_calls=[
                     ChatCompletionDeltaToolCall(
                         id=None,
                         function=Function(arguments=': "San ', name=None),
-                        type='function',
-                        index=0
+                        type="function",
+                        index=0,
                     )
                 ],
                 audio=None,
@@ -372,9 +379,8 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():
     print("Content block delta:", content_block_delta)
 
     assert type_of_content == "input_json_delta"
-    assert content_block_delta["type"] == "input_json_delta" 
+    assert content_block_delta["type"] == "input_json_delta"
     assert content_block_delta["partial_json"] == ': "San '
-
 
 
 def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
@@ -389,11 +395,8 @@ def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
                         "thinking": "I need to summar",
                         "signature": "sigsig",
                     },
-                    {
-                        "type": "redacted_thinking",
-                        "data": "REDACTED"
-                    }
-                ]
+                    {"type": "redacted_thinking", "data": "REDACTED"},
+                ],
             )
         )
     ]
@@ -450,7 +453,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
     )
 
     assert type_of_content == "thinking_delta"
-    assert content_block_delta["type"] == "thinking_delta" 
+    assert content_block_delta["type"] == "thinking_delta"
     assert content_block_delta["thinking"] == "I need to summar"
 
 
@@ -495,7 +498,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
     )
 
     assert type_of_content == "signature_delta"
-    assert content_block_delta["type"] == "signature_delta" 
+    assert content_block_delta["type"] == "signature_delta"
     assert content_block_delta["signature"] == "sigsig"
 
 

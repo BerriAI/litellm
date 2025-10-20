@@ -18,6 +18,7 @@ verbose_logger.setLevel(logging.DEBUG)
 litellm.set_verbose = True
 import time
 
+
 @pytest.mark.asyncio
 async def test_opik_logging_http_request():
     """
@@ -56,7 +57,9 @@ async def test_opik_logging_http_request():
         await asyncio.sleep(1)
 
         # Check batching of events and that the queue contains 5 trace events and 5 span events
-        assert mock_post.called == False, "HTTP request was made but events should have been batched"
+        assert (
+            mock_post.called == False
+        ), "HTTP request was made but events should have been batched"
         assert len(test_opik_logger.log_queue) == 10
 
         # Now make calls to exceed the batch size
@@ -68,7 +71,7 @@ async def test_opik_logging_http_request():
                 temperature=0.2,
                 mock_response="This is a mock response",
             )
-        
+
         # Wait a short time for any asynchronous operations to complete
         await asyncio.sleep(1)
 
@@ -86,6 +89,7 @@ async def test_opik_logging_http_request():
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 def test_sync_opik_logging_http_request():
     """
@@ -125,17 +129,20 @@ def test_sync_opik_logging_http_request():
         time.sleep(3)
 
         # Check that 5 spans and 5 traces were sent
-        assert mock_post.call_count == 10, f"Expected 10 HTTP requests, but got {mock_post.call_count}"
-        
+        assert (
+            mock_post.call_count == 10
+        ), f"Expected 10 HTTP requests, but got {mock_post.call_count}"
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="local-only test, to test if everything works fine.")
 async def test_opik_logging():
     try:
         from litellm.integrations.opik.opik import OpikLogger
-        
+
         # Initialize OpikLogger
         test_opik_logger = OpikLogger()
         litellm.callbacks = [test_opik_logger]
@@ -147,28 +154,30 @@ async def test_opik_logging():
             messages=[{"role": "user", "content": "What LLM are you ?"}],
             max_tokens=10,
             temperature=0.2,
-            metadata={"opik": {"custom_field": "custom_value"}}
+            metadata={"opik": {"custom_field": "custom_value"}},
         )
         print("Non-streaming response:", response)
-        
+
         # Log a streaming completion call
         stream_response = await litellm.acompletion(
             model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Stream = True - What llm are you ?"}],
+            messages=[
+                {"role": "user", "content": "Stream = True - What llm are you ?"}
+            ],
             max_tokens=10,
             temperature=0.2,
             stream=True,
-            metadata={"opik": {"custom_field": "custom_value"}}
+            metadata={"opik": {"custom_field": "custom_value"}},
         )
         print("Streaming response:")
         async for chunk in stream_response:
-            print(chunk.choices[0].delta.content, end='', flush=True)
+            print(chunk.choices[0].delta.content, end="", flush=True)
         print()  # New line after streaming response
 
         await asyncio.sleep(2)
 
         assert len(test_opik_logger.log_queue) == 4
-        
+
         await asyncio.sleep(test_opik_logger.flush_interval + 1)
         assert len(test_opik_logger.log_queue) == 0
     except Exception as e:

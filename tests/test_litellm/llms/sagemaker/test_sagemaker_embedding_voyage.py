@@ -28,14 +28,19 @@ class TestSagemakerEmbeddingFactory:
     def test_get_model_config_voyage_model(self):
         """Test that Voyage models return VoyageEmbeddingConfig"""
         config = SagemakerEmbeddingConfig.get_model_config("voyage-3-5-embedding")
-        
+
         assert isinstance(config, VoyageEmbeddingConfig)
-        assert config.get_supported_openai_params("voyage-3-5-embedding") == ["encoding_format", "dimensions"]
+        assert config.get_supported_openai_params("voyage-3-5-embedding") == [
+            "encoding_format",
+            "dimensions",
+        ]
 
     def test_get_model_config_hf_model(self):
         """Test that non-Voyage models return base SagemakerEmbeddingConfig"""
-        config = SagemakerEmbeddingConfig.get_model_config("sentence-transformers-model")
-        
+        config = SagemakerEmbeddingConfig.get_model_config(
+            "sentence-transformers-model"
+        )
+
         assert isinstance(config, SagemakerEmbeddingConfig)
         assert config.get_supported_openai_params("sentence-transformers-model") == []
 
@@ -44,7 +49,7 @@ class TestSagemakerEmbeddingFactory:
         config1 = SagemakerEmbeddingConfig.get_model_config("VOYAGE-3-5-embedding")
         config2 = SagemakerEmbeddingConfig.get_model_config("Voyage-3-5-Embedding")
         config3 = SagemakerEmbeddingConfig.get_model_config("voyage-3-5-embedding")
-        
+
         assert isinstance(config1, VoyageEmbeddingConfig)
         assert isinstance(config2, VoyageEmbeddingConfig)
         assert isinstance(config3, VoyageEmbeddingConfig)
@@ -67,7 +72,7 @@ class TestVoyageEmbeddingConfig:
             non_default_params={"encoding_format": "float"},
             optional_params={},
             model="voyage-3-5-embedding",
-            drop_params=False
+            drop_params=False,
         )
         assert result == {"encoding_format": "float"}
 
@@ -77,7 +82,7 @@ class TestVoyageEmbeddingConfig:
             non_default_params={"dimensions": 1024},
             optional_params={},
             model="voyage-3-5-embedding",
-            drop_params=False
+            drop_params=False,
         )
         assert result == {"output_dimension": 1024}
 
@@ -87,7 +92,7 @@ class TestVoyageEmbeddingConfig:
             non_default_params={"encoding_format": "invalid"},
             optional_params={},
             model="voyage-3-5-embedding",
-            drop_params=False
+            drop_params=False,
         )
         assert result == {"encoding_format": "invalid"}
 
@@ -97,7 +102,7 @@ class TestVoyageEmbeddingConfig:
             non_default_params={"encoding_format": "invalid", "dimensions": 512},
             optional_params={},
             model="voyage-3-5-embedding",
-            drop_params=True
+            drop_params=True,
         )
         assert result == {"encoding_format": "invalid", "output_dimension": 512}
 
@@ -107,12 +112,12 @@ class TestVoyageEmbeddingConfig:
             model="voyage-3-5-embedding",
             input=["Hello", "World"],
             optional_params={"encoding_format": "float"},
-            headers={}
+            headers={},
         )
         expected = {
             "input": ["Hello", "World"],
             "model": "voyage-3-5-embedding",
-            "encoding_format": "float"
+            "encoding_format": "float",
         }
         assert result == expected
 
@@ -121,38 +126,30 @@ class TestVoyageEmbeddingConfig:
         # Mock Voyage response
         voyage_response = {
             "data": [
-                {
-                    "object": "embedding",
-                    "embedding": [0.1, 0.2, 0.3],
-                    "index": 0
-                },
-                {
-                    "object": "embedding", 
-                    "embedding": [0.4, 0.5, 0.6],
-                    "index": 1
-                }
+                {"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0},
+                {"object": "embedding", "embedding": [0.4, 0.5, 0.6], "index": 1},
             ],
             "object": "list",
             "model": "voyage-3-5-embedding",
-            "usage": {"total_tokens": 10}
+            "usage": {"total_tokens": 10},
         }
-        
+
         # Create mock httpx Response
         mock_response = httpx.Response(
             status_code=200,
-            content=json.dumps(voyage_response).encode('utf-8'),
-            headers={"content-type": "application/json"}
+            content=json.dumps(voyage_response).encode("utf-8"),
+            headers={"content-type": "application/json"},
         )
-        
+
         model_response = EmbeddingResponse()
         result = self.config.transform_embedding_response(
             model="voyage-3-5-embedding",
             raw_response=mock_response,
             model_response=model_response,
             logging_obj=None,
-            request_data={"input": ["Hello", "World"]}
+            request_data={"input": ["Hello", "World"]},
         )
-        
+
         # Verify response structure
         assert result.object == "list"
         assert result.model == "voyage-3-5-embedding"
@@ -184,39 +181,32 @@ class TestHFSagemakerEmbeddingConfig:
             model="sentence-transformers-model",
             input=["Hello", "World"],
             optional_params={},
-            headers={}
+            headers={},
         )
-        expected = {
-            "inputs": ["Hello", "World"]
-        }
+        expected = {"inputs": ["Hello", "World"]}
         assert result == expected
 
     def test_transform_embedding_response_hf(self):
         """Test HF response transformation to OpenAI format"""
         # Mock HF response
-        hf_response = {
-            "embedding": [
-                [0.1, 0.2, 0.3],
-                [0.4, 0.5, 0.6]
-            ]
-        }
-        
+        hf_response = {"embedding": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]}
+
         # Create mock httpx Response
         mock_response = httpx.Response(
             status_code=200,
-            content=json.dumps(hf_response).encode('utf-8'),
-            headers={"content-type": "application/json"}
+            content=json.dumps(hf_response).encode("utf-8"),
+            headers={"content-type": "application/json"},
         )
-        
+
         model_response = EmbeddingResponse()
         result = self.config.transform_embedding_response(
             model="sentence-transformers-model",
             raw_response=mock_response,
             model_response=model_response,
             logging_obj=None,
-            request_data={"inputs": ["Hello", "World"]}
+            request_data={"inputs": ["Hello", "World"]},
         )
-        
+
         # Verify response structure
         assert result.object == "list"
         assert result.model == "sentence-transformers-model"
@@ -235,26 +225,28 @@ class TestSagemakerEmbeddingIntegration:
 
     def test_voyage_embedding_request_format(self):
         """Test that Voyage models use correct request format"""
-        with patch('litellm.llms.sagemaker.completion.handler.SagemakerLLM.embedding') as mock_embedding:
+        with patch(
+            "litellm.llms.sagemaker.completion.handler.SagemakerLLM.embedding"
+        ) as mock_embedding:
             # Mock the actual SageMaker call to avoid AWS credentials
             mock_embedding.return_value = EmbeddingResponse(
                 object="list",
                 data=[
                     {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]},
-                    {"object": "embedding", "index": 1, "embedding": [0.4, 0.5, 0.6]}
+                    {"object": "embedding", "index": 1, "embedding": [0.4, 0.5, 0.6]},
                 ],
                 model="voyage-3-5-embedding",
-                usage=Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10)
+                usage=Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10),
             )
-            
+
             # Test Voyage model
             response = embedding(
                 model="sagemaker/voyage-3-5-embedding-endpoint",
                 input=["Hello", "World"],
                 encoding_format="float",
-                dimensions=1024
+                dimensions=1024,
             )
-            
+
             # Verify the request was made with correct format
             mock_embedding.assert_called_once()
             call_args = mock_embedding.call_args
@@ -263,31 +255,35 @@ class TestSagemakerEmbeddingIntegration:
             # Check that the parameters are in the optional_params
             optional_params = call_args[1].get("optional_params", {})
             assert optional_params.get("encoding_format") == "float"
-            assert optional_params.get("output_dimension") == 1024  # dimensions is mapped to output_dimension
+            assert (
+                optional_params.get("output_dimension") == 1024
+            )  # dimensions is mapped to output_dimension
 
     def test_hf_embedding_request_format(self):
         """Test that HF models use correct request format"""
-        with patch('litellm.llms.sagemaker.completion.handler.SagemakerLLM.embedding') as mock_embedding:
+        with patch(
+            "litellm.llms.sagemaker.completion.handler.SagemakerLLM.embedding"
+        ) as mock_embedding:
             # Mock the actual SageMaker call to avoid AWS credentials
             mock_embedding.return_value = EmbeddingResponse(
                 object="list",
                 data=[
                     {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]},
-                    {"object": "embedding", "index": 1, "embedding": [0.4, 0.5, 0.6]}
+                    {"object": "embedding", "index": 1, "embedding": [0.4, 0.5, 0.6]},
                 ],
                 model="sentence-transformers-model",
-                usage=Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10)
+                usage=Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10),
             )
-            
+
             # Test HF model with drop_params=True to ignore unsupported parameters
             response = embedding(
                 model="sagemaker/sentence-transformers-endpoint",
                 input=["Hello", "World"],
                 encoding_format="float",  # Should be ignored
                 dimensions=1024,  # Should be ignored
-                drop_params=True
+                drop_params=True,
             )
-            
+
             # Verify the request was made
             mock_embedding.assert_called_once()
             call_args = mock_embedding.call_args
@@ -295,8 +291,14 @@ class TestSagemakerEmbeddingIntegration:
             assert call_args[1]["input"] == ["Hello", "World"]
             # HF models should ignore these parameters in optional_params
             optional_params = call_args[1].get("optional_params", {})
-            assert "encoding_format" not in optional_params or optional_params["encoding_format"] is None
-            assert "dimensions" not in optional_params or optional_params["dimensions"] is None
+            assert (
+                "encoding_format" not in optional_params
+                or optional_params["encoding_format"] is None
+            )
+            assert (
+                "dimensions" not in optional_params
+                or optional_params["dimensions"] is None
+            )
 
     def test_parameter_validation_voyage(self):
         """Test parameter validation for Voyage models"""
@@ -306,7 +308,7 @@ class TestSagemakerEmbeddingIntegration:
             non_default_params={"encoding_format": "float", "dimensions": 512},
             optional_params={},
             model="voyage-3-5-embedding",
-            drop_params=False
+            drop_params=False,
         )
         assert result == {"encoding_format": "float", "output_dimension": 512}
 
@@ -318,7 +320,7 @@ class TestSagemakerEmbeddingIntegration:
             non_default_params={"encoding_format": "float", "dimensions": 512},
             optional_params={},
             model="sentence-transformers-model",
-            drop_params=False
+            drop_params=False,
         )
         assert result == {}  # HF models should ignore these parameters
 
@@ -329,46 +331,46 @@ class TestErrorHandling:
     def test_voyage_response_missing_data(self):
         """Test handling of Voyage response missing data field"""
         config = VoyageEmbeddingConfig()
-        
+
         # Mock response without data field
         mock_response = httpx.Response(
             status_code=200,
-            content=json.dumps({"object": "list"}).encode('utf-8'),
-            headers={"content-type": "application/json"}
+            content=json.dumps({"object": "list"}).encode("utf-8"),
+            headers={"content-type": "application/json"},
         )
-        
+
         model_response = EmbeddingResponse()
-        
+
         # VoyageEmbeddingConfig doesn't validate for missing data field, it just sets it to None
         result = config.transform_embedding_response(
             model="voyage-3-5-embedding",
             raw_response=mock_response,
             model_response=model_response,
             logging_obj=None,
-            request_data={"input": ["Hello"]}
+            request_data={"input": ["Hello"]},
         )
         assert result.data is None
 
     def test_hf_response_missing_embedding(self):
         """Test handling of HF response missing embedding field"""
         config = SagemakerEmbeddingConfig()
-        
+
         # Mock response without embedding field
         mock_response = httpx.Response(
             status_code=200,
-            content=json.dumps({"object": "list"}).encode('utf-8'),
-            headers={"content-type": "application/json"}
+            content=json.dumps({"object": "list"}).encode("utf-8"),
+            headers={"content-type": "application/json"},
         )
-        
+
         model_response = EmbeddingResponse()
-        
+
         with pytest.raises(Exception, match="HF response missing 'embedding' field"):
             config.transform_embedding_response(
                 model="sentence-transformers-model",
                 raw_response=mock_response,
                 model_response=model_response,
                 logging_obj=None,
-                request_data={"inputs": ["Hello"]}
+                request_data={"inputs": ["Hello"]},
             )
 
 

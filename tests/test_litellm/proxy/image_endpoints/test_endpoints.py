@@ -81,7 +81,9 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {})
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", fake_proxy_logger)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", fake_proxy_logger
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.version", "test-version")
     monkeypatch.setattr(

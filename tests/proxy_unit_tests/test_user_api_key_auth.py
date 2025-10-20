@@ -786,7 +786,6 @@ async def test_user_api_key_auth_websocket():
     with patch(
         "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
     ) as mock_user_api_key_auth:
-
         # Make the call to the WebSocket function
         await user_api_key_auth_websocket(mock_websocket)
 
@@ -795,10 +794,14 @@ async def test_user_api_key_auth_websocket():
 
         # Get the request object that was passed to user_api_key_auth
         request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
-        
+
         # Verify that the request has headers set
-        assert hasattr(request_arg, "headers"), "Request object should have headers attribute"
-        assert "authorization" in request_arg.headers, "Request headers should contain authorization"
+        assert hasattr(
+            request_arg, "headers"
+        ), "Request object should have headers attribute"
+        assert (
+            "authorization" in request_arg.headers
+        ), "Request headers should contain authorization"
         assert request_arg.headers["authorization"] == "Bearer some_api_key"
 
         assert (
@@ -1034,14 +1037,14 @@ async def test_x_litellm_api_key():
     ignored_key = "aj12445"
 
     # Create request with headers as bytes
-    request = Request(
-        scope={
-            "type": "http"
-        }
-    )
+    request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
 
-    valid_token = await user_api_key_auth(request=request, api_key="Bearer " + ignored_key, custom_litellm_key_header=master_key)
+    valid_token = await user_api_key_auth(
+        request=request,
+        api_key="Bearer " + ignored_key,
+        custom_litellm_key_header=master_key,
+    )
     assert valid_token.token == hash_token(master_key)
 
 
@@ -1056,7 +1059,9 @@ async def test_user_api_key_from_query_param():
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     user_key = "sk-query-1234"
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key)))
+    user_api_key_cache.set_cache(
+        key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key))
+    )
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
@@ -1069,7 +1074,9 @@ async def test_user_api_key_from_query_param():
             "query_string": f"alt=sse&key={user_key}".encode(),
         }
     )
-    request._url = URL(url=f"/v1beta/models/gemini:streamGenerateContent?alt=sse&key={user_key}")
+    request._url = URL(
+        url=f"/v1beta/models/gemini:streamGenerateContent?alt=sse&key={user_key}"
+    )
 
     async def return_body():
         return b"{}"
@@ -1078,4 +1085,3 @@ async def test_user_api_key_from_query_param():
 
     valid_token = await user_api_key_auth(request=request, api_key="")
     assert valid_token.token == hash_token(user_key)
-

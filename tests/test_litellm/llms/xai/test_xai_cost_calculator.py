@@ -26,6 +26,7 @@ class TestXAICostCalculator:
         """Set up test environment."""
         # Load the main model cost map directly to ensure we have the latest pricing
         import json
+
         try:
             with open("model_prices_and_context_window.json", "r") as f:
                 model_cost_map = json.load(f)
@@ -212,7 +213,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(
+            model="xai/grok-4-fast-reasoning", usage=usage
+        )
 
         # Expected costs for grok-4-fast-reasoning with tiered pricing:
         # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
@@ -239,7 +242,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(
+            model="xai/grok-4-fast-reasoning", usage=usage
+        )
 
         # Expected costs for grok-4-fast-reasoning with regular pricing:
         # Input: 100000 tokens * $0.2e-6 (regular rate) = $0.02
@@ -265,7 +270,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-latest", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(
+            model="xai/grok-4-latest", usage=usage
+        )
 
         # Expected costs for grok-4-latest with tiered pricing:
         # Input: 200000 tokens * $6e-6 (ALL tokens at tiered rate since input > 128k) = $1.2
@@ -291,7 +298,9 @@ class TestXAICostCalculator:
             ),
         )
 
-        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4-fast-reasoning", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(
+            model="xai/grok-4-fast-reasoning", usage=usage
+        )
 
         # Expected costs for grok-4-fast-reasoning:
         # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06

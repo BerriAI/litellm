@@ -44,17 +44,21 @@ class GeminiPassthroughLoggingHandler:
 
             # Use Gemini config for transformation
             instance_of_gemini_llm = litellm.GoogleAIStudioGeminiConfig()
-            litellm_model_response: ModelResponse = instance_of_gemini_llm.transform_response(
-                model=model,
-                messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
-                raw_response=httpx_response,
-                model_response=litellm.ModelResponse(),
-                logging_obj=logging_obj,
-                optional_params={},
-                litellm_params={},
-                api_key="",
-                request_data={},
-                encoding=litellm.encoding,
+            litellm_model_response: ModelResponse = (
+                instance_of_gemini_llm.transform_response(
+                    model=model,
+                    messages=[
+                        {"role": "user", "content": "no-message-pass-through-endpoint"}
+                    ],
+                    raw_response=httpx_response,
+                    model_response=litellm.ModelResponse(),
+                    logging_obj=logging_obj,
+                    optional_params={},
+                    litellm_params={},
+                    api_key="",
+                    request_data={},
+                    encoding=litellm.encoding,
+                )
             )
             kwargs = GeminiPassthroughLoggingHandler._create_gemini_response_logging_payload_for_generate_content(
                 litellm_model_response=litellm_model_response,
@@ -96,12 +100,16 @@ class GeminiPassthroughLoggingHandler:
         - Logs in litellm callbacks
         """
         kwargs: Dict[str, Any] = {}
-        model = model or GeminiPassthroughLoggingHandler.extract_model_from_url(url_route)
-        complete_streaming_response = GeminiPassthroughLoggingHandler._build_complete_streaming_response(
-            all_chunks=all_chunks,
-            litellm_logging_obj=litellm_logging_obj,
-            model=model,
-            url_route=url_route,
+        model = model or GeminiPassthroughLoggingHandler.extract_model_from_url(
+            url_route
+        )
+        complete_streaming_response = (
+            GeminiPassthroughLoggingHandler._build_complete_streaming_response(
+                all_chunks=all_chunks,
+                litellm_logging_obj=litellm_logging_obj,
+                model=model,
+                url_route=url_route,
+            )
         )
 
         if complete_streaming_response is None:
@@ -156,7 +164,9 @@ class GeminiPassthroughLoggingHandler:
                 continue
             all_openai_chunks.append(parsed_chunk)
 
-        complete_streaming_response = litellm.stream_chunk_builder(chunks=all_openai_chunks)
+        complete_streaming_response = litellm.stream_chunk_builder(
+            chunks=all_openai_chunks
+        )
 
         return complete_streaming_response
 

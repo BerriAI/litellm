@@ -678,10 +678,7 @@ def create_standard_logging_payload_with_tool_calls() -> StandardLoggingPayload:
         "endTime": 1234567891.0,
         "completionStartTime": 1234567890.5,
         "response_time": 1.0,
-        "model_map_information": {
-            "model_map_key": "gpt-4",
-            "model_map_value": None
-        },
+        "model_map_information": {"model_map_key": "gpt-4", "model_map_value": None},
         "model": "gpt-4",
         "model_id": "model-123",
         "model_group": "openai-gpt",
@@ -904,6 +901,7 @@ class TestDataDogLLMObsLoggerToolCalls:
             output_function_info = output_tool_calls[0].get("function", {})
             assert output_function_info.get("name") == "format_response"
 
+
 def create_standard_logging_payload_with_spend_metrics() -> StandardLoggingPayload:
     """Create a StandardLoggingPayload object with spend metrics for testing"""
     from datetime import datetime, timezone
@@ -927,10 +925,7 @@ def create_standard_logging_payload_with_spend_metrics() -> StandardLoggingPaylo
         "endTime": 1234567891.0,
         "completionStartTime": 1234567890.5,
         "response_time": 1.0,
-        "model_map_information": {
-            "model_map_key": "gpt-4",
-            "model_map_value": None
-        },
+        "model_map_information": {"model_map_key": "gpt-4", "model_map_value": None},
         "model": "gpt-4",
         "model_id": "model-123",
         "model_group": "openai-gpt",
@@ -998,6 +993,7 @@ async def test_datadog_llm_obs_spend_metrics(mock_env_vars):
     budget_reset_iso = payload["metadata"]["user_api_key_budget_reset_at"]
     print(f"Budget reset time (ISO format): {budget_reset_iso}")
     from datetime import datetime, timezone
+
     print(f"Current time: {datetime.now(timezone.utc).isoformat()}")
 
     # Test the _get_spend_metrics method
@@ -1013,7 +1009,7 @@ async def test_datadog_llm_obs_spend_metrics(mock_env_vars):
     assert isinstance(budget_reset, str)
     print(f"Budget reset datetime: {budget_reset}")
     # Should be close to 10 days from now
-    budget_reset_dt = datetime.fromisoformat(budget_reset.replace('Z', '+00:00'))
+    budget_reset_dt = datetime.fromisoformat(budget_reset.replace("Z", "+00:00"))
     now = datetime.now(timezone.utc)
     time_diff = (budget_reset_dt - now).total_seconds() / 86400  # days
     assert 9.5 <= time_diff <= 10.5  # Should be close to 10 days
@@ -1051,6 +1047,7 @@ async def test_datadog_llm_obs_spend_metrics_no_budget(mock_env_vars):
 async def test_spend_metrics_in_datadog_payload(mock_env_vars):
     """Test that spend metrics are correctly included in DataDog LLM Observability payloads"""
     from datetime import datetime
+
     datadog_llm_obs_logger = DataDogLLMObsLogger()
 
     standard_payload = create_standard_logging_payload_with_spend_metrics()
@@ -1063,7 +1060,9 @@ async def test_spend_metrics_in_datadog_payload(mock_env_vars):
     start_time = datetime.now()
     end_time = datetime.now()
 
-    payload = datadog_llm_obs_logger.create_llm_obs_payload(kwargs, start_time, end_time)
+    payload = datadog_llm_obs_logger.create_llm_obs_payload(
+        kwargs, start_time, end_time
+    )
 
     # Verify basic payload structure
     assert payload.get("name") == "litellm_llm_call"
@@ -1093,14 +1092,17 @@ async def test_spend_metrics_in_datadog_payload(mock_env_vars):
     # Verify budget reset is a datetime string in ISO format
     budget_reset = spend_metrics["user_api_key_budget_reset_at"]
     assert isinstance(budget_reset, str)
-    print(f"Budget reset in payload: {budget_reset}")    # In StandardLoggingUserAPIKeyMetadata
+    print(
+        f"Budget reset in payload: {budget_reset}"
+    )  # In StandardLoggingUserAPIKeyMetadata
     user_api_key_budget_reset_at: Optional[str] = None
-    
-    # In DDLLMObsSpendMetrics  
+
+    # In DDLLMObsSpendMetrics
     user_api_key_budget_reset_at: str
     # Should be close to 10 days from now
     from datetime import datetime, timezone
-    budget_reset_dt = datetime.fromisoformat(budget_reset.replace('Z', '+00:00'))
+
+    budget_reset_dt = datetime.fromisoformat(budget_reset.replace("Z", "+00:00"))
     now = datetime.now(timezone.utc)
     time_diff = (budget_reset_dt - now).total_seconds() / 86400  # days
     assert 9.5 <= time_diff <= 10.5  # Should be close to 10 days

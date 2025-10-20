@@ -56,7 +56,7 @@ class TestPanwAirsInitialization:
         guardrail_config = {"guardrail_name": "test_guardrail"}
 
         with patch("litellm.logging_callback_manager.add_litellm_callback"):
-            handler = initialize_guardrail(litellm_params, guardrail_config)  
+            handler = initialize_guardrail(litellm_params, guardrail_config)
 
         assert isinstance(handler, PanwPrismaAirsHandler)
         assert handler.guardrail_name == "test_guardrail"
@@ -70,7 +70,7 @@ class TestPanwAirsInitialization:
                 profile_name="test_profile",
                 api_key=None,  # No API key provided
                 default_on=True,
-            )  
+            )
 
     def test_missing_profile_name_raises_error(self):
         """Test that missing profile name raises ValueError."""
@@ -83,7 +83,7 @@ class TestPanwAirsInitialization:
         guardrail_config = {"guardrail_name": "test_guardrail"}
 
         with pytest.raises(ValueError, match="profile_name is required"):
-            initialize_guardrail(litellm_params, guardrail_config)   
+            initialize_guardrail(litellm_params, guardrail_config)
 
 
 class TestPanwAirsPromptScanning:
@@ -391,7 +391,7 @@ class TestPanwAirsConfiguration:
         guardrail_config = {"guardrail_name": "test"}
 
         with patch("litellm.logging_callback_manager.add_litellm_callback"):
-            handler = initialize_guardrail(litellm_params, guardrail_config)  
+            handler = initialize_guardrail(litellm_params, guardrail_config)
 
         assert handler.api_base == "https://service.api.aisecurity.paloaltonetworks.com"
 
@@ -411,7 +411,7 @@ class TestPanwAirsConfiguration:
         guardrail_config = {"guardrail_name": "test"}
 
         with patch("litellm.logging_callback_manager.add_litellm_callback"):
-            handler = initialize_guardrail(litellm_params, guardrail_config)  
+            handler = initialize_guardrail(litellm_params, guardrail_config)
 
         assert handler.api_base == custom_base
 
@@ -430,7 +430,7 @@ class TestPanwAirsConfiguration:
         guardrail_config = {"guardrail_name": "test_guardrail"}
 
         with patch("litellm.logging_callback_manager.add_litellm_callback"):
-            handler = initialize_guardrail(litellm_params, guardrail_config)   
+            handler = initialize_guardrail(litellm_params, guardrail_config)
 
         assert handler.guardrail_name == "test_guardrail"
 
@@ -522,13 +522,15 @@ class TestPanwAirsMaskingFunctionality:
         user_api_key_dict = UserAPIKeyAuth()
         data = {
             "model": "gpt-3.5-turbo",
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "My SSN is 123-45-6789"},
-                    {"type": "image", "url": "data:image/jpeg;base64,abc123"}
-                ]
-            }],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "My SSN is 123-45-6789"},
+                        {"type": "image", "url": "data:image/jpeg;base64,abc123"},
+                    ],
+                }
+            ],
         }
 
         mock_response = {
@@ -552,7 +554,9 @@ class TestPanwAirsMaskingFunctionality:
         assert data["messages"][0]["content"][0]["text"] == "My SSN is XXXXXXXXXX"
         # Image should remain unchanged
         assert data["messages"][0]["content"][1]["type"] == "image"
-        assert data["messages"][0]["content"][1]["url"] == "data:image/jpeg;base64,abc123"
+        assert (
+            data["messages"][0]["content"][1]["url"] == "data:image/jpeg;base64,abc123"
+        )
 
     @pytest.mark.asyncio
     async def test_response_masking_on_block(self):
@@ -611,7 +615,9 @@ class TestPanwAirsMaskingFunctionality:
             "messages": [{"role": "user", "content": "Test content"}],
         }
 
-        with patch.object(handler, "_call_panw_api", side_effect=Exception("API Error")):
+        with patch.object(
+            handler, "_call_panw_api", side_effect=Exception("API Error")
+        ):
             with pytest.raises(HTTPException) as exc_info:
                 await handler.async_pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
@@ -666,7 +672,7 @@ class TestPanwAirsAdvancedFeatures:
     async def test_tool_call_extraction(self):
         """Test extraction of text from responses with tool calls."""
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
-        
+
         handler = PanwPrismaAirsHandler(
             guardrail_name="test_panw_airs",
             api_key="test_api_key",
@@ -691,10 +697,10 @@ class TestPanwAirsAdvancedFeatures:
                                 type="function",
                                 function=Function(
                                     name="get_weather",
-                                    arguments='{"location": "San Francisco", "ssn": "123-45-6789"}'
-                                )
+                                    arguments='{"location": "San Francisco", "ssn": "123-45-6789"}',
+                                ),
                             )
-                        ]
+                        ],
                     ),
                 ),
             ],
@@ -711,7 +717,7 @@ class TestPanwAirsAdvancedFeatures:
     async def test_tool_call_masking(self):
         """Test masking of tool call arguments when blocked."""
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
-        
+
         handler = PanwPrismaAirsHandler(
             guardrail_name="test_panw_airs",
             api_key="test_api_key",
@@ -737,10 +743,10 @@ class TestPanwAirsAdvancedFeatures:
                                 type="function",
                                 function=Function(
                                     name="get_weather",
-                                    arguments='{"location": "San Francisco", "ssn": "123-45-6789"}'
-                                )
+                                    arguments='{"location": "San Francisco", "ssn": "123-45-6789"}',
+                                ),
                             )
-                        ]
+                        ],
                     ),
                 ),
             ],
@@ -758,18 +764,23 @@ class TestPanwAirsAdvancedFeatures:
             "category": "sensitive_data",
             "response_masked_data": {
                 "data": '{"location": "San Francisco", "ssn": "XXXXXXXXXX"}'
-            }
+            },
         }
 
-        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
             mock_api.return_value = mock_scan_result
-            
+
             result = await handler.async_post_call_success_hook(
                 user_api_key_dict=user_api_key_dict, response=response, data=data
             )
 
             # Verify arguments were masked
-            assert result.choices[0].message.tool_calls[0].function.arguments == '{"location": "San Francisco", "ssn": "XXXXXXXXXX"}'
+            assert (
+                result.choices[0].message.tool_calls[0].function.arguments
+                == '{"location": "San Francisco", "ssn": "XXXXXXXXXX"}'
+            )
 
     @pytest.mark.asyncio
     async def test_multi_choice_masking(self):
@@ -795,7 +806,9 @@ class TestPanwAirsAdvancedFeatures:
                 Choices(
                     finish_reason="stop",
                     index=1,
-                    message=Message(content="Another SSN: 987-65-4321", role="assistant"),
+                    message=Message(
+                        content="Another SSN: 987-65-4321", role="assistant"
+                    ),
                 ),
             ],
             created=1234567890,
@@ -809,12 +822,14 @@ class TestPanwAirsAdvancedFeatures:
         mock_scan_result = {
             "action": "block",
             "category": "sensitive_data",
-            "response_masked_data": {"data": "SSN is XXXXXXXXXX"}
+            "response_masked_data": {"data": "SSN is XXXXXXXXXX"},
         }
 
-        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
             mock_api.return_value = mock_scan_result
-            
+
             result = await handler.async_post_call_success_hook(
                 user_api_key_dict=user_api_key_dict, response=response, data=data
             )
@@ -837,23 +852,35 @@ class TestPanwAirsAdvancedFeatures:
         user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
         request_data = {
             "messages": [{"role": "user", "content": "test"}],
-            "model": "gpt-4"
+            "model": "gpt-4",
         }
 
         # Create mock streaming chunks
         from litellm.types.utils import StreamingChoices, Delta
-        
+
         mock_chunks = [
             ModelResponse(
                 id="test_id",
-                choices=[StreamingChoices(delta=Delta(content="Hello", role="assistant"), finish_reason=None, index=0)],
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="Hello", role="assistant"),
+                        finish_reason=None,
+                        index=0,
+                    )
+                ],
                 created=1234567890,
                 model="gpt-4",
                 object="chat.completion.chunk",
             ),
             ModelResponse(
                 id="test_id",
-                choices=[StreamingChoices(delta=Delta(content=" world", role="assistant"), finish_reason="stop", index=0)],
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content=" world", role="assistant"),
+                        finish_reason="stop",
+                        index=0,
+                    )
+                ],
                 created=1234567890,
                 model="gpt-4",
                 object="chat.completion.chunk",
@@ -866,10 +893,14 @@ class TestPanwAirsAdvancedFeatures:
 
         mock_scan_result = {"action": "allow", "category": "safe"}
 
-        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
-            with patch("litellm.proxy.common_utils.callback_utils.add_guardrail_to_applied_guardrails_header") as mock_header:
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            with patch(
+                "litellm.proxy.common_utils.callback_utils.add_guardrail_to_applied_guardrails_header"
+            ) as mock_header:
                 mock_api.return_value = mock_scan_result
-                
+
                 chunks_received = []
                 async for chunk in handler.async_post_call_streaming_iterator_hook(
                     user_api_key_dict=user_api_key_dict,
@@ -881,8 +912,7 @@ class TestPanwAirsAdvancedFeatures:
                 # Verify header function was called
                 assert mock_header.called
                 mock_header.assert_called_once_with(
-                    request_data=request_data, 
-                    guardrail_name="test_panw_airs"
+                    request_data=request_data, guardrail_name="test_panw_airs"
                 )
 
 
@@ -907,12 +937,14 @@ class TestTextCompletionSupport:
         data = {
             "prompt": "Complete this sentence: AI security is",
             "model": "gpt-3.5-turbo-instruct",
-            "max_tokens": 50
+            "max_tokens": 50,
         }
 
         mock_scan_result = {"action": "allow", "category": "safe"}
 
-        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
             mock_api.return_value = mock_scan_result
 
             result = await handler.async_pre_call_hook(
@@ -925,7 +957,9 @@ class TestTextCompletionSupport:
             # Verify API was called with the prompt text
             mock_api.assert_called_once()
             call_args = mock_api.call_args
-            assert call_args.kwargs["content"] == "Complete this sentence: AI security is"
+            assert (
+                call_args.kwargs["content"] == "Complete this sentence: AI security is"
+            )
             assert call_args.kwargs["is_response"] is False
 
             # Verify request was allowed through
@@ -955,10 +989,12 @@ class TestTextCompletionSupport:
         mock_scan_result = {
             "action": "block",
             "category": "dlp",
-            "prompt_masked_data": {"data": "Send money to account XXXXXXXXXX"}
+            "prompt_masked_data": {"data": "Send money to account XXXXXXXXXX"},
         }
 
-        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
             mock_api.return_value = mock_scan_result
 
             result = await handler.async_pre_call_hook(
@@ -994,7 +1030,9 @@ class TestTextCompletionSupport:
 
         mock_scan_result = {"action": "allow", "category": "safe"}
 
-        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
             mock_api.return_value = mock_scan_result
 
             await handler.async_pre_call_hook(

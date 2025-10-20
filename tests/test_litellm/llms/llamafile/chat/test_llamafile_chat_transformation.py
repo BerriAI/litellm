@@ -14,16 +14,18 @@ from litellm.llms.llamafile.chat.transformation import LlamafileChatConfig
         (None, "secret-key", "secret-key"),
         (None, None, "fake-api-key"),
         ("", "secret-key", "secret-key"),  # Empty string should fall back to secret
-        ("", None, "fake-api-key"),  # Empty string with no secret should use the fake key
+        (
+            "",
+            None,
+            "fake-api-key",
+        ),  # Empty string with no secret should use the fake key
     ],
 )
-def test_resolve_api_key(
-    input_api_key, env_api_key, expected_api_key
-):
+def test_resolve_api_key(input_api_key, env_api_key, expected_api_key):
     env = {}
     if env_api_key is not None:
         env["LLAMAFILE_API_KEY"] = env_api_key
-        
+
     with patch.dict("os.environ", env, clear=True):
         result = LlamafileChatConfig._resolve_api_key(input_api_key)
         assert result == expected_api_key
@@ -58,7 +60,7 @@ def test_resolve_api_base(
     env = {}
     if env_api_base is not None:
         env["LLAMAFILE_API_BASE"] = env_api_base
-        
+
     with patch.dict("os.environ", env, clear=True):
         result = LlamafileChatConfig._resolve_api_base(input_api_base)
         assert result == expected_api_base
@@ -110,7 +112,7 @@ def test_get_openai_compatible_provider_info(
     api_base, api_key, env_base, env_key, expected_base, expected_key
 ):
     config = LlamafileChatConfig()
-    
+
     env = {}
     if env_base is not None:
         env["LLAMAFILE_API_BASE"] = env_base
@@ -128,7 +130,9 @@ def test_get_openai_compatible_provider_info(
         wraps=LlamafileChatConfig._resolve_api_key,
     )
 
-    with patch.dict("os.environ", env, clear=True), patch_base as mock_base, patch_key as mock_key:
+    with patch.dict(
+        "os.environ", env, clear=True
+    ), patch_base as mock_base, patch_key as mock_key:
         result_base, result_key = config._get_openai_compatible_provider_info(
             api_base, api_key
         )

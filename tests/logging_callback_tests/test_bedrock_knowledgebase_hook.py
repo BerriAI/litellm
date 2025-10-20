@@ -19,11 +19,17 @@ import pytest
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import VectorStorePreCallHook
+from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+    VectorStorePreCallHook,
+)
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import StandardLoggingPayload, StandardLoggingVectorStoreRequest
+from litellm.types.utils import (
+    StandardLoggingPayload,
+    StandardLoggingVectorStoreRequest,
+)
 from litellm.types.vector_stores import VectorStoreSearchResponse
+
 
 class MockCustomLogger(CustomLogger):
     def __init__(self):
@@ -34,6 +40,7 @@ class MockCustomLogger(CustomLogger):
         self.standard_logging_payload = kwargs.get("standard_logging_object")
         pass
 
+
 @pytest.fixture(autouse=True)
 def add_aws_region_to_env(monkeypatch):
     monkeypatch.setenv("AWS_REGION", "us-west-2")
@@ -41,20 +48,25 @@ def add_aws_region_to_env(monkeypatch):
 
 @pytest.fixture
 def setup_vector_store_registry():
-    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry, LiteLLM_ManagedVectorStore
+    from litellm.vector_stores.vector_store_registry import (
+        VectorStoreRegistry,
+        LiteLLM_ManagedVectorStore,
+    )
+
     # Init vector store registry
     litellm.vector_store_registry = VectorStoreRegistry(
         vector_stores=[
             LiteLLM_ManagedVectorStore(
-                vector_store_id="T37J8R4WTM",
-                custom_llm_provider="bedrock"
+                vector_store_id="T37J8R4WTM", custom_llm_provider="bedrock"
             )
         ]
     )
 
 
 @pytest.mark.asyncio
-async def test_e2e_bedrock_knowledgebase_retrieval_with_completion(setup_vector_store_registry):
+async def test_e2e_bedrock_knowledgebase_retrieval_with_completion(
+    setup_vector_store_registry,
+):
     litellm._turn_on_debug()
     client = AsyncHTTPHandler()
     print("value of litellm.vector_store_registry:", litellm.vector_store_registry)
@@ -65,44 +77,46 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_completion(setup_vector_
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
         # Provide proper JSON response content
-        mock_response.text = json.dumps({
-            "id": "msg_01ABC123",
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type": "text", "text": "LiteLLM is a library that simplifies LLM API access."}],
-            "model": "claude-3.5-sonnet",
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {
-                "input_tokens": 100,
-                "output_tokens": 50
+        mock_response.text = json.dumps(
+            {
+                "id": "msg_01ABC123",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "LiteLLM is a library that simplifies LLM API access.",
+                    }
+                ],
+                "model": "claude-3.5-sonnet",
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 100, "output_tokens": 50},
             }
-        })
+        )
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
-        
+
         try:
             response = await litellm.acompletion(
                 model="anthropic/claude-3.5-sonnet",
                 messages=[{"role": "user", "content": "what is litellm?"}],
-                vector_store_ids = [
-                    "T37J8R4WTM"
-                ],
-                client=client
-        )
+                vector_store_ids=["T37J8R4WTM"],
+                client=client,
+            )
         except Exception as e:
             print(f"Error: {e}")
 
         # Verify the LLM request was made
         mock_post.assert_called_once()
-        
+
         # Verify the request body
         print("call args:", mock_post.call_args)
         request_body = mock_post.call_args.kwargs["json"]
         print("Request body:", json.dumps(request_body, indent=4, default=str))
-        
+
         # Assert content from the knowedge base was applied to the request
-        
+
         # 1. we should have 2 content blocks, the first is the context from the knowledge base, the second is the user message
         content = request_body["messages"][0]["content"]
         assert len(content) == 2
@@ -112,29 +126,28 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_completion(setup_vector_
         # 2. the first content block should have the bedrock knowledge base prefix string
         # this helps confirm that the context from the knowledge base was applied to the request
         assert VectorStorePreCallHook.CONTENT_PREFIX_STRING in content[0]["text"]
-        
 
 
 @pytest.mark.asyncio
-async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call(setup_vector_store_registry):
+async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call(
+    setup_vector_store_registry,
+):
     """
     Test that the Bedrock Knowledge Base Hook works when making a real llm api call and returns citations.
     """
-    
+
     # Init client
     litellm._turn_on_debug()
     async_client = AsyncHTTPHandler()
     response = await litellm.acompletion(
         model="anthropic/claude-3-5-haiku-latest",
         messages=[{"role": "user", "content": "what is litellm?"}],
-        vector_store_ids = [
-            "T37J8R4WTM"
-        ],
-        client=async_client
+        vector_store_ids=["T37J8R4WTM"],
+        client=async_client,
     )
     print("OPENAI RESPONSE:", json.dumps(dict(response), indent=4, default=str))
     assert response is not None
-    
+
     # Check that search_results are present in provider_specific_fields
     assert hasattr(response.choices[0].message, "provider_specific_fields")
     provider_fields = response.choices[0].message.provider_specific_fields
@@ -143,14 +156,14 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call(setup_vecto
     search_results = provider_fields["search_results"]
     assert search_results is not None
     assert len(search_results) > 0
-    
+
     # Check search result structure (OpenAI-compatible format)
     first_search_result = search_results[0]
     assert "object" in first_search_result
     assert first_search_result["object"] == "vector_store.search_results.page"
     assert "data" in first_search_result
     assert len(first_search_result["data"]) > 0
-    
+
     # Check individual result structure
     first_result = first_search_result["data"][0]
     assert "score" in first_result
@@ -159,80 +172,83 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call(setup_vecto
     print(f"First search result has {len(first_search_result['data'])} items")
 
 
-
-
 @pytest.mark.asyncio
-async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_streaming(setup_vector_store_registry):
+async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_streaming(
+    setup_vector_store_registry,
+):
     """
     Test that the Bedrock Knowledge Base Hook works with streaming and returns search_results in chunks.
     """
-    
+
     # Init client
     # litellm._turn_on_debug()
     async_client = AsyncHTTPHandler()
     response = await litellm.acompletion(
         model="anthropic/claude-3-5-haiku-latest",
         messages=[{"role": "user", "content": "what is litellm?"}],
-        vector_store_ids = [
-            "T37J8R4WTM"
-        ],
+        vector_store_ids=["T37J8R4WTM"],
         stream=True,
-        client=async_client
+        client=async_client,
     )
-    
+
     # Collect chunks
     chunks = []
     search_results_found = False
     async for chunk in response:
         chunks.append(chunk)
         print(f"Chunk: {chunk}")
-        
+
         # Check if this chunk has search_results in provider_specific_fields
         if hasattr(chunk, "choices") and chunk.choices:
             for choice in chunk.choices:
                 if hasattr(choice, "delta") and choice.delta:
-                    provider_fields = getattr(choice.delta, "provider_specific_fields", None)
+                    provider_fields = getattr(
+                        choice.delta, "provider_specific_fields", None
+                    )
                     if provider_fields and "search_results" in provider_fields:
                         search_results = provider_fields["search_results"]
-                        print(f"Found search_results in streaming chunk: {len(search_results)} results")
-                        
+                        print(
+                            f"Found search_results in streaming chunk: {len(search_results)} results"
+                        )
+
                         # Verify structure
                         assert search_results is not None
                         assert len(search_results) > 0
-                        
+
                         first_search_result = search_results[0]
                         assert "object" in first_search_result
-                        assert first_search_result["object"] == "vector_store.search_results.page"
+                        assert (
+                            first_search_result["object"]
+                            == "vector_store.search_results.page"
+                        )
                         assert "data" in first_search_result
                         assert len(first_search_result["data"]) > 0
-                        
+
                         search_results_found = True
-    
+
     print(f"Total chunks received: {len(chunks)}")
     assert len(chunks) > 0
     assert search_results_found, "search_results should be present in streaming chunks"
 
 
 @pytest.mark.asyncio
-async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_with_tools(setup_vector_store_registry):
+async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_with_tools(
+    setup_vector_store_registry,
+):
     """
     Test that the Bedrock Knowledge Base Hook works when making a real llm api call
     """
-    
+
     # Init client
     litellm._turn_on_debug()
     response = await litellm.acompletion(
         model="anthropic/claude-3-5-haiku-latest",
         messages=[{"role": "user", "content": "what is litellm?"}],
         max_tokens=10,
-        tools=[
-            {
-                "type": "file_search",
-                "vector_store_ids": ["T37J8R4WTM"]
-            }
-        ],
+        tools=[{"type": "file_search", "vector_store_ids": ["T37J8R4WTM"]}],
     )
     assert response is not None
+
 
 @pytest.mark.asyncio
 async def test_openai_with_knowledge_base_mock_openai(setup_vector_store_registry):
@@ -243,7 +259,7 @@ async def test_openai_with_knowledge_base_mock_openai(setup_vector_store_registr
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key="fake-api-key")
-    
+
     # Variable to capture the request
     captured_request = {}
 
@@ -254,31 +270,33 @@ async def test_openai_with_knowledge_base_mock_openai(setup_vector_store_registr
         async def mock_create(**kwargs):
             mock_response = Mock()
             mock_response.choices = [
-                Mock(message=Mock(content="Mock response from OpenAI", role="assistant"))
+                Mock(
+                    message=Mock(content="Mock response from OpenAI", role="assistant")
+                )
             ]
-            mock_response.usage = Mock(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+            mock_response.usage = Mock(
+                prompt_tokens=100, completion_tokens=50, total_tokens=150
+            )
             mock_response.id = "chatcmpl-123"
             mock_response.object = "chat.completion"
             mock_response.created = 1234567890
             mock_response.model = "gpt-4"
-            
+
             # Store the request for verification
             captured_request.update(kwargs)
-            
+
             # Return wrapper with parse method
             wrapper = Mock()
             wrapper.parse.return_value = mock_response
             return wrapper
-        
+
         mock_client.side_effect = mock_create
-        
+
         try:
             await litellm.acompletion(
                 model="gpt-4",
                 messages=[{"role": "user", "content": "what is litellm?"}],
-                vector_store_ids = [
-                    "T37J8R4WTM"
-                ],
+                vector_store_ids=["T37J8R4WTM"],
                 client=client,
             )
         except Exception as e:
@@ -287,16 +305,16 @@ async def test_openai_with_knowledge_base_mock_openai(setup_vector_store_registr
         # Verify the API was called
         mock_client.assert_called_once()
         request_body = captured_request
-        
+
         # Verify the request contains messages with knowledge base context
         assert "messages" in request_body
         messages = request_body["messages"]
-        
+
         # We expect at least 2 messages:
         # 1. User message with the knowledge base context
         # 2. User message with the question
         assert len(messages) >= 2
-        
+
         print("request messages:", json.dumps(messages, indent=4, default=str))
 
         # assert message[0] is the user message with the knowledge base context
@@ -305,7 +323,9 @@ async def test_openai_with_knowledge_base_mock_openai(setup_vector_store_registr
 
 
 @pytest.mark.asyncio
-async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(setup_vector_store_registry):
+async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(
+    setup_vector_store_registry,
+):
     """
     Tests that vector store ids can be passed as tools
 
@@ -315,7 +335,7 @@ async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(setup_vecto
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key="fake-api-key")
-    
+
     # Variable to capture the request
     captured_request = {}
 
@@ -326,32 +346,33 @@ async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(setup_vecto
         async def mock_create(**kwargs):
             mock_response = Mock()
             mock_response.choices = [
-                Mock(message=Mock(content="Mock response from OpenAI", role="assistant"))
+                Mock(
+                    message=Mock(content="Mock response from OpenAI", role="assistant")
+                )
             ]
-            mock_response.usage = Mock(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+            mock_response.usage = Mock(
+                prompt_tokens=100, completion_tokens=50, total_tokens=150
+            )
             mock_response.id = "chatcmpl-123"
             mock_response.object = "chat.completion"
             mock_response.created = 1234567890
             mock_response.model = "gpt-4"
-            
+
             # Store the request for verification
             captured_request.update(kwargs)
-            
+
             # Return wrapper with parse method
             wrapper = Mock()
             wrapper.parse.return_value = mock_response
             return wrapper
-        
+
         mock_client.side_effect = mock_create
-        
+
         try:
             await litellm.acompletion(
                 model="gpt-4",
                 messages=[{"role": "user", "content": "what is litellm?"}],
-                tools=[{
-                    "type": "file_search",
-                    "vector_store_ids": ["T37J8R4WTM"]
-                }],
+                tools=[{"type": "file_search", "vector_store_ids": ["T37J8R4WTM"]}],
                 client=client,
             )
         except Exception as e:
@@ -361,16 +382,16 @@ async def test_openai_with_vector_store_ids_in_tool_call_mock_openai(setup_vecto
         mock_client.assert_called_once()
         request_body = captured_request
         print("request body:", json.dumps(request_body, indent=4, default=str))
-        
+
         # Verify the request contains messages with knowledge base context
         assert "messages" in request_body
         messages = request_body["messages"]
-        
+
         # We expect at least 2 messages:
         # 1. User message with the knowledge base context
         # 2. User message with the question
         assert len(messages) >= 2
-        
+
         print("request messages:", json.dumps(messages, indent=4, default=str))
 
         # assert message[0] is the user message with the knowledge base context
@@ -387,7 +408,7 @@ async def test_openai_with_mixed_tool_call_mock_openai(setup_vector_store_regist
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key="fake-api-key")
-    
+
     # Variable to capture the request
     captured_request = {}
 
@@ -398,24 +419,28 @@ async def test_openai_with_mixed_tool_call_mock_openai(setup_vector_store_regist
         async def mock_create(**kwargs):
             mock_response = Mock()
             mock_response.choices = [
-                Mock(message=Mock(content="Mock response from OpenAI", role="assistant"))
+                Mock(
+                    message=Mock(content="Mock response from OpenAI", role="assistant")
+                )
             ]
-            mock_response.usage = Mock(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+            mock_response.usage = Mock(
+                prompt_tokens=100, completion_tokens=50, total_tokens=150
+            )
             mock_response.id = "chatcmpl-123"
             mock_response.object = "chat.completion"
             mock_response.created = 1234567890
             mock_response.model = "gpt-4"
-            
+
             # Store the request for verification
             captured_request.update(kwargs)
-            
+
             # Return wrapper with parse method
             wrapper = Mock()
             wrapper.parse.return_value = mock_response
             return wrapper
-        
+
         mock_client.side_effect = mock_create
-        
+
         try:
             await litellm.acompletion(
                 model="gpt-4",
@@ -494,12 +519,12 @@ async def test_openai_with_mixed_tool_call_mock_openai(setup_vector_store_regist
 #             text_content = content_item.get("text")
 #             assert text_content is not None
 #             assert len(text_content) > 0
-            
-
 
 
 @pytest.mark.asyncio
-async def test_e2e_bedrock_knowledgebase_retrieval_without_vector_store_registry(setup_vector_store_registry):
+async def test_e2e_bedrock_knowledgebase_retrieval_without_vector_store_registry(
+    setup_vector_store_registry,
+):
     litellm._turn_on_debug()
     client = AsyncHTTPHandler()
     litellm.vector_store_registry = None
@@ -510,55 +535,56 @@ async def test_e2e_bedrock_knowledgebase_retrieval_without_vector_store_registry
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
         # Provide proper JSON response content
-        mock_response.text = json.dumps({
-            "id": "msg_01ABC123",
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type": "text", "text": "LiteLLM is a library that simplifies LLM API access."}],
-            "model": "claude-3.5-sonnet",
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {
-                "input_tokens": 100,
-                "output_tokens": 50
+        mock_response.text = json.dumps(
+            {
+                "id": "msg_01ABC123",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "LiteLLM is a library that simplifies LLM API access.",
+                    }
+                ],
+                "model": "claude-3.5-sonnet",
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 100, "output_tokens": 50},
             }
-        })
+        )
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
         try:
             response = await litellm.acompletion(
                 model="anthropic/claude-3.5-sonnet",
                 messages=[{"role": "user", "content": "what is litellm?"}],
-                vector_store_ids = [
-                    "T37J8R4WTM"
-                ],
-                client=client
-        )
+                vector_store_ids=["T37J8R4WTM"],
+                client=client,
+            )
         except Exception as e:
             print(f"Error: {e}")
 
         # Verify the LLM request was made
         mock_post.assert_called_once()
-        
+
         # Verify the request body
         print("call args:", mock_post.call_args)
         request_body = mock_post.call_args.kwargs["json"]
         print("Request body:", json.dumps(request_body, indent=4, default=str))
-        
+
         # Assert content from the knowedge base was applied to the request
-        
+
         # 1. we should have 1 content block, the first is the user message
         # There should only be one since there is no initialized vector store registry
         content = request_body["messages"][0]["content"]
         assert len(content) == 1
         assert content[0]["type"] == "text"
-        
-
-
 
 
 @pytest.mark.asyncio
-async def test_e2e_bedrock_knowledgebase_retrieval_with_vector_store_not_in_registry(setup_vector_store_registry):
+async def test_e2e_bedrock_knowledgebase_retrieval_with_vector_store_not_in_registry(
+    setup_vector_store_registry,
+):
     """
     No vector store request is made for vector store ids that are not in the registry
 
@@ -572,53 +598,53 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_vector_store_not_in_regi
     else:
         print("Registry is None")
 
-
     with patch.object(client, "post") as mock_post:
         # Mock the response for the LLM call
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
         # Provide proper JSON response content
-        mock_response.text = json.dumps({
-            "id": "msg_01ABC123",
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type": "text", "text": "LiteLLM is a library that simplifies LLM API access."}],
-            "model": "claude-3.5-sonnet",
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {
-                "input_tokens": 100,
-                "output_tokens": 50
+        mock_response.text = json.dumps(
+            {
+                "id": "msg_01ABC123",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "LiteLLM is a library that simplifies LLM API access.",
+                    }
+                ],
+                "model": "claude-3.5-sonnet",
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 100, "output_tokens": 50},
             }
-        })
+        )
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
         try:
             response = await litellm.acompletion(
                 model="anthropic/claude-3.5-sonnet",
                 messages=[{"role": "user", "content": "what is litellm?"}],
-                vector_store_ids = [
-                    "newUnknownVectorStoreId"
-                ],
-                client=client
-        )
+                vector_store_ids=["newUnknownVectorStoreId"],
+                client=client,
+            )
         except Exception as e:
             print(f"Error: {e}")
 
         # Verify the LLM request was made
         mock_post.assert_called_once()
-        
+
         # Verify the request body
         print("call args:", mock_post.call_args)
         request_body = mock_post.call_args.kwargs["json"]
         print("Request body:", json.dumps(request_body, indent=4, default=str))
-        
+
         # Assert content from the knowedge base was applied to the request
-        
+
         # 1. we should have 1 content block, the first is the user message
         # There should only be one since there is no initialized vector store registry
         content = request_body["messages"][0]["content"]
         assert len(content) == 1
         assert content[0]["type"] == "text"
-        

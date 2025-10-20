@@ -2,4 +2,3 @@
 from .transformation import AzureAIOCRConfig
 
 __all__ = ["AzureAIOCRConfig"]
-

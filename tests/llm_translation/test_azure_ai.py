@@ -315,10 +315,10 @@ async def test_azure_gpt5_reasoning(model):
     assert response.choices[0].message.content is not None
 
 
-
 def test_completion_azure():
     try:
         from litellm import completion_cost
+
         litellm.set_verbose = False
         ## Test azure call
         response = completion(

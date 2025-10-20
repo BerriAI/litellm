@@ -198,7 +198,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def create_output_content_part_done_event(
         self, litellm_complete_object: ModelResponse
     ) -> ContentPartDoneEvent:
-
         text = getattr(litellm_complete_object.choices[0].message, "content", "") or ""  # type: ignore
         reasoning_content = getattr(litellm_complete_object.choices[0].message, "reasoning_content", "") or ""  # type: ignore
 
@@ -441,7 +440,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _emit_response_completed_event(
         self, litellm_model_response: ModelResponse
     ) -> Optional[ResponseCompletedEvent]:
-
         if litellm_model_response:
             # Add cost to usage object if include_cost_in_streaming_usage is True
             if (
