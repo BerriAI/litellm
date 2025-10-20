@@ -3282,8 +3282,6 @@ class BaseLLMHTTPHandler:
             BaseAnthropicMessagesConfig,
             BaseBatchesConfig,
             BaseOCRConfig,
-            BaseVideoGenerationConfig,
-            "BaseVideoRetrievalConfig",
             BaseVideoConfig,
             "BasePassthroughConfig",
         ],
