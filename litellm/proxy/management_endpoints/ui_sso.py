@@ -43,6 +43,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
 from litellm.proxy.auth.auth_utils import _has_user_setup_sso
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.saml_handler import SAMLAuthenticationHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
@@ -134,6 +135,7 @@ async def google_login(
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
+    saml_enabled = SAMLAuthenticationHandler.should_use_saml_handler()
 
     ####### Check if UI is disabled #######
     _disable_ui_flag = os.getenv("DISABLE_ADMIN_UI")
@@ -147,6 +149,7 @@ async def google_login(
         microsoft_client_id is not None
         or google_client_id is not None
         or generic_client_id is not None
+        or saml_enabled is True
     ):
         if premium_user is not True:
             # Check if under 'free SSO user' limit
@@ -154,7 +157,7 @@ async def google_login(
                 total_users = await prisma_client.db.litellm_usertable.count()
                 if total_users and total_users > 5:
                     raise ProxyException(
-                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `GENERIC_CLIENT_ID`, or SAML SSO configuration in your env. Please unset this",
                         type=ProxyErrorTypes.auth_error,
                         param="premium_user",
                         code=status.HTTP_403_FORBIDDEN,
@@ -208,17 +211,22 @@ async def google_login(
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
+            saml_enabled=saml_enabled,
         )
         is True
     ):
         verbose_proxy_logger.info(f"Redirecting to SSO login for {redirect_url}")
-        return await SSOAuthenticationHandler.get_sso_login_redirect(
-            redirect_url=redirect_url,
-            microsoft_client_id=microsoft_client_id,
-            google_client_id=google_client_id,
-            generic_client_id=generic_client_id,
-            state=cli_state,
-        )
+        if saml_enabled:
+            saml_login_url = SAMLAuthenticationHandler.get_login_url(request, state=cli_state)
+            return RedirectResponse(url=saml_login_url)
+        else:
+            return await SSOAuthenticationHandler.get_sso_login_redirect(
+                redirect_url=redirect_url,
+                microsoft_client_id=microsoft_client_id,
+                google_client_id=google_client_id,
+                generic_client_id=generic_client_id,
+                state=cli_state,
+            )
     elif ui_username is not None:
         # No Google, Microsoft SSO
         # Use UI Credentials set in .env
@@ -625,6 +633,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
+    saml_enabled = SAMLAuthenticationHandler.should_use_saml_handler()
     received_response: Optional[dict] = None
     # get url from request
     if master_key is None:
@@ -1128,11 +1137,13 @@ class SSOAuthenticationHandler:
         google_client_id: Optional[str] = None,
         microsoft_client_id: Optional[str] = None,
         generic_client_id: Optional[str] = None,
+        saml_enabled: Optional[bool] = None,
     ) -> bool:
         if (
             google_client_id is not None
             or microsoft_client_id is not None
             or generic_client_id is not None
+            or saml_enabled is True
         ):
             return True
         return False
@@ -1962,16 +1973,18 @@ async def debug_sso_login(request: Request):
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
+    saml_enabled = SAMLAuthenticationHandler.should_use_saml_handler()
 
     ####### Check if user is a Enterprise / Premium User #######
     if (
         microsoft_client_id is not None
         or google_client_id is not None
         or generic_client_id is not None
+        or saml_enabled is True
     ):
         if premium_user is not True:
             raise ProxyException(
-                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `GENERIC_CLIENT_ID`, or SAML SSO configuration in your env. Please unset this",
                 type=ProxyErrorTypes.auth_error,
                 param="premium_user",
                 code=status.HTTP_403_FORBIDDEN,
@@ -1982,6 +1995,12 @@ async def debug_sso_login(request: Request):
         request=request,
         sso_callback_route="sso/debug/callback",
     )
+
+    # check if SAML is configured
+    if saml_enabled:
+        # redirect to saml login url
+        saml_login_url = SAMLAuthenticationHandler.get_login_url(request)
+        return RedirectResponse(url=saml_login_url)
 
     # Check if we should use SSO handler
     if (
@@ -2036,6 +2055,7 @@ async def debug_sso_callback(request: Request):
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
+    saml_enabled = SAMLAuthenticationHandler.should_use_saml_handler()
 
     redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
     if redirect_url.endswith("/"):
@@ -2044,7 +2064,10 @@ async def debug_sso_callback(request: Request):
         redirect_url += "/sso/debug/callback"
 
     result = None
-    if google_client_id is not None:
+    if saml_enabled:
+        # Handle SAML POST callback
+        result = await SAMLAuthenticationHandler.process_saml_response(request)
+    elif google_client_id is not None:
         result = await GoogleSSOHandler.get_google_callback_response(
             request=request,
             google_client_id=google_client_id,
@@ -2101,3 +2124,84 @@ async def debug_sso_callback(request: Request):
     )
 
     return HTMLResponse(content=html_content)
+
+@router.post("/sso/saml/acs", tags=["experimental"], include_in_schema=False)
+@router.post("/saml/acs", tags=["experimental"], include_in_schema=False)  # alias for IdP compatibility
+async def saml_acs_callback(request: Request):
+    """
+    SAML Assertion Consumer Service (ACS) endpoint.
+    This is where the IdP sends the SAML response after authentication.
+    """
+    from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+    )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
+        )
+
+    verbose_proxy_logger.info(f"Processing SAML ACS callback at {request.url.path}")
+
+    try:
+        # Process SAML response and extract user information
+        verbose_proxy_logger.debug("Calling SAMLAuthenticationHandler.process_saml_response")
+        result = await SAMLAuthenticationHandler.process_saml_response(request)
+        verbose_proxy_logger.info(f"SAML response processed successfully for user: {result.email}")
+
+        # Check if this is a CLI login by looking at RelayState
+        form_data = await request.form()
+        relay_state = form_data.get("RelayState")
+
+        if relay_state and relay_state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
+            # Extract the key ID from the relay state
+            key_id = relay_state.split(":", 1)[1]
+
+            verbose_proxy_logger.info(
+                f"CLI SSO callback detected for key: {key_id}"
+            )
+            return await cli_sso_callback(
+                request=request, key=key_id, existing_key=None, result=result
+            )
+
+        # Regular UI SSO callback
+        from litellm.proxy.proxy_server import general_settings
+
+        ui_access_mode = general_settings.get("ui_access_mode", None)
+
+        return await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result=result,
+            request=request,
+            received_response=None,
+            generic_client_id=None,
+            ui_access_mode=ui_access_mode,
+        )
+
+    except ProxyException as e:
+        verbose_proxy_logger.error(f"SAML authentication failed: {e}")
+        # Ensure status_code is an integer
+        status_code = int(e.code) if e.code else 401
+        raise HTTPException(status_code=status_code, detail=e.message)
+    except Exception as e:
+        verbose_proxy_logger.error(f"Unexpected error during SAML authentication: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/sso/saml/metadata", tags=["experimental"], include_in_schema=False)
+async def saml_metadata():
+    """
+    SAML Service Provider metadata endpoint.
+    Returns the SP metadata XML that should be uploaded to the IdP.
+    """
+    from fastapi.responses import Response
+
+    try:
+        metadata_xml = SAMLAuthenticationHandler.get_metadata()
+        return Response(content=metadata_xml, media_type="application/xml")
+    except ProxyException as e:
+        verbose_proxy_logger.error(f"Failed to generate SAML metadata: {e}")
+        raise HTTPException(status_code=e.code, detail=e.message)
+    except Exception as e:
+        verbose_proxy_logger.error(f"Unexpected error generating SAML metadata: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
