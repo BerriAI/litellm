@@ -4427,7 +4427,7 @@ class BaseLLMHTTPHandler:
             input=input,
             api_key="",
             additional_args={
-                "complete_input_dict": {"input": input, "voice": voice},
+                "complete_input_dict": request_data,
                 "api_base": api_base,
                 "headers": headers,
             },
@@ -4526,7 +4526,7 @@ class BaseLLMHTTPHandler:
             input=input,
             api_key="",
             additional_args={
-                "complete_input_dict": {"input": input, "voice": voice},
+                "complete_input_dict": request_data,
                 "api_base": api_base,
                 "headers": headers,
             },
