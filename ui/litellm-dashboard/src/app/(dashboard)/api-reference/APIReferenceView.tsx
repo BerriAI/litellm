@@ -10,9 +10,18 @@ interface ApiRefProps {
 
 const APIReferenceView: React.FC<ApiRefProps> = ({ proxySettings }) => {
   let base_url = "<your_proxy_base_url>";
+  let model_name = "gpt-3.5-turbo";
 
-  if (proxySettings?.PROXY_BASE_URL !== undefined && proxySettings?.PROXY_BASE_URL) {
+  // Use API_REFERENCE_BASE_URL if set (for control plane setups), otherwise fall back to PROXY_BASE_URL
+  if (proxySettings?.API_REFERENCE_BASE_URL !== undefined && proxySettings?.API_REFERENCE_BASE_URL) {
+    base_url = proxySettings.API_REFERENCE_BASE_URL;
+  } else if (proxySettings?.PROXY_BASE_URL !== undefined && proxySettings?.PROXY_BASE_URL) {
     base_url = proxySettings.PROXY_BASE_URL;
+  }
+
+  // Use API_REFERENCE_MODEL if set (for custom model examples)
+  if (proxySettings?.API_REFERENCE_MODEL !== undefined && proxySettings?.API_REFERENCE_MODEL) {
+    model_name = proxySettings.API_REFERENCE_MODEL;
   }
 
   return (
@@ -49,7 +58,7 @@ client = openai.OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo", # model to send to the proxy
+    model="${model_name}", # model to send to the proxy
     messages = [
         {
             "role": "user",
@@ -109,7 +118,7 @@ from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
     openai_api_base="${base_url}",
-    model = "gpt-3.5-turbo",
+    model = "${model_name}",
     temperature=0.1
 )
 

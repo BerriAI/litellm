@@ -932,6 +932,13 @@ async def get_ui_settings(request: Request):
         if os.environ["PROXY_DEFAULT_TEAM_DISABLED"].lower() == "true":
             default_team_disabled = True
 
+    # Allow overriding the API Reference base URL (for control plane setups)
+    # If API_REFERENCE_BASE_URL is set, use it; otherwise fall back to PROXY_BASE_URL
+    _api_reference_base_url = os.getenv("API_REFERENCE_BASE_URL", _proxy_base_url)
+    
+    # Allow overriding the API Reference model name
+    _api_reference_model = os.getenv("API_REFERENCE_MODEL", None)
+
     return {
         "PROXY_BASE_URL": _proxy_base_url,
         "PROXY_LOGOUT_URL": _logout_url,
@@ -941,6 +948,8 @@ async def get_ui_settings(request: Request):
             "spend_logs_row_count"
         ),
         "DISABLE_EXPENSIVE_DB_QUERIES": disable_expensive_db_queries,
+        "API_REFERENCE_BASE_URL": _api_reference_base_url,
+        "API_REFERENCE_MODEL": _api_reference_model,
     }
 
 
