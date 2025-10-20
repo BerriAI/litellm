@@ -5,11 +5,10 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 import httpx
 
 if TYPE_CHECKING:
-    from openai._legacy_response import (
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.types.llms.openai import (
         HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
     )
-
-    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     from ..chat.transformation import BaseLLMException as _BaseLLMException
 
