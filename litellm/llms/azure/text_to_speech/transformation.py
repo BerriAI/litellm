@@ -179,28 +179,23 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Transform OpenAI TTS request to Azure AVA TTS SSML format
         
+        Note: optional_params should already be mapped via map_openai_params in main.py
+        
         Returns dict with:
         - ssml_body: str (the SSML XML body)
         - headers: dict (updated headers with output format)
         """
-        # Map OpenAI params to Azure params
-        mapped_params = self.map_openai_params(
-            model=model,
-            optional_params=optional_params,
-            drop_params=False,
-        )
+        # Get voice (already mapped in main.py, or use default)
+        azure_voice = optional_params.get("voice", "en-US-AriaNeural")
         
-        # Get voice (use mapped voice or default)
-        azure_voice = mapped_params.get("voice", "en-US-AriaNeural")
-        
-        # Set output format in header
-        output_format = mapped_params.get(
+        # Set output format in header (already mapped in main.py)
+        output_format = optional_params.get(
             "output_format", "audio-24khz-48kbitrate-mono-mp3"
         )
         headers["X-Microsoft-OutputFormat"] = output_format
         
         # Build SSML
-        rate = mapped_params.get("rate", "0%")
+        rate = optional_params.get("rate", "0%")
         
         # Escape XML special characters in input text
         escaped_input = (
