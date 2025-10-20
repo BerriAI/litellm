@@ -87,7 +87,7 @@ async def anthropic_response(  # noqa: PLR0915
 
         ### CALL HOOKS ### - modify incoming data before calling the model
         data = await proxy_logging_obj.pre_call_hook(  # type: ignore
-            user_api_key_dict=user_api_key_dict, data=data, call_type="text_completion"
+            user_api_key_dict=user_api_key_dict, data=data, call_type=CallTypes.anthropic_messages.value
         )
 
         tasks = []
@@ -120,7 +120,7 @@ async def anthropic_response(  # noqa: PLR0915
         ):  # model in router deployments, calling a specific deployment on the router
             llm_coro = llm_router.aanthropic_messages(**data, specific_deployment=True)
         elif (
-            llm_router is not None and data["model"] in llm_router.get_model_ids()
+            llm_router is not None and llm_router.has_model_id(data["model"])
         ):  # model in router model list
             llm_coro = llm_router.aanthropic_messages(**data)
         elif (

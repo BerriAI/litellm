@@ -41,8 +41,10 @@ class TestLangfuseInMemoryCache:
             "litellm.integrations.langfuse.langfuse.LangFuseLogger", MockLangFuseLogger
         ):
             # Add the mock logger to cache with expired TTL
+            expired_time = time.time() - 1  # Already expired
             self.cache.cache_dict["test_key"] = mock_logger
-            self.cache.ttl_dict["test_key"] = time.time() - 1  # Already expired
+            self.cache.ttl_dict["test_key"] = expired_time
+            self.cache.expiration_heap = [(expired_time, "test_key")]
 
             initial_count = litellm.initialized_langfuse_clients
 

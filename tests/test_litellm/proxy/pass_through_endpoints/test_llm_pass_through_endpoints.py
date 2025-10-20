@@ -18,12 +18,12 @@ import litellm
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
+    bedrock_llm_proxy_route,
     create_pass_through_route,
     llm_passthrough_factory_proxy_route,
-    vllm_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
-    bedrock_llm_proxy_route,
+    vllm_proxy_route,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
@@ -719,6 +719,85 @@ class TestVertexAIPassThroughHandler:
         empty_response = {}
         assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(empty_response) is False
 
+    def test_vertex_passthrough_handler_predict_cost_tracking(self):
+        """
+        Test that vertex_passthrough_handler correctly tracks costs for /predict endpoint
+        """
+        import datetime
+        from unittest.mock import Mock, patch
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+            VertexPassthroughLoggingHandler,
+        )
+
+        # Create mock embedding response data
+        embedding_response_data = {
+            "predictions": [
+                {
+                    "embeddings": {
+                        "values": [0.1, 0.2, 0.3, 0.4, 0.5],
+                        "statistics": {
+                            "token_count": 10
+                        }
+                    }
+                }
+            ]
+        }
+
+        # Create mock httpx.Response
+        mock_httpx_response = Mock()
+        mock_httpx_response.json.return_value = embedding_response_data
+        mock_httpx_response.status_code = 200
+
+        # Create mock logging object
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.litellm_call_id = "test-call-id-123"
+        mock_logging_obj.model_call_details = {}
+
+        # Test URL with /predict endpoint
+        url_route = "/v1/projects/test-project/locations/us-central1/publishers/google/models/textembedding-gecko@001:predict"
+        
+        start_time = datetime.datetime.now()
+        end_time = datetime.datetime.now()
+        
+        with patch("litellm.completion_cost") as mock_completion_cost:
+            # Mock the completion cost calculation
+            mock_completion_cost.return_value = 0.0001
+            
+            # Call the handler
+            result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+                httpx_response=mock_httpx_response,
+                logging_obj=mock_logging_obj,
+                url_route=url_route,
+                result="test-result",
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False
+            )
+
+            # Verify cost tracking was implemented
+            assert result is not None
+            assert "result" in result
+            assert "kwargs" in result
+            
+            # Verify cost calculation was called
+            mock_completion_cost.assert_called_once()
+            
+            # Verify cost is set in kwargs
+            assert "response_cost" in result["kwargs"]
+            assert result["kwargs"]["response_cost"] == 0.0001
+            
+            # Verify cost is set in logging object
+            assert "response_cost" in mock_logging_obj.model_call_details
+            assert mock_logging_obj.model_call_details["response_cost"] == 0.0001
+            
+            # Verify model is set in kwargs
+            assert "model" in result["kwargs"]
+            assert result["kwargs"]["model"] == "textembedding-gecko@001"
+
 
 class TestVertexAIDiscoveryPassThroughHandler:
     """
@@ -916,6 +995,64 @@ class TestBedrockLLMProxyRoute:
             # For regular models, model should be just the model ID
             assert call_kwargs["model"] == "anthropic.claude-3-sonnet-20240229-v1:0"
             assert result == "success"
+
+    @pytest.mark.asyncio
+    async def test_bedrock_error_handling_returns_actual_error(self):
+        """
+        Test that when Bedrock API returns an error, it is properly propagated to the user
+        instead of being returned as a generic "Internal Server Error".
+        """
+        from fastapi import HTTPException
+
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            handle_bedrock_passthrough_router_model,
+        )
+        
+        mock_request = Mock()
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        
+        mock_request_body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"textaaa": "Hello"}]
+                }
+            ]
+        }
+        
+        bedrock_error_message = '{"message":"ContentBlock object at messages.0.content.0 must set one of the following keys: text, image, toolUse, toolResult, document, video."}'
+        
+        # Create a mock httpx.Response for the error
+        mock_error_response = Mock(spec=httpx.Response)
+        mock_error_response.status_code = 400
+        mock_error_response.aread = AsyncMock(return_value=bedrock_error_message.encode('utf-8'))
+        
+        # Create the HTTPStatusError
+        mock_http_error = httpx.HTTPStatusError(
+            message="Bad Request",
+            request=Mock(spec=httpx.Request),
+            response=mock_error_response,
+        )
+        
+        mock_llm_router = Mock()
+        mock_llm_router.allm_passthrough_route = AsyncMock(side_effect=mock_http_error)
+        
+        endpoint = "model/test-model/converse"
+        model = "test-model"
+        
+        with pytest.raises(HTTPException) as exc_info:
+            await handle_bedrock_passthrough_router_model(
+                model=model,
+                endpoint=endpoint,
+                request=mock_request,
+                request_body=mock_request_body,
+                llm_router=mock_llm_router,
+            )
+        
+        assert exc_info.value.status_code == 400
+        assert "ContentBlock object at messages.0.content.0 must set one of the following keys" in str(exc_info.value.detail)
 
 
 class TestLLMPassthroughFactoryProxyRoute:

@@ -417,6 +417,12 @@ def bytes_to_mb(bytes_value: int):
 def get_key_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[Dict[str, int]]:
+    """
+    Get the model rpm limit for a given api key
+    - check key metadata
+    - check key model max budget
+    - check team metadata
+    """
     if user_api_key_dict.metadata:
         if "model_rpm_limit" in user_api_key_dict.metadata:
             return user_api_key_dict.metadata["model_rpm_limit"]
@@ -426,7 +432,9 @@ def get_key_model_rpm_limit(
             if "rpm_limit" in budget and budget["rpm_limit"] is not None:
                 model_rpm_limit[model] = budget["rpm_limit"]
         return model_rpm_limit
-
+    elif user_api_key_dict.team_metadata:
+        if "model_rpm_limit" in user_api_key_dict.team_metadata:
+            return user_api_key_dict.team_metadata["model_rpm_limit"]
     return None
 
 
@@ -439,7 +447,25 @@ def get_key_model_tpm_limit(
     elif user_api_key_dict.model_max_budget:
         if "tpm_limit" in user_api_key_dict.model_max_budget:
             return user_api_key_dict.model_max_budget["tpm_limit"]
+    elif user_api_key_dict.team_metadata:
+        if "model_tpm_limit" in user_api_key_dict.team_metadata:
+            return user_api_key_dict.team_metadata["model_tpm_limit"]
+    return None
 
+
+def get_team_model_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.team_metadata:
+        return user_api_key_dict.team_metadata.get("model_rpm_limit")
+    return None
+
+
+def get_team_model_tpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.team_metadata:
+        return user_api_key_dict.team_metadata.get("model_tpm_limit")
     return None
 
 
@@ -472,6 +498,7 @@ def _has_user_setup_sso():
     )
 
     return sso_setup
+
 
 def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
     """Return the header_name mapped to CUSTOMER role, if any (dict-based)."""
@@ -522,7 +549,11 @@ def get_end_user_id_from_request_body(
             for header_name, header_value in request_headers.items():
                 if header_name.lower() == custom_header_name_to_check.lower():
                     user_id_from_header = header_value
-                    user_id_str = str(user_id_from_header) if user_id_from_header is not None else ""
+                    user_id_str = (
+                        str(user_id_from_header)
+                        if user_id_from_header is not None
+                        else ""
+                    )
                     if user_id_str.strip():
                         return user_id_str
 

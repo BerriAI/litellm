@@ -281,12 +281,12 @@ def prompt_team_selection_fallback(teams: List[Dict[str, Any]]) -> Optional[Dict
 
 def update_key_with_team(base_url: str, api_key: str, team_id: str) -> bool:
     """Update the API key to be associated with the selected team"""
-
+    from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.client import Client
     
     client = Client(base_url=base_url, api_key=api_key)
     try:
-        result = client.keys.update(key=api_key, team_id=team_id)
+        client.keys.update(key=api_key, team_id=team_id, models=[SpecialModelNames.all_team_models.value])
         click.echo(f"✅ Successfully assigned key to team: {team_id}")
         return True
     except requests.exceptions.HTTPError as e:
@@ -301,11 +301,42 @@ def update_key_with_team(base_url: str, api_key: str, team_id: str) -> bool:
 
 # Polling-based authentication - no local server needed
 
+def _handle_team_assignment(base_url: str, api_key: str, user_id: str) -> None:
+    """Handle team fetching and assignment for the authenticated user."""
+    click.echo("\n" + "="*60)
+    click.echo("📋 Fetching your teams...")
+    
+    teams = get_user_teams(
+        base_url=base_url,
+        api_key=api_key,
+        user_id=user_id,
+    )
+    
+    if teams:
+        # Prompt for team selection (will display teams interactively)
+        selected_team = prompt_team_selection(teams)
+        
+        if selected_team:
+            team_id = selected_team.get('team_id')
+            if team_id:
+                click.echo(f"\n🔄 Assigning your key to team: {selected_team.get('team_alias', team_id)}")
+                success = update_key_with_team(base_url, api_key, team_id)
+                if success:
+                    click.echo(f"✅ Your CLI key is now associated with team: {selected_team.get('team_alias', team_id)}")
+                    click.echo(f"🎯 You can now access models: {', '.join(selected_team.get('models', ['All models']))}")
+                else:
+                    click.echo("⚠️ Key assignment failed, but you can still use the CLI")
+            else:
+                click.echo("ℹ️ Continuing without team assignment. You can assign a team later using the CLI.")
+    else:
+        click.echo("ℹ️ No teams found. You can create or join teams using the web interface.")
+
+
 @click.command(name="login")
 @click.pass_context
 def login(ctx: click.Context):
     """Login to LiteLLM proxy using SSO authentication"""
-    import uuid
+    from litellm._uuid import uuid
 
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
     from litellm.proxy.client.cli.interface import show_commands
@@ -322,7 +353,8 @@ def login(ctx: click.Context):
         # Construct SSO login URL with CLI source and pre-generated key
         sso_url = f"{base_url}/sso/key/generate?source={LITELLM_CLI_SOURCE_IDENTIFIER}&key={key_id}"
         
-        # If we have an existing key, include it so the server can regenerate it
+        # If we have an existing key, include it as a parameter to the login endpoint
+        # The server will encode it in the OAuth state parameter for the SSO flow
         if existing_key:
             sso_url += f"&existing_key={existing_key}"
         
@@ -364,35 +396,8 @@ def login(ctx: click.Context):
                             click.echo(f"API Key: {api_key[:20]}...")
                             click.echo("You can now use the CLI without specifying --api-key")
                             
-                            # Fetch and display user's teams
-                            click.echo("\n" + "="*60)
-                            click.echo("📋 Fetching your teams...")
-                            
-                            teams = get_user_teams(
-                                base_url=base_url,
-                                api_key=api_key,
-                                user_id=data.get("user_id"),
-                            )
-                            
-                            
-                            if teams:
-                                # Prompt for team selection (will display teams interactively)
-                                selected_team = prompt_team_selection(teams)
-                                
-                                if selected_team:
-                                    team_id = selected_team.get('team_id')
-                                    if team_id:
-                                        click.echo(f"\n🔄 Assigning your key to team: {selected_team.get('team_alias', team_id)}")
-                                        success = update_key_with_team(base_url, api_key, team_id)
-                                        if success:
-                                            click.echo(f"✅ Your CLI key is now associated with team: {selected_team.get('team_alias', team_id)}")
-                                            click.echo(f"🎯 You can now access models: {', '.join(selected_team.get('models', ['All models']))}")
-                                        else:
-                                            click.echo("⚠️ Key assignment failed, but you can still use the CLI")
-                                else:
-                                    click.echo("ℹ️ Continuing without team assignment. You can assign a team later using the CLI.")
-                            else:
-                                click.echo("ℹ️ No teams found. You can create or join teams using the web interface.")
+                            # Handle team assignment
+                            _handle_team_assignment(base_url, api_key, data.get("user_id"))
                             
                             # Show available commands after successful login
                             click.echo("\n" + "="*60)

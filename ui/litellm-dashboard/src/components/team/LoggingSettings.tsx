@@ -1,12 +1,12 @@
 /* eslint-disable @next/next/no-img-element */
 /* eslint-disable react/no-unescaped-entities */
-import React, { useState } from 'react';
-import { Form, Select, Space, Tooltip, Divider } from 'antd';
-import { InfoCircleOutlined } from '@ant-design/icons';
-import { Button, Card, TextInput } from '@tremor/react';
-import { PlusIcon, TrashIcon, CogIcon, BanIcon } from '@heroicons/react/outline';
-import { callbackInfo, Callbacks, callback_map, mapDisplayToInternalNames } from '../callback_info_helpers';
-import NumericalInput from '../shared/numerical_input';
+import React from "react";
+import { Select, Tooltip, Divider } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { Button, Card, TextInput } from "@tremor/react";
+import { PlusIcon, TrashIcon, CogIcon, BanIcon } from "@heroicons/react/outline";
+import { callbackInfo, callback_map, mapDisplayToInternalNames } from "../callback_info_helpers";
+import NumericalInput from "../shared/numerical_input";
 
 const { Option } = Select;
 
@@ -23,11 +23,11 @@ interface LoggingSettingsProps {
   onDisabledCallbacksChange?: (disabledCallbacks: string[]) => void;
 }
 
-const LoggingSettings: React.FC<LoggingSettingsProps> = ({ 
-  value = [], 
+const LoggingSettings: React.FC<LoggingSettingsProps> = ({
+  value = [],
   onChange,
   disabledCallbacks = [],
-  onDisabledCallbacksChange
+  onDisabledCallbacksChange,
 }) => {
   // Get callbacks that support team and key logging
   const supportedCallbacks = Object.entries(callbackInfo)
@@ -49,9 +49,9 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
 
   const addLoggingConfig = () => {
     const newConfig: LoggingConfig = {
-      callback_name: '',
-      callback_type: 'success',
-      callback_vars: {}
+      callback_name: "",
+      callback_type: "success",
+      callback_vars: {},
     };
     handleChange([...value, newConfig]);
   };
@@ -63,18 +63,18 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
 
   const updateLoggingConfig = (index: number, field: keyof LoggingConfig, newValue: any) => {
     const updatedConfigs = [...value];
-    if (field === 'callback_name') {
+    if (field === "callback_name") {
       // Convert display name to callback value and reset callback_vars when callback changes
       const callbackValue = callback_map[newValue] || newValue;
       updatedConfigs[index] = {
         ...updatedConfigs[index],
         [field]: callbackValue,
-        callback_vars: {}
+        callback_vars: {},
       };
     } else {
       updatedConfigs[index] = {
         ...updatedConfigs[index],
-        [field]: newValue
+        [field]: newValue,
       };
     }
     handleChange(updatedConfigs);
@@ -86,8 +86,8 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
       ...updatedConfigs[configIndex],
       callback_vars: {
         ...updatedConfigs[configIndex].callback_vars,
-        [varName]: varValue
-      }
+        [varName]: varValue,
+      },
     };
     handleChange(updatedConfigs);
   };
@@ -96,9 +96,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
     if (!config.callback_name) return null;
 
     // Find the display name for the callback
-    const callbackDisplayName = Object.entries(callback_map).find(
-      ([_, value]) => value === config.callback_name
-    )?.[0];
+    const callbackDisplayName = Object.entries(callback_map).find(([_, value]) => value === config.callback_name)?.[0];
 
     if (!callbackDisplayName) return null;
 
@@ -118,39 +116,35 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
           {Object.entries(dynamicParams).map(([paramName, paramType]) => (
             <div key={paramName} className="space-y-2">
               <label className="text-sm font-medium text-gray-700 capitalize flex items-center space-x-1">
-                <span>{paramName.replace(/_/g, ' ')}</span>
+                <span>{paramName.replace(/_/g, " ")}</span>
                 <Tooltip title={`Environment variable reference recommended: os.environ/${paramName.toUpperCase()}`}>
                   <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
                 </Tooltip>
-                {paramType === 'password' && (
+                {paramType === "password" && (
                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
                     Sensitive
                   </span>
                 )}
-                {paramType === 'number' && (
+                {paramType === "number" && (
                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
                     Number
                   </span>
                 )}
               </label>
-              {paramType === 'number' && (
-                <span className="text-xs text-gray-500">
-                  Value must be between 0 and 1
-                </span>
-              )}
-              {paramType === 'number' ? (
+              {paramType === "number" && <span className="text-xs text-gray-500">Value must be between 0 and 1</span>}
+              {paramType === "number" ? (
                 <NumericalInput
                   step={0.01}
                   width={400}
                   placeholder={`os.environ/${paramName.toUpperCase()}`}
-                  value={config.callback_vars[paramName] || ''}
+                  value={config.callback_vars[paramName] || ""}
                   onChange={(e: any) => updateCallbackVar(configIndex, paramName, e.target.value)}
                 />
               ) : (
                 <TextInput
-                  type={paramType === 'password' ? 'password' : 'text'}
+                  type={paramType === "password" ? "password" : "text"}
                   placeholder={`os.environ/${paramName.toUpperCase()}`}
-                  value={config.callback_vars[paramName] || ''}
+                  value={config.callback_vars[paramName] || ""}
                   onChange={(e) => updateCallbackVar(configIndex, paramName, e.target.value)}
                 />
               )}
@@ -172,7 +166,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
             <InfoCircleOutlined className="text-gray-400 cursor-help" />
           </Tooltip>
         </div>
-        
+
         <div className="space-y-2">
           <label className="text-sm font-medium text-gray-700">Disabled Callbacks</label>
           <Select
@@ -180,7 +174,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
             placeholder="Select callbacks to disable"
             value={disabledCallbacks}
             onChange={handleDisabledCallbacksChange}
-            style={{ width: '100%' }}
+            style={{ width: "100%" }}
             optionLabelProp="label"
           >
             {allCallbacks.map((callbackName) => {
@@ -191,17 +185,18 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                   <Tooltip title={description} placement="right">
                     <div className="flex items-center space-x-2">
                       {logo && (
-                        <img 
-                          src={logo} 
-                          alt={callbackName} 
+                        <img
+                          src={logo}
+                          alt={callbackName}
                           className="w-4 h-4 object-contain"
                           onError={(e) => {
                             // Create a div with callback initial as fallback
                             const target = e.target as HTMLImageElement;
                             const parent = target.parentElement;
                             if (parent) {
-                              const fallbackDiv = document.createElement('div');
-                              fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                              const fallbackDiv = document.createElement("div");
+                              fallbackDiv.className =
+                                "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
                               fallbackDiv.textContent = callbackName.charAt(0);
                               parent.replaceChild(fallbackDiv, target);
                             }
@@ -246,8 +241,8 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
 
       <div className="space-y-4">
         {value.map((config, index) => {
-          const callbackDisplayName = config.callback_name 
-            ? Object.entries(callback_map).find(([_, value]) => value === config.callback_name)?.[0] 
+          const callbackDisplayName = config.callback_name
+            ? Object.entries(callback_map).find(([_, value]) => value === config.callback_name)?.[0]
             : undefined;
           const logoUrl = callbackDisplayName ? callbackInfo[callbackDisplayName]?.logo : null;
 
@@ -260,12 +255,8 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
             >
               <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center space-x-2">
-                  {logoUrl && (
-                    <img src={logoUrl} alt={callbackDisplayName} className="w-5 h-5 object-contain" />
-                  )}
-                  <span className="text-sm font-medium">
-                    {callbackDisplayName || 'New Integration'} Configuration
-                  </span>
+                  {logoUrl && <img src={logoUrl} alt={callbackDisplayName} className="w-5 h-5 object-contain" />}
+                  <span className="text-sm font-medium">{callbackDisplayName || "New Integration"} Configuration</span>
                 </div>
                 <Button
                   variant="light"
@@ -286,7 +277,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                     <Select
                       value={callbackDisplayName}
                       placeholder="Select integration"
-                      onChange={(value) => updateLoggingConfig(index, 'callback_name', value)}
+                      onChange={(value) => updateLoggingConfig(index, "callback_name", value)}
                       className="w-full"
                       optionLabelProp="label"
                     >
@@ -298,17 +289,18 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                             <Tooltip title={description} placement="right">
                               <div className="flex items-center space-x-2">
                                 {logo && (
-                                  <img 
-                                    src={logo} 
-                                    alt={callbackName} 
+                                  <img
+                                    src={logo}
+                                    alt={callbackName}
                                     className="w-4 h-4 object-contain"
                                     onError={(e) => {
                                       // Create a div with callback initial as fallback
                                       const target = e.target as HTMLImageElement;
                                       const parent = target.parentElement;
                                       if (parent) {
-                                        const fallbackDiv = document.createElement('div');
-                                        fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                                        const fallbackDiv = document.createElement("div");
+                                        fallbackDiv.className =
+                                          "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
                                         fallbackDiv.textContent = callbackName.charAt(0);
                                         parent.replaceChild(fallbackDiv, target);
                                       }
@@ -328,7 +320,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                     <label className="text-sm font-medium text-gray-700">Event Type</label>
                     <Select
                       value={config.callback_type}
-                      onChange={(value) => updateLoggingConfig(index, 'callback_type', value)}
+                      onChange={(value) => updateLoggingConfig(index, "callback_type", value)}
                       className="w-full"
                     >
                       <Option value="success">
@@ -371,4 +363,4 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
   );
 };
 
-export default LoggingSettings; 
+export default LoggingSettings;

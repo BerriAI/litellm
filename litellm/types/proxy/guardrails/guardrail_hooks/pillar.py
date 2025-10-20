@@ -15,6 +15,22 @@ class PillarGuardrailConfigModelOptionalParams(BaseModel):
         default="monitor",
         description="Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only). If not provided, the `PILLAR_ON_FLAGGED_ACTION` environment variable is checked, defaults to 'monitor'.",
     )
+    async_mode: Optional[bool] = Field(
+        default=None,
+        description="Set to True to request asynchronous analysis (sets `plr_async` header).",
+    )
+    persist_session: Optional[bool] = Field(
+        default=None,
+        description="Set to False to disable session persistence (sets `plr_persist` header).",
+    )
+    include_scanners: Optional[bool] = Field(
+        default=True,
+        description="Include scanner summaries in response payloads (sets `plr_scanners` header).",
+    )
+    include_evidence: Optional[bool] = Field(
+        default=True,
+        description="Include detailed evidence objects in response payloads (sets `plr_evidence` header).",
+    )
 
 
 class PillarGuardrailConfigModel(

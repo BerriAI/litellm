@@ -13,7 +13,6 @@ from typing import (
     Union,
 )
 
-import fastuuid as uuid
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
@@ -33,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 import litellm
+from litellm._uuid import uuid
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
     LiteLLMPydanticObjectBase,
@@ -123,12 +123,18 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_output_tokens: Required[Optional[int]]
     input_cost_per_token: Required[float]
     input_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
-    input_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
+    input_cost_per_token_priority: Optional[
+        float
+    ]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
     cache_read_input_token_cost: Optional[float]
-    cache_read_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
-    cache_read_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
+    cache_read_input_token_cost_flex: Optional[
+        float
+    ]  # OpenAI flex service tier pricing
+    cache_read_input_token_cost_priority: Optional[
+        float
+    ]  # OpenAI priority service tier pricing
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
@@ -147,7 +153,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_batches: Optional[float]
     output_cost_per_token: Required[float]
     output_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
-    output_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
+    output_cost_per_token_priority: Optional[
+        float
+    ]  # OpenAI priority service tier pricing
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_audio_token: Optional[float]
     output_cost_per_token_above_128k_tokens: Optional[
@@ -165,6 +173,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
+    ocr_cost_per_page: Optional[float]  # for OCR models
+    annotation_cost_per_page: Optional[float]  # for OCR models
     search_context_cost_per_query: Optional[
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
@@ -210,7 +220,7 @@ class GenericStreamingChunk(TypedDict, total=False):
 from enum import Enum
 
 
-class CallTypes(Enum):
+class CallTypes(str, Enum):
     embedding = "embedding"
     aembedding = "aembedding"
     completion = "completion"
@@ -322,6 +332,8 @@ CallTypesLiteral = Literal[
     "agenerate_content",
     "generate_content_stream",
     "agenerate_content_stream",
+    "ocr",
+    "aocr",
 ]
 
 
@@ -1417,6 +1429,9 @@ class EmbeddingResponse(OpenAIObject):
         model = model
         super().__init__(model=model, object=object, data=data, usage=usage)  # type: ignore
 
+        if hidden_params:
+            self._hidden_params = hidden_params
+
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
@@ -1856,6 +1871,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_team_alias: Optional[str]
     user_api_key_end_user_id: Optional[str]
     user_api_key_request_route: Optional[str]
+    user_api_key_auth_metadata: Optional[Dict[str, str]]
 
 
 class StandardLoggingMCPToolCall(TypedDict, total=False):
@@ -2031,6 +2047,13 @@ class GuardrailMode(TypedDict, total=False):
     default: Optional[str]
 
 
+GuardrailStatus = Literal[
+    "success",
+    "guardrail_intervened", 
+    "guardrail_failed_to_respond",
+    "not_run"
+]
+
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
     guardrail_provider: Optional[str]
@@ -2039,7 +2062,7 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     ]
     guardrail_request: Optional[dict]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
-    guardrail_status: Literal["success", "failure", "blocked"]
+    guardrail_status: GuardrailStatus
     start_time: Optional[float]
     end_time: Optional[float]
     duration: Optional[float]
@@ -2060,16 +2083,61 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
 
+class CachingDetails(TypedDict):
+    """
+    Track all caching related metrics, fields for a given request
+    """
+
+    cache_hit: Optional[bool]
+    """
+    Whether the request hit the cache
+    """
+    cache_duration_ms: Optional[float]
+    """
+    Duration for reading from cache
+    """
+
+
+class CostBreakdown(TypedDict, total=False):
+    """
+    Detailed cost breakdown for a request
+    """
+
+    input_cost: float  # Cost of input/prompt tokens
+    output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
+    total_cost: float  # Total cost (input + output + tool usage)
+    tool_usage_cost: float  # Cost of usage of built-in tools
+    original_cost: float  # Cost before discount (optional)
+    discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
+    discount_amount: float  # Discount amount in USD (optional)
+
+
+class StandardLoggingPayloadStatusFields(TypedDict, total=False):
+    """Status fields for easy filtering and analytics"""
+    llm_api_status: StandardLoggingPayloadStatus
+    """Status of the LLM API call - 'success' if completed, 'failure' if errored"""
+    guardrail_status: GuardrailStatus
+    """
+    Status of guardrail execution:
+    - 'success': Guardrail ran and allowed content through
+    - 'guardrail_intervened': Guardrail blocked or modified content
+    - 'guardrail_failed_to_respond': Guardrail had technical failure
+    - 'not_run': No guardrail was run
+    """
+
+
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     call_type: str
     stream: Optional[bool]
     response_cost: float
+    cost_breakdown: Optional[CostBreakdown]  # Detailed cost breakdown
     response_cost_failure_debug_info: Optional[
         StandardLoggingModelCostFailureDebugInformation
     ]
     status: StandardLoggingPayloadStatus
+    status_fields: StandardLoggingPayloadStatusFields
     custom_llm_provider: Optional[str]
     total_tokens: int
     prompt_tokens: int
@@ -2159,10 +2227,67 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     arize_space_key: Optional[str]
     arize_space_id: Optional[str]
 
+    # PostHog dynamic params
+    posthog_api_key: Optional[str]
+    posthog_api_url: Optional[str]
+
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
 
+class CustomPricingLiteLLMParams(BaseModel):
+    ## CUSTOM PRICING ##
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    input_cost_per_second: Optional[float] = None
+    output_cost_per_second: Optional[float] = None
+    input_cost_per_pixel: Optional[float] = None
+    output_cost_per_pixel: Optional[float] = None
+    
+    # Include all ModelInfoBase fields as optional
+    # This allows any model_info parameter to be set in litellm_params
+    input_cost_per_token_flex: Optional[float] = None
+    input_cost_per_token_priority: Optional[float] = None
+    cache_creation_input_token_cost: Optional[float] = None
+    cache_creation_input_token_cost_above_1hr: Optional[float] = None
+    cache_creation_input_token_cost_above_200k_tokens: Optional[float] = None
+    cache_creation_input_audio_token_cost: Optional[float] = None
+    cache_read_input_token_cost: Optional[float] = None
+    cache_read_input_token_cost_flex: Optional[float] = None
+    cache_read_input_token_cost_priority: Optional[float] = None
+    cache_read_input_token_cost_above_200k_tokens: Optional[float] = None
+    cache_read_input_audio_token_cost: Optional[float] = None
+    input_cost_per_character: Optional[float] = None
+    input_cost_per_character_above_128k_tokens: Optional[float] = None
+    input_cost_per_audio_token: Optional[float] = None
+    input_cost_per_token_cache_hit: Optional[float] = None
+    input_cost_per_token_above_128k_tokens: Optional[float] = None
+    input_cost_per_token_above_200k_tokens: Optional[float] = None
+    input_cost_per_query: Optional[float] = None
+    input_cost_per_image: Optional[float] = None
+    input_cost_per_image_above_128k_tokens: Optional[float] = None
+    input_cost_per_audio_per_second: Optional[float] = None
+    input_cost_per_audio_per_second_above_128k_tokens: Optional[float] = None
+    input_cost_per_video_per_second: Optional[float] = None
+    input_cost_per_video_per_second_above_128k_tokens: Optional[float] = None
+    input_cost_per_video_per_second_above_15s_interval: Optional[float] = None
+    input_cost_per_video_per_second_above_8s_interval: Optional[float] = None
+    input_cost_per_token_batches: Optional[float] = None
+    output_cost_per_token_batches: Optional[float] = None
+    output_cost_per_token_flex: Optional[float] = None
+    output_cost_per_token_priority: Optional[float] = None
+    output_cost_per_character: Optional[float] = None
+    output_cost_per_audio_token: Optional[float] = None
+    output_cost_per_token_above_128k_tokens: Optional[float] = None
+    output_cost_per_token_above_200k_tokens: Optional[float] = None
+    output_cost_per_character_above_128k_tokens: Optional[float] = None
+    output_cost_per_image: Optional[float] = None
+    output_cost_per_reasoning_token: Optional[float] = None
+    output_cost_per_video_per_second: Optional[float] = None
+    output_cost_per_audio_per_second: Optional[float] = None
+    search_context_cost_per_query: Optional[Dict[str, Any]] = None
+    citation_cost_per_token: Optional[float] = None
+    tiered_pricing: Optional[List[Dict[str, Any]]] = None
 
 all_litellm_params = [
     "metadata",
@@ -2262,7 +2387,8 @@ all_litellm_params = [
     "litellm_session_id",
     "use_litellm_proxy",
     "prompt_label",
-] + list(StandardCallbackDynamicParams.__annotations__.keys())
+    "shared_session",
+] + list(StandardCallbackDynamicParams.__annotations__.keys()) + list(CustomPricingLiteLLMParams.model_fields.keys())
 
 
 class KeyGenerationConfig(TypedDict, total=False):
@@ -2405,6 +2531,7 @@ class LlmProviders(str, Enum):
     DOTPROMPT = "dotprompt"
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
+    LEMONADE = "lemonade"
 
 
 # Create a set of all provider values for quick lookup
@@ -2592,6 +2719,7 @@ class SpecialEnums(Enum):
 
 class ServiceTier(Enum):
     """Enum for service tier types used in cost calculations."""
+
     FLEX = "flex"
     PRIORITY = "priority"
 
@@ -2633,3 +2761,24 @@ CostResponseTypes = Union[
     ImageResponse,
     TranscriptionResponse,
 ]
+
+
+class PriorityReservationSettings(BaseModel):
+    """
+    Settings for priority-based rate limiting reservation.
+
+    Defines what priority to assign to keys without explicit priority metadata.
+    The priority_reservation mapping is configured separately via litellm.priority_reservation.
+    """
+
+    default_priority: float = Field(
+        default=0.25,
+        description="Priority level to assign to API keys without explicit priority metadata. Should match a key in litellm.priority_reservation.",
+    )
+    
+    saturation_threshold: float = Field(
+        default=0.50,
+        description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits."
+    )
+
+    model_config = ConfigDict(protected_namespaces=())

@@ -80,11 +80,8 @@ def list(ctx: click.Context):
         display_teams_table(teams)
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        try:
-            error_body = e.response.json()
-            click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
-        except:
-            click.echo(e.response.text, err=True)
+        error_body = e.response.json()
+        click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
         click.echo(f"Error: {str(e)}", err=True)
@@ -107,12 +104,8 @@ def available(ctx: click.Context):
             click.echo("ℹ️ No available teams to join.")
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        try:
-            error_body = e.response.json()
-            click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
-        except:
-            click.echo(e.response.text, err=True)
-        raise click.Abort()
+        error_body = e.response.json()
+        click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
     except Exception as e:
         click.echo(f"Error: {str(e)}", err=True)
         raise click.Abort()
@@ -152,7 +145,7 @@ def assign_key(ctx: click.Context, team_id: Optional[str]):
         # Update the key with the selected team
         if team_id:
             click.echo(f"\n🔄 Assigning your key to team: {team_id}")
-            result = client.keys.update(key=api_key, team_id=team_id)
+            client.keys.update(key=api_key, team_id=team_id)
             click.echo(f"✅ Successfully assigned key to team: {team_id}")
             
             # Show team details if available
@@ -168,11 +161,8 @@ def assign_key(ctx: click.Context, team_id: Optional[str]):
         
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
-        try:
-            error_body = e.response.json()
-            click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
-        except:
-            click.echo(e.response.text, err=True)
+        error_body = e.response.json()
+        click.echo(f"Details: {error_body.get('detail', 'Unknown error')}", err=True)
         raise click.Abort()
     except Exception as e:
         click.echo(f"Error: {str(e)}", err=True)
