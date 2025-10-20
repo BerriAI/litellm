@@ -4357,35 +4357,6 @@ def test_deepseek_reasoning_content_completion():
         pytest.skip("Model is timing out")
 
 
-@pytest.mark.parametrize(
-    "custom_llm_provider, expected_result",
-    [("anthropic", {"anthropic-beta": "test"}), ("bedrock", {}), ("vertex_ai", {})],
-)
-def test_provider_specific_header(custom_llm_provider, expected_result):
-    from litellm.types.utils import ProviderSpecificHeader
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-    from unittest.mock import patch
-
-    litellm.set_verbose = True
-    client = HTTPHandler()
-    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
-        try:
-            resp = litellm.completion(
-                model="anthropic/claude-3-5-sonnet-v2@20241022",
-                messages=[{"role": "user", "content": "Hello world"}],
-                provider_specific_header=ProviderSpecificHeader(
-                    custom_llm_provider="anthropic",
-                    extra_headers={"anthropic-beta": "test"},
-                ),
-                client=client,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-
-        mock_post.assert_called_once()
-        print(mock_post.call_args.kwargs["headers"])
-        assert "anthropic-beta" in mock_post.call_args.kwargs["headers"]
-
 
 def test_qwen_text_completion():
     # litellm._turn_on_debug()

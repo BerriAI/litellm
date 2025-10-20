@@ -173,6 +173,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
+    ocr_cost_per_page: Optional[float]  # for OCR models
+    annotation_cost_per_page: Optional[float]  # for OCR models
     search_context_cost_per_query: Optional[
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
@@ -218,7 +220,7 @@ class GenericStreamingChunk(TypedDict, total=False):
 from enum import Enum
 
 
-class CallTypes(Enum):
+class CallTypes(str, Enum):
     embedding = "embedding"
     aembedding = "aembedding"
     completion = "completion"
@@ -330,6 +332,8 @@ CallTypesLiteral = Literal[
     "agenerate_content",
     "generate_content_stream",
     "agenerate_content_stream",
+    "ocr",
+    "aocr",
 ]
 
 
@@ -2094,17 +2098,18 @@ class CachingDetails(TypedDict):
     """
 
 
-class CostBreakdown(TypedDict):
+class CostBreakdown(TypedDict, total=False):
     """
     Detailed cost breakdown for a request
     """
 
     input_cost: float  # Cost of input/prompt tokens
-    output_cost: (
-        float  # Cost of output/completion tokens (includes reasoning if applicable)
-    )
+    output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
+    original_cost: float  # Cost before discount (optional)
+    discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
+    discount_amount: float  # Discount amount in USD (optional)
 
 
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):
