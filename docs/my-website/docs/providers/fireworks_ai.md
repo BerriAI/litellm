@@ -28,7 +28,7 @@ This guide explains how to integrate LiteLLM with Fireworks AI. You can connect 
 ## API Key
 ```python
 # env variable
-os.environ['FIREWORKS_AI_API_KEY']
+os.environ['FIREWORKS_API_KEY']
 ```
 
 ## Sample Usage - Serverless Models
@@ -36,7 +36,7 @@ os.environ['FIREWORKS_AI_API_KEY']
 from litellm import completion
 import os
 
-os.environ['FIREWORKS_AI_API_KEY'] = ""
+os.environ['FIREWORKS_API_KEY'] = ""
 response = completion(
     model="fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct", 
     messages=[
@@ -51,7 +51,7 @@ print(response)
 from litellm import completion
 import os
 
-os.environ['FIREWORKS_AI_API_KEY'] = ""
+os.environ['FIREWORKS_API_KEY'] = ""
 response = completion(
     model="fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct", 
     messages=[
@@ -69,7 +69,7 @@ for chunk in response:
 from litellm import completion
 import os
 
-os.environ['FIREWORKS_AI_API_KEY'] = ""
+os.environ['FIREWORKS_API_KEY'] = ""
 response = completion(
     model="fireworks_ai/accounts/fireworks/models/YOUR_MODEL_ID", 
     messages=[
@@ -84,7 +84,7 @@ print(response)
 from litellm import completion
 import os
 
-os.environ['FIREWORKS_AI_API_KEY'] = "YOUR_DIRECT_API_KEY"
+os.environ['FIREWORKS_API_KEY'] = "YOUR_DIRECT_API_KEY"
 response = completion(
     model="fireworks_ai/accounts/fireworks/models/qwen2p5-coder-7b#accounts/gitlab/deployments/2fb7764c", 
     messages=[
@@ -107,7 +107,7 @@ model_list:
   - model_name: fireworks-llama-v3-70b-instruct
     litellm_params:
       model: fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct
-      api_key: "os.environ/FIREWORKS_AI_API_KEY"
+      api_key: "os.environ/FIREWORKS_API_KEY"
 ```
 
 ### 2. Start Proxy 
@@ -203,7 +203,7 @@ LiteLLM will add `#transform=inline` to the url of the image_url, if the model i
 from litellm import completion
 import os
 
-os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
+os.environ["FIREWORKS_API_KEY"] = "YOUR_API_KEY"
 os.environ["FIREWORKS_AI_API_BASE"] = "https://audio-prod.us-virginia-1.direct.fireworks.ai/v1"
 
 completion = litellm.completion(
@@ -239,7 +239,7 @@ model_list:
   - model_name: llama-v3p3-70b-instruct
     litellm_params:
       model: fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct
-      api_key: os.environ/FIREWORKS_AI_API_KEY
+      api_key: os.environ/FIREWORKS_API_KEY
     #   api_base: os.environ/FIREWORKS_AI_API_BASE [OPTIONAL], defaults to "https://api.fireworks.ai/inference/v1"
 ```
 
@@ -342,7 +342,7 @@ We support ALL Fireworks AI models, just set `fireworks_ai/` as a prefix when se
 from litellm import transcription
 import os
 
-os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
+os.environ["FIREWORKS_API_KEY"] = "YOUR_API_KEY"
 os.environ["FIREWORKS_AI_API_BASE"] = "https://audio-prod.us-virginia-1.direct.fireworks.ai/v1"
 
 response = transcription(

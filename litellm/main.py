@@ -4470,8 +4470,10 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
             )
         elif custom_llm_provider == "fireworks_ai":
-            api_key = (
-                api_key or litellm.api_key or get_secret_str("FIREWORKS_AI_API_KEY")
+            api_key = api_key or litellm.api_key or (
+                get_secret_str("FIREWORKS_API_KEY")
+                or get_secret_str("FIREWORKS_AI_API_KEY")
+                or get_secret_str("FIREWORKS_AI_TOKEN")
             )
             response = openai_chat_completions.embedding(
                 model=model,
