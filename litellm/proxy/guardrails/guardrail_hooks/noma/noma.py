@@ -585,6 +585,7 @@ class NomaGuardrail(CustomGuardrail):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[Union[Exception, str, dict]]:
         verbose_proxy_logger.debug("Running Noma pre-call hook")
@@ -646,6 +647,7 @@ class NomaGuardrail(CustomGuardrail):
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Union[Exception, str, dict, None]:
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call

@@ -18,6 +18,7 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_query,
+    get_custom_llm_provider_from_request_headers,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
@@ -282,6 +283,7 @@ async def retrieve_batch(
         else:
             custom_llm_provider = (
                 provider
+                or get_custom_llm_provider_from_request_headers(request=request)
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
             )
@@ -369,7 +371,13 @@ async def list_batches(
 
     ```
     """
-    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj, version
+    from litellm.proxy.proxy_server import (
+        llm_router,
+        proxy_logging_obj,
+        version,
+        general_settings,
+        proxy_config,
+    )
 
     verbose_proxy_logger.debug("GET /v1/batches after={} limit={}".format(after, limit))
     try:
@@ -379,8 +387,23 @@ async def list_batches(
                 detail={"error": CommonProxyErrors.no_llm_router.value},
             )
 
-        ## check for target model names
+        # Include original request and headers in the data
         data = await _read_request_body(request=request)
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            route_type="alist_batches",
+        )
+
+        ## check for target model names
         target_model_names = target_model_names or data.get("target_model_names", None)
         if target_model_names:
             model = target_model_names.split(",")[0]
@@ -388,10 +411,12 @@ async def list_batches(
                 model=model,
                 after=after,
                 limit=limit,
+                **data,
             )
         else:
             custom_llm_provider = (
                 provider
+                or get_custom_llm_provider_from_request_headers(request=request)
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
             )
@@ -399,7 +424,15 @@ async def list_batches(
                 custom_llm_provider=custom_llm_provider,  # type: ignore
                 after=after,
                 limit=limit,
+                **data,
             )
+
+        ## POST CALL HOOKS ###
+        _response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
+        )
+        if _response is not None and type(response) == type(_response):
+            response = _response
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
