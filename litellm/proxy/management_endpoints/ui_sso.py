@@ -642,7 +642,6 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
-    saml_enabled = SAMLAuthenticationHandler.should_use_saml_handler()
     received_response: Optional[dict] = None
     # get url from request
     if master_key is None:
