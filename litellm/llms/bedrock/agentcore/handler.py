@@ -457,6 +457,133 @@ class AgentCoreConfig(BaseAWSLLM):
                     message=f"AgentCore: Failed to create client with both explicit credentials and default chain: {e} | {fallback_error}",
                 )
 
+    def _process_image_element(
+        self, element: Dict[str, Any], media_items: List[Dict[str, Any]]
+    ) -> None:
+        """Process image_url element and append to media_items."""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            convert_to_anthropic_image_obj,
+        )
+
+        image_url_data = element.get("image_url", {})
+        url = (
+            image_url_data.get("url", "")
+            if isinstance(image_url_data, dict)
+            else image_url_data
+        )
+        format_override = (
+            image_url_data.get("format")
+            if isinstance(image_url_data, dict)
+            else None
+        )
+
+        if not url:
+            return
+
+        try:
+            parsed = convert_to_anthropic_image_obj(url, format=format_override)
+            media_format = (
+                parsed["media_type"].split("/")[-1]
+                if "/" in parsed["media_type"]
+                else "jpeg"
+            )
+            media_items.append(
+                {"type": "image", "format": media_format, "data": parsed["data"]}
+            )
+        except ValueError as e:
+            litellm.verbose_logger.error(
+                f"Invalid image format at index {len(media_items)}: {e}. "
+                f"URL: {url[:100]}{'...' if len(url) > 100 else ''}"
+            )
+        except Exception as e:
+            litellm.verbose_logger.error(
+                f"Unexpected error parsing image at index {len(media_items)}: "
+                f"{type(e).__name__}: {e}"
+            )
+            raise
+
+    def _process_video_element(
+        self, element: Dict[str, Any], media_items: List[Dict[str, Any]]
+    ) -> None:
+        """Process video_url element and append to media_items."""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            convert_to_anthropic_image_obj,
+        )
+
+        video_url_data = element.get("video_url", {})
+        url = (
+            video_url_data.get("url", "")
+            if isinstance(video_url_data, dict)
+            else video_url_data
+        )
+        format_override = (
+            video_url_data.get("format")
+            if isinstance(video_url_data, dict)
+            else None
+        )
+
+        if not url:
+            return
+
+        try:
+            parsed = convert_to_anthropic_image_obj(url, format=format_override)
+            media_format = (
+                parsed["media_type"].split("/")[-1]
+                if "/" in parsed["media_type"]
+                else "mp4"
+            )
+            media_items.append(
+                {"type": "video", "format": media_format, "data": parsed["data"]}
+            )
+        except Exception as e:
+            litellm.verbose_logger.error(
+                f"Invalid video format: {e}. "
+                f"URL: {url[:100]}{'...' if len(url) > 100 else ''}"
+            )
+
+    def _process_audio_element(
+        self, element: Dict[str, Any], media_items: List[Dict[str, Any]]
+    ) -> None:
+        """Process audio element and append to media_items."""
+        input_audio = element.get("input_audio", {})
+
+        if not isinstance(input_audio, dict):
+            litellm.verbose_logger.error(
+                f"Unexpected audio format: {element}. Skipping audio."
+            )
+            return
+
+        audio_data = input_audio.get("data", "")
+        audio_format = input_audio.get("format", "mp3")
+
+        if audio_data:
+            media_items.append(
+                {"type": "audio", "format": audio_format, "data": audio_data}
+            )
+
+    def _process_document_element(
+        self, element: Dict[str, Any], media_items: List[Dict[str, Any]]
+    ) -> None:
+        """Process document element and append to media_items."""
+        source = element.get("source", {})
+
+        if not isinstance(source, dict):
+            litellm.verbose_logger.error(
+                f"Unexpected document format: {element}. Skipping document."
+            )
+            return
+
+        doc_data = source.get("data", "")
+        doc_media_type = source.get("media_type", "application/pdf")
+        doc_format = (
+            doc_media_type.split("/")[-1] if "/" in doc_media_type else "pdf"
+        )
+
+        if doc_data:
+            media_items.append(
+                {"type": "document", "format": doc_format, "data": doc_data}
+            )
+
     def _extract_text_and_media_from_content(
         self, content: Union[str, List[Dict[str, Any]]]
     ) -> Tuple[str, Optional[List[Dict[str, Any]]]]:
@@ -488,10 +615,6 @@ class AgentCoreConfig(BaseAWSLLM):
             For PDFs with Claude models, consider converting to images first.
             The implementation supports all types, but your agent's model must support them.
         """
-        from litellm.litellm_core_utils.prompt_templates.factory import (
-            convert_to_anthropic_image_obj,
-        )
-
         # Simple text-only content
         if isinstance(content, str):
             return content, None
@@ -508,149 +631,15 @@ class AgentCoreConfig(BaseAWSLLM):
                 element_type = element.get("type", "")
 
                 if element_type == "text":
-                    # Extract text
                     text_parts.append(element.get("text", ""))
-
                 elif element_type == "image_url":
-                    # Use LiteLLM's utility to parse image properly
-                    image_url_data = element.get("image_url", {})
-
-                    if isinstance(image_url_data, dict):
-                        url = image_url_data.get("url", "")
-                        format_override = image_url_data.get("format")
-                    else:
-                        url = image_url_data
-                        format_override = None
-
-                    if url:
-                        try:
-                            # Use convert_to_anthropic_image_obj for proper parsing
-                            parsed = convert_to_anthropic_image_obj(
-                                url, format=format_override
-                            )
-
-                            # Convert to AgentCore format
-                            # AgentCore expects: {"type": "image", "format": "jpeg", "data": "..."}
-                            media_format = (
-                                parsed["media_type"].split("/")[-1]
-                                if "/" in parsed["media_type"]
-                                else "jpeg"
-                            )
-
-                            media_items.append(
-                                {
-                                    "type": "image",
-                                    "format": media_format,
-                                    "data": parsed["data"],
-                                }
-                            )
-                        except ValueError as e:
-                            # Expected error for invalid format
-                            litellm.verbose_logger.error(
-                                f"Invalid image format at index {len(media_items)}: {e}. "
-                                f"URL: {url[:100]}{'...' if len(url) > 100 else ''}"
-                            )
-                            # Skip invalid images and continue processing
-                            continue
-                        except Exception as e:
-                            # Unexpected error - should not happen
-                            litellm.verbose_logger.error(
-                                f"Unexpected error parsing image at index {len(media_items)}: "
-                                f"{type(e).__name__}: {e}"
-                            )
-                            raise  # Re-raise unexpected errors
-
+                    self._process_image_element(element, media_items)
                 elif element_type == "video_url":
-                    # Handle video content
-                    video_url_data = element.get("video_url", {})
-
-                    if isinstance(video_url_data, dict):
-                        url = video_url_data.get("url", "")
-                        format_override = video_url_data.get("format")
-                    else:
-                        url = video_url_data
-                        format_override = None
-
-                    if url:
-                        try:
-                            # Use same parsing utility (works for video too)
-                            parsed = convert_to_anthropic_image_obj(
-                                url, format=format_override
-                            )
-
-                            # Convert to AgentCore format
-                            media_format = (
-                                parsed["media_type"].split("/")[-1]
-                                if "/" in parsed["media_type"]
-                                else "mp4"
-                            )
-
-                            media_items.append(
-                                {
-                                    "type": "video",
-                                    "format": media_format,
-                                    "data": parsed["data"],
-                                }
-                            )
-                        except Exception as e:
-                            litellm.verbose_logger.error(
-                                f"Invalid video format: {e}. "
-                                f"URL: {url[:100]}{'...' if len(url) > 100 else ''}"
-                            )
-                            continue
-
+                    self._process_video_element(element, media_items)
                 elif element_type == "audio":
-                    # Handle audio content
-                    # Audio content has different structure: {"type": "audio", "input_audio": {"data": "...", "format": "wav"}}
-                    input_audio = element.get("input_audio", {})
-
-                    if isinstance(input_audio, dict):
-                        audio_data = input_audio.get("data", "")
-                        audio_format = input_audio.get("format", "mp3")
-
-                        if audio_data:
-                            media_items.append(
-                                {
-                                    "type": "audio",
-                                    "format": audio_format,
-                                    "data": audio_data,
-                                }
-                            )
-                    else:
-                        litellm.verbose_logger.error(
-                            f"Unexpected audio format: {element}. Skipping audio."
-                        )
-                        continue
-
+                    self._process_audio_element(element, media_items)
                 elif element_type == "document":
-                    # Handle document content
-                    # Document structure: {"type": "document", "source": {"type": "text", "media_type": "...", "data": "..."}}
-                    source = element.get("source", {})
-
-                    if isinstance(source, dict):
-                        doc_data = source.get("data", "")
-                        doc_media_type = source.get("media_type", "application/pdf")
-
-                        # Extract format from media type (e.g., "application/pdf" -> "pdf")
-                        doc_format = (
-                            doc_media_type.split("/")[-1]
-                            if "/" in doc_media_type
-                            else "pdf"
-                        )
-
-                        if doc_data:
-                            media_items.append(
-                                {
-                                    "type": "document",
-                                    "format": doc_format,
-                                    "data": doc_data,
-                                }
-                            )
-                    else:
-                        litellm.verbose_logger.error(
-                            f"Unexpected document format: {element}. Skipping document."
-                        )
-                        continue
+                    self._process_document_element(element, media_items)
 
             # Combine text parts
             text_prompt = " ".join(text_parts) if text_parts else ""
@@ -881,6 +870,68 @@ class AgentCoreConfig(BaseAWSLLM):
 
         return None
 
+    def _resolve_aws_region(
+        self, model_region: Optional[str], **kwargs
+    ) -> str:
+        """
+        Resolve AWS region from model ARN or kwargs/environment.
+
+        Args:
+            model_region: Region extracted from ARN (if provided)
+            **kwargs: Keyword arguments that may contain aws_region or aws_region_name
+
+        Returns:
+            AWS region string
+
+        Raises:
+            BedrockError: If region cannot be determined
+        """
+        if model_region:
+            return model_region
+
+        aws_region = (
+            kwargs.get("aws_region")
+            or kwargs.get("aws_region_name")
+            or os.getenv("AWS_REGION")
+        )
+
+        if not aws_region:
+            raise BedrockError(
+                status_code=400,
+                message="AgentCore: aws_region_name is required when not using full ARN. Provide via aws_region_name parameter or AWS_REGION environment variable.",
+            )
+
+        return aws_region
+
+    def _resolve_agent_arn(
+        self,
+        provided_arn: Optional[str],
+        api_base: str,
+        agent_name: str,
+        aws_region: str,
+        client: boto3.client,
+    ) -> str:
+        """
+        Resolve agent ARN from provided sources or construct from agent name.
+
+        Args:
+            provided_arn: ARN from model string (if provided)
+            api_base: API base parameter (may contain ARN)
+            agent_name: Agent identifier
+            aws_region: AWS region
+            client: Boto3 client
+
+        Returns:
+            Agent runtime ARN
+        """
+        if provided_arn:
+            return provided_arn
+
+        if api_base and api_base.startswith("arn:aws:bedrock-agentcore:"):
+            return api_base
+
+        return self._build_agent_arn(agent_name, aws_region, client)
+
     def completion(
         self,
         model: str,
@@ -917,42 +968,23 @@ class AgentCoreConfig(BaseAWSLLM):
         Returns:
             ModelResponse or CustomStreamWrapper for streaming
         """
-        # Parse model string
+        # Parse model string and extract parameters
         model_info = self._parse_model(model)
         agent_name = model_info["agent_name"]
         provided_arn = model_info["arn"]
         model_region = model_info["region"]
 
-        # Extract qualifier - prefer model string qualifier over optional_params
         qualifier = model_info.get("qualifier") or optional_params.pop(
             "qualifier", None
         )
-
-        # Extract runtime_session_id if provided (for session continuity)
         runtime_session_id = optional_params.pop("runtime_session_id", None)
 
-        # AWS region (use model region if ARN provided, otherwise from kwargs/env)
-        if model_region:
-            aws_region = model_region
-        else:
-            aws_region = (
-                kwargs.get("aws_region")
-                or kwargs.get("aws_region_name")
-                or os.getenv("AWS_REGION")
-            )
-            if not aws_region:
-                raise BedrockError(
-                    status_code=400,
-                    message="AgentCore: aws_region_name is required when not using full ARN. Provide via aws_region_name parameter or AWS_REGION environment variable.",
-                )
+        # Resolve AWS region and create client
+        aws_region = self._resolve_aws_region(model_region, **kwargs)
 
-        # Create boto3 client with comprehensive credential management
         try:
-            client = self._create_agentcore_client(
-                region=aws_region, **kwargs  # Pass all kwargs for credential resolution
-            )
+            client = self._create_agentcore_client(region=aws_region, **kwargs)
         except BedrockError:
-            # Re-raise BedrockError as-is
             raise
         except Exception as e:
             litellm.verbose_logger.error(f"Failed to create AgentCore client: {e}")
@@ -960,27 +992,18 @@ class AgentCoreConfig(BaseAWSLLM):
                 status_code=500, message=f"AgentCore: AWS client creation failed: {e}"
             ) from e
 
-        # Get or construct ARN
-        if provided_arn:
-            agent_arn = provided_arn
-        elif api_base and api_base.startswith("arn:aws:bedrock-agentcore:"):
-            agent_arn = api_base
-        else:
-            # Construct ARN from agent name
-            agent_arn = self._build_agent_arn(agent_name, aws_region, client)
+        # Resolve agent ARN and build request
+        agent_arn = self._resolve_agent_arn(
+            provided_arn, api_base, agent_name, aws_region, client
+        )
 
-        # Build request payload with session support
         request_data = self._transform_messages_to_agentcore(
             messages, session_id=runtime_session_id
         )
-
-        # Store session ID for response metadata
         response_session_id = request_data.get("runtimeSessionId")
-
-        # Add remaining optional parameters (temperature, max_tokens, etc.)
         request_data.update(optional_params)
 
-        # Make request
+        # Execute request
         created_at = int(time.time())
 
         if stream:
