@@ -464,7 +464,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # This happens when the current chunk has no text/reasoning content
         if hasattr(self, '_pending_annotation_events') and self._pending_annotation_events:
             event = self._pending_annotation_events.pop(0)
-            print(f"[STREAMING_ANNOTATION_DEBUG] Emitting queued annotation event, {len(self._pending_annotation_events)} remaining")
             return event
 
         return None
