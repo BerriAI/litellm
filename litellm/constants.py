@@ -94,9 +94,12 @@ AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
 
 # WebSocket constants
-REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES = int(
-    os.getenv("REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES", 10 * 1024 * 1024)
-)  # 10MB default to handle large base64 audio payloads from realtime APIs
+# Default to None (unlimited) to match OpenAI's official agents SDK behavior
+# https://github.com/openai/openai-agents-python/blob/cf1b933660e44fd37b4350c41febab8221801409/src/agents/realtime/openai_realtime.py#L235
+_max_size_env = os.getenv("REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES")
+REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES = (
+    int(_max_size_env) if _max_size_env is not None else None
+)
 
 # SSL/TLS cipher configuration for faster handshakes
 # Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones

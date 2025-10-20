@@ -17,8 +17,8 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.openai_endpoint_utils import (
-    get_custom_llm_provider_from_request_query,
     get_custom_llm_provider_from_request_headers,
+    get_custom_llm_provider_from_request_query,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
@@ -372,11 +372,11 @@ async def list_batches(
     ```
     """
     from litellm.proxy.proxy_server import (
+        general_settings,
         llm_router,
+        proxy_config,
         proxy_logging_obj,
         version,
-        general_settings,
-        proxy_config,
     )
 
     verbose_proxy_logger.debug("GET /v1/batches after={} limit={}".format(after, limit))
@@ -429,9 +429,9 @@ async def list_batches(
 
         ## POST CALL HOOKS ###
         _response = await proxy_logging_obj.post_call_success_hook(
-            data=data, user_api_key_dict=user_api_key_dict, response=response
+            data=data, user_api_key_dict=user_api_key_dict, response=response  # type: ignore
         )
-        if _response is not None and type(response) == type(_response):
+        if _response is not None and type(response) is type(_response):
             response = _response
 
         ### RESPONSE HEADERS ###

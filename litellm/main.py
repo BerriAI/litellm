@@ -5690,12 +5690,28 @@ def speech(  # noqa: PLR0915
         optional_params["speed"] = speed  # type: ignore
     if instructions is not None:
         optional_params["instructions"] = instructions
+
     if timeout is None:
         timeout = litellm.request_timeout
 
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
     litellm_params_dict = get_litellm_params(**kwargs)
+    
+    # Get provider-specific text-to-speech config and map parameters
+    text_to_speech_provider_config = ProviderConfigManager.get_provider_text_to_speech_config(
+        model=model,
+        provider=litellm.LlmProviders(custom_llm_provider),
+    )
+    
+    # Map OpenAI params to provider-specific params if config exists
+    if text_to_speech_provider_config is not None:
+        optional_params = text_to_speech_provider_config.map_openai_params(
+            model=model,
+            optional_params=optional_params,
+            drop_params=False,
+        )
+    
     logging_obj: Logging = cast(Logging, kwargs.get("litellm_logging_obj"))
     logging_obj.update_environment_variables(
         model=model,
@@ -5769,52 +5785,85 @@ def speech(  # noqa: PLR0915
             aspeech=aspeech,
         )
     elif custom_llm_provider == "azure":
-        # azure configs
-        if voice is None or not (isinstance(voice, str)):
-            raise litellm.BadRequestError(
-                message="'voice' is required to be passed as a string for Azure TTS",
-                model=model,
-                llm_provider=custom_llm_provider,
+        # Check if this is Azure Speech Service (Cognitive Services TTS)
+        if model.startswith("speech/"):
+            from litellm.llms.azure.text_to_speech.transformation import (
+                AzureAVATextToSpeechConfig,
             )
-        api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
 
-        api_version = api_version or litellm.api_version or get_secret("AZURE_API_VERSION")  # type: ignore
+            # Azure AVA (Cognitive Services) Text-to-Speech
+            if text_to_speech_provider_config is None:
+                raise litellm.BadRequestError(
+                    message="Azure Speech Service configuration not found",
+                    model=model,
+                    llm_provider=custom_llm_provider,
+                )
 
-        api_key = (
-            api_key
-            or litellm.api_key
-            or litellm.azure_key
-            or get_secret("AZURE_OPENAI_API_KEY")
-            or get_secret("AZURE_API_KEY")
-        )  # type: ignore
+            # Cast to specific Azure config type to access dispatch method
+            azure_config = cast(AzureAVATextToSpeechConfig, text_to_speech_provider_config)
+            
+            response = azure_config.dispatch_text_to_speech(  # type: ignore
+                model=model,
+                input=input,
+                voice=voice,
+                optional_params=optional_params,
+                litellm_params_dict=litellm_params_dict,
+                logging_obj=logging_obj,
+                timeout=timeout,
+                extra_headers=extra_headers,
+                base_llm_http_handler=base_llm_http_handler,
+                aspeech=aspeech or False,
+                api_base=api_base,
+                api_key=api_key,
+                **kwargs,
+            )
+        else:
+            # Azure OpenAI TTS
+            if voice is None or not (isinstance(voice, str)):
+                raise litellm.BadRequestError(
+                    message="'voice' is required to be passed as a string for Azure TTS",
+                    model=model,
+                    llm_provider=custom_llm_provider,
+                )
+            api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
 
-        azure_ad_token: Optional[str] = optional_params.get("extra_body", {}).pop(  # type: ignore
-            "azure_ad_token", None
-        ) or get_secret(
-            "AZURE_AD_TOKEN"
-        )
-        azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
+            api_version = api_version or litellm.api_version or get_secret("AZURE_API_VERSION")  # type: ignore
 
-        if extra_headers:
-            optional_params["extra_headers"] = extra_headers
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret("AZURE_OPENAI_API_KEY")
+                or get_secret("AZURE_API_KEY")
+            )  # type: ignore
 
-        response = azure_chat_completions.audio_speech(
-            model=model,
-            input=input,
-            voice=voice,
-            optional_params=optional_params,
-            api_key=api_key,
-            api_base=api_base,
-            api_version=api_version,
-            azure_ad_token=azure_ad_token,
-            azure_ad_token_provider=azure_ad_token_provider,
-            organization=organization,
-            max_retries=max_retries,
-            timeout=timeout,
-            client=client,  # pass AsyncOpenAI, OpenAI client
-            aspeech=aspeech,
-            litellm_params=litellm_params_dict,
-        )
+            azure_ad_token: Optional[str] = optional_params.get("extra_body", {}).pop(  # type: ignore
+                "azure_ad_token", None
+            ) or get_secret(
+                "AZURE_AD_TOKEN"
+            )
+            azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
+
+            if extra_headers:
+                optional_params["extra_headers"] = extra_headers
+
+            response = azure_chat_completions.audio_speech(
+                model=model,
+                input=input,
+                voice=voice,
+                optional_params=optional_params,
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                azure_ad_token=azure_ad_token,
+                azure_ad_token_provider=azure_ad_token_provider,
+                organization=organization,
+                max_retries=max_retries,
+                timeout=timeout,
+                client=client,  # pass AsyncOpenAI, OpenAI client
+                aspeech=aspeech,
+                litellm_params=litellm_params_dict,
+            )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         generic_optional_params = GenericLiteLLMParams(**kwargs)
 
