@@ -379,6 +379,11 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "compactifai"
         elif model.startswith("ovhcloud/"):
             custom_llm_provider = "ovhcloud"
+        # bedrock agentcore models
+        elif model.startswith("bedrock/agentcore/"):
+            custom_llm_provider = "bedrock"
+            # Strip the prefix for model parsing
+            model = model.replace("bedrock/agentcore/", "", 1)
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa
