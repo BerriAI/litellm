@@ -172,16 +172,32 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         if not model_response.data:
             model_response.data = []
         
-        # AI/ML API can return images in two different formats:
-        # 1. output.choices array with image_base64
-        # 2. images array with url (and optional width, height, content_type)
+        # AI/ML API can return images in multiple formats:
+        # 1. Top-level data array with url (OpenAI-like format)
+        # 2. output.choices array with image_base64
+        # 3. images array with url (and optional width, height, content_type)
         
-        if "output" in response_data and "choices" in response_data["output"]:
+        if "data" in response_data and isinstance(response_data["data"], list):
+            # Handle OpenAI-like format: {"data": [{"url": "...", "width": 1024, "height": 768, "content_type": "image/jpeg"}]}
+            for image in response_data["data"]:
+                if "url" in image:
+                    model_response.data.append(ImageObject(
+                        b64_json=None,
+                        url=image["url"],
+                        revised_prompt=image.get("revised_prompt"),
+                    ))
+                elif "b64_json" in image or "image_base64" in image:
+                    model_response.data.append(ImageObject(
+                        b64_json=image.get("b64_json") or image.get("image_base64"),
+                        url=None,
+                        revised_prompt=image.get("revised_prompt"),
+                    ))
+        elif "output" in response_data and "choices" in response_data["output"]:
             for choice in response_data["output"]["choices"]:
                 if "image_base64" in choice:
                     model_response.data.append(ImageObject(
                         b64_json=choice["image_base64"],
-                        url=None,  # AI/ML API returns base64, not URLs
+                        url=None,
                     ))
                 elif "url" in choice:
                     model_response.data.append(ImageObject(

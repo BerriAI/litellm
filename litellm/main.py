@@ -154,6 +154,7 @@ from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
 from .llms.bytez.chat.transformation import BytezChatConfig
+from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
@@ -379,6 +380,7 @@ async def acompletion(
         Literal["none", "minimal", "low", "medium", "high", "default"]
     ] = None,
     safety_identifier: Optional[str] = None,
+    service_tier: Optional[str] = None,
     # set api_base, api_version, api_key
     base_url: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -528,6 +530,7 @@ async def acompletion(
         "model_list": model_list,
         "reasoning_effort": reasoning_effort,
         "safety_identifier": safety_identifier,
+        "service_tier": service_tier,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
@@ -950,6 +953,7 @@ def completion(  # type: ignore # noqa: PLR0915
     deployment_id=None,
     extra_headers: Optional[dict] = None,
     safety_identifier: Optional[str] = None,
+    service_tier: Optional[str] = None,
     # soon to be deprecated params by OpenAI
     functions: Optional[List] = None,
     function_call: Optional[str] = None,
@@ -1292,6 +1296,7 @@ def completion(  # type: ignore # noqa: PLR0915
             "thinking": thinking,
             "web_search_options": web_search_options,
             "safety_identifier": safety_identifier,
+            "service_tier": service_tier,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
         }
         optional_params = get_optional_params(
@@ -2027,6 +2032,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nebius"
             or custom_llm_provider == "wandb"
+            or custom_llm_provider == "clarifai"
             or custom_llm_provider in litellm.openai_compatible_providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
@@ -2221,40 +2227,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "clarifai"
             or model in litellm.clarifai_models
         ):
-            clarifai_key = None
-            clarifai_key = (
-                api_key
-                or litellm.clarifai_key
-                or litellm.api_key
-                or get_secret("CLARIFAI_API_KEY")
-                or get_secret("CLARIFAI_API_TOKEN")
-            )
-
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret("CLARIFAI_API_BASE")
-                or "https://api.clarifai.com/v2"
-            )
-            api_base = litellm.ClarifaiConfig()._convert_model_to_url(model, api_base)
-            response = base_llm_http_handler.completion(
-                model=model,
-                stream=stream,
-                fake_stream=True,  # clarifai does not support streaming, we fake it
-                messages=messages,
-                acompletion=acompletion,
-                api_base=api_base,
-                model_response=model_response,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                shared_session=shared_session,
-                custom_llm_provider="clarifai",
-                timeout=timeout,
-                headers=headers,
-                encoding=encoding,
-                api_key=clarifai_key,
-                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
-            )
+            pass # Deprecated - handled in the openai compatible provider section above
         elif custom_llm_provider == "anthropic_text":
             api_key = (
                 api_key
@@ -4754,6 +4727,33 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
                 litellm_params={},
             )
+        elif custom_llm_provider == "cometapi":
+            api_key = (
+                api_key
+                or litellm.cometapi_key
+                or get_secret_str("COMETAPI_KEY")
+                or litellm.api_key
+            )
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("COMETAPI_API_BASE")
+                or "https://api.cometapi.com/v1"
+            )
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={},
+            )
         elif custom_llm_provider in litellm._custom_providers:
             custom_handler: Optional[CustomLLM] = None
             for item in litellm.custom_provider_map:
@@ -5910,6 +5910,7 @@ async def ahealth_check(
             "batch",
             "rerank",
             "realtime",
+            "responses",
         ]
     ] = "chat",
     prompt: Optional[str] = None,
@@ -6017,6 +6018,10 @@ async def ahealth_check(
             ),
             "batch": lambda: litellm.alist_batches(
                 **_filter_model_params(model_params),
+            ),
+            "responses": lambda: litellm.aresponses(
+                **_filter_model_params(model_params),
+                input=prompt or "test",
             ),
         }
 

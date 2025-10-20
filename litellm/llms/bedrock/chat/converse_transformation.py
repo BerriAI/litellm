@@ -1439,11 +1439,6 @@ class AmazonConverseConfig(BaseConfig):
         if stream is True:
             if model is not None:
                 ###################################################################
-                # GPT-OSS models do not support streaming
-                ###################################################################
-                if "gpt-oss" in model:
-                    return True
-                ###################################################################
                 # AI21 models do not support streaming
                 ###################################################################
                 if "ai21" in model:

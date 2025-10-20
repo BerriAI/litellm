@@ -43,6 +43,7 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ):
         text = ""
@@ -61,7 +62,7 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
         )
 
         verbose_proxy_logger.debug("Moderation response: %s", moderation_response)
-        if moderation_response.results[0].flagged is True:
+        if moderation_response and moderation_response.results[0].flagged is True:
             raise HTTPException(
                 status_code=403, detail={"error": "Violated content safety policy"}
             )
