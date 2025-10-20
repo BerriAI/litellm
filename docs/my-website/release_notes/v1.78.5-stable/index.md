@@ -1,6 +1,6 @@
 ---
-title: "v1.78.4-stable - Native OCR Support"
-slug: "v1-78-4"
+title: "[Preview] v1.78.5-stable - Native OCR Support"
+slug: "v1-78-5"
 date: 2025-10-18T10:00:00
 authors:
   - name: Krrish Dholakia
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.78.4-stable
+ghcr.io/berriai/litellm:v1.78.5.rc.1
 ```
 
 </TabItem>
@@ -35,7 +35,7 @@ ghcr.io/berriai/litellm:v1.78.4-stable
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.78.4
+pip install litellm==1.78.5
 ```
 
 </TabItem>

@@ -13,8 +13,8 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 
     guardrail_name = guardrail.get("guardrail_name")
     profile_name = cast(Optional[str], getattr(litellm_params, "profile_name", None))
-    if not litellm_params.api_key:
-        raise ValueError("PANW Prisma AIRS: api_key is required")
+    
+    # Note: api_key can be None here - handler will fallback to PANW_PRISMA_AIRS_API_KEY env var
     if not profile_name:
         raise ValueError("PANW Prisma AIRS: profile_name is required")
     if not guardrail_name:
