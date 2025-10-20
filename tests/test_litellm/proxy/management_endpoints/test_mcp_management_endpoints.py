@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,7 +22,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.mcp import MCPAuth
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 def generate_mock_mcp_server_db_record(
@@ -63,10 +63,10 @@ def generate_mock_mcp_server_config_record(
         url=url,
         transport=MCPTransport.http if transport == "http" else MCPTransport.sse,
         auth_type=MCPAuth.api_key if auth_type == "api_key" else None,
-        mcp_info=MCPInfo(
-            server_name=name,
-            description="Config server description",
-        ),
+        mcp_info={
+            "server_name": name,
+            "description": "Config server description",
+        },
     )
 
 
@@ -483,6 +483,7 @@ class TestMCPHealthCheckEndpoints:
         mock_manager.health_check_server = AsyncMock(
             return_value={
                 "server_id": "test-server",
+                "server_name": "Test Server",
                 "status": "healthy",
                 "tools_count": 3,
                 "last_health_check": "2024-01-01T12:00:00",
@@ -519,6 +520,7 @@ class TestMCPHealthCheckEndpoints:
 
             # Verify results
             assert result["server_id"] == "test-server"
+            assert result["server_name"] == "Test Server"
             assert result["status"] == "healthy"
             assert result["tools_count"] == 3
             assert result["response_time_ms"] == 150.5
@@ -631,6 +633,7 @@ class TestMCPHealthCheckEndpoints:
             return_value={
                 "server1": {
                     "server_id": "server1",
+                    "server_name": "Test DB Server",
                     "status": "healthy",
                     "tools_count": 2,
                     "last_health_check": "2024-01-01T12:00:00",
@@ -639,6 +642,7 @@ class TestMCPHealthCheckEndpoints:
                 },
                 "server2": {
                     "server_id": "server2",
+                    "server_name": "Test DB Server",
                     "status": "unhealthy",
                     "last_health_check": "2024-01-01T12:00:00",
                     "response_time_ms": 5000.0,
@@ -684,8 +688,10 @@ class TestMCPHealthCheckEndpoints:
             # Check individual server results
             assert result["servers"]["server1"]["status"] == "healthy"
             assert result["servers"]["server1"]["tools_count"] == 2
+            assert result["servers"]["server1"]["server_name"] == "Test DB Server"
             assert result["servers"]["server2"]["status"] == "unhealthy"
             assert result["servers"]["server2"]["error"] == "Connection timeout"
+            assert result["servers"]["server2"]["server_name"] == "Test DB Server"
 
     @pytest.mark.asyncio
     async def test_fetch_all_mcp_servers_with_health_status(self):

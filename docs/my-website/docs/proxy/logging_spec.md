@@ -11,8 +11,10 @@ Found under `kwargs["standard_logging_object"]`. This is a standard payload, log
 | `trace_id` | `str` | Trace multiple LLM calls belonging to same overall request |
 | `call_type` | `str` | Type of call |
 | `response_cost` | `float` | Cost of the response in USD ($) |
+| `cost_breakdown` | `Optional[CostBreakdown]` | Detailed cost breakdown object |
 | `response_cost_failure_debug_info` | `StandardLoggingModelCostFailureDebugInformation` | Debug information if cost tracking fails |
 | `status` | `StandardLoggingPayloadStatus` | Status of the payload |
+| `status_fields` | `StandardLoggingPayloadStatusFields` | Typed status fields for easy filtering and analytics |
 | `total_tokens` | `int` | Total number of tokens |
 | `prompt_tokens` | `int` | Number of prompt tokens |
 | `completion_tokens` | `int` | Number of completion tokens |
@@ -38,6 +40,29 @@ Found under `kwargs["standard_logging_object"]`. This is a standard payload, log
 | `error_information` | `Optional[StandardLoggingPayloadErrorInformation]` | Optional error information |
 | `model_parameters` | `dict` | Model parameters |
 | `hidden_params` | `StandardLoggingHiddenParams` | Hidden parameters |
+
+## Cost Breakdown
+
+The `cost_breakdown` field provides detailed cost breakdown for completion requests as a `CostBreakdown` object containing:
+
+- **`input_cost`**: Cost of input/prompt tokens including cache creation tokens
+- **`output_cost`**: Cost of output/completion tokens (including reasoning tokens if applicable)
+- **`tool_usage_cost`**: Cost of built-in tools usage (e.g., web search, code interpreter)
+- **`total_cost`**: Total cost of input + output + tool usage
+
+**Note**: This field is populated for all call types. For non-completion calls, `input_cost` and `output_cost` may be 0.
+
+The total cost relationship is: `response_cost = cost_breakdown.total_cost`
+
+### CostBreakdown Type
+
+```python
+class CostBreakdown(TypedDict, total=False):
+    input_cost: float        # Cost of input/prompt tokens in USD
+    output_cost: float       # Cost of output/completion tokens in USD (includes reasoning)
+    tool_usage_cost: float   # Cost of built-in tools usage in USD
+    total_cost: float        # Total cost in USD
+```
 
 ## StandardLoggingUserAPIKeyMetadata
 
@@ -138,17 +163,89 @@ A literal type with two possible values:
 
 ## StandardLoggingGuardrailInformation
 
+| Field                 | Type | Description                                                                                                                                                               |
+|-----------------------|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `guardrail_name`      | `Optional[str]` | Guardrail name                                                                                                                                                            |
+| `guardrail_provider`  | `Optional[str]` | Guardrail provider                                                                                                                                                        |
+| `guardrail_mode`      | `Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]` | Guardrail mode                                                                                                                                                            |
+| `guardrail_request`   | `Optional[dict]` | Guardrail request                                                                                                                                                         |
+| `guardrail_response`  | `Optional[Union[dict, str, List[dict]]]` | Guardrail response                                                                                                                                                        |
+| `guardrail_status`    | `Literal["success", "failure", "blocked"]` | Guardrail execution status: `success` = no violations detected, `blocked` = content blocked/modified due to policy violations, `failure` = technical error or API failure |
+| `start_time`          | `Optional[float]` | Start time of the guardrail                                                                                                                                               |
+| `end_time`            | `Optional[float]` | End time of the guardrail                                                                                                                                                 |
+| `duration`            | `Optional[float]` | Duration of the guardrail in seconds                                                                                                                                      |
+| `masked_entity_count` | `Optional[Dict[str, int]]` | Count of masked entities                                                                                                                                                  |
+
+## StandardLoggingPayloadStatusFields
+
+Typed status fields for easy filtering and analytics.
+
 | Field | Type | Description |
 |-------|------|-------------|
-| `guardrail_name` | `Optional[str]` | Guardrail name |
-| `guardrail_mode` | `Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]` | Guardrail mode |
-| `guardrail_request` | `Optional[dict]` | Guardrail request |
-| `guardrail_response` | `Optional[Union[dict, str, List[dict]]]` | Guardrail response |
-| `guardrail_status` | `Literal["success", "failure"]` | Guardrail status |
-| `start_time` | `Optional[float]` | Start time of the guardrail |
-| `end_time` | `Optional[float]` | End time of the guardrail |
-| `duration` | `Optional[float]` | Duration of the guardrail in seconds |
-| `masked_entity_count` | `Optional[Dict[str, int]]` | Count of masked entities |
+| `llm_api_status` | `StandardLoggingPayloadStatus` | Status of the LLM API call: `"success"` if completed successfully, `"failure"` if errored |
+| `guardrail_status` | `GuardrailStatus` | Status of guardrail execution (see below) |
+
+### StandardLoggingPayloadStatus
+
+A literal type with two possible values:
+- `"success"` - The LLM API request completed successfully
+- `"failure"` - The LLM API request failed
+
+### GuardrailStatus
+
+A literal type with four possible values:
+- `"success"` - Guardrail ran and allowed content through (no violations detected)
+- `"guardrail_intervened"` - Guardrail blocked or modified content due to policy violations
+- `"guardrail_failed_to_respond"` - Guardrail had a technical failure or API error
+- `"not_run"` - No guardrail was executed for this request
+
+### Usage Examples
+
+Filter logs for requests where guardrails intervened:
+```json
+{
+  "status_fields": {
+    "guardrail_status": "guardrail_intervened"
+  }
+}
+```
+
+Find guardrail technical failures:
+```json
+{
+  "status_fields": {
+    "guardrail_status": "guardrail_failed_to_respond"
+  }
+}
+```
+
+Get successful LLM requests:
+```json
+{
+  "status_fields": {
+    "llm_api_status": "success"
+  }
+}
+```
+
+Find requests where guardrails ran successfully without intervention:
+```json
+{
+  "status_fields": {
+    "guardrail_status": "success",
+    "llm_api_status": "success"
+  }
+}
+```
+
+Find requests where no guardrail was run:
+```json
+{
+  "status_fields": {
+    "guardrail_status": "not_run"
+  }
+}
+```
 
 ## StandardLoggingPromptManagementMetadata
 

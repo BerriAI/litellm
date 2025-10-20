@@ -6,7 +6,6 @@ from typing_extensions import TypedDict
 from litellm.proxy._types import MCPAuthType, MCPTransportType
 from litellm.types.mcp import MCPServerCostInfo
 
-
 # MCPInfo now allows arbitrary additional fields for custom metadata
 MCPInfo = Dict[str, Any]
 
@@ -18,9 +17,24 @@ class MCPServer(BaseModel):
     server_name: Optional[str] = None
     url: Optional[str] = None
     transport: MCPTransportType
+    spec_path: Optional[str] = None
     auth_type: Optional[MCPAuthType] = None
     authentication_token: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
+    extra_headers: Optional[List[str]] = (
+        None  # allow admin to specify which headers to forward to the MCP server
+    )
+    allowed_tools: Optional[List[str]] = None
+    disallowed_tools: Optional[List[str]] = None
+    allowed_params: Optional[Dict[str, List[str]]] = (
+        None  # map of tool names to allowed parameter lists
+    )
+    # OAuth-specific fields
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    scopes: Optional[List[str]] = None
+    authorization_url: Optional[str] = None
+    token_url: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
     args: Optional[List[str]] = None

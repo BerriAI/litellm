@@ -70,6 +70,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
+from litellm.types.utils import PriorityReservationSettings
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 import httpx
@@ -227,6 +228,7 @@ use_client: bool = False
 ssl_verify: Union[str, bool] = True
 ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
+ssl_ecdh_curve: Optional[str] = None  # Set to 'X25519' to disable PQC and improve performance
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
@@ -326,6 +328,9 @@ public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
 #### REQUEST PRIORITIZATION #####
 priority_reservation: Optional[Dict[str, float]] = None
+priority_reservation_settings: "PriorityReservationSettings" = (
+    PriorityReservationSettings()
+)
 
 
 ######## Networking Settings ########
@@ -365,6 +370,7 @@ output_parse_pii: bool = False
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
+cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
 custom_prompt_dict: Dict[str, dict] = {}
 check_provider_endpoint = False
 
@@ -387,7 +393,7 @@ def identify(event_details):
 ####### ADDITIONAL PARAMS ################### configurable params if you use proxy models like Helicone, map spend to org id, etc.
 api_base: Optional[str] = None
 headers = None
-api_version = None
+api_version: Optional[str] = None
 organization = None
 project = None
 config_path = None
@@ -696,6 +702,9 @@ azure_llms = {
     "gpt-35-turbo": "azure/gpt-35-turbo",
     "gpt-35-turbo-16k": "azure/gpt-35-turbo-16k",
     "gpt-35-turbo-instruct": "azure/gpt-35-turbo-instruct",
+    "azure/gpt-41":"gpt-4.1", 
+    "azure/gpt-41-mini":"gpt-4.1-mini",
+    "azure/gpt-41-nano":"gpt-4.1-nano"
 }
 
 azure_embedding_models = {
@@ -1073,6 +1082,7 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
 )
 from .llms.cohere.chat.transformation import CohereChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
+from .llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
 from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
 from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
 from .llms.deepinfra.chat.transformation import DeepInfraConfig
@@ -1202,6 +1212,7 @@ from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
+from .ocr.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *
@@ -1234,3 +1245,21 @@ global_disable_no_log_param: bool = False
 
 ### PASSTHROUGH ###
 from .passthrough import allm_passthrough_route, llm_passthrough_route
+from .google_genai import agenerate_content
+
+### GLOBAL CONFIG ###
+global_bitbucket_config: Optional[Dict[str, Any]] = None
+
+
+def set_global_bitbucket_config(config: Dict[str, Any]) -> None:
+    """Set global BitBucket configuration for prompt management."""
+    global global_bitbucket_config
+    global_bitbucket_config = config
+
+### GLOBAL CONFIG ###
+global_gitlab_config: Optional[Dict[str, Any]] = None
+
+def set_global_gitlab_config(config: Dict[str, Any]) -> None:
+    """Set global BitBucket configuration for prompt management."""
+    global global_gitlab_config
+    global_gitlab_config = config

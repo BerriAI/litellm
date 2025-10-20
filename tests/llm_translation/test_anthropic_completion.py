@@ -256,7 +256,6 @@ def test_anthropic_tool_streaming():
     for chunk in anthropic_chunk_list:
         parsed_chunk = response_iter.chunk_parser(chunk)
         if tool_use := parsed_chunk.get("tool_use"):
-
             # We only increment when a new block starts
             if tool_use.get("id") is not None:
                 correct_tool_index += 1
@@ -330,32 +329,52 @@ def test_process_anthropic_headers_with_no_matching_headers():
     assert result == expected_output, "Unexpected output for non-matching headers"
 
 
-def test_anthropic_computer_tool_use():
-    from litellm import completion
-
-    tools = [
-        {
-            "type": "computer_20241022",
-            "function": {
-                "name": "computer",
-                "parameters": {
-                    "display_height_px": 100,
-                    "display_width_px": 100,
-                    "display_number": 1,
+@pytest.mark.parametrize(
+    "tool_type, tool_config, message_content",
+    [
+        (
+            "computer_20241022",
+            {
+                "type": "computer_20241022",
+                "function": {
+                    "name": "computer",
+                    "parameters": {
+                        "display_height_px": 100,
+                        "display_width_px": 100,
+                        "display_number": 1,
+                    },
                 },
             },
-        }
-    ]
+            "Save a picture of a cat to my desktop.",
+        ),
+        (
+            "web_fetch_20250910",
+            {
+                "type": "web_fetch_20250910",
+                "name": "web_fetch",
+                "max_uses": 5,
+            },
+            "Please analyze the content at https://example.com/article",
+        ),
+    ],
+)
+def test_anthropic_tool_use(tool_type, tool_config, message_content):
+    """Test Anthropic tool use with computer use and web fetch tools."""
+    from litellm import completion
+
+    litellm._turn_on_debug()
+
+    tools = [tool_config]
     model = "claude-3-5-sonnet-20241022"
-    messages = [{"role": "user", "content": "Save a picture of a cat to my desktop."}]
+    messages = [{"role": "user", "content": message_content}]
 
     try:
         resp = completion(
             model=model,
             messages=messages,
             tools=tools,
-            # headers={"anthropic-beta": "computer-use-2024-10-22"},
         )
+        print(f"Tool type: {tool_type}")
         print(resp)
     except litellm.InternalServerError:
         pass
@@ -920,6 +939,14 @@ def test_anthropic_citations_api():
     citations = resp.choices[0].message.provider_specific_fields["citations"]
 
     assert citations is not None
+    if citations:
+        citation = citations[0][0]
+        assert "supported_text" in citation
+        assert "cited_text" in citation
+        assert "document_index" in citation
+        assert "document_title" in citation
+        assert "start_char_index" in citation
+        assert "end_char_index" in citation
 
 
 def test_anthropic_citations_api_streaming():
@@ -955,11 +982,9 @@ def test_anthropic_citations_api_streaming():
     has_citations = False
     for chunk in resp:
         print(f"returned chunk: {chunk}")
-        if (
-            chunk.choices[0].delta.provider_specific_fields
-            and "citation" in chunk.choices[0].delta.provider_specific_fields
-        ):
-            has_citations = True
+        if provider_specific_fields := chunk.choices[0].delta.provider_specific_fields:
+            if "citation" in provider_specific_fields:
+                has_citations = True
 
     assert has_citations
 
@@ -1494,3 +1519,126 @@ def test_anthropic_streaming():
             role_set_count += 1
 
     assert role_set_count == 1
+
+
+def test_anthropic_via_responses_api():
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    response = litellm.responses(
+        model="anthropic/claude-sonnet-4-5",
+        input="Who won the World Cup in 2022?",
+        max_output_tokens=100,
+        stream=True,
+    )
+
+    assert response is not None
+
+    # Expected event sequence
+    expected_events = [
+        ResponsesAPIStreamEvents.RESPONSE_CREATED,
+        ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+        ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,  # Can occur multiple times
+        ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+        ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+    ]
+
+    events_seen = []
+    text_delta_count = 0
+
+    for chunk in response:
+        print(f"chunk: {chunk}")
+
+        # Each chunk should have a type attribute
+        assert hasattr(chunk, "type"), f"Chunk missing 'type' attribute: {chunk}"
+
+        event_type = chunk.type
+
+        # Track events seen
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA:
+            text_delta_count += 1
+            if ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA not in events_seen:
+                events_seen.append(event_type)
+        else:
+            events_seen.append(event_type)
+
+        # Assert specific structures for each event type
+        if event_type == ResponsesAPIStreamEvents.RESPONSE_CREATED:
+            assert chunk.type == ResponsesAPIStreamEvents.RESPONSE_CREATED
+            assert hasattr(chunk, "response")
+            assert chunk.response.status == "in_progress"
+            assert hasattr(chunk.response, "id")
+            assert hasattr(chunk.response, "model")
+
+        elif event_type == ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS:
+            assert chunk.type == ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS
+            assert hasattr(chunk, "response")
+            assert chunk.response.status == "in_progress"
+
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
+            assert chunk.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "item")
+            assert chunk.item.type == "message"
+            assert chunk.item.role == "assistant"
+
+        elif event_type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED:
+            assert chunk.type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
+            assert hasattr(chunk, "item_id")
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "content_index")
+            assert hasattr(chunk, "part")
+            assert chunk.part.type == "output_text"
+
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA:
+            assert chunk.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+            assert hasattr(chunk, "item_id")
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "content_index")
+            assert hasattr(chunk, "delta")
+            assert isinstance(chunk.delta, str)
+
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+            assert chunk.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE
+            assert hasattr(chunk, "item_id")
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "content_index")
+            assert hasattr(chunk, "text")
+
+        elif event_type == ResponsesAPIStreamEvents.CONTENT_PART_DONE:
+            assert chunk.type == ResponsesAPIStreamEvents.CONTENT_PART_DONE
+            assert hasattr(chunk, "item_id")
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "content_index")
+            assert hasattr(chunk, "part")
+            assert chunk.part.type == "output_text"
+
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            assert chunk.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "item")
+            assert chunk.item.status == "completed"
+
+        elif event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+            assert chunk.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+            assert hasattr(chunk, "response")
+            assert chunk.response.status == "completed"
+            assert hasattr(chunk.response, "usage")
+            assert hasattr(chunk.response, "output")
+
+    # Assert we saw all expected events
+    print(f"Events seen: {events_seen}")
+    assert (
+        events_seen == expected_events
+    ), f"Event sequence mismatch. Expected: {expected_events}, Got: {events_seen}"
+
+    # Assert we saw at least one text delta
+    assert (
+        text_delta_count > 0
+    ), f"Expected at least one response.output_text.delta event, got {text_delta_count}"
+
+    print(f"✓ All {len(events_seen)} events matched expected structure")
+    print(f"✓ Received {text_delta_count} text delta chunks")

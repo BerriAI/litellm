@@ -22,6 +22,7 @@ from typing import (
     overload,
 )
 
+from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME, MAX_TEAM_LIST_LIMIT
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -32,6 +33,7 @@ from litellm.proxy._types import (
     SpendLogsPayload,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CallTypes
 
 try:
     import backoff
@@ -93,7 +95,7 @@ from litellm.types.mcp import (
     MCPPreCallRequestObject,
     MCPPreCallResponseObject,
 )
-from litellm.types.utils import CallTypes, LLMResponseTypes, LoggedLiteLLMParams
+from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -391,7 +393,7 @@ class ProxyLogging:
         for callback in litellm.callbacks:
             if isinstance(callback, str):
                 callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                    callback,
+                    cast(_custom_logger_compatible_callbacks_literal, callback),
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
                 )
@@ -799,6 +801,7 @@ class ProxyLogging:
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> None:
         pass
@@ -818,6 +821,7 @@ class ProxyLogging:
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> dict:
         pass
@@ -836,6 +840,7 @@ class ProxyLogging:
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[dict]:
         """
@@ -902,7 +907,7 @@ class ProxyLogging:
                 _callback = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        callback
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback  # type: ignore
@@ -1241,7 +1246,7 @@ class ProxyLogging:
                 _callback: Optional[CustomLogger] = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        callback
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback  # type: ignore
@@ -1308,7 +1313,7 @@ class ProxyLogging:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj is None:
-            import uuid
+            from litellm._uuid import uuid
 
             request_data["litellm_call_id"] = str(uuid.uuid4())
             user_api_key_logged_metadata = (
@@ -1395,48 +1400,52 @@ class ProxyLogging:
         3. /image/generation
         4. /files
         """
+        from litellm.types.guardrails import GuardrailEventHooks
 
-        for callback in litellm.callbacks:
-            try:
+        guardrail_callbacks: List[CustomGuardrail] = []
+        other_callbacks: List[CustomLogger] = []
+        try:
+            for callback in litellm.callbacks:
                 _callback: Optional[CustomLogger] = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        callback
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback  # type: ignore
 
                 if _callback is not None:
+                    if isinstance(_callback, CustomGuardrail):
+                        guardrail_callbacks.append(_callback)
+                    else:
+                        other_callbacks.append(_callback)
                     ############## Handle Guardrails ########################################
                     #############################################################################
-                    if isinstance(callback, CustomGuardrail):
-                        # Main - V2 Guardrails implementation
-                        from litellm.types.guardrails import GuardrailEventHooks
 
-                        if (
-                            callback.should_run_guardrail(
-                                data=data, event_type=GuardrailEventHooks.post_call
-                            )
-                            is not True
-                        ):
-                            continue
+            for callback in guardrail_callbacks:
+                # Main - V2 Guardrails implementation
+                if (
+                    callback.should_run_guardrail(
+                        data=data, event_type=GuardrailEventHooks.post_call
+                    )
+                    is not True
+                ):
+                    continue
 
-                        await callback.async_post_call_success_hook(
-                            user_api_key_dict=user_api_key_dict,
-                            data=data,
-                            response=response,
-                        )
+                await callback.async_post_call_success_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    response=response,
+                )
 
-                    ############ Handle CustomLogger ###############################
-                    #################################################################
-                    elif isinstance(_callback, CustomLogger):
-                        await _callback.async_post_call_success_hook(
-                            user_api_key_dict=user_api_key_dict,
-                            data=data,
-                            response=response,
-                        )
-            except Exception as e:
-                raise e
+            ############ Handle CustomLogger ###############################
+            #################################################################
+            for callback in other_callbacks:
+                await callback.async_post_call_success_hook(
+                    user_api_key_dict=user_api_key_dict, data=data, response=response
+                )
+        except Exception as e:
+            raise e
         return response
 
     async def async_post_call_streaming_hook(
@@ -1482,7 +1491,7 @@ class ProxyLogging:
                             continue
                     if isinstance(callback, str):
                         _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                            callback
+                            cast(_custom_logger_compatible_callbacks_literal, callback)
                         )
                     else:
                         _callback = callback  # type: ignore
@@ -1522,7 +1531,7 @@ class ProxyLogging:
             _callback: Optional[CustomLogger] = None
             if isinstance(callback, str):
                 _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                    callback
+                    cast(_custom_logger_compatible_callbacks_literal, callback)
                 )
             else:
                 _callback = callback  # type: ignore
@@ -2817,6 +2826,13 @@ class PrismaClient:
             )
             raise e
 
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,
+        max_tries=3,
+        max_time=10,
+        on_backoff=on_backoff,
+    )
     async def health_check(self):
         """
         Health check endpoint for the prisma client
@@ -2848,7 +2864,18 @@ class PrismaClient:
             raise e
 
     async def _get_spend_logs_row_count(self) -> int:
-        try:
+        """
+        Get the row count from LiteLLM_SpendLogs table using PostgreSQL system statistics.
+        """
+
+        @backoff.on_exception(
+            backoff.expo,
+            Exception,
+            max_tries=3,
+            max_time=10,
+            on_backoff=on_backoff,
+        )
+        async def _fetch_row_count() -> int:
             sql_query = """
             SELECT reltuples::BIGINT
             FROM pg_class
@@ -2856,12 +2883,22 @@ class PrismaClient:
             """
             result = await self.db.query_raw(query=sql_query)
             return result[0]["reltuples"]
+
+        try:
+            return await _fetch_row_count()
         except Exception as e:
             verbose_proxy_logger.error(
                 f"Error getting LiteLLM_SpendLogs row count: {e}"
             )
             return 0
 
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,
+        max_tries=3,
+        max_time=10,
+        on_backoff=on_backoff,
+    )
     async def _set_spend_logs_row_count_in_proxy_state(self) -> None:
         """
         Set the `LiteLLM_SpendLogs`row count in proxy state.
@@ -3543,18 +3580,21 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
     )
 
 
-def _premium_user_check():
+def _premium_user_check(feature: Optional[str] = None):
     """
     Raises an HTTPException if the user is not a premium user
     """
     from litellm.proxy.proxy_server import premium_user
 
+    if feature:
+        detail_msg = f"This feature is only available for LiteLLM Enterprise users: {feature}. {CommonProxyErrors.not_premium_user.value}"
+    else:
+        detail_msg = f"This feature is only available for LiteLLM Enterprise users. {CommonProxyErrors.not_premium_user.value}"
+
     if not premium_user:
         raise HTTPException(
             status_code=403,
-            detail={
-                "error": f"This feature is only available for LiteLLM Enterprise users. {CommonProxyErrors.not_premium_user.value}"
-            },
+            detail={"error": detail_msg},
         )
 
 
@@ -3566,8 +3606,10 @@ def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
         return False
     model_names = llm_router.get_model_names()
 
+    model_names_set = set(model_names)
+
     is_in_list = False
-    if model in model_names:
+    if model in model_names_set:
         is_in_list = True
 
     return is_in_list
@@ -3670,6 +3712,7 @@ def construct_database_url_from_env_vars() -> Optional[str]:
     database_username = os.getenv("DATABASE_USERNAME")
     database_password = os.getenv("DATABASE_PASSWORD")
     database_name = os.getenv("DATABASE_NAME")
+    database_schema = os.getenv("DATABASE_SCHEMA")
 
     if database_host and database_username and database_name:
         # Handle the problem of special character escaping in the database URL
@@ -3684,6 +3727,9 @@ def construct_database_url_from_env_vars() -> Optional[str]:
             database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
         else:
             database_url = f"postgresql://{database_username_enc}@{database_host}/{database_name_enc}"
+
+        if database_schema:
+            database_url += f"?schema={database_schema}"
 
         return database_url
 

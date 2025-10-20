@@ -12,13 +12,6 @@ import {
   Grid,
   Badge,
   Button as TremorButton,
-  TableRow,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableBody,
-  Table,
-  Icon,
   TextInput,
 } from "@tremor/react";
 import TeamMembersComponent from "./team_member_view";
@@ -34,27 +27,23 @@ import {
 } from "@/components/networking";
 import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Select as Select2 } from "antd";
-import {
-  ArrowLeftIcon,
-  PencilAltIcon,
-  PlusIcon,
-  TrashIcon,
-} from "@heroicons/react/outline";
+import { ArrowLeftIcon } from "@heroicons/react/outline";
 import MemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import { isAdminRole } from "@/utils/roles";
 import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import EditLoggingSettings from "./EditLoggingSettings";
 import LoggingSettingsView from "../logging_settings_view";
 import { fetchMCPAccessGroups } from "../networking";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils"
+import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import NotificationsManager from "../molecules/notifications_manager";
+import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
+import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 
 export interface TeamMembership {
   user_id: string;
@@ -101,6 +90,7 @@ export interface TeamData {
       object_permission_id: string;
       mcp_servers: string[];
       mcp_access_groups?: string[];
+      mcp_tool_permissions?: Record<string, string[]>;
       vector_stores: string[];
     };
     team_member_budget_table: {
@@ -141,15 +131,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [loading, setLoading] = useState(true);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [form] = Form.useForm();
-  const [isEditMemberModalVisible, setIsEditMemberModalVisible] =
-    useState(false);
-  const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(
-    null
-  );
+  const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
+  const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
 
   console.log("userModels in team info", userModels);
@@ -191,9 +178,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       try {
         if (!accessToken) return;
         const response = await getGuardrailsList(accessToken);
-        const guardrailNames = response.guardrails.map(
-          (g: { guardrail_name: string }) => g.guardrail_name
-        );
+        const guardrailNames = response.guardrails.map((g: { guardrail_name: string }) => g.guardrail_name);
         setGuardrailsList(guardrailNames);
       } catch (error) {
         console.error("Failed to fetch guardrails:", error);
@@ -228,13 +213,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     } catch (error: any) {
       let errMsg = "Failed to add team member";
 
-      if (
-        error?.raw?.detail?.error?.includes(
-          "Assigning team admins is a premium feature"
-        )
-      ) {
-        errMsg =
-          "Assigning admins is an enterprise-only feature. Please upgrade your LiteLLM plan to enable this.";
+      if (error?.raw?.detail?.error?.includes("Assigning team admins is a premium feature")) {
+        errMsg = "Assigning admins is an enterprise-only feature. Please upgrade your LiteLLM plan to enable this.";
       } else if (error?.message) {
         errMsg = error.message;
       }
@@ -274,13 +254,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       onUpdate(updatedTeamData);
     } catch (error: any) {
       let errMsg = "Failed to update team member";
-      if (
-        error?.raw?.detail?.includes(
-          "Assigning team admins is a premium feature"
-        )
-      ) {
-        errMsg =
-          "Assigning admins is an enterprise-only feature. Please upgrade your LiteLLM plan to enable this.";
+      if (error?.raw?.detail?.includes("Assigning team admins is a premium feature")) {
+        errMsg = "Assigning admins is an enterprise-only feature. Please upgrade your LiteLLM plan to enable this.";
       } else if (error?.message) {
         errMsg = error.message;
       }
@@ -350,6 +325,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         organization_id: values.organization_id,
       };
 
+      updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
+
       if (values.team_member_budget !== undefined) {
         updateData.team_member_budget = Number(values.team_member_budget);
       }
@@ -368,7 +345,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         servers: [],
         accessGroups: [],
       };
-      if ((servers && servers.length > 0) || (accessGroups && accessGroups.length > 0)) {
+      const mcpToolPermissions = values.mcp_tool_permissions || {};
+
+      if (
+        (servers && servers.length > 0) ||
+        (accessGroups && accessGroups.length > 0) ||
+        Object.keys(mcpToolPermissions).length > 0
+      ) {
         updateData.object_permission = {};
         if (servers && servers.length > 0) {
           updateData.object_permission.mcp_servers = servers;
@@ -376,8 +359,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         if (accessGroups && accessGroups.length > 0) {
           updateData.object_permission.mcp_access_groups = accessGroups;
         }
+        if (Object.keys(mcpToolPermissions).length > 0) {
+          updateData.object_permission.mcp_tool_permissions = mcpToolPermissions;
+        }
       }
       delete values.mcp_servers_and_groups;
+      delete values.mcp_tool_permissions;
 
       const response = await teamUpdateCall(accessToken, updateData);
 
@@ -400,30 +387,25 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const { team_info: info } = teamData;
 
   const copyToClipboard = async (text: string, key: string) => {
-    const success = await utilCopyToClipboard(text)
+    const success = await utilCopyToClipboard(text);
     if (success) {
-      setCopiedStates((prev) => ({ ...prev, [key]: true }))
+      setCopiedStates((prev) => ({ ...prev, [key]: true }));
       setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }))
-      }, 2000)
+        setCopiedStates((prev) => ({ ...prev, [key]: false }));
+      }, 2000);
     }
-  }
+  };
 
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <TremorButton
-            icon={ArrowLeftIcon}
-            variant="light"
-            onClick={onClose}
-            className="mb-4"
-          >
+          <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
             Back to Teams
           </TremorButton>
           <Title>{info.team_alias}</Title>
           <div className="flex items-center cursor-pointer">
-            <Text className="text-gray-500 font-mono">{info.team_id}</Text> 
+            <Text className="text-gray-500 font-mono">{info.team_id}</Text>
             <Button
               type="text"
               size="small"
@@ -462,24 +444,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <div className="mt-2">
                   <Title>${formatNumberWithCommas(info.spend, 4)}</Title>
                   <Text>
-                    of{" "}
-                    {info.max_budget === null
-                      ? "Unlimited"
-                      : `$${formatNumberWithCommas(info.max_budget, 4)}`}
+                    of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 4)}`}
                   </Text>
-                  {info.budget_duration && (
-                    <Text className="text-gray-500">
-                      Reset: {info.budget_duration}
-                    </Text>
-                  )}
+                  {info.budget_duration && <Text className="text-gray-500">Reset: {info.budget_duration}</Text>}
                   <br />
                   {info.team_member_budget_table && (
                     <Text className="text-gray-500">
-                      Team Member Budget: $
-                      {formatNumberWithCommas(
-                        info.team_member_budget_table.max_budget,
-                        4
-                      )}
+                      Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 4)}
                     </Text>
                   )}
                 </div>
@@ -488,17 +459,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <Card>
                 <Text>Rate Limits</Text>
                 <div className="mt-2">
-                  <Text>
-                    TPM: {info.tpm_limit || "Unlimited"}
-                  </Text>
-                  <Text>
-                    RPM: {info.rpm_limit || "Unlimited"}
-                  </Text>
-                  {info.max_parallel_requests && (
-                    <Text>
-                      Max Parallel Requests: {info.max_parallel_requests}
-                    </Text>
-                  )}
+                  <Text>TPM: {info.tpm_limit || "Unlimited"}</Text>
+                  <Text>RPM: {info.rpm_limit || "Unlimited"}</Text>
+                  {info.max_parallel_requests && <Text>Max Parallel Requests: {info.max_parallel_requests}</Text>}
                 </div>
               </Card>
 
@@ -520,16 +483,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <Card>
                 <Text className="font-semibold text-gray-900">Virtual Keys</Text>
                 <div className="mt-2">
-                    <Text>
-                      User Keys: {teamData.keys.filter(key => key.user_id).length}
-                    </Text>
-                    <Text>
-                      Service Account Keys: {teamData.keys.filter(key => !key.user_id).length}
-                    </Text>
-                    <Text className="text-gray-500">
-                      Total: {teamData.keys.length}
-                    </Text>
-                  </div>
+                  <Text>User Keys: {teamData.keys.filter((key) => key.user_id).length}</Text>
+                  <Text>Service Account Keys: {teamData.keys.filter((key) => !key.user_id).length}</Text>
+                  <Text className="text-gray-500">Total: {teamData.keys.length}</Text>
+                </div>
               </Card>
 
               <ObjectPermissionsView
@@ -561,11 +518,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           {/* Member Permissions Panel */}
           {canEditTeam && (
             <TabPanel>
-              <MemberPermissions
-                teamId={teamId}
-                accessToken={accessToken}
-                canEditTeam={canEditTeam}
-              />
+              <MemberPermissions teamId={teamId} accessToken={accessToken} canEditTeam={canEditTeam} />
             </TabPanel>
           )}
 
@@ -575,9 +528,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <div className="flex justify-between items-center mb-4">
                 <Title>Team Settings</Title>
                 {canEditTeam && !isEditing && (
-                  <TremorButton onClick={() => setIsEditing(true)}>
-                    Edit Settings
-                  </TremorButton>
+                  <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
                 )}
               </div>
 
@@ -597,11 +548,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
                     guardrails: info.metadata?.guardrails || [],
                     metadata: info.metadata
-                      ? JSON.stringify(
-                          (({ logging, ...rest }) => rest)(info.metadata),
-                          null,
-                          2
-                        )
+                      ? JSON.stringify((({ logging, ...rest }) => rest)(info.metadata), null, 2)
                       : "",
                     logging_settings: info.metadata?.logging || [],
                     organization_id: info.organization_id,
@@ -612,25 +559,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       servers: info.object_permission?.mcp_servers || [],
                       accessGroups: info.object_permission?.mcp_access_groups || [],
                     },
+                    mcp_tool_permissions: info.object_permission?.mcp_tool_permissions || {},
                   }}
                   layout="vertical"
                 >
                   <Form.Item
                     label="Team Name"
                     name="team_alias"
-                    rules={[
-                      { required: true, message: "Please input a team name" },
-                    ]}
+                    rules={[{ required: true, message: "Please input a team name" }]}
                   >
                     <Input type="" />
                   </Form.Item>
 
                   <Form.Item label="Models" name="models">
                     <Select mode="multiple" placeholder="Select models">
-                      <Select.Option
-                        key="all-proxy-models"
-                        value="all-proxy-models"
-                      >
+                      <Select.Option key="all-proxy-models" value="all-proxy-models">
                         All Proxy Models
                       </Select.Option>
                       {Array.from(new Set(userModels)).map((model, idx) => (
@@ -642,11 +585,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Max Budget (USD)" name="max_budget">
-                    <NumericalInput
-                      step={0.01}
-                      precision={2}
-                      style={{ width: "100%" }}
-                    />
+                    <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item
@@ -654,11 +593,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     name="team_member_budget"
                     tooltip="This is the individual budget for a user in the team."
                   >
-                    <NumericalInput
-                      step={0.01}
-                      precision={2}
-                      style={{ width: "100%" }}
-                    />
+                    <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
 
                   <Form.Item
@@ -674,11 +609,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     name="team_member_tpm_limit"
                     tooltip="Default tokens per minute limit for an individual team member. This limit applies to all requests the user makes within this team. Can be overridden per member."
                   >
-                    <NumericalInput 
-                      step={1} 
-                      style={{ width: "100%" }}
-                      placeholder="e.g., 1000"
-                    />
+                    <NumericalInput step={1} style={{ width: "100%" }} placeholder="e.g., 1000" />
                   </Form.Item>
 
                   <Form.Item
@@ -686,11 +617,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     name="team_member_rpm_limit"
                     tooltip="Default requests per minute limit for an individual team member. This limit applies to all requests the user makes within this team. Can be overridden per member."
                   >
-                    <NumericalInput 
-                      step={1} 
-                      style={{ width: "100%" }}
-                      placeholder="e.g., 100"
-                    />
+                    <NumericalInput step={1} style={{ width: "100%" }} placeholder="e.g., 100" />
                   </Form.Item>
 
                   <Form.Item label="Reset Budget" name="budget_duration">
@@ -701,17 +628,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Select>
                   </Form.Item>
 
-                  <Form.Item
-                    label="Tokens per minute Limit (TPM)"
-                    name="tpm_limit"
-                  >
+                  <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
                     <NumericalInput step={1} style={{ width: "100%" }} />
                   </Form.Item>
 
-                  <Form.Item
-                    label="Requests per minute Limit (RPM)"
-                    name="rpm_limit"
-                  >
+                  <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
                     <NumericalInput step={1} style={{ width: "100%" }} />
                   </Form.Item>
 
@@ -737,34 +658,61 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Select
                       mode="tags"
                       placeholder="Select or enter guardrails"
-                      options={guardrailsList.map(name => ({ value: name, label: name }))}
+                      options={guardrailsList.map((name) => ({ value: name, label: name }))}
                     />
                   </Form.Item>
 
                   <Form.Item label="Vector Stores" name="vector_stores">
                     <VectorStoreSelector
-                      onChange={(values: string[]) =>
-                         form.setFieldValue("vector_stores", values)
-                      }
+                      onChange={(values: string[]) => form.setFieldValue("vector_stores", values)}
                       value={form.getFieldValue("vector_stores")}
                       accessToken={accessToken || ""}
                       placeholder="Select vector stores"
                     />
                   </Form.Item>
 
-                  <Form.Item
-                    label="MCP Servers / Access Groups"
-                    name="mcp_servers_and_groups"
-                  >
+                  <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
+                    <PassThroughRoutesSelector
+                      onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+                      value={form.getFieldValue("allowed_passthrough_routes")}
+                      accessToken={accessToken || ""}
+                      placeholder="Select pass through routes"
+                    />
+                  </Form.Item>
+
+                  <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
                     <MCPServerSelector
-                      onChange={(val) =>
-                        form.setFieldValue("mcp_servers_and_groups", val)
-                      }
+                      onChange={(val) => form.setFieldValue("mcp_servers_and_groups", val)}
                       value={form.getFieldValue("mcp_servers_and_groups")}
                       accessToken={accessToken || ""}
                       placeholder="Select MCP servers or access groups (optional)"
                     />
                   </Form.Item>
+
+                  {/* Hidden field to register mcp_tool_permissions with the form */}
+                  <Form.Item name="mcp_tool_permissions" initialValue={{}} hidden>
+                    <Input type="hidden" />
+                  </Form.Item>
+
+                  <Form.Item
+                    noStyle
+                    shouldUpdate={(prevValues, currentValues) =>
+                      prevValues.mcp_servers_and_groups !== currentValues.mcp_servers_and_groups ||
+                      prevValues.mcp_tool_permissions !== currentValues.mcp_tool_permissions
+                    }
+                  >
+                    {() => (
+                      <div className="mb-6">
+                        <MCPToolPermissions
+                          accessToken={accessToken || ""}
+                          selectedServers={form.getFieldValue("mcp_servers_and_groups")?.servers || []}
+                          toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
+                          onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
+                        />
+                      </div>
+                    )}
+                  </Form.Item>
+
                   <Form.Item label="Organization ID" name="organization_id">
                     <Input type="" />
                   </Form.Item>
@@ -772,9 +720,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <Form.Item label="Logging Settings" name="logging_settings">
                     <EditLoggingSettings
                       value={form.getFieldValue("logging_settings")}
-                      onChange={(values) =>
-                        form.setFieldValue("logging_settings", values)
-                      }
+                      onChange={(values) => form.setFieldValue("logging_settings", values)}
                     />
                   </Form.Item>
 
@@ -784,10 +730,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                   <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
                     <div className="flex justify-end items-center gap-2">
-                      <Button
-                        htmlType="button"
-                        onClick={() => setIsEditing(false)}
-                      >
+                      <Button htmlType="button" onClick={() => setIsEditing(false)}>
                         Cancel
                       </Button>
                       <TremorButton type="submit">Save Changes</TremorButton>
@@ -827,9 +770,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Text className="font-medium">Team Budget</Text>
                     <div>
                       Max Budget:{" "}
-                      {info.max_budget !== null
-                        ? `$${formatNumberWithCommas(info.max_budget, 4)}`
-                        : "No Limit"}
+                      {info.max_budget !== null ? `$${formatNumberWithCommas(info.max_budget, 4)}` : "No Limit"}
                     </div>
                     <div>Budget Reset: {info.budget_duration || "Never"}</div>
                   </div>
@@ -840,22 +781,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                       </Tooltip>
                     </Text>
-                    <div>
-                      Max Budget:{" "}
-                      {info.team_member_budget_table?.max_budget || "No Limit"}
-                    </div>
-                    <div>
-                      Key Duration:{" "}
-                      {info.metadata?.team_member_key_duration || "No Limit"}
-                    </div>
-                    <div>
-                      TPM Limit:{" "}
-                      {info.team_member_budget_table?.tpm_limit || "No Limit"}
-                    </div>
-                    <div>
-                      RPM Limit:{" "}
-                      {info.team_member_budget_table?.rpm_limit || "No Limit"}
-                    </div>
+                    <div>Max Budget: {info.team_member_budget_table?.max_budget || "No Limit"}</div>
+                    <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
+                    <div>TPM Limit: {info.team_member_budget_table?.tpm_limit || "No Limit"}</div>
+                    <div>RPM Limit: {info.team_member_budget_table?.rpm_limit || "No Limit"}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Organization ID</Text>
@@ -863,9 +792,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </div>
                   <div>
                     <Text className="font-medium">Status</Text>
-                    <Badge color={info.blocked ? "red" : "green"}>
-                      {info.blocked ? "Blocked" : "Active"}
-                    </Badge>
+                    <Badge color={info.blocked ? "red" : "green"}>{info.blocked ? "Blocked" : "Active"}</Badge>
                   </div>
 
                   <ObjectPermissionsView
@@ -907,48 +834,48 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               name: "max_budget_in_team",
               label: (
                 <span>
-                  Team Member Budget (USD){' '}
+                  Team Member Budget (USD){" "}
                   <Tooltip title="Maximum amount in USD this member can spend within this team. This is separate from any global user budget limits">
-                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                   </Tooltip>
                 </span>
               ),
               type: "numerical" as const,
               step: 0.01,
               min: 0,
-              placeholder: "Budget limit for this member within this team"
+              placeholder: "Budget limit for this member within this team",
             },
             {
               name: "tpm_limit",
               label: (
                 <span>
-                  Team Member TPM Limit{' '}
+                  Team Member TPM Limit{" "}
                   <Tooltip title="Maximum tokens per minute this member can use within this team. This is separate from any global user TPM limit">
-                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                   </Tooltip>
                 </span>
               ),
               type: "numerical" as const,
               step: 1,
               min: 0,
-              placeholder: "Tokens per minute limit for this member in this team"
+              placeholder: "Tokens per minute limit for this member in this team",
             },
             {
               name: "rpm_limit",
               label: (
                 <span>
-                  Team Member RPM Limit{' '}
+                  Team Member RPM Limit{" "}
                   <Tooltip title="Maximum requests per minute this member can make within this team. This is separate from any global user RPM limit">
-                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                   </Tooltip>
                 </span>
               ),
               type: "numerical" as const,
               step: 1,
               min: 0,
-              placeholder: "Requests per minute limit for this member in this team"
-            }
-          ]
+              placeholder: "Requests per minute limit for this member in this team",
+            },
+          ],
         }}
       />
 

@@ -1,5 +1,7 @@
 from typing import Optional
 
+from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
+
 from .chat import ChatClient
 from .credentials import CredentialsManagementClient
 from .http_client import HTTPClient
@@ -27,7 +29,7 @@ class Client:
             timeout: Request timeout in seconds (default: 30)
         """
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
-        self._api_key = api_key
+        self._api_key = get_litellm_gateway_api_key() or api_key
 
         # Initialize resource clients
 

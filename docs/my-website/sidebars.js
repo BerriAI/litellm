@@ -36,6 +36,7 @@ const sidebars = {
           "proxy/guardrails/aporia_api",
           "proxy/guardrails/azure_content_guardrail",
           "proxy/guardrails/bedrock",
+          "proxy/guardrails/enkryptai",
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
@@ -50,6 +51,7 @@ const sidebars = {
           "proxy/guardrails/custom_guardrail",
           "proxy/guardrails/prompt_injection",
           "proxy/guardrails/tool_permission",
+          "proxy/guardrails/javelin",
         ].sort(),
       ],
     },
@@ -92,10 +94,10 @@ const sidebars = {
 
     {
       type: "category",
-      label: "LiteLLM Proxy Server",
+      label: "LiteLLM AI Gateway",
       link: {
         type: "generated-index",
-        title: "LiteLLM Proxy Server (LLM Gateway)",
+        title: "LiteLLM AI Gateway (LLM Proxy)",
         description: `OpenAI Proxy Server (LLM Gateway) to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
         slug: "/simple_proxy",
       },
@@ -185,14 +187,24 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "Spend Tracking",
+          items: [
+            "proxy/cost_tracking",
+            "proxy/custom_pricing",
+            "proxy/billing",
+          ],
+        },
+        {
+          type: "category",
           label: "Budgets + Rate Limits",
           items: [
+            "proxy/users",
+            "proxy/team_budgets",
+            "proxy/tag_budgets",
             "proxy/customers",
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
-            "proxy/team_budgets",
             "proxy/temporary_budget_increase",
-            "proxy/users"
           ],
         },
         "proxy/caching",
@@ -247,15 +259,6 @@ const sidebars = {
             "secret",
             "oidc"
           ]
-        },
-        {
-          type: "category",
-          label: "Spend Tracking",
-          items: [
-            "proxy/billing",
-            "proxy/cost_tracking",
-            "proxy/custom_pricing"
-          ],
         },
       ]
     },
@@ -332,8 +335,21 @@ const sidebars = {
             "image_variations",
           ]
         },
-        "mcp",
+        {
+          type: "category",
+          label: "/mcp - Model Context Protocol",
+          items: [
+            "mcp",
+            "mcp_usage",
+            "mcp_control",
+            "mcp_cost",
+            "mcp_guardrail",
+          ]
+        },
         "moderation",
+        "bedrock_invoke",
+        "bedrock_converse",
+        "ocr",
         {
           type: "category",
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
@@ -342,12 +358,20 @@ const sidebars = {
             "pass_through/anthropic_completion",
             "pass_through/assembly_ai",
             "pass_through/bedrock",
+            "pass_through/azure_passthrough",
             "pass_through/cohere",
             "pass_through/google_ai_studio",
             "pass_through/langfuse",
             "pass_through/mistral",
             "pass_through/openai_passthrough",
-            "pass_through/vertex_ai",
+            {
+              type: "category",
+              label: "Vertex AI",
+              items: [
+                "pass_through/vertex_ai",
+                "pass_through/vertex_ai_live_websocket",
+              ]
+            },
             "pass_through/vllm",
             "proxy/pass_through"
           ]
@@ -402,7 +426,6 @@ const sidebars = {
           items: [
             "providers/azure_ai",
             "providers/azure_ai_img",
-            "providers/azure_ai_img_edit",
           ]
         },
         {
@@ -411,6 +434,7 @@ const sidebars = {
           items: [
             "providers/vertex",
             "providers/vertex_partner",
+            "providers/vertex_self_deployed",
             "providers/vertex_image",
             "providers/vertex_batch",
           ]
@@ -457,7 +481,14 @@ const sidebars = {
         "providers/deepgram",
         "providers/watsonx",
         "providers/predibase",
-        "providers/nvidia_nim",
+        {
+          type: "category",
+          label: "Nvidia NIM",
+          items: [
+            "providers/nvidia_nim",
+            "providers/nvidia_nim_rerank",
+          ]
+        },
         { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
         "providers/xai",
         "providers/moonshot",
@@ -476,6 +507,7 @@ const sidebars = {
         "providers/fireworks_ai",
         "providers/clarifai",
         "providers/compactifai",
+        "providers/lemonade",
         "providers/vllm",
         "providers/llamafile",
         "providers/infinity",
@@ -513,18 +545,21 @@ const sidebars = {
         "providers/oci",
         "providers/datarobot",
         "providers/ovhcloud",  
+        "providers/wandb_inference",
+        "providers/cometapi",
       ],
     },
     {
       type: "category",
       label: "Guides",
       items: [
-        "completion/audio",
-        "completion/batching",
         "completion/computer_use",
+        "completion/web_search",
+        "completion/web_fetch",
+        "completion/function_call",
+        "completion/audio",
         "completion/document_understanding",
         "completion/drop_params",
-        "completion/function_call",
         "completion/image_generation_chat",
         "completion/json_mode",
         "completion/knowledgebase",
@@ -539,8 +574,8 @@ const sidebars = {
         "completion/stream",
         "completion/provider_specific_params",
         "completion/vision",
-        "completion/web_search",
         "exception_mapping",
+        "completion/batching",
         "guides/finetuned_models",
         "guides/security_settings",
         "proxy/veo_video_generation",
@@ -577,7 +612,6 @@ const sidebars = {
         "budget_manager",
         "caching/all_caches",
         "completion/token_usage",
-        "sdk/headers",
         "sdk_custom_pricing",
         "embedding/async_embedding",
         "embedding/moderation",
@@ -659,6 +693,7 @@ const sidebars = {
       items: [
         "data_security",
         "data_retention",
+        "proxy/security_encryption_faq",
         "migration_policy",
         {
           type: "category",
@@ -691,7 +726,8 @@ const sidebars = {
             "projects/llm_cord",
             "projects/pgai",
             "projects/GPTLocalhost",
-            "projects/HolmesGPT"
+            "projects/HolmesGPT",
+            "projects/Railtracks",
           ],
         },
         "extras/code_quality",

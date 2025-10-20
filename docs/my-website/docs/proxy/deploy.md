@@ -27,7 +27,7 @@ echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
 source .env
 
 # Start
-docker-compose up
+docker compose up
 ```
 
 
@@ -715,6 +715,25 @@ docker run ghcr.io/berriai/litellm:main-stable
 ```
 
 
+### Restart Workers After N Requests
+
+Use this to mitigate memory growth by recycling workers after a fixed number of requests. When set, each worker restarts after completing the specified number of requests. Defaults to disabled when unset.
+
+Usage Examples:
+
+```shell showLineNumbers title="docker run (CLI flag)"
+docker run ghcr.io/berriai/litellm:main-stable \
+    --max_requests_before_restart 10000
+```
+
+Or set via environment variable:
+
+```shell showLineNumbers title="Environment Variable"
+export MAX_REQUESTS_BEFORE_RESTART=10000
+docker run ghcr.io/berriai/litellm:main-stable
+```
+
+
 ### 5. config.yaml file on s3, GCS Bucket Object/url
 
 Use this if you cannot mount a config file on your deployment service (example - AWS Fargate, Railway etc)
@@ -769,6 +788,30 @@ docker run --name litellm-proxy \
 ## Platform-specific Guide
 
 <Tabs>
+<TabItem value="AWS ECS" label="AWS ECS - Elastic Container Service">
+
+### Terraform-based ECS Deployment
+
+LiteLLM maintains a dedicated Terraform tutorial for deploying the proxy on ECS. Follow the step-by-step guide in the [litellm-ecs-deployment repository](https://github.com/BerriAI/litellm-ecs-deployment) to provision the required ECS services, task definitions, and supporting AWS resources.
+
+1. Clone the tutorial repository to review the Terraform modules and variables.
+  ```bash
+  git clone https://github.com/BerriAI/litellm-ecs-deployment.git
+  cd litellm-ecs-deployment
+  ```
+
+2. Initialize and validate the Terraform project before applying it to your chosen workspace/account.
+  ```bash
+  terraform init
+  terraform plan
+  terraform apply
+  ```
+
+3. Once `terraform apply` completes, do `./build.sh` to push the repository on ECR and update the ECS cluster. Use that endpoint (port `4000` by default) for API requests to your LiteLLM proxy.
+
+
+</TabItem>
+
 <TabItem value="AWS EKS" label="AWS EKS - Kubernetes">
 
 ### Kubernetes (AWS EKS)

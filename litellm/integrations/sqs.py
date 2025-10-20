@@ -7,6 +7,9 @@ This logger sends ``StandardLoggingPayload`` entries to an AWS SQS queue.
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
+import traceback
 from typing import List, Optional
 
 import litellm
@@ -29,28 +32,33 @@ from .custom_batch_logger import CustomBatchLogger
 
 
 class SQSLogger(CustomBatchLogger, BaseAWSLLM):
-    """Batching logger that writes logs to an AWS SQS queue."""
+    """Batching logger that writes logs to an AWS SQS queue, optionally encrypting the payload."""
 
     def __init__(
-        self,
-        sqs_queue_url: Optional[str] = None,
-        sqs_region_name: Optional[str] = None,
-        sqs_api_version: Optional[str] = None,
-        sqs_use_ssl: bool = True,
-        sqs_verify: Optional[bool] = None,
-        sqs_endpoint_url: Optional[str] = None,
-        sqs_aws_access_key_id: Optional[str] = None,
-        sqs_aws_secret_access_key: Optional[str] = None,
-        sqs_aws_session_token: Optional[str] = None,
-        sqs_aws_session_name: Optional[str] = None,
-        sqs_aws_profile_name: Optional[str] = None,
-        sqs_aws_role_name: Optional[str] = None,
-        sqs_aws_web_identity_token: Optional[str] = None,
-        sqs_aws_sts_endpoint: Optional[str] = None,
-        sqs_flush_interval: Optional[int] = DEFAULT_SQS_FLUSH_INTERVAL_SECONDS,
-        sqs_batch_size: Optional[int] = DEFAULT_SQS_BATCH_SIZE,
-        sqs_config=None,
-        **kwargs,
+            self,
+            # --- Standard SQS params ---
+            sqs_queue_url: Optional[str] = None,
+            sqs_region_name: Optional[str] = None,
+            sqs_api_version: Optional[str] = None,
+            sqs_use_ssl: bool = True,
+            sqs_verify: Optional[bool] = None,
+            sqs_endpoint_url: Optional[str] = None,
+            sqs_aws_access_key_id: Optional[str] = None,
+            sqs_aws_secret_access_key: Optional[str] = None,
+            sqs_aws_session_token: Optional[str] = None,
+            sqs_aws_session_name: Optional[str] = None,
+            sqs_aws_profile_name: Optional[str] = None,
+            sqs_aws_role_name: Optional[str] = None,
+            sqs_aws_web_identity_token: Optional[str] = None,
+            sqs_aws_sts_endpoint: Optional[str] = None,
+            sqs_flush_interval: Optional[int] = DEFAULT_SQS_FLUSH_INTERVAL_SECONDS,
+            sqs_batch_size: Optional[int] = DEFAULT_SQS_BATCH_SIZE,
+            sqs_config=None,
+            # --- 🔐 Application-level encryption params ---
+            sqs_aws_use_application_level_encryption: bool = False,
+            sqs_app_encryption_key_b64: Optional[str] = None,
+            sqs_app_encryption_aad: Optional[str] = None,
+            **kwargs,
     ) -> None:
         try:
             verbose_logger.debug(
@@ -76,7 +84,11 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 sqs_aws_role_name=sqs_aws_role_name,
                 sqs_aws_web_identity_token=sqs_aws_web_identity_token,
                 sqs_aws_sts_endpoint=sqs_aws_sts_endpoint,
+                sqs_aws_use_application_level_encryption=sqs_aws_use_application_level_encryption,
+                sqs_app_encryption_key_b64=sqs_app_encryption_key_b64,
+                sqs_app_encryption_aad=sqs_app_encryption_aad,
                 sqs_config=sqs_config,
+                **kwargs,
             )
 
             asyncio.create_task(self.periodic_flush())
@@ -94,7 +106,6 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             )
 
             self.log_queue: List[StandardLoggingPayload] = []
-
             BaseAWSLLM.__init__(self)
 
         except Exception as e:
@@ -117,6 +128,9 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         sqs_aws_role_name: Optional[str] = None,
         sqs_aws_web_identity_token: Optional[str] = None,
         sqs_aws_sts_endpoint: Optional[str] = None,
+        sqs_aws_use_application_level_encryption: bool = False,
+        sqs_app_encryption_key_b64: Optional[str] = None,
+        sqs_app_encryption_aad: Optional[str] = None,
         sqs_config=None,
     ) -> None:
         litellm.aws_sqs_callback_params = litellm.aws_sqs_callback_params or {}
@@ -178,6 +192,28 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             litellm.aws_sqs_callback_params.get("sqs_aws_sts_endpoint") or sqs_aws_sts_endpoint
         )
 
+        self.sqs_aws_use_application_level_encryption = (
+                litellm.aws_sqs_callback_params.get("sqs_aws_use_application_level_encryption", False)
+                or sqs_aws_use_application_level_encryption
+        )
+        self.sqs_app_encryption_key_b64 = (
+                litellm.aws_sqs_callback_params.get("sqs_app_encryption_key_b64")
+                or sqs_app_encryption_key_b64
+        )
+        self.sqs_app_encryption_aad = (
+                litellm.aws_sqs_callback_params.get("sqs_app_encryption_aad")
+                or sqs_app_encryption_aad
+        )
+        self.app_crypto: Optional["AppCrypto"] = None
+        if self.sqs_aws_use_application_level_encryption:
+            from litellm.litellm_core_utils.app_crypto import AppCrypto
+            if not self.sqs_app_encryption_key_b64:
+                raise ValueError("sqs_app_encryption_key_b64 is required when encryption is enabled.")
+            key = base64.b64decode(self.sqs_app_encryption_key_b64)
+            self.app_crypto = AppCrypto(key)
+            verbose_logger.debug(
+                "SQSLogger: Application-level encryption enabled."
+            )
         self.sqs_config = litellm.aws_sqs_callback_params.get("sqs_config") or sqs_config
 
     async def async_log_success_event(
@@ -199,6 +235,25 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             )
         except Exception as e:
             verbose_logger.exception(f"sqs Layer Error - {str(e)}")
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            standard_logging_payload = kwargs.get("standard_logging_object")
+            if standard_logging_payload is None:
+                raise ValueError("standard_logging_payload is None")
+
+            self.log_queue.append(standard_logging_payload)
+            verbose_logger.debug(
+                "sqs logging: queue length %s, batch size %s",
+                len(self.log_queue),
+                self.batch_size,
+            )
+
+        except Exception as e:
+            verbose_logger.exception(
+                f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
+            )
+            pass
 
     async def async_send_batch(self) -> None:
         verbose_logger.debug(
@@ -236,11 +291,21 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             if self.sqs_queue_url is None:
                 raise ValueError("sqs_queue_url not set")
 
-            json_string = safe_dumps(payload)
+            json_data = json.loads(safe_dumps(payload))
+            if self.app_crypto:
+                aad_bytes = (
+                    self.sqs_app_encryption_aad.encode("utf-8")
+                    if self.sqs_app_encryption_aad
+                    else None
+                )
+                encrypted = self.app_crypto.encrypt_json(json_data, aad=aad_bytes)
+                json_string = json.dumps({"__encrypted__": True, "payload": encrypted})
+            else:
+                json_string = safe_dumps(payload)
 
             body = (
-                f"Action={SQS_SEND_MESSAGE_ACTION}&Version={SQS_API_VERSION}&MessageBody="
-                + quote(json_string, safe="")
+                    f"Action={SQS_SEND_MESSAGE_ACTION}&Version={SQS_API_VERSION}&MessageBody="
+                    + quote(json_string, safe="")
             )
 
             headers = {
