@@ -20,6 +20,7 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import verbose_logger
+from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -3339,7 +3340,9 @@ class BaseLLMHTTPHandler:
 
         try:
             async with websockets.connect(  # type: ignore
-                url, extra_headers=headers
+                url,
+                extra_headers=headers,
+                max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
                     websocket,
