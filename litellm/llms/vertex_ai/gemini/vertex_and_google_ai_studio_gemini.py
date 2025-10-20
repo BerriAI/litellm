@@ -54,7 +54,6 @@ from litellm.types.llms.openai import (
     ImageURLListItem,
     ImageURLObject,
     OpenAIChatCompletionFinishReason,
-    ChatCompletionAnnotation
 )
 from litellm.types.llms.vertex_ai import (
     VERTEX_CREDENTIALS_TYPES,
@@ -1386,14 +1385,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         "url": web_data.get("uri", ""),
                         "title": web_data.get("title", ""),
                     }
-                    print(f"[VERTEX_ANNOTATION_DEBUG] Chunk {idx} -> URL: {web_data.get('uri', '')}, Title: {web_data.get('title', '')}")
 
             # Process each grounding support to create annotations
             for support in grounding_supports:
                 segment = support.get("segment", {})
                 start_index = segment.get("startIndex")
                 end_index = segment.get("endIndex")
-                text = segment.get("text", "")
                 
                 # Get the chunk indices for this support
                 chunk_indices = support.get("groundingChunkIndices", [])
@@ -1417,7 +1414,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return annotations
 
     @staticmethod
-    def _process_candidates(
+    def _process_candidates(  # noqa: PLR0915
         _candidates: List[Candidates],
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict,
