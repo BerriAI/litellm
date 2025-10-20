@@ -4,14 +4,16 @@ Azure AVA (Cognitive Services) Text-to-Speech transformation
 Maps OpenAI TTS spec to Azure Cognitive Services TTS API
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Union
 
 import httpx
 
+import litellm
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
 )
+from litellm.secret_managers.main import get_secret
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -47,6 +49,88 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         "wav": "riff-24khz-16bit-mono-pcm",
         "pcm": "raw-24khz-16bit-mono-pcm",
     }
+
+    def dispatch_text_to_speech(
+        self,
+        model: str,
+        input: str,
+        voice: Optional[Union[str, Dict]],
+        optional_params: Dict,
+        litellm_params_dict: Dict,
+        logging_obj: "LiteLLMLoggingObj",
+        timeout: Union[float, httpx.Timeout],
+        extra_headers: Optional[Dict[str, Any]],
+        base_llm_http_handler: Any,
+        aspeech: bool,
+        **kwargs: Any,
+    ) -> Union[
+        "HttpxBinaryResponseContent",
+        Coroutine[Any, Any, "HttpxBinaryResponseContent"],
+    ]:
+        """
+        Dispatch method to handle Azure AVA TTS requests
+        
+        This method encapsulates Azure-specific credential resolution and parameter handling
+        
+        Args:
+            base_llm_http_handler: The BaseLLMHTTPHandler instance from main.py
+        """
+        # Resolve api_base from multiple sources
+        api_base = (
+            litellm_params_dict.get("api_base")
+            or litellm.api_base
+            or get_secret("AZURE_API_BASE")
+        )
+        
+        # Resolve api_key from multiple sources (Azure-specific)
+        api_key = (
+            litellm_params_dict.get("api_key")
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret("AZURE_OPENAI_API_KEY")
+            or get_secret("AZURE_API_KEY")
+        )
+        
+        # Get Azure AD token if needed
+        extra_body_token = optional_params.get("extra_body", {}).pop(
+            "azure_ad_token", None
+        )
+        secret_token = get_secret("AZURE_AD_TOKEN")
+        azure_ad_token: Optional[str] = (
+            extra_body_token if isinstance(extra_body_token, str) else None
+        ) or (secret_token if isinstance(secret_token, str) else None)
+        
+        azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
+        
+        # Convert voice to string if it's a dict (for Azure AVA, voice must be a string)
+        voice_str: Optional[str] = None
+        if isinstance(voice, str):
+            voice_str = voice
+        elif isinstance(voice, dict):
+            # Extract voice name from dict if needed
+            voice_str = voice.get("name") if voice else None
+        
+        litellm_params_dict.update({
+            "api_key": api_key,
+            "api_base": api_base,
+        })
+        # Call the text_to_speech_handler
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=voice_str,
+            text_to_speech_provider_config=self,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider="azure",
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=None,
+            _is_async=aspeech,
+        )
+        
+        return response
 
     def get_supported_openai_params(self, model: str) -> list:
         """

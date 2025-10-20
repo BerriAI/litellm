@@ -5788,24 +5788,11 @@ def speech(  # noqa: PLR0915
     elif custom_llm_provider == "azure":
         # Check if this is Azure Speech Service (Cognitive Services TTS)
         if model.startswith("speech/"):
-            # Azure AVA (Cognitive Services) Text-to-Speech
-            api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
-
-            api_key = (
-                api_key
-                or litellm.api_key
-                or litellm.azure_key
-                or get_secret("AZURE_OPENAI_API_KEY")
-                or get_secret("AZURE_API_KEY")
-            )  # type: ignore
-
-            azure_ad_token: Optional[str] = optional_params.get("extra_body", {}).pop(  # type: ignore
-                "azure_ad_token", None
-            ) or get_secret(
-                "AZURE_AD_TOKEN"
+            from litellm.llms.azure.text_to_speech.transformation import (
+                AzureAVATextToSpeechConfig,
             )
-            azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
 
+            # Azure AVA (Cognitive Services) Text-to-Speech
             if text_to_speech_provider_config is None:
                 raise litellm.BadRequestError(
                     message="Azure Speech Service configuration not found",
@@ -5813,27 +5800,21 @@ def speech(  # noqa: PLR0915
                     llm_provider=custom_llm_provider,
                 )
 
-            # Convert voice to string if it's a dict (for Azure AVA, voice must be a string)
-            voice_str: Optional[str] = None
-            if isinstance(voice, str):
-                voice_str = voice
-            elif isinstance(voice, dict):
-                # Extract voice name from dict if needed
-                voice_str = voice.get("name") if voice else None
-
-            response = base_llm_http_handler.text_to_speech_handler(  # type: ignore
+            # Cast to specific Azure config type to access dispatch method
+            azure_config = cast(AzureAVATextToSpeechConfig, text_to_speech_provider_config)
+            
+            response = azure_config.dispatch_text_to_speech(  # type: ignore
                 model=model,
                 input=input,
-                voice=voice_str,
-                text_to_speech_provider_config=text_to_speech_provider_config,
-                text_to_speech_optional_params=optional_params,
-                custom_llm_provider=custom_llm_provider,
-                litellm_params={**litellm_params_dict, "api_key": api_key, "api_base": api_base},
+                voice=voice,
+                optional_params=optional_params,
+                litellm_params_dict=litellm_params_dict,
                 logging_obj=logging_obj,
                 timeout=timeout,
                 extra_headers=extra_headers,
-                client=None,
-                _is_async=aspeech or False,
+                base_llm_http_handler=base_llm_http_handler,
+                aspeech=aspeech or False,
+                **kwargs,
             )
         else:
             # Azure OpenAI TTS
