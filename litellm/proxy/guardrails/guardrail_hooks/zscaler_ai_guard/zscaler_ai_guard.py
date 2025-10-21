@@ -224,7 +224,6 @@ class ZscalerAIGuard(CustomGuardrail):
 
         try:
             response = self._send_request(zscaler_ai_guard_url, extra_headers, data)
-            #print(f"response: {response.json()}")     
             return self._handle_response(response, direction)
 
         except requests.exceptions.Timeout:
@@ -375,7 +374,7 @@ class ZscalerAIGuard(CustomGuardrail):
         )
 
         return self._handle_guardrail_result(data, zscaler_ai_guard_result)
-
+    
     def convert_litellm_response_object_to_str(
         self, response_obj: Union[Any, LiteLLMModelResponse]
     ) -> Optional[str]:
@@ -392,12 +391,15 @@ class ZscalerAIGuard(CustomGuardrail):
                             response_str += choice.text
 
             elif isinstance(response_obj, ModelResponse):
-                for choice in response_obj.choices:
-                    if isinstance(choice, (Choices, StreamingChoices)):  
-                        if hasattr(choice, 'message') and choice.message.content and isinstance(  
+                for choice in response_obj.choices:  # type: ignore[assignment]
+                    if isinstance(choice, Choices):
+                        if choice.message.content and isinstance(
                             choice.message.content, str
                         ):
                             response_str += choice.message.content
+                    elif isinstance(choice, StreamingChoices):
+                        if choice.delta.content and isinstance(choice.delta.content, str):
+                            response_str += choice.delta.content
             else:
                 verbose_proxy_logger.error(
                     f"isinstance(response_obj : {type(response_obj)}, currently only handle TextCompletionResponse, ModelResponse"
@@ -407,7 +409,7 @@ class ZscalerAIGuard(CustomGuardrail):
             error_msg = f"Error converting response to string: {str(e)}"
             verbose_proxy_logger.error(f"{error_msg}")
             return None
-
+            
     @log_guardrail_information
     async def async_post_call_success_hook(
         self, data: dict, user_api_key_dict: UserAPIKeyAuth, response
