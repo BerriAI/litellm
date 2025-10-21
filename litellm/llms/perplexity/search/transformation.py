@@ -36,7 +36,6 @@ class PerplexitySearchConfig(BaseSearchConfig):
     def validate_environment(
         self,
         headers: Dict,
-        model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         **kwargs,
@@ -54,7 +53,6 @@ class PerplexitySearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
-        model: str,
         optional_params: dict,
         **kwargs,
     ) -> str:
@@ -72,7 +70,6 @@ class PerplexitySearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        model: str,
         query: Union[str, List[str]],
         optional_params: dict,
         **kwargs,
@@ -87,7 +84,6 @@ class PerplexitySearchConfig(BaseSearchConfig):
         https://docs.perplexity.ai/api-reference/search-post
         
         Args:
-            model: Model name
             query: Search query (string or list of strings)
             optional_params: Optional parameters for the request
                 - max_results: Maximum number of search results (1-20)
@@ -123,7 +119,6 @@ class PerplexitySearchConfig(BaseSearchConfig):
 
     def transform_search_response(
         self,
-        model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         **kwargs,
@@ -132,7 +127,6 @@ class PerplexitySearchConfig(BaseSearchConfig):
         Transform Perplexity API response to standard SearchResponse format.
         
         Args:
-            model: Model name
             raw_response: Raw httpx response from Perplexity API
             logging_obj: Logging object for tracking
             

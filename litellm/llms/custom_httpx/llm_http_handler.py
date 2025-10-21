@@ -1552,7 +1552,6 @@ class BaseLLMHTTPHandler:
 
     def search(
         self,
-        model: str,
         query: Union[str, List[str]],
         optional_params: dict,
         timeout: Union[float, httpx.Timeout],
@@ -1570,12 +1569,11 @@ class BaseLLMHTTPHandler:
         """
         if provider_config is None:
             raise ValueError(
-                f"No provider config found for model: {model} and provider: {custom_llm_provider}"
+                f"No provider config found for provider: {custom_llm_provider}"
             )
 
         if asearch is True:
             return self.async_search(
-                model=model,
                 query=query,
                 optional_params=optional_params,
                 timeout=timeout,
@@ -1593,19 +1591,16 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             api_base=api_base,
             headers=headers or {},
-            model=model,
         )
 
         # Get complete URL
         complete_url = provider_config.get_complete_url(
             api_base=api_base,
-            model=model,
             optional_params=optional_params,
         )
 
         # Transform the request
         data = provider_config.transform_search_request(
-            model=model,
             query=query,
             optional_params=optional_params,
         )
@@ -1636,14 +1631,12 @@ class BaseLLMHTTPHandler:
             raise self._handle_error(e=e, provider_config=provider_config)
 
         return provider_config.transform_search_response(
-            model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
 
     async def async_search(
         self,
-        model: str,
         query: Union[str, List[str]],
         optional_params: dict,
         timeout: Union[float, httpx.Timeout],
@@ -1660,7 +1653,7 @@ class BaseLLMHTTPHandler:
         """
         if provider_config is None:
             raise ValueError(
-                f"No provider config found for model: {model} and provider: {custom_llm_provider}"
+                f"No provider config found for provider: {custom_llm_provider}"
             )
 
         # Validate environment and get headers
@@ -1668,19 +1661,16 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             api_base=api_base,
             headers=headers or {},
-            model=model,
         )
 
         # Get complete URL
         complete_url = provider_config.get_complete_url(
             api_base=api_base,
-            model=model,
             optional_params=optional_params,
         )
 
         # Transform the request
         data = provider_config.transform_search_request(
-            model=model,
             query=query,
             optional_params=optional_params,
         )
@@ -1715,7 +1705,6 @@ class BaseLLMHTTPHandler:
             raise self._handle_error(e=e, provider_config=provider_config)
 
         return provider_config.transform_search_response(
-            model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
