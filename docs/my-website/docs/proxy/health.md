@@ -213,6 +213,20 @@ model_list:
       mode: realtime
 ```
 
+### OCR Models 
+
+To run OCR health checks, specify the mode as "ocr" in your config for the relevant model.
+
+```yaml
+model_list:
+  - model_name: mistral/mistral-ocr-latest
+    litellm_params:
+      model: mistral/mistral-ocr-latest
+      api_key: os.environ/MISTRAL_API_KEY
+    model_info:
+      mode: ocr
+```
+
 ### Wildcard Routes
 
 For wildcard routes, you can specify a `health_check_model` in your config.yaml. This model will be used for health checks for that wildcard route.

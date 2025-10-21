@@ -393,3 +393,16 @@ async def test_health_check_bad_model():
         assert (
             end_time - start_time < 2
         ), "Health check took longer than health_check_timeout"
+
+@pytest.mark.asyncio
+async def test_ahealth_check_ocr():
+    litellm._turn_on_debug()
+    response = await litellm.ahealth_check(
+        model_params={
+            "model": "mistral/mistral-ocr-latest",
+            "api_key": os.getenv("MISTRAL_API_KEY"),
+        },
+        mode="ocr",
+    )
+    print(response)
+    return response

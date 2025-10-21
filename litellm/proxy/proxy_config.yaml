@@ -1,20 +1,7 @@
 model_list:
-  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
+  - model_name: openai-gpt-4o-realtime-audio
     litellm_params:
-      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
-      aws_region_name: us-east-1
-      custom_llm_provider: bedrock
-  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
-    litellm_params:
-      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
-      aws_region_name: us-west-2
-      custom_llm_provider: bedrock
-
-
-guardrails:
-  - guardrail_name: "bedrock-pre-guard"
-    litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
-      mode: "pre_call"
-      guardrailIdentifier: ff6ujrregl1q
-      guardrailVersion: "DRAFT"
+      model: openai/gpt-4o-realtime-preview-2024-10-01
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: realtime

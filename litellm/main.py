@@ -5960,6 +5960,7 @@ async def ahealth_check(
             "rerank",
             "realtime",
             "responses",
+            "ocr",
         ]
     ] = "chat",
     prompt: Optional[str] = None,
@@ -6022,57 +6023,13 @@ async def ahealth_check(
                 litellm_logging_obj=litellm_logging_obj,
             )
 
-        mode_handlers = {
-            "chat": lambda: litellm.acompletion(
-                **model_params,
-            ),
-            "completion": lambda: litellm.atext_completion(
-                **_filter_model_params(model_params),
-                prompt=prompt or "test",
-            ),
-            "embedding": lambda: litellm.aembedding(
-                **_filter_model_params(model_params),
-                input=input or ["test"],
-            ),
-            "audio_speech": lambda: litellm.aspeech(
-                **{
-                    **_filter_model_params(model_params),
-                    **(
-                        {"voice": "alloy"}
-                        if "voice" not in _filter_model_params(model_params)
-                        else {}
-                    ),
-                },
-                input=prompt or "test",
-            ),
-            "audio_transcription": lambda: litellm.atranscription(
-                **_filter_model_params(model_params),
-                file=get_audio_file_for_health_check(),
-            ),
-            "image_generation": lambda: litellm.aimage_generation(
-                **_filter_model_params(model_params),
-                prompt=prompt,
-            ),
-            "rerank": lambda: litellm.arerank(
-                **_filter_model_params(model_params),
-                query=prompt or "",
-                documents=["my sample text"],
-            ),
-            "realtime": lambda: _realtime_health_check(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                api_base=model_params.get("api_base", None),
-                api_key=model_params.get("api_key", None),
-                api_version=model_params.get("api_version", None),
-            ),
-            "batch": lambda: litellm.alist_batches(
-                **_filter_model_params(model_params),
-            ),
-            "responses": lambda: litellm.aresponses(
-                **_filter_model_params(model_params),
-                input=prompt or "test",
-            ),
-        }
+        mode_handlers = HealthCheckHelpers.get_mode_handlers(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            model_params=model_params,
+            prompt=prompt,
+            input=input,
+        )
 
         if mode in mode_handlers:
             _response = await mode_handlers[mode]()
