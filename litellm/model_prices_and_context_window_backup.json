@@ -934,7 +934,7 @@
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.65e-05,
         "search_context_cost_per_query": {
@@ -2768,6 +2768,18 @@
         "max_tokens": 8191,
         "mode": "embedding",
         "output_cost_per_token": 0.0
+    },
+    "azure/speech/azure-tts": {
+        "input_cost_per_character": 15e-06,
+        "litellm_provider": "azure",
+        "mode": "audio_speech",
+        "source": "https://azure.microsoft.com/en-us/pricing/calculator/"
+    },
+    "azure/speech/azure-tts-hd": {
+        "input_cost_per_character": 30e-06,
+        "litellm_provider": "azure",
+        "mode": "audio_speech",
+        "source": "https://azure.microsoft.com/en-us/pricing/calculator/"
     },
     "azure/tts-1": {
         "input_cost_per_character": 1.5e-05,
@@ -4981,7 +4993,7 @@
         "litellm_provider": "anthropic",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "search_context_cost_per_query": {
@@ -5011,7 +5023,7 @@
         "litellm_provider": "anthropic",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "search_context_cost_per_query": {
@@ -8051,7 +8063,7 @@
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.65e-05,
         "search_context_cost_per_query": {
@@ -12130,7 +12142,7 @@
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "search_context_cost_per_query": {
@@ -12520,6 +12532,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4.1-2025-04-14": {
@@ -12553,6 +12566,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4.1-mini": {
@@ -12589,6 +12603,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4.1-mini-2025-04-14": {
@@ -12622,6 +12637,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4.1-nano": {
@@ -12658,6 +12674,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4.1-nano-2025-04-14": {
@@ -12691,6 +12708,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4.5-preview": {
@@ -12755,6 +12773,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4o-2024-05-13": {
@@ -12795,6 +12814,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4o-2024-11-20": {
@@ -12815,6 +12835,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4o-audio-preview": {
@@ -12906,6 +12927,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4o-mini-2024-07-18": {
@@ -12931,6 +12953,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-4o-mini-audio-preview": {
@@ -13248,6 +13271,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-5-pro": {
@@ -13485,6 +13509,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-5-mini-2025-08-07": {
@@ -13523,6 +13548,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "gpt-5-nano": {
@@ -14737,7 +14763,7 @@
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.65e-05,
         "search_context_cost_per_query": {
@@ -16543,6 +16569,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "o3-2025-04-16": {
@@ -16574,6 +16601,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "o3-deep-research": {
@@ -16758,6 +16786,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "o4-mini-2025-04-16": {
@@ -16776,6 +16805,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_service_tier": true,
         "supports_vision": true
     },
     "o4-mini-deep-research": {
@@ -20612,7 +20642,7 @@
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.65e-05,
         "search_context_cost_per_query": {
@@ -22031,7 +22061,7 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_batches": 7.5e-06,
@@ -22057,7 +22087,7 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_batches": 7.5e-06,

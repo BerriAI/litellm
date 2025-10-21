@@ -86,7 +86,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             "status": "in_progress",
             "error": None,
             "incomplete_details": None,
-            "instructions": self.request_input,
+            "instructions": self.responses_api_request.get("instructions", None),
             "max_output_tokens": None,
             "model": self.model,
             "output": [],

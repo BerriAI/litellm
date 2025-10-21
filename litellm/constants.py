@@ -93,6 +93,14 @@ AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 0))
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
 
+# WebSocket constants
+# Default to None (unlimited) to match OpenAI's official agents SDK behavior
+# https://github.com/openai/openai-agents-python/blob/cf1b933660e44fd37b4350c41febab8221801409/src/agents/realtime/openai_realtime.py#L235
+_max_size_env = os.getenv("REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES")
+REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES = (
+    int(_max_size_env) if _max_size_env is not None else None
+)
+
 # SSL/TLS cipher configuration for faster handshakes
 # Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
 # This balances performance with broad compatibility
@@ -199,6 +207,9 @@ JITTER = float(os.getenv("JITTER", 0.75))
 DEFAULT_IN_MEMORY_TTL = int(
     os.getenv("DEFAULT_IN_MEMORY_TTL", 5)
 )  # default time to live for the in-memory cache
+DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE = int(
+    os.getenv("DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE", 1000)
+)  # default max size for redis batch cache
 DEFAULT_POLLING_INTERVAL = float(
     os.getenv("DEFAULT_POLLING_INTERVAL", 0.03)
 )  # default polling interval for the scheduler
@@ -396,6 +407,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "extra_headers",
     "thinking",
     "web_search_options",
+    "service_tier",
 ]
 
 OPENAI_TRANSCRIPTION_PARAMS = [
@@ -450,6 +462,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "reasoning_effort": None,
     "thinking": None,
     "web_search_options": None,
+    "service_tier": None,
     "safety_identifier": None,
 }
 
@@ -969,6 +982,10 @@ DEFAULT_SOFT_BUDGET = float(
 )  # by default all litellm proxy keys have a soft budget of 50.0
 # makes it clear this is a rate limit error for a litellm virtual key
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY = "LiteLLM Virtual Key user_api_key_hash"
+
+# Python garbage collection threshold configuration
+# Format: "gen0,gen1,gen2" e.g., "1000,50,50"
+PYTHON_GC_THRESHOLD = os.getenv("PYTHON_GC_THRESHOLD")
 
 # pass through route constansts
 BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [

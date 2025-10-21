@@ -11,10 +11,6 @@ authors:
     title: CTO, LiteLLM
     url: https://www.linkedin.com/in/reffajnaahsi/
     image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
-  - name: Alexsander Hamir
-    title: Backend Performance Engineer
-    url: https://www.linkedin.com/in/alexsander-baptista/
-    image_url: https://media.licdn.com/dms/image/v2/D5603AQGXnziu4kqNCQ/profile-displayphoto-crop_800_800/B56ZkxEcuOKEAI-/0/1757464874550?e=1762387200&v=beta&t=9SNXLsWhx8OnYPAMQ9fqAr02oevDYEAL2vMYg2f9ieg
 
 hide_table_of_contents: false
 ---
