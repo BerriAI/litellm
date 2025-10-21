@@ -427,6 +427,7 @@ const sidebars = {
           label: "Azure AI",
           items: [
             "providers/azure_ai",
+            "providers/azure_ocr",
             "providers/azure_ai_speech",
             "providers/azure_ai_img",
           ]
