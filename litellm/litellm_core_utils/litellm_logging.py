@@ -3165,7 +3165,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                     event_scrubber=EventScrubber(
                         denylist=SENTRY_DENYLIST, pii_denylist=SENTRY_PII_DENYLIST
                     ),
-                    environment=os.environ.get("SENTRY_ENVIRONMENT", "development")
+                    environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
                 )
                 capture_exception = sentry_sdk_instance.capture_exception
                 add_breadcrumb = sentry_sdk_instance.add_breadcrumb

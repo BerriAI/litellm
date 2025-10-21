@@ -64,8 +64,8 @@ These options are useful for high-volume applications where sampling a subset of
 #### Sentry Environment
 - **SENTRY_ENVIRONMENT**: Specifies the environment name for your Sentry events (e.g., "production", "staging", "development")
   - Helps organize and filter errors by deployment environment in Sentry dashboard
-  - Example: `os.environ["SENTRY_ENVIRONMENT"] = "production"`
-  - If not set, Sentry will use 'development' as the default environment
+  - Example: `os.environ["SENTRY_ENVIRONMENT"] = "staging"`
+  - If not set, Sentry will use 'production' as the default environment
 
 ## Redacting Messages, Response Content from Sentry Logging 
 

@@ -69,6 +69,22 @@ def test_sentry_environment():
     existing_environment = os.getenv("SENTRY_ENVIRONMENT")
     existing_dsn = os.getenv("SENTRY_DSN")
 
+    # Create mock sentry_sdk module
+    mock_event_scrubber_instance = MagicMock()
+    mock_event_scrubber_cls = MagicMock(return_value=mock_event_scrubber_instance)
+
+    mock_scrubber_module = MagicMock()
+    mock_scrubber_module.EventScrubber = mock_event_scrubber_cls
+
+    mock_sentry_sdk = MagicMock()
+    mock_sentry_sdk.scrubber = mock_scrubber_module
+    mock_init = MagicMock()
+    mock_sentry_sdk.init = mock_init
+
+    # Inject mocks into sys.modules
+    sys.modules["sentry_sdk"] = mock_sentry_sdk
+    sys.modules["sentry_sdk.scrubber"] = mock_scrubber_module
+
     try:
         # Set a mock DSN to allow Sentry initialization
         os.environ["SENTRY_DSN"] = "https://test@sentry.io/123456"
