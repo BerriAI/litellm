@@ -1,4 +1,4 @@
-"""GraySwan Cygnal guardrail integration for LiteLLM."""
+"""Gray Swan Cygnal guardrail integration for LiteLLM."""
 
 from typing import TYPE_CHECKING
 
@@ -21,7 +21,7 @@ def initialize_guardrail(
 
     guardrail_name = guardrail.get("guardrail_name")
     if not guardrail_name:
-        raise ValueError("GraySwan guardrail requires a guardrail_name")
+        raise ValueError("Gray Swan guardrail requires a guardrail_name")
 
     optional_params = getattr(litellm_params, "optional_params", None)
 

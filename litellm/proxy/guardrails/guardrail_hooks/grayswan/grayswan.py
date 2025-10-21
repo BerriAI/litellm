@@ -1,4 +1,4 @@
-"""GraySwan Cygnal guardrail integration."""
+"""Gray Swan Cygnal guardrail integration."""
 
 import os
 from typing import Any, Dict, Literal, Optional, Union
@@ -24,16 +24,16 @@ from litellm.types.utils import LLMResponseTypes
 
 
 class GraySwanGuardrailMissingSecrets(Exception):
-    """Raised when the GraySwan API key is missing."""
+    """Raised when the Gray Swan API key is missing."""
 
 
 class GraySwanGuardrailAPIError(Exception):
-    """Raised when the GraySwan API returns an error."""
+    """Raised when the Gray Swan API returns an error."""
 
 
 class GraySwanGuardrail(CustomGuardrail):
     """
-    Guardrail that calls GraySwan's Cygnal monitoring endpoint.
+    Guardrail that calls Gray Swan's Cygnal monitoring endpoint.
 
     see: https://docs.grayswan.ai/cygnal/monitor-requests
     """
@@ -63,7 +63,7 @@ class GraySwanGuardrail(CustomGuardrail):
         api_key_value = api_key or os.getenv("GRAYSWAN_API_KEY")
         if not api_key_value:
             raise GraySwanGuardrailMissingSecrets(
-                "GraySwan API key missing. Set `GRAYSWAN_API_KEY` or pass `api_key`."
+                "Gray Swan API key missing. Set `GRAYSWAN_API_KEY` or pass `api_key`."
             )
         self.api_key: str = api_key_value
 
@@ -77,7 +77,7 @@ class GraySwanGuardrail(CustomGuardrail):
         else:
             if action:
                 verbose_proxy_logger.warning(
-                    "GraySwan Guardrail: Unsupported on_flagged_action '%s', defaulting to '%s'.",
+                    "Gray Swan Guardrail: Unsupported on_flagged_action '%s', defaulting to '%s'.",
                     action,
                     self.DEFAULT_ON_FLAGGED_ACTION,
                 )
@@ -131,11 +131,11 @@ class GraySwanGuardrail(CustomGuardrail):
         ):
             return data
 
-        verbose_proxy_logger.debug("GraySwan Guardrail: pre-call hook triggered")
+        verbose_proxy_logger.debug("Gray Swan Guardrail: pre-call hook triggered")
 
         messages = data.get("messages")
         if not messages:
-            verbose_proxy_logger.debug("GraySwan Guardrail: No messages in data")
+            verbose_proxy_logger.debug("Gray Swan Guardrail: No messages in data")
             return data
 
         dynamic_body = self.get_guardrail_dynamic_request_body_params(data) or {}
@@ -143,7 +143,7 @@ class GraySwanGuardrail(CustomGuardrail):
         payload = self._prepare_payload(messages, dynamic_body)
         if payload is None:
             verbose_proxy_logger.debug(
-                "GraySwan Guardrail: no content to scan; skipping request"
+                "Gray Swan Guardrail: no content to scan; skipping request"
             )
             return data
 
@@ -181,7 +181,7 @@ class GraySwanGuardrail(CustomGuardrail):
 
         messages = data.get("messages")
         if not messages:
-            verbose_proxy_logger.debug("GraySwan Guardrail: No messages in data")
+            verbose_proxy_logger.debug("Gray Swan Guardrail: No messages in data")
             return data
 
         dynamic_body = self.get_guardrail_dynamic_request_body_params(data) or {}
@@ -189,7 +189,7 @@ class GraySwanGuardrail(CustomGuardrail):
         payload = self._prepare_payload(messages, dynamic_body)
         if payload is None:
             verbose_proxy_logger.debug(
-                "GraySwan Guardrail: no content to scan; skipping request"
+                "Gray Swan Guardrail: no content to scan; skipping request"
             )
             return data
 
@@ -227,7 +227,7 @@ class GraySwanGuardrail(CustomGuardrail):
 
         if not response_messages:
             verbose_proxy_logger.debug(
-                "GraySwan Guardrail: no response messages detected; skipping post-call scan"
+                "Gray Swan Guardrail: no response messages detected; skipping post-call scan"
             )
             return response
 
@@ -236,7 +236,7 @@ class GraySwanGuardrail(CustomGuardrail):
         payload = self._prepare_payload(response_messages, dynamic_body)
         if payload is None:
             verbose_proxy_logger.debug(
-                "GraySwan Guardrail: no content to scan; skipping request"
+                "Gray Swan Guardrail: no content to scan; skipping request"
             )
             return response
 
@@ -263,13 +263,13 @@ class GraySwanGuardrail(CustomGuardrail):
             response.raise_for_status()
             result = response.json()
             verbose_proxy_logger.debug(
-                "GraySwan Guardrail: monitor response %s", safe_dumps(result)
+                "Gray Swan Guardrail: monitor response %s", safe_dumps(result)
             )
         except HTTPException:
             raise
         except Exception as exc:  # pragma: no cover - depends on HTTP client behaviour
             verbose_proxy_logger.exception(
-                "GraySwan Guardrail: API request failed: %s", exc
+                "Gray Swan Guardrail: API request failed: %s", exc
             )
             raise GraySwanGuardrailAPIError(str(exc)) from exc
 
@@ -315,14 +315,14 @@ class GraySwanGuardrail(CustomGuardrail):
         flagged = violation_score >= self.violation_threshold
         if not flagged:
             verbose_proxy_logger.debug(
-                "GraySwan Guardrail: request passed (score=%s, rules=%s)",
+                "Gray Swan Guardrail: request passed (score=%s, rules=%s)",
                 violation_score,
                 violated_rules,
             )
             return
 
         verbose_proxy_logger.warning(
-            "GraySwan Guardrail: violation score %.3f exceeds threshold %.3f",
+            "Gray Swan Guardrail: violation score %.3f exceeds threshold %.3f",
             violation_score,
             self.violation_threshold,
         )
@@ -331,7 +331,7 @@ class GraySwanGuardrail(CustomGuardrail):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": "Blocked by GraySwan Guardrail",
+                    "error": "Blocked by Gray Swan Guardrail",
                     "violation": violation_score,
                     "violated_rules": violated_rules,
                     "mutation": mutation_detected,
@@ -351,7 +351,7 @@ class GraySwanGuardrail(CustomGuardrail):
         if normalised in self.SUPPORTED_REASONING_MODES:
             return normalised
         verbose_proxy_logger.warning(
-            "GraySwan Guardrail: ignoring unsupported reasoning_mode '%s'",
+            "Gray Swan Guardrail: ignoring unsupported reasoning_mode '%s'",
             candidate,
         )
         return None
