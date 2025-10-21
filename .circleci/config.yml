@@ -1084,6 +1084,49 @@ jobs:
           paths:
             - ocr_coverage.xml
             - ocr_coverage
+  search_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.22.0"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/search_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml search_coverage.xml
+            mv .coverage search_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - search_coverage.xml
+            - search_coverage
   litellm_mapped_tests:
     docker:
       - image: cimg/python:3.11
@@ -2827,7 +2870,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage
+            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3381,6 +3424,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - search_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - litellm_mapped_enterprise_tests:
           filters:
             branches:
@@ -3437,6 +3486,7 @@ workflows:
             - guardrails_testing
             - llm_responses_api_testing
             - ocr_testing
+            - search_testing
             - litellm_mapped_tests
             - litellm_mapped_enterprise_tests
             - batches_testing
@@ -3501,6 +3551,7 @@ workflows:
             - google_generate_content_endpoint_testing
             - llm_responses_api_testing
             - ocr_testing
+            - search_testing
             - litellm_mapped_tests
             - litellm_mapped_enterprise_tests
             - batches_testing
