@@ -44,6 +44,10 @@ from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.search.transformation import (
+    BaseSearchConfig,
+    SearchResponse,
+)
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
 )
@@ -1542,6 +1546,144 @@ class BaseLLMHTTPHandler:
             provider_config=provider_config,
             model=model,
             response=response,
+            logging_obj=logging_obj,
+        )
+
+
+    def search(
+        self,
+        model: str,
+        query: Union[str, List[str]],
+        optional_params: dict,
+        timeout: Union[float, httpx.Timeout],
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        custom_llm_provider: str,
+        headers: dict,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        asearch: bool = False,
+        provider_config: Optional[BaseSearchConfig] = None,
+    ) -> Union[SearchResponse, Coroutine[Any, Any, SearchResponse]]:
+        """
+        Sync Search handler.
+        """
+        if provider_config is None:
+            raise ValueError(
+                f"No provider config found for model: {model} and provider: {custom_llm_provider}"
+            )
+
+        if asearch is True:
+            return self.async_search(
+                model=model,
+                query=query,
+                optional_params=optional_params,
+                timeout=timeout,
+                logging_obj=logging_obj,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                headers=headers,
+                client=client,
+                provider_config=provider_config,
+            )
+
+        # Transform the request
+        data = provider_config.transform_search_request(
+            model=model,
+            query=query,
+            optional_params=optional_params,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=query if isinstance(query, str) else str(query),
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            client = _get_httpx_client()
+
+        try:
+            # Make the POST request with JSON data
+            response = client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_search_response(
+            model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_search(
+        self,
+        model: str,
+        query: Union[str, List[str]],
+        optional_params: dict,
+        timeout: Union[float, httpx.Timeout],
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        custom_llm_provider: str,
+        headers: dict,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        provider_config: Optional[BaseSearchConfig] = None,
+    ) -> SearchResponse:
+        """
+        Async Search handler.
+        """
+        if provider_config is None:
+            raise ValueError(
+                f"No provider config found for model: {model} and provider: {custom_llm_provider}"
+            )
+
+        # Transform the request
+        data = provider_config.transform_search_request(
+            model=model,
+            query=query,
+            optional_params=optional_params,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=query if isinstance(query, str) else str(query),
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        else:
+            async_httpx_client = client
+
+        try:
+            # Make the async POST request with JSON data
+            response = await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_search_response(
+            model=model,
+            raw_response=response,
             logging_obj=logging_obj,
         )
 
@@ -3285,6 +3427,7 @@ class BaseLLMHTTPHandler:
             BaseAnthropicMessagesConfig,
             BaseBatchesConfig,
             BaseOCRConfig,
+            BaseSearchConfig,
             BaseTextToSpeechConfig,
             "BasePassthroughConfig",
         ],
