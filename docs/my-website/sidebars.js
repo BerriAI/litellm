@@ -402,6 +402,11 @@ const sidebars = {
       },
       items: [
         {
+          type: "doc",
+          id: "provider_registration/index",
+          label: "Integrate as a Model Provider",
+        },
+        {
           type: "category",
           label: "OpenAI",
           items: [
@@ -740,11 +745,6 @@ const sidebars = {
         "proxy/customer_routing",
         "proxy_server",
       ],
-    },
-    {
-      type: "doc",
-      id: "provider_registration/index",
-      label: "Integrate as a Model Provider",
     },
     "troubleshoot",
   ],
