@@ -43,9 +43,9 @@ class PerplexitySearchConfig(BaseSearchConfig):
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("PERPLEXITY_API_KEY")
+        api_key = api_key or get_secret_str("PERPLEXITYAI_API_KEY")
         if not api_key:
-            raise ValueError("PERPLEXITY_API_KEY is not set")
+            raise ValueError("PERPLEXITYAI_API_KEY is not set. Set `PERPLEXITYAI_API_KEY` environment variable.")
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
         return headers

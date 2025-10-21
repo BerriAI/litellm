@@ -6,6 +6,7 @@ This follows the same pattern as BaseOCRTest in tests/ocr_tests/base_ocr_unit_te
 import pytest
 import litellm
 from abc import ABC, abstractmethod
+import json
 
 
 class BaseSearchTest(ABC):
@@ -32,7 +33,7 @@ class BaseSearchTest(ABC):
             pytest.skip("Model is overloaded")
 
     @pytest.mark.asyncio
-    async def test_basic_search(self, sync_mode):
+    async def test_basic_search(self):
         """
         Test basic search functionality with a simple query.
         """
@@ -45,9 +46,9 @@ class BaseSearchTest(ABC):
                 query="latest developments in AI",
                 custom_llm_provider=custom_llm_provider,
             )
+            print("Search response=", response.model_dump_json(indent=4))
 
             print(f"\n{'='*80}")
-            print(f"Sync Mode: {sync_mode}")
             print(f"Response type: {type(response)}")
             print(f"Response object: {response.object if hasattr(response, 'object') else 'N/A'}")
             
