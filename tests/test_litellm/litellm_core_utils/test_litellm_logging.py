@@ -77,32 +77,32 @@ def test_sentry_environment():
         if existing_environment:
             del os.environ["SENTRY_ENVIRONMENT"]
 
-        with patch("sentry_sdk.init") as mock_init:
-            set_callbacks(["sentry"])
-            # Check that init was called with default environment "development"
-            mock_init.assert_called_once()
-            call_kwargs = mock_init.call_args[1]
-            assert call_kwargs["environment"] == "development"
+        mock_init.reset_mock()
+        set_callbacks(["sentry"])
+        # Check that init was called with default environment "development"
+        mock_init.assert_called_once()
+        call_kwargs = mock_init.call_args[1]
+        assert call_kwargs["environment"] == "development"
 
         # Test with custom environment value
         os.environ["SENTRY_ENVIRONMENT"] = "production"
 
-        with patch("sentry_sdk.init") as mock_init:
-            set_callbacks(["sentry"])
-            # Check that init was called with custom environment "production"
-            mock_init.assert_called_once()
-            call_kwargs = mock_init.call_args[1]
-            assert call_kwargs["environment"] == "production"
+        mock_init.reset_mock()
+        set_callbacks(["sentry"])
+        # Check that init was called with custom environment "production"
+        mock_init.assert_called_once()
+        call_kwargs = mock_init.call_args[1]
+        assert call_kwargs["environment"] == "production"
 
         # Test with staging environment
         os.environ["SENTRY_ENVIRONMENT"] = "staging"
 
-        with patch("sentry_sdk.init") as mock_init:
-            set_callbacks(["sentry"])
-            # Check that init was called with custom environment "staging"
-            mock_init.assert_called_once()
-            call_kwargs = mock_init.call_args[1]
-            assert call_kwargs["environment"] == "staging"
+        mock_init.reset_mock()
+        set_callbacks(["sentry"])
+        # Check that init was called with custom environment "staging"
+        mock_init.assert_called_once()
+        call_kwargs = mock_init.call_args[1]
+        assert call_kwargs["environment"] == "staging"
 
     except Exception as e:
         print(f"Error: {e}")
