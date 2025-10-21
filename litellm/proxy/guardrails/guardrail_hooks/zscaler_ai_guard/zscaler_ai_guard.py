@@ -19,6 +19,7 @@ from litellm.types.utils import (
     ModelResponse,
     TextChoices,
     Choices,
+    StreamingChoices
 )
 from litellm import ModelResponse as LiteLLMModelResponse
 
@@ -36,7 +37,6 @@ class ZscalerAIGuard(CustomGuardrail):
         send_user_api_key_alias: Optional[bool] = False,
         send_user_api_key_user_id: Optional[bool] = False,
         send_user_api_key_team_id: Optional[bool] = False,
-        verify_ssl: Optional[bool] = True,
         **kwargs,
     ):
         # store kwargs as optional_params
@@ -55,7 +55,6 @@ class ZscalerAIGuard(CustomGuardrail):
         self.send_user_api_key_team_id = send_user_api_key_team_id or os.environ.get(
             "SEND_USER_API_KEY_TEAM_ID", False
         )
-        self.verify_ssl = verify_ssl
 
         verbose_proxy_logger.debug(
             f'''send_user_api_key_alias: {self.send_user_api_key_alias}, 
@@ -129,8 +128,7 @@ class ZscalerAIGuard(CustomGuardrail):
             url,
             headers=headers,
             json=data,
-            timeout=GUARDRAIL_TIMEOUT,
-            verify=self.verify_ssl,
+            timeout=GUARDRAIL_TIMEOUT
         )
         return response
 
@@ -395,8 +393,8 @@ class ZscalerAIGuard(CustomGuardrail):
 
             elif isinstance(response_obj, ModelResponse):
                 for choice in response_obj.choices:
-                    if isinstance(choice, Choices):
-                        if choice.message.content and isinstance(
+                    if isinstance(choice, (Choices, StreamingChoices)):  
+                        if hasattr(choice, 'message') and choice.message.content and isinstance(  
                             choice.message.content, str
                         ):
                             response_str += choice.message.content

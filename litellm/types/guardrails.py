@@ -414,6 +414,22 @@ class ToolPermissionGuardrailConfigModel(BaseModel):
     )
 
 
+class ZscalerAIGuardConfigModel(BaseModel):
+    """Configuration parameters for the Zscaler AI Guard guardrail"""
+
+    policy_id: int = Field(
+        description="Policy ID for Zscaler AI Guard (required)"
+    )
+    send_user_api_key_alias: Optional[bool] = Field(
+        default=False, description="Whether to send user_API_key_alias in headers"
+    )
+    send_user_api_key_user_id: Optional[bool] = Field(
+        default=False, description="Whether to send user_API_key_user_id in headers"
+    )
+    send_user_api_key_team_id: Optional[bool] = Field(
+        default=False, description="Whether to send user_API_key_team_id in headers"
+    )
+
 class JavelinGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Javelin guardrail"""
 
@@ -523,6 +539,7 @@ class LitellmParams(
     PillarGuardrailConfigModel,
     NomaGuardrailConfigModel,
     ToolPermissionGuardrailConfigModel,
+    ZscalerAIGuardConfigModel, 
     JavelinGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
