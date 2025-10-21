@@ -2,10 +2,12 @@
 Helper functions for health check calls.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Dict, Literal, Optional
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+
+TEST_PDF_URL = "https://arxiv.org/pdf/2201.04234"
 
 
 class HealthCheckHelpers:
@@ -77,4 +79,109 @@ class HealthCheckHelpers:
 
         return {
             "tags": [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME],
+        }
+
+    @staticmethod
+    def get_mode_handlers(
+        model: str,
+        custom_llm_provider: str,
+        model_params: dict,
+        prompt: Optional[str] = None,
+        input: Optional[list] = None,
+    ) -> Dict[
+        Literal[
+            "chat",
+            "completion",
+            "embedding",
+            "audio_speech",
+            "audio_transcription",
+            "image_generation",
+            "rerank",
+            "realtime",
+            "batch",
+            "responses",
+            "ocr",
+        ],
+        Callable,
+    ]:
+        """
+        Returns a dictionary of mode handlers for health check calls. 
+
+        Mode Handlers are Callables that need to be run for execution of the health check call.
+
+        Args:
+            model: The model name
+            custom_llm_provider: The LLM provider
+            model_params: The model parameters
+            prompt: Optional prompt for health check
+            input: Optional input for health check
+
+        Returns:
+            Dictionary mapping mode names to their handler functions
+        """
+        import litellm
+        from litellm.litellm_core_utils.audio_utils.utils import (
+            get_audio_file_for_health_check,
+        )
+        from litellm.litellm_core_utils.health_check_utils import _filter_model_params
+        from litellm.realtime_api.main import _realtime_health_check
+
+        return {
+            "chat": lambda: litellm.acompletion(
+                **model_params,
+            ),
+            "completion": lambda: litellm.atext_completion(
+                **_filter_model_params(model_params=model_params),
+                prompt=prompt or "test",
+            ),
+            "embedding": lambda: litellm.aembedding(
+                **_filter_model_params(model_params=model_params),
+                input=input or ["test"],
+            ),
+            "audio_speech": lambda: litellm.aspeech(
+                **{
+                    **_filter_model_params(model_params=model_params),
+                    **(
+                        {"voice": "alloy"}
+                        if "voice"
+                        not in _filter_model_params(model_params=model_params)
+                        else {}
+                    ),
+                },
+                input=prompt or "test",
+            ),
+            "audio_transcription": lambda: litellm.atranscription(
+                **_filter_model_params(model_params=model_params),
+                file=get_audio_file_for_health_check(),
+            ),
+            "image_generation": lambda: litellm.aimage_generation(
+                **_filter_model_params(model_params=model_params),
+                prompt=prompt,
+            ),
+            "rerank": lambda: litellm.arerank(
+                **_filter_model_params(model_params=model_params),
+                query=prompt or "",
+                documents=["my sample text"],
+            ),
+            "realtime": lambda: _realtime_health_check(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                api_base=model_params.get("api_base", None),
+                api_key=model_params.get("api_key", None),
+                api_version=model_params.get("api_version", None),
+            ),
+            "batch": lambda: litellm.alist_batches(
+                **_filter_model_params(model_params=model_params),
+            ),
+            "responses": lambda: litellm.aresponses(
+                **_filter_model_params(model_params=model_params),
+                input=prompt or "test",
+            ),
+            "ocr": lambda: litellm.aocr(
+                **_filter_model_params(model_params=model_params),
+                document={
+                    "type": "document_url",
+                    "document_url": TEST_PDF_URL,
+                },
+            ),
         }
