@@ -2779,6 +2779,17 @@
         "litellm_provider": "azure",
         "mode": "audio_speech"
     },
+    "azure/speech/azure-tts": {
+        "input_cost_per_character": 15e-06,
+        "litellm_provider": "azure",
+        "mode": "audio_speech",
+        "source": "https://azure.microsoft.com/en-us/pricing/calculator/"
+    },
+    "azure/speech/azure-tts-hd": {
+        "input_cost_per_character": 30e-06,
+        "litellm_provider": "azure",
+        "mode": "https://azure.microsoft.com/en-us/pricing/calculator/"
+    },
     "azure/us/gpt-4o-2024-08-06": {
         "cache_read_input_token_cost": 1.375e-06,
         "input_cost_per_token": 2.75e-06,
