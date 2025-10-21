@@ -1,12 +1,14 @@
+from typing import List, Dict, Literal, Optional, Tuple, Callable, Optional, TYPE_CHECKING, Union
 import urllib
-from typing import List, Dict
-import httpx
-from litellm.secret_managers.main import get_secret_str
-from typing import Literal, Optional, Tuple
 import time
+import json
 from aiohttp import ClientSession
+from functools import cached_property
+
+import httpx
 
 import litellm
+from litellm.secret_managers.main import get_secret_str
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.types.utils import ModelResponse
@@ -14,11 +16,9 @@ from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
 
 
+from .credentials import get_token_creator
 from ...base import BaseLLM
 
-from typing import Callable
-
-from typing import Optional, TYPE_CHECKING, Union
 
 class GenAIHubOrchestrationError(Exception):
     def __init__(self, status_code, message):
@@ -31,72 +31,43 @@ class GenAIHubOrchestration(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
         self._access_token_data = {}
+        self.token_creator, self.base_url, self.resource_group = get_token_creator()
 
-    def _get_access_token(self):
-        client = litellm.module_level_client
-        auth_url = get_secret_str("AICORE_AUTH_URL")
-        client_id = get_secret_str("AICORE_CLIENT_ID")
-        client_secret = get_secret_str("AICORE_CLIENT_SECRET")
 
+    @property
+    def headers(self) -> Dict:
+        access_token = self.token_creator()
+        # headers for completions and embeddings requests
         headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
+            "Authorization": access_token,
+            "AI-Resource-Group": self.resource_group,
+            "Content-Type": "application/json",
         }
-        data = {
-            "grant_type": "client_credentials",
-            "client_id": client_id,
-            "client_secret": client_secret,
-        }
-        try:
-            response = client.post(url=auth_url, headers=headers, data=data)
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise GenAIHubOrchestrationError(
-                status_code=e.response.status_code,
-                message=e.response.text,
-            )
-        except httpx.TimeoutException:
-            raise GenAIHubOrchestrationError(status_code=408, message="Timeout error occurred.")
-        except Exception as e:
-            raise GenAIHubOrchestrationError(status_code=500, message=str(e))
-        data = response.json()
-        return {
-            "access_token": data["access_token"],
-            "expires_at": time.time() + data["expires_in"] - 60
-        }
+        return headers
 
-    def _get_cached_access_token(self):
-        if self._access_token_data.get("expires_at", 0) > time.time():
-            return self._access_token_data["access_token"]
-        else:
-            self._access_token_data = self._get_access_token()
-            return self._access_token_data["access_token"]
+    @cached_property
+    def deployment_url(self) -> str:
+        with httpx.Client(timeout=30) as client:
+            valid_deployments = []
+            deployments = client.get(self.base_url + '/lm/deployments', headers=self.headers).json()
+            for deployment in deployments.get('resources', []):
+                if deployment['scenarioId'] == 'orchestration':
+                    config_details = client.get(self.base_url + f'/lm/configurations/{deployment["configurationId"]}', headers=self.headers).json()
+                    if config_details["executableId"] == 'orchestration':
+                        valid_deployments.append((deployment["deploymentUrl"], deployment["createdAt"]))
+            return sorted(valid_deployments, key=lambda x: x[1], reverse=True)[0]
+
 
     def validate_environment(
         self,
         endpoint_type: Literal["chat_completions", "embeddings"]
     ) -> Tuple[str, dict]:
-
-
-        api_base = get_secret_str("AICORE_BASE_URL")
-        resource_group = get_secret_str("AICORE_RESOURCE_GROUP")
-
-        # get access token
-        access_token = self._get_cached_access_token()
-        # headers for completions and embeddings requests
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "AI-Resource-Group": resource_group,
-            "Content-Type": "application/json",
-        }
-        # get the deployment url
-        deployment_id = get_secret_str("AICORE_DEPLOYMENT_ID")
-        api_base = f"{api_base.rstrip("/")}/inference/deployments/{deployment_id}"
         if endpoint_type == "chat_completions":
-            api_base = "{}/v2/completion".format(api_base)
+            api_base = "{}/v2/completion".format(self.deployment_url)
         elif endpoint_type == "embeddings":
-            api_base = "{}/v2/embeddings".format(api_base)
+            api_base = "{}/v2/embeddings".format(self.deployment_url)
 
-        return api_base, headers
+        return api_base, self.headers
 
 
     def encode_model_id(self, model_id: str) -> str:
