@@ -54,6 +54,52 @@ model_list:
 3. Note your region (e.g., `eastus`, `westus`, `westeurope`)
 4. Use the regional endpoint: `https://{region}.tts.speech.microsoft.com`
 
+## Cost Tracking (Pricing)
+
+LiteLLM automatically tracks costs for Azure AI Speech based on the number of characters processed.
+
+### Available Models
+
+| Model | Voice Type | Cost per 1M Characters |
+|-------|-----------|----------------------|
+| `azure/speech/azure-tts` | Neural | $15 |
+| `azure/speech/azure-tts-hd` | Neural HD | $30 |
+
+### How Costs are Calculated
+
+Azure AI Speech charges based on the number of characters in your input text. LiteLLM automatically:
+- Counts the number of characters in your `input` parameter
+- Calculates the cost based on the model pricing
+- Returns the cost in the response object
+
+```python showLineNumbers title="View Request Cost"
+from litellm import speech
+
+response = speech(
+    model="azure/speech/azure-tts",
+    voice="alloy",
+    input="Hello, this is a test message",
+    api_base="https://eastus.tts.speech.microsoft.com",
+    api_key=os.environ["AZURE_TTS_API_KEY"],
+)
+
+# Access the calculated cost
+cost = response._hidden_params.get("response_cost")
+print(f"Request cost: ${cost}")
+```
+
+### Verify Azure Pricing
+
+To check the latest Azure AI Speech pricing:
+
+1. Visit the [Azure Pricing Calculator](https://azure.microsoft.com/en-us/pricing/calculator/)
+2. Set **Service** to "AI Services"
+3. Set **API** to "Azure AI Speech"
+4. Select **Text to Speech** and your region
+5. View the current pricing per million characters
+
+**Note:** Pricing may vary by region and Azure subscription type.
+
 ## Voice Mapping
 
 LiteLLM automatically maps OpenAI voice names to Azure Neural voices:

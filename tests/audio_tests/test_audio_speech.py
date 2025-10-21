@@ -373,5 +373,9 @@ async def test_azure_ava_tts_async():
         
         print(f"Azure TTS audio saved to: {speech_file_path}")
 
+        # assert response cost is greater than 0
+        print("Response cost: ", response._hidden_params["response_cost"])
+        assert response._hidden_params["response_cost"] > 0
+
     except Exception as e:
         pytest.fail(f"Test failed with exception: {str(e)}")
