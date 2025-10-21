@@ -608,9 +608,9 @@ class CustomStreamWrapper:
     def handle_sap_stream(self, chunk):
         try:
             print_verbose(f"chunk: {chunk} (Type: {type(chunk)})")
-            chunk_ = chunk.orchestration_result.choices[0]
-            text = chunk_.delta.content
-            finish_reason = chunk_.finish_reason or None
+            chunk_ = chunk["orchestration_result"]["choices"][0]
+            text = chunk_["message"]["content"]
+            finish_reason = chunk_["finish_reason"] or None
             is_finished = finish_reason is not None
             return {
                 "text": text,

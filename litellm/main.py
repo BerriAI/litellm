@@ -1959,6 +1959,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 timeout=timeout,  # type: ignore
+                shared_session=shared_session,
                 custom_prompt_dict=custom_prompt_dict,
                 client=client,
                 custom_llm_provider=custom_llm_provider,

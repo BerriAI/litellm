@@ -227,16 +227,16 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         print_verbose,
         encoding,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        llm_response = response.module_results.llm
-        obj = model_response.model_dump()  # response.module_results.llm
-        obj["choices"] = [asdict(c) for c in llm_response.choices]
-        for c in obj["choices"]:
-            c["message"]["role"] = (
-                c["message"]["role"].value
-                if hasattr(c["message"]["role"], "value")
-                else c["message"]["role"]
-            )
-        obj["created"] = llm_response.created
-        obj["model"] = llm_response.model
-        obj["usage"] = Usage(**asdict(llm_response.usage))
-        return ModelResponse.model_validate(obj)
+        # llm_response = response.module_results.llm
+        # obj = model_response.model_dump()  # response.module_results.llm
+        # obj["choices"] = [asdict(c) for c in llm_response.choices]
+        # for c in obj["choices"]:
+        #     c["message"]["role"] = (
+        #         c["message"]["role"].value
+        #         if hasattr(c["message"]["role"], "value")
+        #         else c["message"]["role"]
+        #     )
+        # obj["created"] = llm_response.created
+        # obj["model"] = llm_response.model
+        # obj["usage"] = Usage(**asdict(llm_response.usage))
+        return ModelResponse.model_validate(response.json()["module_results"]["llm"])

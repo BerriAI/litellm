@@ -1,13 +1,21 @@
 import urllib
 from typing import List, Dict
 import httpx
-
+from litellm.secret_managers.main import get_secret, get_secret_str
+from typing import Literal, Optional, Tuple
+from ...openai_like.common_utils import OpenAILikeError
+import json
+import time
+from aiohttp import ClientSession
 
 import litellm
+from litellm import api_base
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.types.utils import ModelResponse
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.databricks.streaming_utils import ModelResponseIterator
+
 
 from ...base import BaseLLM
 
@@ -58,32 +66,74 @@ class GenAIHubOrchestrationError(Exception):
 class GenAIHubOrchestration(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
-        self._client: Optional["GenAIHubProxyClient"] = None
-        self._orchestration_client = None
+        self._access_token_data = {}
 
-    def _ensure_gen_ai_hub_installed(self) -> None:
-        """Ensure the gen-ai-hub package is available."""
-        if _gen_ai_hub_import_error is not None:
-            raise OptionalDependencyError(
-                "The gen-ai-hub package is required for this functionality. "
-                "Please install it with: pip install sap-ai-sdk-gen[all]"
-            ) from _gen_ai_hub_import_error
+    def _get_access_token(self):
+        client = litellm.module_level_client
+        auth_url = get_secret_str("AICORE_AUTH_URL")
+        client_id = get_secret_str("AICORE_CLIENT_ID")
+        client_secret = get_secret_str("AICORE_CLIENT_SECRET")
 
-    @property
-    def orchestration_client(self):
-        """Initialize and get the orchestration client."""
-        self._ensure_gen_ai_hub_installed()
-        from gen_ai_hub.orchestration.service import OrchestrationService
-
-        if (
-            GenAIHubProxyClient is None
-        ):  # This should never happen due to _ensure_dependency
-            raise RuntimeError(
-                "GenAIHubProxyClient is None despite passing dependency check"
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        data = {
+            "grant_type": "client_credentials",
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+        try:
+            response = client.post(url=auth_url, headers=headers, data=data)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise GenAIHubOrchestrationError(
+                status_code=e.response.status_code,
+                message=e.response.text,
             )
-        if not self._orchestration_client:
-            self._orchestration_client = OrchestrationService(proxy_client=self._client)
-        return self._orchestration_client
+        except httpx.TimeoutException:
+            raise GenAIHubOrchestrationError(status_code=408, message="Timeout error occurred.")
+        except Exception as e:
+            raise GenAIHubOrchestrationError(status_code=500, message=str(e))
+        data = response.json()
+        return {
+            "access_token": data["access_token"],
+            "expires_at": time.time() + data["expires_in"] - 60
+        }
+
+    def _get_cached_access_token(self):
+        if self._access_token_data.get("expires_at", 0) > time.time():
+            return self._access_token_data["access_token"]
+        else:
+            self._access_token_data = self._get_access_token()
+            return self._access_token_data["access_token"]
+
+    def validate_environment(
+        self,
+        endpoint_type: Literal["chat_completions", "embeddings"]
+    ) -> Tuple[str, dict]:
+
+
+        API_BASE = get_secret_str("AICORE_BASE_URL")
+        RESOURCE_GROUP = get_secret_str("AICORE_RESOURCE_GROUP")
+
+        # get access token
+        access_token = self._get_cached_access_token()
+        # headers for completions and embeddings requests
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "AI-Resource-Group": RESOURCE_GROUP,
+            "Content-Type": "application/json",
+        }
+        # get the deployment url
+        deployment_id = get_secret_str("AICORE_DEPLOYMENT_ID")
+        api_base = f"{API_BASE.rstrip("/")}/inference/deployments/{deployment_id}"
+        if endpoint_type == "chat_completions":
+            api_base = "{}/completion".format(api_base)
+        elif endpoint_type == "embeddings":
+            api_base = "{}/embeddings".format(api_base)
+
+        return api_base, headers
+
 
     def encode_model_id(self, model_id: str) -> str:
         """
@@ -99,6 +149,8 @@ class GenAIHubOrchestration(BaseLLM):
         self,
         config,
         model: str,
+        api_base: str,
+        headers: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
         timeout: Optional[Union[float, httpx.Timeout]],
@@ -106,14 +158,25 @@ class GenAIHubOrchestration(BaseLLM):
         logging_obj,
         optional_params: dict,
         extra_headers: Optional[dict] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        shared_session: Optional["ClientSession"] = None,
+        client: Optional[AsyncHTTPHandler] = None
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         try:
-            with temporary_headers_addition(extra_headers or {}):
-                response = await self.orchestration_client.astream(
-                    config=config,
-                    # timeout=int(timeout) if isinstance(timeout, (float)) else timeout
-                )
+            if client is None or not isinstance(client, AsyncHTTPHandler):
+                client = litellm.AsyncHTTPHandler(shared_session=shared_session)
+            data = config.to_dict()
+            data["stream"] = True
+            response = await client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+                stream=True
+            )
+            response.raise_for_status()
+            completion_stream = ModelResponseIterator(
+                streaming_response=response.aiter_lines(), sync_stream=False
+            )
         except OrchestrationError as err:
             raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
         except httpx.TimeoutException:
@@ -138,7 +201,7 @@ class GenAIHubOrchestration(BaseLLM):
                 raise e
 
         return CustomStreamWrapper(
-            completion_stream=_safe_async_iter(),
+            completion_stream=completion_stream,
             model=model,
             logging_obj=logging_obj,
             custom_llm_provider="sap",
@@ -150,6 +213,8 @@ class GenAIHubOrchestration(BaseLLM):
         self,
         config,
         model: str,
+        api_base: str,
+        headers: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
         timeout: Optional[Union[float, httpx.Timeout]],
@@ -158,19 +223,26 @@ class GenAIHubOrchestration(BaseLLM):
         optional_params: dict,
         extra_headers: Optional[dict] = None,
         client: Optional[AsyncHTTPHandler] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         try:
-            with temporary_headers_addition(extra_headers or {}):
-                response = await self.orchestration_client.arun(
-                    config=config,
-                    # timeout=int(timeout) if isinstance(timeout, (float)) else timeout
-                )
+            if client is None or not isinstance(client, AsyncHTTPHandler):
+                client = litellm.AsyncHTTPHandler(shared_session=shared_session)
+            response = await client.post(
+                url=api_base,
+                headers=headers,
+                json={"orchestration_config": config.to_dict()},
+                timeout=timeout
+            )
+            response.raise_for_status()
         except OrchestrationError as err:
             raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
         except httpx.TimeoutException:
             raise GenAIHubOrchestrationError(
                 status_code=408, message="Timeout error occurred."
             )
+        # finally:
+        #     await client.close()
         return litellm.GenAIHubOrchestrationConfig()._transform_response(
             model=model,
             response=response,
@@ -186,6 +258,8 @@ class GenAIHubOrchestration(BaseLLM):
         self,
         config,
         model: str,
+        api_base: str,
+        headers: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
         timeout: Optional[Union[float, httpx.Timeout]],
@@ -196,11 +270,20 @@ class GenAIHubOrchestration(BaseLLM):
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         try:
-            with temporary_headers_addition(extra_headers or {}):
-                response = self.orchestration_client.stream(
-                    config=config,
-                    # timeout=int(timeout) if isinstance(timeout, (float)) else timeout
-                )
+            if client is None or not isinstance(client, HTTPHandler):
+                client = litellm.module_level_client
+            data = config.to_dict()
+            data["stream"] = True
+            response = client.post(
+                url=api_base,
+                headers=headers,
+                json={"orchestration_config": data},
+                stream=True,
+                timeout=timeout)
+            response.raise_for_status()
+            completion_stream = ModelResponseIterator(
+                streaming_response=response.iter_lines(), sync_stream=True
+            )
         except OrchestrationError as err:
             raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
         except httpx.TimeoutException:
@@ -219,7 +302,7 @@ class GenAIHubOrchestration(BaseLLM):
                     raise e
 
         return CustomStreamWrapper(
-            completion_stream=_safe_iter(),
+            completion_stream=completion_stream,
             model=model,
             logging_obj=logging_obj,
             custom_llm_provider="sap",
@@ -231,6 +314,8 @@ class GenAIHubOrchestration(BaseLLM):
         self,
         config,
         model: str,
+        api_base: str,
+        headers: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
         timeout: Optional[Union[float, httpx.Timeout]],
@@ -238,14 +323,17 @@ class GenAIHubOrchestration(BaseLLM):
         logging_obj,
         optional_params: dict,
         extra_headers: Optional[dict] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        client: Optional[HTTPHandler] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         try:
-            with temporary_headers_addition(extra_headers or {}):
-                response = self.orchestration_client.run(
-                    config=config,
-                    # timeout=int(timeout) if isinstance(timeout, (float)) else timeout
-                )
+            if client is None or not isinstance(client, HTTPHandler):
+                client = litellm.module_level_client
+            response = client.post(
+                url=api_base,
+                headers=headers,
+                json={"orchestration_config": config.to_dict()},
+                timeout=timeout)
+            response.raise_for_status()
         except OrchestrationError as err:
             raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
         except httpx.TimeoutException:
@@ -278,11 +366,16 @@ class GenAIHubOrchestration(BaseLLM):
         litellm_params: Optional[Dict] = None,
         logger_fn=None,
         extra_headers: Optional[dict] = None,
+        shared_session: Optional["ClientSession"] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
         **kwargs
     ):
         headers = {} or headers
         stream = optional_params.pop("stream", None)
+
+        api_base, headers = self.validate_environment(
+            endpoint_type="chat_completions"
+        )
 
         config = litellm.GenAIHubOrchestrationConfig()._transform_request(
             model=model,
@@ -297,8 +390,8 @@ class GenAIHubOrchestration(BaseLLM):
             api_key="",
             additional_args={
                 "complete_input_dict": config.to_dict(),
-                "api_base": self.orchestration_client.api_url,
-                "headers": self.orchestration_client.proxy_client.request_header,
+                "api_base": api_base,
+                "headers": headers,
             },
         )
 
@@ -307,6 +400,8 @@ class GenAIHubOrchestration(BaseLLM):
             return self._async_completion(
                 config=config,
                 model=model,
+                api_base=api_base,
+                headers=headers,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 timeout=timeout,
@@ -314,6 +409,7 @@ class GenAIHubOrchestration(BaseLLM):
                 logging_obj=logging_obj,
                 optional_params=optional_params,
                 extra_headers=extra_headers,
+                shared_session=shared_session,
                 client=(
                     client
                     if client is not None and isinstance(client, AsyncHTTPHandler)
@@ -342,6 +438,8 @@ class GenAIHubOrchestration(BaseLLM):
             return self._streaming(
                 config=config,
                 model=model,
+                api_base=api_base,
+                headers=headers,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 timeout=timeout,
@@ -359,6 +457,8 @@ class GenAIHubOrchestration(BaseLLM):
             return self._complete(
                 config=config,
                 model=model,
+                api_base=api_base,
+                headers=headers,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 timeout=timeout,
