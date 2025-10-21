@@ -558,6 +558,8 @@ router_settings:
 | GITHUB_COPILOT_ACCESS_TOKEN_FILE | File to store GitHub Copilot access token for `github_copilot` llm provider
 | GREENSCALE_API_KEY | API key for Greenscale service
 | GREENSCALE_ENDPOINT | Endpoint URL for Greenscale service
+| GRAYSWAN_API_BASE | Base URL for GraySwan API. Default is https://api.grayswan.ai
+| GRAYSWAN_API_KEY | API key for GraySwan Cygnal service
 | GOOGLE_APPLICATION_CREDENTIALS | Path to Google Cloud credentials JSON file
 | GOOGLE_CLIENT_ID | Client ID for Google OAuth
 | GOOGLE_CLIENT_SECRET | Client secret for Google OAuth
