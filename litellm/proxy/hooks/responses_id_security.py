@@ -5,7 +5,7 @@ This hook uses the DBSpendUpdateWriter to batch-write response IDs to the databa
 instead of writing immediately on each request.
 """
 
-from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal, Optional, Tuple, Union
 
 from fastapi import HTTPException
 
@@ -21,6 +21,7 @@ from litellm.types.utils import LLMResponseTypes, SpecialEnums
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import ModelResponseStream
 
 
 class ResponsesIDSecurity(CustomLogger):
@@ -167,3 +168,9 @@ class ResponsesIDSecurity(CustomLogger):
         if isinstance(response, ResponsesAPIResponse) and user_api_key_dict.user_id:
             response = self._encrypt_response_id(response, user_api_key_dict)
         return response
+
+    async def async_post_call_streaming_iterator_hook(
+        self, user_api_key_dict: "UserAPIKeyAuth", response: Any, request_data: dict
+    ) -> AsyncGenerator["ModelResponseStream", None]:
+        async for chunk in response:
+            yield chunk
