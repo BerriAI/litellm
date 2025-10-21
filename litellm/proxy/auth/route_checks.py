@@ -277,6 +277,9 @@ class RouteChecks:
             - True: if route is an OpenAI route
             - False: if route is not an OpenAI route
         """
+        # Ensure route is a string before performing checks
+        if not isinstance(route, str):
+            return False
 
         if route in LiteLLMRoutes.openai_routes.value:
             return True
@@ -324,6 +327,9 @@ class RouteChecks:
         eg.
         route='/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions'
         """
+        # Ensure route is a string before attempting regex matching
+        if not isinstance(route, str):
+            return False
         # Add support for deployment and engine model paths
         deployment_pattern = r"^/openai/deployments/[^/]+/[^/]+/chat/completions$"
         engine_pattern = r"^/engines/[^/]+/chat/completions$"
@@ -347,6 +353,9 @@ class RouteChecks:
         - route: "/key/regenerate/82akk800000000jjsk"
         - returns: False, pattern is "/key/{token_id}/regenerate"
         """
+        # Ensure route is a string before attempting regex matching
+        if not isinstance(route, str):
+            return False
         pattern = re.sub(r"\{[^}]+\}", r"[^/]+", pattern)
         # Anchor the pattern to match the entire string
         pattern = f"^{pattern}$"
