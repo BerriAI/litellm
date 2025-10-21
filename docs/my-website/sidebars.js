@@ -418,6 +418,7 @@ const sidebars = {
             "providers/azure/azure",
             "providers/azure/azure_responses",
             "providers/azure/azure_embedding",
+            "providers/azure/azure_speech",
           ]
         },
         {
@@ -425,6 +426,7 @@ const sidebars = {
           label: "Azure AI",
           items: [
             "providers/azure_ai",
+            "providers/azure_ai_speech",
             "providers/azure_ai_img",
           ]
         },

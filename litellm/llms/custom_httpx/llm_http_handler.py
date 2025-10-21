@@ -20,6 +20,7 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import verbose_logger
+from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -43,6 +44,9 @@ from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.text_to_speech.transformation import (
+    BaseTextToSpeechConfig,
+)
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -62,6 +66,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.llms.openai import (
     CreateBatchRequest,
     CreateFileRequest,
+    HttpxBinaryResponseContent,
     OpenAIFileObject,
     ResponseInputParam,
     ResponsesAPIResponse,
@@ -3280,6 +3285,7 @@ class BaseLLMHTTPHandler:
             BaseAnthropicMessagesConfig,
             BaseBatchesConfig,
             BaseOCRConfig,
+            BaseTextToSpeechConfig,
             "BasePassthroughConfig",
         ],
     ):
@@ -3339,7 +3345,9 @@ class BaseLLMHTTPHandler:
 
         try:
             async with websockets.connect(  # type: ignore
-                url, extra_headers=headers
+                url,
+                extra_headers=headers,
+                max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
                     websocket,
@@ -4336,6 +4344,225 @@ class BaseLLMHTTPHandler:
             )
 
         return generate_content_provider_config.transform_generate_content_response(
+            model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    #####################################################################
+    ################ TEXT TO SPEECH HANDLER ###########################
+    #####################################################################
+    def text_to_speech_handler(
+        self,
+        model: str,
+        input: str,
+        voice: Optional[str],
+        text_to_speech_provider_config: BaseTextToSpeechConfig,
+        text_to_speech_optional_params: Dict,
+        custom_llm_provider: str,
+        litellm_params: Dict,
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        extra_headers: Optional[Dict[str, Any]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+    ) -> Union[
+        "HttpxBinaryResponseContent",
+        Coroutine[Any, Any, "HttpxBinaryResponseContent"],
+    ]:
+        """
+        Handles text-to-speech requests.
+        When _is_async=True, returns a coroutine instead of making the call directly.
+        """
+        if _is_async:
+            return self.async_text_to_speech_handler(
+                model=model,
+                input=input,
+                voice=voice,
+                text_to_speech_provider_config=text_to_speech_provider_config,
+                text_to_speech_optional_params=text_to_speech_optional_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client if isinstance(client, AsyncHTTPHandler) else None,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = text_to_speech_provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=extra_headers or {},
+            model=model,
+            api_base=litellm_params.get("api_base"),
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = text_to_speech_provider_config.get_complete_url(
+            model=model,
+            api_base=litellm_params.get("api_base"),
+            litellm_params=litellm_params,
+        )
+
+        request_data = text_to_speech_provider_config.transform_text_to_speech_request(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=text_to_speech_optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        # Merge provider-specific headers
+        if "headers" in request_data:
+            headers.update(request_data["headers"])
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            # Determine request body type and send appropriately
+            if "dict_body" in request_data:
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=request_data["dict_body"],
+                    timeout=timeout,
+                )
+            elif "ssml_body" in request_data:
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=request_data["ssml_body"],
+                    timeout=timeout,
+                )
+            else:
+                raise ValueError(
+                    "No body found in request_data. Must provide one of: dict_body, ssml_body, text_body, binary_body"
+                )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=text_to_speech_provider_config,
+            )
+
+        return text_to_speech_provider_config.transform_text_to_speech_response(
+            model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_text_to_speech_handler(
+        self,
+        model: str,
+        input: str,
+        voice: Optional[str],
+        text_to_speech_provider_config: BaseTextToSpeechConfig,
+        text_to_speech_optional_params: Dict,
+        custom_llm_provider: str,
+        litellm_params: Dict,
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        extra_headers: Optional[Dict[str, Any]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> "HttpxBinaryResponseContent":
+        """
+        Async version of the text-to-speech handler.
+        Uses async HTTP client to make requests.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = text_to_speech_provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=extra_headers or {},
+            model=model,
+            api_base=litellm_params.get("api_base"),
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = text_to_speech_provider_config.get_complete_url(
+            model=model,
+            api_base=litellm_params.get("api_base"),
+            litellm_params=litellm_params,
+        )
+
+        request_data = text_to_speech_provider_config.transform_text_to_speech_request(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=text_to_speech_optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        # Merge provider-specific headers
+        if "headers" in request_data:
+            headers.update(request_data["headers"])
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            # Determine request body type and send appropriately
+            if "dict_body" in request_data:
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=request_data["dict_body"],
+                    timeout=timeout,
+                )
+            elif "ssml_body" in request_data:
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=request_data["ssml_body"],
+                    timeout=timeout,
+                )
+            else:
+                raise ValueError(
+                    "No body found in request_data. Must provide one of: dict_body, ssml_body, text_body, binary_body"
+                )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=text_to_speech_provider_config,
+            )
+
+        return text_to_speech_provider_config.transform_text_to_speech_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,

@@ -934,7 +934,7 @@
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.65e-05,
         "search_context_cost_per_query": {
@@ -2768,6 +2768,18 @@
         "max_tokens": 8191,
         "mode": "embedding",
         "output_cost_per_token": 0.0
+    },
+    "azure/speech/azure-tts": {
+        "input_cost_per_character": 15e-06,
+        "litellm_provider": "azure",
+        "mode": "audio_speech",
+        "source": "https://azure.microsoft.com/en-us/pricing/calculator/"
+    },
+    "azure/speech/azure-tts-hd": {
+        "input_cost_per_character": 30e-06,
+        "litellm_provider": "azure",
+        "mode": "audio_speech",
+        "source": "https://azure.microsoft.com/en-us/pricing/calculator/"
     },
     "azure/tts-1": {
         "input_cost_per_character": 1.5e-05,
@@ -4981,7 +4993,7 @@
         "litellm_provider": "anthropic",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "search_context_cost_per_query": {
@@ -5011,7 +5023,7 @@
         "litellm_provider": "anthropic",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "search_context_cost_per_query": {
@@ -8051,7 +8063,7 @@
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.65e-05,
         "search_context_cost_per_query": {
@@ -12130,7 +12142,7 @@
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "search_context_cost_per_query": {
@@ -14751,7 +14763,7 @@
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.65e-05,
         "search_context_cost_per_query": {
@@ -20630,7 +20642,7 @@
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.65e-05,
         "search_context_cost_per_query": {
@@ -22049,7 +22061,7 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_batches": 7.5e-06,
@@ -22075,7 +22087,7 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_batches": 7.5e-06,
