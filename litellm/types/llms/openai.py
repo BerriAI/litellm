@@ -1037,6 +1037,15 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     model_config = {"extra": "allow"}
 
 
+ResponsesAPIStatus = Literal[
+    "completed", "failed", "in_progress", "cancelled", "queued", "incomplete"
+]
+"""
+The status of the response generation.
+One of: completed, failed, in_progress, cancelled, queued, or incomplete.
+"""
+
+
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     id: str
     created_at: int
