@@ -76,14 +76,21 @@ class ResponsesIDSecurity(CustomLogger):
     def check_user_access_to_response_id(
         self, response_id_user_id: Optional[str], user_api_key_dict: "UserAPIKeyAuth"
     ) -> bool:
+        from litellm.proxy.proxy_server import general_settings
+
         if (
             response_id_user_id
             and user_api_key_dict.user_id
             and response_id_user_id != user_api_key_dict.user_id
         ):
+            if general_settings.get("disable_responses_id_security", False):
+                verbose_proxy_logger.debug(
+                    f"Responses ID Security is disabled. User {user_api_key_dict.user_id} is accessing response id {response_id_user_id} which is not associated with them."
+                )
+                return True
             raise HTTPException(
                 status_code=403,
-                detail="Forbidden. The response id is not associated with the user, who this key belongs to.",
+                detail="Forbidden. The response id is not associated with the user, who this key belongs to. To disable this security feature, set general_settings::disable_responses_id_security to True in the config.yaml file.",
             )
         return True
 
