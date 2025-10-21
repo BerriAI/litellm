@@ -13,7 +13,7 @@ Extract text from documents and images using Azure AI's OCR models, powered by M
 
 ## Quick Start
 
-**LiteLLM SDK**
+### **LiteLLM SDK**
 
 ```python showLineNumbers title="SDK Usage"
 import litellm
@@ -37,7 +37,7 @@ for page in response.pages:
     print(page.text)
 ```
 
-**LiteLLM PROXY**
+### **LiteLLM PROXY**
 
 ```yaml showLineNumbers title="proxy_config.yaml"
 model_list:
