@@ -132,6 +132,11 @@ class ExaAISearchConfig(BaseSearchConfig):
             if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
         
+        # By default, request text content if not explicitly specified
+        # Exa AI doesn't return content/text unless explicitly requested
+        if "contents" not in result_data:
+            result_data["contents"] = {"text": True}
+        
         return result_data
 
     def transform_search_response(
