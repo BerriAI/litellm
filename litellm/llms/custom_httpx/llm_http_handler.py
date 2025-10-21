@@ -1557,11 +1557,12 @@ class BaseLLMHTTPHandler:
         optional_params: dict,
         timeout: Union[float, httpx.Timeout],
         logging_obj: LiteLLMLoggingObj,
-        api_base: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
         custom_llm_provider: str,
-        headers: dict,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         asearch: bool = False,
+        headers: Optional[Dict[str, Any]] = None,
         provider_config: Optional[BaseSearchConfig] = None,
     ) -> Union[SearchResponse, Coroutine[Any, Any, SearchResponse]]:
         """
@@ -1579,12 +1580,28 @@ class BaseLLMHTTPHandler:
                 optional_params=optional_params,
                 timeout=timeout,
                 logging_obj=logging_obj,
+                api_key=api_key,
                 api_base=api_base,
                 custom_llm_provider=custom_llm_provider,
-                headers=headers,
                 client=client,
+                headers=headers,
                 provider_config=provider_config,
             )
+
+        # Validate environment and get headers
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers or {},
+            model=model,
+        )
+
+        # Get complete URL
+        complete_url = provider_config.get_complete_url(
+            api_base=api_base,
+            model=model,
+            optional_params=optional_params,
+        )
 
         # Transform the request
         data = provider_config.transform_search_request(
@@ -1596,10 +1613,10 @@ class BaseLLMHTTPHandler:
         ## LOGGING
         logging_obj.pre_call(
             input=query if isinstance(query, str) else str(query),
-            api_key="",
+            api_key=api_key,
             additional_args={
                 "complete_input_dict": data,
-                "api_base": api_base,
+                "api_base": complete_url,
                 "headers": headers,
             },
         )
@@ -1610,7 +1627,7 @@ class BaseLLMHTTPHandler:
         try:
             # Make the POST request with JSON data
             response = client.post(
-                url=api_base,
+                url=complete_url,
                 headers=headers,
                 json=data,
                 timeout=timeout,
@@ -1631,10 +1648,11 @@ class BaseLLMHTTPHandler:
         optional_params: dict,
         timeout: Union[float, httpx.Timeout],
         logging_obj: LiteLLMLoggingObj,
-        api_base: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
         custom_llm_provider: str,
-        headers: dict,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        headers: Optional[Dict[str, Any]] = None,
         provider_config: Optional[BaseSearchConfig] = None,
     ) -> SearchResponse:
         """
@@ -1644,6 +1662,21 @@ class BaseLLMHTTPHandler:
             raise ValueError(
                 f"No provider config found for model: {model} and provider: {custom_llm_provider}"
             )
+
+        # Validate environment and get headers
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers or {},
+            model=model,
+        )
+
+        # Get complete URL
+        complete_url = provider_config.get_complete_url(
+            api_base=api_base,
+            model=model,
+            optional_params=optional_params,
+        )
 
         # Transform the request
         data = provider_config.transform_search_request(
@@ -1655,10 +1688,10 @@ class BaseLLMHTTPHandler:
         ## LOGGING
         logging_obj.pre_call(
             input=query if isinstance(query, str) else str(query),
-            api_key="",
+            api_key=api_key,
             additional_args={
                 "complete_input_dict": data,
-                "api_base": api_base,
+                "api_base": complete_url,
                 "headers": headers,
             },
         )
@@ -1673,7 +1706,7 @@ class BaseLLMHTTPHandler:
         try:
             # Make the async POST request with JSON data
             response = await async_httpx_client.post(
-                url=api_base,
+                url=complete_url,
                 headers=headers,
                 json=data,
                 timeout=timeout,
