@@ -139,12 +139,15 @@ class ParallelAISearchConfig(BaseSearchConfig):
         if source_policy:
             request_data["source_policy"] = source_policy
         
+        # Convert to dict before dynamic key assignments
+        result_data = dict(request_data)
+        
         # pass through all other parameters as-is
         for param, value in optional_params.items():
-            if param not in self.get_supported_perplexity_optional_params() and param not in request_data:
-                request_data[param] = value
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
+                result_data[param] = value
         
-        return dict(request_data)
+        return result_data
 
     def transform_search_response(
         self,
