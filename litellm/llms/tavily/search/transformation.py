@@ -3,7 +3,7 @@ Calls Tavily's /search endpoint to search the web.
 
 Tavily API Reference: https://docs.tavily.com/documentation/api-reference/endpoint/search
 """
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx
 
@@ -14,6 +14,32 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+
+
+class _TavilySearchRequestRequired(TypedDict):
+    """Required fields for Tavily Search API request."""
+    query: str  # Required - search query
+
+
+class TavilySearchRequest(_TavilySearchRequestRequired, total=False):
+    """
+    Tavily Search API request format.
+    Based on: https://docs.tavily.com/documentation/api-reference/endpoint/search
+    """
+    max_results: int  # Optional - maximum number of results (0-20), default 5
+    include_domains: List[str]  # Optional - list of domains to include (max 300)
+    exclude_domains: List[str]  # Optional - list of domains to exclude (max 150)
+    topic: str  # Optional - category of search ('general', 'news', 'finance'), default 'general'
+    search_depth: str  # Optional - depth of search ('basic', 'advanced'), default 'basic'
+    include_answer: Union[bool, str]  # Optional - include LLM-generated answer
+    include_raw_content: Union[bool, str]  # Optional - include raw HTML content
+    include_images: bool  # Optional - perform image search
+    include_image_descriptions: bool  # Optional - add descriptions for images
+    include_favicon: bool  # Optional - include favicon URL
+    time_range: str  # Optional - time range filter ('day', 'week', 'month', 'year', 'd', 'w', 'm', 'y')
+    start_date: str  # Optional - start date filter (YYYY-MM-DD)
+    end_date: str  # Optional - end date filter (YYYY-MM-DD)
+    country: str  # Optional - country code filter (e.g., 'US', 'GB', 'DE')
 
 
 class TavilySearchConfig(BaseSearchConfig):
@@ -61,59 +87,94 @@ class TavilySearchConfig(BaseSearchConfig):
         **kwargs,
     ) -> Dict:
         """
-        Transform Search request from LiteLLM unified format to Tavily API format.
-        
-        LiteLLM → Tavily mappings:
-        - query → query (same)
-        - max_results → max_results (same)
-        - search_domain_filter → include_domains (Tavily-specific field name)
-        - country → country (same)
-        - max_tokens_per_page → Not applicable to Tavily
-        
-        https://docs.tavily.com/documentation/api-reference/endpoint/search
+        Transform Search request to Tavily API format.
         
         Args:
-            query: Search query (string or list of strings)
+            query: Search query (string or list of strings). Tavily only supports single string queries.
             optional_params: Optional parameters for the request
                 - max_results: Maximum number of search results (0-20)
-                - search_domain_filter: List of domains to include (becomes include_domains)
-                - country: Country code to boost results from
-                - max_tokens_per_page: Not used by Tavily
+                - search_domain_filter: List of domains to include (max 300) -> maps to `include_domains`
+                - exclude_domains: List of domains to exclude (max 150)
+                - topic: Category of search ('general', 'news', 'finance')
+                - search_depth: Depth of search ('basic', 'advanced')
+                - include_answer: Include LLM-generated answer (bool or 'basic', 'advanced')
+                - include_raw_content: Include raw HTML content (bool or 'markdown', 'text')
+                - include_images: Perform image search (bool)
+                - include_image_descriptions: Add descriptions for images (bool)
+                - include_favicon: Include favicon URL (bool)
+                - time_range: Time range filter ('day', 'week', 'month', 'year', 'd', 'w', 'm', 'y')
+                - start_date: Start date filter (YYYY-MM-DD)
+                - end_date: End date filter (YYYY-MM-DD)
+                - country: Country code filter (e.g., 'US', 'GB', 'DE')
             
         Returns:
-            Dict with request data following Tavily API spec
+            Dict with typed request data following TavilySearchRequest spec
         """
-        # Tavily only accepts string queries, not lists
-        # If query is a list, join with " OR " or take first item
         if isinstance(query, list):
-            query_str = query[0] if len(query) > 0 else ""
-        else:
-            query_str = query
-            
-        request_data: Dict = {
-            "query": query_str,
+            # Tavily only supports single string queries
+            query = " ".join(query)
+
+        request_data: TavilySearchRequest = {
+            "query": query,
         }
         
         # Map max_results (same field name)
-        max_results = optional_params.get("max_results")
-        if max_results is not None:
-            request_data["max_results"] = max_results
+        if "max_results" in optional_params:
+            request_data["max_results"] = optional_params["max_results"]
         
-        # Map search_domain_filter → include_domains (different field name)
-        search_domain_filter = optional_params.get("search_domain_filter")
-        if search_domain_filter is not None:
-            request_data["include_domains"] = search_domain_filter
+        # Map search_domain_filter → include_domains (different field name in Tavily)
+        if "search_domain_filter" in optional_params:
+            request_data["include_domains"] = optional_params["search_domain_filter"]
         
-        # Map country (same field name)
-        country = optional_params.get("country")
-        if country is not None:
-            # Tavily expects lowercase country names
-            request_data["country"] = country.lower() if isinstance(country, str) else country
+        # Map exclude_domains (same field name)
+        if "exclude_domains" in optional_params:
+            request_data["exclude_domains"] = optional_params["exclude_domains"]
         
-        # max_tokens_per_page is not applicable to Tavily
-        # It has chunks_per_source instead, but we don't map it
+        # Map topic (same field name)
+        if "topic" in optional_params:
+            request_data["topic"] = optional_params["topic"]
         
-        return request_data
+        # Map search_depth (same field name)
+        if "search_depth" in optional_params:
+            request_data["search_depth"] = optional_params["search_depth"]
+        
+        # Map include_answer (same field name)
+        if "include_answer" in optional_params:
+            request_data["include_answer"] = optional_params["include_answer"]
+        
+        # Map include_raw_content (same field name)
+        if "include_raw_content" in optional_params:
+            request_data["include_raw_content"] = optional_params["include_raw_content"]
+        
+        # Map include_images (same field name)
+        if "include_images" in optional_params:
+            request_data["include_images"] = optional_params["include_images"]
+        
+        # Map include_image_descriptions (same field name)
+        if "include_image_descriptions" in optional_params:
+            request_data["include_image_descriptions"] = optional_params["include_image_descriptions"]
+        
+        # Map include_favicon (same field name)
+        if "include_favicon" in optional_params:
+            request_data["include_favicon"] = optional_params["include_favicon"]
+        
+        # Map time_range (same field name)
+        if "time_range" in optional_params:
+            request_data["time_range"] = optional_params["time_range"]
+        
+        # Map start_date (same field name)
+        if "start_date" in optional_params:
+            request_data["start_date"] = optional_params["start_date"]
+        
+        # Map end_date (same field name)
+        if "end_date" in optional_params:
+            request_data["end_date"] = optional_params["end_date"]
+        
+        # Map country (same field name, but lowercase for Tavily)
+        if "country" in optional_params:
+            request_data["country"] = optional_params["country"].lower()
+        
+        return dict(request_data)
 
     def transform_search_response(
         self,
