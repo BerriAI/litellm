@@ -4,6 +4,7 @@ Base Search transformation configuration.
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
+from pydantic import PrivateAttr
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -34,6 +35,9 @@ class SearchResponse(LiteLLMPydanticObjectBase):
     object: str = "search"
     
     model_config = {"extra": "allow"}
+
+    # Define private attributes using PrivateAttr
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
 
 
 class BaseSearchConfig:
