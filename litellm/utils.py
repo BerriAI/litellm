@@ -7622,7 +7622,6 @@ class ProviderConfigManager:
 
     @staticmethod
     def get_provider_search_config(
-        model: str,
         provider: LlmProviders,
     ) -> Optional["BaseSearchConfig"]:
         """

@@ -55,8 +55,8 @@ def _build_search_optional_params(
 
 @client
 async def asearch(
-    model: str,
     query: Union[str, List[str]],
+    custom_llm_provider: str,
     max_results: Optional[int] = None,
     search_domain_filter: Optional[List[str]] = None,
     max_tokens_per_page: Optional[int] = None,
@@ -64,7 +64,6 @@ async def asearch(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
     extra_headers: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> SearchResponse:
@@ -72,8 +71,8 @@ async def asearch(
     Async Search function.
     
     Args:
-        model: Model name (e.g., "perplexity/sonar-pro")
         query: Search query (string or list of strings)
+        custom_llm_provider: Provider name (e.g., "perplexity")
         max_results: Optional maximum number of results (1-20), default 10
         search_domain_filter: Optional list of domains to filter (max 20)
         max_tokens_per_page: Optional max tokens per page, default 1024
@@ -81,7 +80,6 @@ async def asearch(
         api_key: Optional API key
         api_base: Optional API base URL
         timeout: Optional timeout
-        custom_llm_provider: Optional custom LLM provider
         extra_headers: Optional extra headers
         **kwargs: Additional parameters
         
@@ -94,14 +92,14 @@ async def asearch(
         
         # Basic search
         response = await litellm.asearch(
-            model="perplexity/sonar-pro",
-            query="latest AI developments 2024"
+            query="latest AI developments 2024",
+            custom_llm_provider="perplexity"
         )
         
         # Search with options
         response = await litellm.asearch(
-            model="perplexity/sonar-pro",
             query="AI developments",
+            custom_llm_provider="perplexity",
             max_results=10,
             search_domain_filter=["arxiv.org", "nature.com"],
             max_tokens_per_page=1024,
@@ -119,16 +117,10 @@ async def asearch(
         loop = asyncio.get_event_loop()
         kwargs["asearch"] = True
 
-        # Get custom llm provider
-        if custom_llm_provider is None:
-            _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=api_base
-            )
-
         func = partial(
             search,
-            model=model,
             query=query,
+            custom_llm_provider=custom_llm_provider,
             max_results=max_results,
             search_domain_filter=search_domain_filter,
             max_tokens_per_page=max_tokens_per_page,
@@ -136,7 +128,6 @@ async def asearch(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
-            custom_llm_provider=custom_llm_provider,
             extra_headers=extra_headers,
             **kwargs,
         )
@@ -158,7 +149,7 @@ async def asearch(
         return response
     except Exception as e:
         raise litellm.exception_type(
-            model=model,
+            model="",
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
@@ -168,8 +159,8 @@ async def asearch(
 
 @client
 def search(
-    model: str,
     query: Union[str, List[str]],
+    custom_llm_provider: str,
     max_results: Optional[int] = None,
     search_domain_filter: Optional[List[str]] = None,
     max_tokens_per_page: Optional[int] = None,
@@ -177,7 +168,6 @@ def search(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
     extra_headers: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Union[SearchResponse, Coroutine[Any, Any, SearchResponse]]:
@@ -185,8 +175,8 @@ def search(
     Synchronous Search function.
     
     Args:
-        model: Model name (e.g., "perplexity/sonar-pro")
         query: Search query (string or list of strings)
+        custom_llm_provider: Provider name (e.g., "perplexity")
         max_results: Optional maximum number of results (1-20), default 10
         search_domain_filter: Optional list of domains to filter (max 20)
         max_tokens_per_page: Optional max tokens per page, default 1024
@@ -194,7 +184,6 @@ def search(
         api_key: Optional API key
         api_base: Optional API base URL
         timeout: Optional timeout
-        custom_llm_provider: Optional custom LLM provider
         extra_headers: Optional extra headers
         **kwargs: Additional parameters
         
@@ -207,14 +196,14 @@ def search(
         
         # Basic search
         response = litellm.search(
-            model="perplexity/sonar-pro",
-            query="latest AI developments 2024"
+            query="latest AI developments 2024",
+            custom_llm_provider="perplexity"
         )
         
         # Search with options
         response = litellm.search(
-            model="perplexity/sonar-pro",
             query="AI developments",
+            custom_llm_provider="perplexity",
             max_results=10,
             search_domain_filter=["arxiv.org", "nature.com"],
             max_tokens_per_page=1024,
@@ -223,8 +212,8 @@ def search(
         
         # Multi-query search
         response = litellm.search(
-            model="perplexity/sonar-pro",
-            query=["AI developments", "machine learning trends"]
+            query=["AI developments", "machine learning trends"],
+            custom_llm_provider="perplexity"
         )
         
         # Access results
@@ -248,25 +237,9 @@ def search(
         if isinstance(query, list) and not all(isinstance(q, str) for q in query):
             raise ValueError("All items in query list must be strings")
 
-        model, custom_llm_provider, dynamic_api_key, dynamic_api_base = (
-            litellm.get_llm_provider(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                api_base=api_base,
-                api_key=api_key,
-            )
-        )
-        
-        # Update with dynamic values if available
-        if dynamic_api_key:
-            api_key = dynamic_api_key
-        if dynamic_api_base:
-            api_base = dynamic_api_base
-
         # Get provider config
         search_provider_config: Optional[BaseSearchConfig] = (
             ProviderConfigManager.get_provider_search_config(
-                model=model,
                 provider=litellm.LlmProviders(custom_llm_provider),
             )
         )
@@ -277,7 +250,7 @@ def search(
             )
 
         verbose_logger.debug(
-            f"Search call - model: {model}, provider: {custom_llm_provider}"
+            f"Search call - provider: {custom_llm_provider}"
         )
 
         # Build optional_params from explicit parameters
@@ -295,19 +268,17 @@ def search(
             api_key=api_key,
             api_base=api_base,
             headers=extra_headers or {},
-            model=model,
         )
 
         # Get complete URL
         complete_url = search_provider_config.get_complete_url(
             api_base=api_base,
-            model=model,
             optional_params=optional_params,
         )
 
         # Pre Call logging
         litellm_logging_obj.update_environment_variables(
-            model=model,
+            model="",
             optional_params=optional_params,
             litellm_params={
                 "litellm_call_id": litellm_call_id,
@@ -318,7 +289,6 @@ def search(
 
         # Call the handler
         response = base_llm_http_handler.search(
-            model=model,
             query=query,
             optional_params=optional_params,
             timeout=timeout or request_timeout,
@@ -334,7 +304,7 @@ def search(
         return response
     except Exception as e:
         raise litellm.exception_type(
-            model=model,
+            model="",
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
