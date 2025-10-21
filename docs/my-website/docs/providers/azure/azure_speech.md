@@ -1,6 +1,13 @@
 # Azure Text to Speech (tts)
 
-Convert text to natural-sounding speech using Azure OpenAI's Text to Speech models. Supports multiple voices and audio formats.
+## Overview
+
+| Property | Details |
+|-------|-------|
+| Description | Convert text to natural-sounding speech using Azure OpenAI's Text to Speech models |
+| Provider Route on LiteLLM | `azure/` |
+| Supported Operations | `/audio/speech` |
+| Link to Provider Doc | [Azure OpenAI TTS ↗](https://learn.microsoft.com/en-us/azure/ai-services/openai/text-to-speech-quickstart)
 
 ## Quick Start
 
