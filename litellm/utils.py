@@ -144,6 +144,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
+from litellm.llms.base_llm.search.transformation import BaseSearchConfig
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
 )
@@ -7613,6 +7614,26 @@ class ProviderConfigManager:
         PROVIDER_TO_CONFIG_MAP = {
             litellm.LlmProviders.MISTRAL: MistralOCRConfig,
             litellm.LlmProviders.AZURE_AI: AzureAIOCRConfig,
+        }
+        config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
+        if config_class is None:
+            return None
+        return config_class()
+
+    @staticmethod
+    def get_provider_search_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional["BaseSearchConfig"]:
+        """
+        Get Search configuration for a given provider.
+        """
+        from litellm.llms.perplexity.search.transformation import (
+            PerplexitySearchConfig,
+        )
+
+        PROVIDER_TO_CONFIG_MAP = {
+            litellm.LlmProviders.PERPLEXITY: PerplexitySearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
