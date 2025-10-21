@@ -44,6 +44,10 @@ from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.search.transformation import (
+    BaseSearchConfig,
+    SearchResponse,
+)
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
 )
@@ -1542,6 +1546,166 @@ class BaseLLMHTTPHandler:
             provider_config=provider_config,
             model=model,
             response=response,
+            logging_obj=logging_obj,
+        )
+
+
+    def search(
+        self,
+        query: Union[str, List[str]],
+        optional_params: dict,
+        timeout: Union[float, httpx.Timeout],
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        custom_llm_provider: str,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        asearch: bool = False,
+        headers: Optional[Dict[str, Any]] = None,
+        provider_config: Optional[BaseSearchConfig] = None,
+    ) -> Union[SearchResponse, Coroutine[Any, Any, SearchResponse]]:
+        """
+        Sync Search handler.
+        """
+        if provider_config is None:
+            raise ValueError(
+                f"No provider config found for provider: {custom_llm_provider}"
+            )
+
+        if asearch is True:
+            return self.async_search(
+                query=query,
+                optional_params=optional_params,
+                timeout=timeout,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                client=client,
+                headers=headers,
+                provider_config=provider_config,
+            )
+
+        # Validate environment and get headers
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers or {},
+        )
+
+        # Get complete URL
+        complete_url = provider_config.get_complete_url(
+            api_base=api_base,
+            optional_params=optional_params,
+        )
+
+        # Transform the request
+        data = provider_config.transform_search_request(
+            query=query,
+            optional_params=optional_params,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=query if isinstance(query, str) else str(query),
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": complete_url,
+                "headers": headers,
+            },
+        )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            client = _get_httpx_client()
+
+        try:
+            # Make the POST request with JSON data
+            response = client.post(
+                url=complete_url,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_search_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_search(
+        self,
+        query: Union[str, List[str]],
+        optional_params: dict,
+        timeout: Union[float, httpx.Timeout],
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        custom_llm_provider: str,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        headers: Optional[Dict[str, Any]] = None,
+        provider_config: Optional[BaseSearchConfig] = None,
+    ) -> SearchResponse:
+        """
+        Async Search handler.
+        """
+        if provider_config is None:
+            raise ValueError(
+                f"No provider config found for provider: {custom_llm_provider}"
+            )
+
+        # Validate environment and get headers
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers or {},
+        )
+
+        # Get complete URL
+        complete_url = provider_config.get_complete_url(
+            api_base=api_base,
+            optional_params=optional_params,
+        )
+
+        # Transform the request
+        data = provider_config.transform_search_request(
+            query=query,
+            optional_params=optional_params,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=query if isinstance(query, str) else str(query),
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": complete_url,
+                "headers": headers,
+            },
+        )
+
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        else:
+            async_httpx_client = client
+
+        try:
+            # Make the async POST request with JSON data
+            response = await async_httpx_client.post(
+                url=complete_url,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_search_response(
+            raw_response=response,
             logging_obj=logging_obj,
         )
 
@@ -3285,6 +3449,7 @@ class BaseLLMHTTPHandler:
             BaseAnthropicMessagesConfig,
             BaseBatchesConfig,
             BaseOCRConfig,
+            BaseSearchConfig,
             BaseTextToSpeechConfig,
             "BasePassthroughConfig",
         ],
