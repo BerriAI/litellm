@@ -103,7 +103,7 @@ class ZscalerAIGuard(CustomGuardrail):
         extra_headers = headers.copy()
         if self.send_user_api_key_alias:
             user_api_key_alias = kwargs.get("user_api_key_alias", "N/A")
-            extra_headers.update({"user_api_key_alias": user_api_key_alias})
+            extra_headers.update({"user-api-key-alias": user_api_key_alias})
 
         if self.send_user_api_key_team_id:
             user_api_key_team_id = kwargs.get("user_api_key_team_id", "N/A")

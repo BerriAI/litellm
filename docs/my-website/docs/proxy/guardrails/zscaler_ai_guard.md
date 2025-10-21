@@ -136,15 +136,15 @@ If you need to send end-user information to Zscaler AI Guard for analysis, this 
 
 - To send user_api_key_alias:
 Set SEND_USER_API_KEY_ALIAS = True in litellm (Default: False)
-Add user_api_key_alias to the custom_headers in Zscaler AI Guard
+Add 'user-api-key-alias' to the custom_headers in Zscaler AI Guard
 
 - To send user_api_key_user_id:
 Set SEND_USER_API_KEY_USER_ID = True in litellm  (Default: False)
-Add user_api_key_user_id to the custom_headers in Zscaler AI Guard
+Add 'user-api-key-user-id' to the custom_headers in Zscaler AI Guard
 
 - To send user_api_key_team_id:
 Set SEND_USER_API_KEY_TEAM_ID = True in litellm  (Default: False)
-Add user_api_key_team_id to the custom_headers in Zscaler AI Guard
+Add 'user-api-key-team-id' to the custom_headers in Zscaler AI Guard
 
 ## 7. Using a Custom Zscaler AI Guard Policy with LiteLLM (Optional)
 If an end user wants to use their own custom Zscaler AI Guard policy instead of the default policy for LiteLLM, they can do so by providing metadata in their LiteLLM request. Follow the steps below to implement this functionality:
