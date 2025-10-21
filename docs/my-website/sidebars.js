@@ -588,7 +588,8 @@ const sidebars = {
         "guides/finetuned_models",
         "guides/security_settings",
         "proxy/veo_video_generation",
-        "reasoning_content"
+        "reasoning_content",
+        "extras/creating_adapters",
       ]
     },
 
