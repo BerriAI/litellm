@@ -45,6 +45,33 @@ class BaseSearchConfig:
     def __init__(self) -> None:
         pass
 
+    def validate_environment(
+        self,
+        headers: Dict,
+        model: str,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        **kwargs,
+    ) -> Dict:
+        """
+        Validate environment and return headers.
+        Override in provider-specific implementations.
+        """
+        return headers
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        model: str,
+        optional_params: dict,
+        **kwargs,
+    ) -> str:
+        """
+        Get complete URL for Search endpoint.
+        Override in provider-specific implementations.
+        """
+        raise NotImplementedError("get_complete_url must be implemented by provider")
+
     def transform_search_request(
         self,
         model: str,
