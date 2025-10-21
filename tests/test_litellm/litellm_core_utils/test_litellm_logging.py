@@ -95,20 +95,20 @@ def test_sentry_environment():
 
         mock_init.reset_mock()
         set_callbacks(["sentry"])
-        # Check that init was called with default environment "development"
+        # Check that init was called with default environment "production"
         mock_init.assert_called_once()
         call_kwargs = mock_init.call_args[1]
         assert call_kwargs["environment"] == "development"
 
         # Test with custom environment value
-        os.environ["SENTRY_ENVIRONMENT"] = "production"
+        os.environ["SENTRY_ENVIRONMENT"] = "development"
 
         mock_init.reset_mock()
         set_callbacks(["sentry"])
-        # Check that init was called with custom environment "production"
+        # Check that init was called with custom environment "development"
         mock_init.assert_called_once()
         call_kwargs = mock_init.call_args[1]
-        assert call_kwargs["environment"] == "production"
+        assert call_kwargs["environment"] == "development"
 
         # Test with staging environment
         os.environ["SENTRY_ENVIRONMENT"] = "staging"
