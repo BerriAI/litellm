@@ -64,6 +64,64 @@ def test_sentry_sample_rate():
                 del os.environ["SENTRY_API_SAMPLE_RATE"]
 
 
+def test_sentry_environment():
+    """Test that SENTRY_ENVIRONMENT is properly handled during Sentry initialization"""
+    existing_environment = os.getenv("SENTRY_ENVIRONMENT")
+    existing_dsn = os.getenv("SENTRY_DSN")
+
+    try:
+        # Set a mock DSN to allow Sentry initialization
+        os.environ["SENTRY_DSN"] = "https://test@sentry.io/123456"
+
+        # Test with default value (no environment set)
+        if existing_environment:
+            del os.environ["SENTRY_ENVIRONMENT"]
+
+        with patch("sentry_sdk.init") as mock_init:
+            set_callbacks(["sentry"])
+            # Check that init was called with default environment "development"
+            mock_init.assert_called_once()
+            call_kwargs = mock_init.call_args[1]
+            assert call_kwargs["environment"] == "development"
+
+        # Test with custom environment value
+        os.environ["SENTRY_ENVIRONMENT"] = "production"
+
+        with patch("sentry_sdk.init") as mock_init:
+            set_callbacks(["sentry"])
+            # Check that init was called with custom environment "production"
+            mock_init.assert_called_once()
+            call_kwargs = mock_init.call_args[1]
+            assert call_kwargs["environment"] == "production"
+
+        # Test with staging environment
+        os.environ["SENTRY_ENVIRONMENT"] = "staging"
+
+        with patch("sentry_sdk.init") as mock_init:
+            set_callbacks(["sentry"])
+            # Check that init was called with custom environment "staging"
+            mock_init.assert_called_once()
+            call_kwargs = mock_init.call_args[1]
+            assert call_kwargs["environment"] == "staging"
+
+    except Exception as e:
+        print(f"Error: {e}")
+        raise
+    finally:
+        # Restore the original environment variables
+        if existing_environment:
+            os.environ["SENTRY_ENVIRONMENT"] = existing_environment
+        else:
+            if "SENTRY_ENVIRONMENT" in os.environ:
+                del os.environ["SENTRY_ENVIRONMENT"]
+
+        if existing_dsn:
+            os.environ["SENTRY_DSN"] = existing_dsn
+        else:
+            if "SENTRY_DSN" in os.environ:
+                del os.environ["SENTRY_DSN"]
+
+
 def test_use_custom_pricing_for_model():
     from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 
