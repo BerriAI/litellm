@@ -7630,9 +7630,13 @@ class ProviderConfigManager:
         from litellm.llms.perplexity.search.transformation import (
             PerplexitySearchConfig,
         )
+        from litellm.llms.tavily.search.transformation import (
+            TavilySearchConfig,
+        )
 
         PROVIDER_TO_CONFIG_MAP = {
             litellm.LlmProviders.PERPLEXITY: PerplexitySearchConfig,
+            litellm.LlmProviders.TAVILY: TavilySearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
