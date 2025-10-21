@@ -7632,11 +7632,14 @@ class ProviderConfigManager:
         )
 
         if litellm.LlmProviders.AZURE == provider:
-            from litellm.llms.azure.text_to_speech.transformation import (
-                AzureAVATextToSpeechConfig,
-            )
+            # Only return Azure AVA config for Azure Speech Service models (speech/)
+            # Azure OpenAI TTS models (azure/azure-tts) should not use this config
+            if model.startswith("speech/"):
+                from litellm.llms.azure.text_to_speech.transformation import (
+                    AzureAVATextToSpeechConfig,
+                )
 
-            return AzureAVATextToSpeechConfig()
+                return AzureAVATextToSpeechConfig()
         return None
 
     @staticmethod
