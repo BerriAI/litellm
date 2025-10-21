@@ -1,9 +1,9 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# GraySwan Cygnal Guardrail
+# Gray Swan Cygnal Guardrail
 
-Use [GraySwan Cygnal](https://docs.grayswan.ai/cygnal/monitor-requests) to continuously monitor conversations for policy violations, indirect prompt injection (IPI), jailbreak attempts, and other safety risks.
+Use [Gray Swan Cygnal](https://docs.grayswan.ai/cygnal/monitor-requests) to continuously monitor conversations for policy violations, indirect prompt injection (IPI), jailbreak attempts, and other safety risks.
 
 Cygnal returns a `violation` score between `0` and `1` (higher means more likely to violate policy), plus metadata such as violated rule indices, mutation detection, and IPI flags. LiteLLM can automatically block or monitor requests based on this signal.
 
@@ -13,7 +13,7 @@ Cygnal returns a `violation` score between `0` and `1` (higher means more likely
 
 ### 1. Obtain Credentials
 
-1. Create a GraySwan account and generate a Cygnal API key.
+1. Create a Gray Swan account and generate a Cygnal API key.
 2. Configure environment variables for the LiteLLM proxy host:
 
 ```bash
@@ -22,7 +22,7 @@ export GRAYSWAN_API_KEY="your-grayswan-key"
 
 ### 2. Configure `config.yaml`
 
-Add a guardrail entry that references the GraySwan integration. Below is a balanced example that monitors both input and output but only blocks once the violation score reaches the configured threshold.
+Add a guardrail entry that references the Gray Swan integration. Below is a balanced example that monitors both input and output but only blocks once the violation score reaches the configured threshold.
 
 ```yaml
 model_list:
@@ -63,7 +63,7 @@ litellm --config config.yaml --port 4000
 
 ## Choosing Guardrail Modes
 
-GraySwan can run during `pre_call`, `during_call`, and `post_call` stages. Combine modes based on your latency and coverage requirements.
+Gray Swan can run during `pre_call`, `during_call`, and `post_call` stages. Combine modes based on your latency and coverage requirements.
 
 | Mode         | When it Runs      | Protects              | Typical Use Case |
 |--------------|-------------------|-----------------------|------------------|
@@ -138,10 +138,10 @@ Provides the strongest enforcement by inspecting both prompts and responses.
 
 | Parameter                             | Type            | Description |
 |---------------------------------------|-----------------|-------------|
-| `api_key`                             | string          | GraySwan Cygnal API key. Reads from `GRAYSWAN_API_KEY` if omitted. |
+| `api_key`                             | string          | Gray Swan Cygnal API key. Reads from `GRAYSWAN_API_KEY` if omitted. |
 | `mode`                                | string or list  | Guardrail stages (`pre_call`, `during_call`, `post_call`). |
 | `optional_params.on_flagged_action`   | string          | `monitor` (log only) or `block` (raise `HTTPException`). |
 | `.optional_params.violation_threshold`| number (0-1)    | Scores at or above this value are considered violations. |
 | `optional_params.reasoning_mode`      | string          | `off`, `hybrid`, or `thinking`. Enables Cygnal’s reasoning capabilities. |
 | `optional_params.categories`          | object          | Map of custom category names to descriptions. |
-| `optional_params.policy_id`           | string          | GraySwan policy identifier. |
+| `optional_params.policy_id`           | string          | Gray Swan policy identifier. |
