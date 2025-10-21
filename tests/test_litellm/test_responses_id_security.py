@@ -251,11 +251,62 @@ class TestAsyncPostCallSuccessHook:
         """Test post-call hook passes through non-ResponsesAPIResponse objects"""
         mock_response = {"id": "some-other-response", "data": "test"}
         data = {}
-
+        
         result = await responses_id_security.async_post_call_success_hook(
             data=data,
             user_api_key_dict=mock_user_api_key_dict,
             response=mock_response,
         )
-
+        
         assert result == mock_response
+
+
+class TestAsyncPostCallStreamingHook:
+    """Test async_post_call_streaming_hook function"""
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_encrypts_response_created_event(
+        self, responses_id_security, mock_user_api_key_dict
+    ):
+        """Test streaming hook encrypts response ID in ResponseCreatedEvent"""
+        # Create a mock streaming event with a response object
+        mock_event = MagicMock()
+        mock_event.type = "response.created"
+        
+        mock_response_obj = ResponsesAPIResponse(
+            id="resp_stream_123",
+            created_at=1234567890,
+            output=[],
+            status="in_progress"
+        )
+        mock_event.response = mock_response_obj
+        
+        with patch.object(
+            responses_id_security, "_encrypt_response_id", return_value=mock_response_obj
+        ) as mock_encrypt:
+            result = await responses_id_security.async_post_call_streaming_hook(
+                user_api_key_dict=mock_user_api_key_dict,
+                response=mock_event,
+            )
+            
+            mock_encrypt.assert_called_once_with(mock_response_obj, mock_user_api_key_dict)
+            assert result == mock_event
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_handles_non_responses_events(
+        self, responses_id_security, mock_user_api_key_dict
+    ):
+        """Test streaming hook passes through non-Responses API events"""
+        # Create a mock event without response object (like OutputTextDeltaEvent)
+        mock_event = MagicMock()
+        mock_event.type = "response.output_text.delta"
+        mock_event.delta = "Hello "
+        mock_event.response = None
+        
+        result = await responses_id_security.async_post_call_streaming_hook(
+            user_api_key_dict=mock_user_api_key_dict,
+            response=mock_event,
+        )
+        
+        # Event should pass through unchanged
+        assert result == mock_event

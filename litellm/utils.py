@@ -144,9 +144,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
-from litellm.llms.base_llm.text_to_speech.transformation import (
-    BaseTextToSpeechConfig,
-)
+from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
@@ -912,6 +910,7 @@ def _get_wrapper_timeout(
 
     return timeout
 
+
 def check_coroutine(value) -> bool:
     return get_coroutine_checker().is_async_callable(value)
 
@@ -991,9 +990,7 @@ def post_call_processing(
                         ].message.content  # type: ignore
                         if model_response is not None:
                             ### POST-CALL RULES ###
-                            rules_obj.post_call_rules(
-                                input=model_response, model=model
-                            )
+                            rules_obj.post_call_rules(input=model_response, model=model)
                             ### JSON SCHEMA VALIDATION ###
                             if litellm.enable_json_schema_validation is True:
                                 try:
@@ -1009,9 +1006,9 @@ def post_call_processing(
                                                 optional_params["response_format"],
                                                 dict,
                                             )
-                                            and optional_params[
-                                                "response_format"
-                                            ].get("json_schema")
+                                            and optional_params["response_format"].get(
+                                                "json_schema"
+                                            )
                                             is not None
                                         ):
                                             json_response_format = optional_params[
@@ -1039,9 +1036,7 @@ def post_call_processing(
                             if (
                                 optional_params is not None
                                 and "response_format" in optional_params
-                                and isinstance(
-                                    optional_params["response_format"], dict
-                                )
+                                and isinstance(optional_params["response_format"], dict)
                                 and "type" in optional_params["response_format"]
                                 and optional_params["response_format"]["type"]
                                 == "json_object"
@@ -1074,7 +1069,6 @@ def post_call_processing(
 
 def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
-
 
     @wraps(original_function)
     def wrapper(*args, **kwargs):  # noqa: PLR0915
@@ -4394,6 +4388,33 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
+    # Handle Responses API streaming events
+    if hasattr(response_obj, "type") and hasattr(response_obj, "response"):
+        # This is a Responses API streaming event (e.g., ResponseCreatedEvent, ResponseCompletedEvent)
+        # Extract text from the response object's output if available
+        responses_api_response = getattr(response_obj, "response", None)
+        if responses_api_response and hasattr(responses_api_response, "output"):
+            output_list = responses_api_response.output
+            response_str = ""
+            for output_item in output_list:
+                # Handle output items with content array
+                if hasattr(output_item, "content"):
+                    for content_part in output_item.content:
+                        if hasattr(content_part, "text"):
+                            response_str += content_part.text
+                # Handle output items with direct text field
+                elif hasattr(output_item, "text"):
+                    response_str += output_item.text
+            return response_str
+
+    # Handle Responses API text delta events
+    if hasattr(response_obj, "type") and hasattr(response_obj, "delta"):
+        event_type = getattr(response_obj, "type", "")
+        if "text.delta" in event_type or "output_text.delta" in event_type:
+            delta = getattr(response_obj, "delta", "")
+            return delta if isinstance(delta, str) else ""
+
+    # Handle standard ModelResponse and ModelResponseStream
     _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
         response_obj.choices
     )
@@ -4998,7 +5019,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
                 ocr_cost_per_page=_model_info.get("ocr_cost_per_page", None),
-                annotation_cost_per_page=_model_info.get("annotation_cost_per_page", None),
+                annotation_cost_per_page=_model_info.get(
+                    "annotation_cost_per_page", None
+                ),
             )
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
@@ -7224,6 +7247,7 @@ class ProviderConfigManager:
             from litellm.llms.sagemaker.embedding.transformation import (
                 SagemakerEmbeddingConfig,
             )
+
             return SagemakerEmbeddingConfig.get_model_config(model)
         return None
 
