@@ -4,7 +4,7 @@ Convert text to natural-sounding speech using Azure OpenAI's Text to Speech mode
 
 ## Quick Start
 
-**LiteLLM SDK**
+### **LiteLLM SDK**
 
 ```python showLineNumbers title="SDK Usage"
 from litellm import speech
@@ -26,7 +26,7 @@ response = speech(
 response.stream_to_file(speech_file_path)
 ```
 
-**LiteLLM PROXY**
+### **LiteLLM PROXY**
 
 ```yaml showLineNumbers title="proxy_config.yaml"
 model_list:
