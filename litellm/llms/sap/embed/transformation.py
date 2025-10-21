@@ -33,7 +33,7 @@ except ImportError as err:
     _gen_ai_hub_import_error = err
 
 
-from ..chat.handler import OptionalDependencyError, GenAIHubOrchestrationError
+from ..chat.handler import GenAIHubOrchestrationError
 
 
 class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
@@ -42,13 +42,13 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         self._client: Optional["GenAIHubProxyClient"] = None
         self._orchestration_client = None
 
-    def _ensure_gen_ai_hub_installed(self) -> None:
-        """Ensure the gen-ai-hub package is available."""
-        if _gen_ai_hub_import_error is not None:
-            raise OptionalDependencyError(
-                "The gen-ai-hub package is required for this functionality. "
-                "Please install it with: pip install sap-ai-sdk-gen[all]"
-            ) from _gen_ai_hub_import_error
+    # def _ensure_gen_ai_hub_installed(self) -> None:
+    #     """Ensure the gen-ai-hub package is available."""
+    #     if _gen_ai_hub_import_error is not None:
+    #         raise OptionalDependencyError(
+    #             "The gen-ai-hub package is required for this functionality. "
+    #             "Please install it with: pip install sap-ai-sdk-gen[all]"
+    #         ) from _gen_ai_hub_import_error
 
     def get_error_class(self, error_message, status_code, headers):
         return GenAIHubOrchestrationError(status_code, error_message)
@@ -73,7 +73,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
     @property
     def proxy_client(self) -> "GenAIHubProxyClient":
         """Initialize and get the orchestration client."""
-        self._ensure_gen_ai_hub_installed()
+        # self._ensure_gen_ai_hub_installed()
         if (
             GenAIHubProxyClient is None
         ):  # This should never happen due to _ensure_dependency
@@ -95,7 +95,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         return url.rstrip("/") + f"?api-version={api_version}"
 
     def validate_environment(self, headers: dict, *args, **kwargs) -> dict:
-        self._ensure_gen_ai_hub_installed()
+        # self._ensure_gen_ai_hub_installed()
         with temporary_headers_addition(headers):
             return {**self.proxy_client.request_header}
 
