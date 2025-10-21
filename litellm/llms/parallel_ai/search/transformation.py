@@ -117,25 +117,15 @@ class ParallelAISearchConfig(BaseSearchConfig):
         """
         request_data: ParallelAISearchRequest = {}
         
-        # Map query to objective (string) or search_queries (list)
+        # Map query to objective (string or list both become objective)
         if isinstance(query, list):
-            # List of queries -> search_queries
             request_data["objective"] = self._transform_query_to_objective(query)
         else:
-            # Single string -> objective (natural language description)
             request_data["objective"] = query
         
-        # Map max_results (same field name)
+        # Transform Perplexity unified spec parameters to Parallel AI format
         if "max_results" in optional_params:
             request_data["max_results"] = optional_params["max_results"]
-        
-        # Map processor (same field name)
-        if "processor" in optional_params:
-            request_data["processor"] = optional_params["processor"]
-        
-        # Map max_chars_per_result (same field name)
-        if "max_chars_per_result" in optional_params:
-            request_data["max_chars_per_result"] = optional_params["max_chars_per_result"]
         
         # Map domain filters to source_policy
         source_policy: _ParallelAISourcePolicy = {}
@@ -148,6 +138,11 @@ class ParallelAISearchConfig(BaseSearchConfig):
         
         if source_policy:
             request_data["source_policy"] = source_policy
+        
+        # pass through all other parameters as-is
+        for param, value in optional_params.items():
+            if param not in self.get_supported_perplexity_optional_params() and param not in request_data:
+                request_data[param] = value
         
         return dict(request_data)
 
