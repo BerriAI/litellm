@@ -2515,6 +2515,7 @@ class LlmProviders(str, Enum):
     TOPAZ = "topaz"
     TAVILY = "tavily"
     PARALLEL_AI = "parallel_ai"
+    EXA_AI = "exa_ai"
     ASSEMBLYAI = "assemblyai"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
