@@ -183,7 +183,7 @@ class OllamaConfig(BaseConfig):
                 if model.startswith("gpt-oss"):
                     optional_params["think"] = value
                 else:
-                    optional_params["think"] = True
+                    optional_params["think"] = value in {"low", "medium", "high"}
             elif param == "response_format" and isinstance(value, dict):
                 if value["type"] == "json_object":
                     optional_params["format"] = "json"
