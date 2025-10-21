@@ -5,7 +5,16 @@ This hook uses the DBSpendUpdateWriter to batch-write response IDs to the databa
 instead of writing immediately on each request.
 """
 
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 from fastapi import HTTPException
 
@@ -15,7 +24,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    BaseLiteLLMOpenAIResponseObject,
+    ResponsesAPIResponse,
+)
 from litellm.types.utils import LLMResponseTypes, SpecialEnums
 
 if TYPE_CHECKING:
@@ -139,18 +151,40 @@ class ResponsesIDSecurity(CustomLogger):
         return response_id, None
 
     def _encrypt_response_id(
-        self, response: ResponsesAPIResponse, user_api_key_dict: "UserAPIKeyAuth"
-    ) -> ResponsesAPIResponse:
+        self,
+        response: BaseLiteLLMOpenAIResponseObject,
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> BaseLiteLLMOpenAIResponseObject:
         # encrypt the response id using the symmetric key
         # encrypt the response id, and encode the user id and response id in base64
-        encrypted_response_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
-            response.id, user_api_key_dict.user_id
-        )
-        encoded_user_id_and_response_id = encrypt_value_helper(
-            value=encrypted_response_id
-        )
-        response.id = f"resp_{encoded_user_id_and_response_id}"  # maintain the 'resp_' prefix for the responses api response id
+        response_id = getattr(response, "id", None)
+        response_obj = getattr(response, "response", None)
+        if (
+            response_id
+            and isinstance(response_id, str)
+            and response_id.startswith("resp_")
+        ):
+            encrypted_response_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
+                response_id, user_api_key_dict.user_id
+            )
+            encoded_user_id_and_response_id = encrypt_value_helper(
+                value=encrypted_response_id
+            )
+            setattr(
+                response, "id", f"resp_{encoded_user_id_and_response_id}"
+            )  # maintain the 'resp_' prefix for the responses api response id
 
+        elif response_obj and isinstance(response_obj, ResponsesAPIResponse):
+            encrypted_response_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
+                response_obj.id, user_api_key_dict.user_id
+            )
+            encoded_user_id_and_response_id = encrypt_value_helper(
+                value=encrypted_response_id
+            )
+            setattr(
+                response_obj, "id", f"resp_{encoded_user_id_and_response_id}"
+            )  # maintain the 'resp_' prefix for the responses api response id
+            setattr(response, "response", response_obj)
         return response
 
     async def async_post_call_success_hook(
@@ -165,12 +199,28 @@ class ResponsesIDSecurity(CustomLogger):
         This method adds response IDs to an in-memory queue, which are then
         batch-processed by the DBSpendUpdateWriter during regular database update cycles.
         """
+        from litellm.proxy.proxy_server import general_settings
+
+        if general_settings.get("disable_responses_id_security", False):
+            return response
         if isinstance(response, ResponsesAPIResponse) and user_api_key_dict.user_id:
-            response = self._encrypt_response_id(response, user_api_key_dict)
+            response = cast(
+                ResponsesAPIResponse,
+                self._encrypt_response_id(response, user_api_key_dict),
+            )
         return response
 
-    async def async_post_call_streaming_iterator_hook(
+    async def async_post_call_streaming_iterator_hook(  # type: ignore
         self, user_api_key_dict: "UserAPIKeyAuth", response: Any, request_data: dict
-    ) -> AsyncGenerator["ModelResponseStream", None]:
+    ) -> AsyncGenerator[BaseLiteLLMOpenAIResponseObject, None]:
+        from litellm.proxy.proxy_server import general_settings
+
         async for chunk in response:
+            if (
+                isinstance(chunk, BaseLiteLLMOpenAIResponseObject)
+                and user_api_key_dict.request_route
+                == "/v1/responses"  # only encrypt the response id for the responses api
+                and not general_settings.get("disable_responses_id_security", False)
+            ):
+                chunk = self._encrypt_response_id(chunk, user_api_key_dict)
             yield chunk
