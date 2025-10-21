@@ -43,6 +43,7 @@ class ParallelAISearchRequest(_ParallelAISearchRequestRequired, total=False):
 
 class ParallelAISearchConfig(BaseSearchConfig):
     PARALLEL_AI_API_BASE = "https://api.parallel.ai"
+    PARALLEL_HEADER_SEARCH_EXTRACT_VALUE = "search-extract-2025-10-10"
     
     def validate_environment(
         self,
@@ -54,11 +55,12 @@ class ParallelAISearchConfig(BaseSearchConfig):
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("PARALLEL_AI_API_KEY")
+        api_key = api_key or get_secret_str("PARALLEL_AI_API_KEY") or get_secret_str("PARALLEL_API_KEY")
         if not api_key:
-            raise ValueError("PARALLEL_AI_API_KEY is not set. Set `PARALLEL_AI_API_KEY` environment variable.")
+            raise ValueError("PARALLEL_API_KEY is not set. Set `PARALLEL_API_KEY` environment variable.")
         headers["x-api-key"] = api_key
         headers["Content-Type"] = "application/json"
+        headers["parallel-beta"] = self.PARALLEL_HEADER_SEARCH_EXTRACT_VALUE
         return headers
 
     def get_complete_url(
