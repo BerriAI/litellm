@@ -107,11 +107,11 @@ class ZscalerAIGuard(CustomGuardrail):
 
         if self.send_user_api_key_team_id:
             user_api_key_team_id = kwargs.get("user_api_key_team_id", "N/A")
-            extra_headers.update({"user_api_key_team_id": user_api_key_team_id})
+            extra_headers.update({"user-api-key-team-id": user_api_key_team_id})
 
         if self.send_user_api_key_user_id:
-            user_api_key_user_id = kwargs.get("user_api_key_user_id", "N/A")
-            extra_headers.update({"user_api_key_user_id": user_api_key_user_id})
+            user_api_key_user_id = kwargs.get("user-api-key-user-id", "N/A")
+            extra_headers.update({"user-api-key-user-id": user_api_key_user_id})
         return extra_headers
     
     def _send_request(self, url, headers, data):
