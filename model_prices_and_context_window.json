@@ -4344,7 +4344,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-06
     },
-    "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20240620-v1:0": {
+    "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0": {
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_read_input_token_cost": 3.6e-07,
         "input_cost_per_token": 3.6e-06,
