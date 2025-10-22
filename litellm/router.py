@@ -140,6 +140,7 @@ from litellm.types.router import (
     RouterRateLimitError,
     RouterRateLimitErrorBasic,
     RoutingStrategy,
+    SearchToolTypedDict,
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -204,6 +205,8 @@ class Router:
         ] = None,
         ## ASSISTANTS API ##
         assistants_config: Optional[AssistantsTypedDict] = None,
+        ## SEARCH API ##
+        search_tools: Optional[List[SearchToolTypedDict]] = None,
         ## CACHING ##
         redis_url: Optional[str] = None,
         redis_host: Optional[str] = None,
@@ -363,6 +366,7 @@ class Router:
         )
 
         self.assistants_config = assistants_config
+        self.search_tools = search_tools or []
         self.deployment_names: List = (
             []
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
@@ -878,6 +882,13 @@ class Router:
 
         self.aocr = self.factory_function(aocr, call_type="aocr")
         self.ocr = self.factory_function(ocr, call_type="ocr")
+
+        # Search routes
+        #########################################################
+        from litellm.search import asearch, search
+
+        self.asearch = self.factory_function(asearch, call_type="asearch")
+        self.search = self.factory_function(search, call_type="search")
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -2705,6 +2716,37 @@ class Router:
                 self.fail_calls[model] += 1
             raise e
 
+    async def _asearch_with_fallbacks(
+        self, original_function: Callable, **kwargs
+    ):
+        """
+        Helper function to make a search API call through the router with load balancing and fallbacks.
+        Reuses the router's retry/fallback infrastructure.
+        """
+        from litellm.router_utils.search_api_router import SearchAPIRouter
+        
+        return await SearchAPIRouter.async_search_with_fallbacks(
+            router_instance=self,
+            original_function=original_function,
+            **kwargs,
+        )
+    
+    async def _asearch_with_fallbacks_helper(
+        self, model: str, original_generic_function: Callable, **kwargs
+    ):
+        """
+        Helper function for search API calls - selects a search tool and calls the original function.
+        Called by async_function_with_fallbacks for each retry attempt.
+        """
+        from litellm.router_utils.search_api_router import SearchAPIRouter
+        
+        return await SearchAPIRouter.async_search_with_fallbacks_helper(
+            router_instance=self,
+            model=model,
+            original_generic_function=original_generic_function,
+            **kwargs,
+        )
+
     async def _ageneric_api_call_with_fallbacks(
         self, model: str, original_function: Callable, **kwargs
     ):
@@ -3580,6 +3622,8 @@ class Router:
             "vector_store_create",
             "aocr",
             "ocr",
+            "asearch",
+            "search",
             "aadapter_generate_content"
         ] = "assistants",
     ):
@@ -3598,6 +3642,7 @@ class Router:
             "vector_store_search",
             "vector_store_create",
             "ocr",
+            "search",
         ):
 
             def sync_wrapper(
@@ -3627,6 +3672,11 @@ class Router:
             elif call_type == "moderation":
                 return await self._pass_through_moderation_endpoint_factory(
                     original_function=original_function, **kwargs
+                )
+            elif call_type in ("asearch", "search"):
+                return await self._asearch_with_fallbacks(
+                    original_function=original_function,
+                    **kwargs,
                 )
             elif call_type in (
                 "anthropic_messages",

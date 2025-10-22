@@ -17,6 +17,7 @@ from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 from .llms.openai import OpenAIFileObject
 from .llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+from .search import SearchProvider
 from .utils import CustomPricingLiteLLMParams, ModelResponse
 
 
@@ -599,6 +600,35 @@ class ModelGroupInfo(BaseModel):
 class AssistantsTypedDict(TypedDict):
     custom_llm_provider: Literal["azure", "openai"]
     litellm_params: LiteLLMParamsTypedDict
+
+
+class SearchToolLiteLLMParams(TypedDict, total=False):
+    """
+    LiteLLM params for search tools.
+    Search tools don't require a 'model' field like regular deployments.
+    """
+    search_provider: Required[SearchProvider]
+    api_key: Optional[str]
+    api_base: Optional[str]
+    timeout: Optional[Union[float, str, httpx.Timeout]]
+    max_retries: Optional[int]
+
+
+class SearchToolTypedDict(TypedDict):
+    """
+    Configuration for a search tool in the router.
+    
+    Example:
+        {
+            "search_tool_name": "litellm-search",
+            "litellm_params": {
+                "search_provider": "perplexity",
+                "api_key": "os.environ/PERPLEXITYAI_API_KEY"
+            }
+        }
+    """
+    search_tool_name: Required[str]
+    litellm_params: Required[SearchToolLiteLLMParams]
 
 
 class FineTuningConfig(BaseModel):

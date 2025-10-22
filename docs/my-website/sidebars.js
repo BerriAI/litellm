@@ -308,6 +308,7 @@ const sidebars = {
           ],
         },
         "text_completion",
+        "bedrock_converse",
         "embedding/supported_embedding",
         {
           type: "category",
@@ -327,6 +328,7 @@ const sidebars = {
         },
           "generateContent",
           "apply_guardrail",
+          "bedrock_invoke",
         {
           type: "category",
           label: "/images",
@@ -347,9 +349,8 @@ const sidebars = {
             "mcp_guardrail",
           ]
         },
+        "anthropic_unified",
         "moderation",
-        "bedrock_invoke",
-        "bedrock_converse",
         "ocr",
         {
           type: "category",
@@ -380,7 +381,7 @@ const sidebars = {
         "realtime",
         "rerank",
         "response_api",
-        "anthropic_unified",
+        "search",
         {
           type: "category",
           label: "/vector_stores",
