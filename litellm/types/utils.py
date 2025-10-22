@@ -173,6 +173,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
+    ocr_cost_per_page: Optional[float]  # for OCR models
+    annotation_cost_per_page: Optional[float]  # for OCR models
     search_context_cost_per_query: Optional[
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
@@ -218,7 +220,7 @@ class GenericStreamingChunk(TypedDict, total=False):
 from enum import Enum
 
 
-class CallTypes(Enum):
+class CallTypes(str, Enum):
     embedding = "embedding"
     aembedding = "aembedding"
     completion = "completion"
@@ -330,6 +332,8 @@ CallTypesLiteral = Literal[
     "agenerate_content",
     "generate_content_stream",
     "agenerate_content_stream",
+    "ocr",
+    "aocr",
 ]
 
 
@@ -2509,6 +2513,8 @@ class LlmProviders(str, Enum):
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
+    TAVILY = "tavily"
+    PARALLEL_AI = "parallel_ai"
     ASSEMBLYAI = "assemblyai"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"

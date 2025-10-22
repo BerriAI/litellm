@@ -12,7 +12,7 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `vertex_ai/` |
 | Link to Provider Doc | [Vertex AI ↗](https://cloud.google.com/vertex-ai) |
 | Base URL | 1. Regional endpoints<br/>`https://{vertex_location}-aiplatform.googleapis.com/`<br/>2. Global endpoints (limited availability)<br/>`https://aiplatform.googleapis.com/`|
-| Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models) |
+| Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models), [`/rerank`](#rerank-api) |
 
 
 <br />
@@ -3114,3 +3114,101 @@ Once that's done, when you deploy the new container in the Google Cloud Run serv
 
 
 s/o @[Darien Kindlund](https://www.linkedin.com/in/kindlund/) for this tutorial
+
+## **Rerank API**
+
+Vertex AI supports reranking through the Discovery Engine API, providing semantic ranking capabilities for document retrieval.
+
+### Setup
+
+Set your Google Cloud project ID:
+
+```bash
+export VERTEXAI_PROJECT="your-project-id"
+```
+
+### Usage
+
+```python
+from litellm import rerank
+
+# Using the latest model (recommended)
+response = rerank(
+    model="vertex_ai/semantic-ranker-default@latest",
+    query="What is Google Gemini?",
+    documents=[
+        "Gemini is a cutting edge large language model created by Google.",
+        "The Gemini zodiac symbol often depicts two figures standing side-by-side.",
+        "Gemini is a constellation that can be seen in the night sky."
+    ],
+    top_n=2,
+    return_documents=True  # Set to False for ID-only responses
+)
+
+# Using specific model versions
+response_v003 = rerank(
+    model="vertex_ai/semantic-ranker-default-003",
+    query="What is Google Gemini?",
+    documents=documents,
+    top_n=2
+)
+
+print(response.results)
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `model` | string | Model name (e.g., `vertex_ai/semantic-ranker-default@latest`) |
+| `query` | string | Search query |
+| `documents` | list | Documents to rank |
+| `top_n` | int | Number of top results to return |
+| `return_documents` | bool | Return full content (True) or IDs only (False) |
+
+### Supported Models
+
+- `semantic-ranker-default@latest`
+- `semantic-ranker-fast@latest` 
+- `semantic-ranker-default-003`
+- `semantic-ranker-default-002`
+
+For detailed model specifications, see the [Google Cloud ranking API documentation](https://cloud.google.com/generative-ai-app-builder/docs/ranking#rank_or_rerank_a_set_of_records_according_to_a_query).
+
+### Proxy Usage
+
+Add to your `config.yaml`:
+
+```yaml
+model_list:
+  - model_name: semantic-ranker-default@latest
+    litellm_params:
+      model: vertex_ai/semantic-ranker-default@latest
+      vertex_ai_project: "your-project-id"
+      vertex_ai_location: "us-central1"
+      vertex_ai_credentials: "path/to/service-account.json" 
+```
+
+Start the proxy:
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+Test with curl:
+
+```bash
+curl http://0.0.0.0:4000/rerank \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "semantic-ranker-default@latest",
+    "query": "What is Google Gemini?",
+    "documents": [
+      "Gemini is a cutting edge large language model created by Google.",
+      "The Gemini zodiac symbol often depicts two figures standing side-by-side.",
+      "Gemini is a constellation that can be seen in the night sky."
+    ],
+    "top_n": 2
+  }'
+```

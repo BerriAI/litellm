@@ -144,6 +144,10 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
+from litellm.llms.base_llm.search.transformation import BaseSearchConfig
+from litellm.llms.base_llm.text_to_speech.transformation import (
+    BaseTextToSpeechConfig,
+)
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
@@ -1509,7 +1513,7 @@ def client(original_function):  # noqa: PLR0915
             )
             # Only run if call_type is a valid value in CallTypes
             if call_type in [ct.value for ct in CallTypes]:
-                await async_post_call_success_deployment_hook(
+                result = await async_post_call_success_deployment_hook(
                     request_data=kwargs,
                     response=result,
                     call_type=CallTypes(call_type),
@@ -4994,6 +4998,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
+                ocr_cost_per_page=_model_info.get("ocr_cost_per_page", None),
+                annotation_cost_per_page=_model_info.get("annotation_cost_per_page", None),
             )
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
@@ -7215,6 +7221,11 @@ class ProviderConfigManager:
             return litellm.OVHCloudEmbeddingConfig()
         elif litellm.LlmProviders.COMETAPI == provider:
             return litellm.CometAPIEmbeddingConfig()
+        elif litellm.LlmProviders.SAGEMAKER == provider:
+            from litellm.llms.sagemaker.embedding.transformation import (
+                SagemakerEmbeddingConfig,
+            )
+            return SagemakerEmbeddingConfig.get_model_config(model)
         return None
 
     @staticmethod
@@ -7244,6 +7255,8 @@ class ProviderConfigManager:
             return litellm.DeepinfraRerankConfig()
         elif litellm.LlmProviders.NVIDIA_NIM == provider:
             return litellm.NvidiaNimRerankConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            return litellm.VertexAIRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -7606,6 +7619,56 @@ class ProviderConfigManager:
         if config_class is None:
             return None
         return config_class()
+
+    @staticmethod
+    def get_provider_search_config(
+        provider: LlmProviders,
+    ) -> Optional["BaseSearchConfig"]:
+        """
+        Get Search configuration for a given provider.
+        """
+        from litellm.llms.parallel_ai.search.transformation import (
+            ParallelAISearchConfig,
+        )
+        from litellm.llms.perplexity.search.transformation import (
+            PerplexitySearchConfig,
+        )
+        from litellm.llms.tavily.search.transformation import (
+            TavilySearchConfig,
+        )
+
+        PROVIDER_TO_CONFIG_MAP = {
+            litellm.LlmProviders.PERPLEXITY: PerplexitySearchConfig,
+            litellm.LlmProviders.TAVILY: TavilySearchConfig,
+            litellm.LlmProviders.PARALLEL_AI: ParallelAISearchConfig,
+        }
+        config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
+        if config_class is None:
+            return None
+        return config_class()
+
+    @staticmethod
+    def get_provider_text_to_speech_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional["BaseTextToSpeechConfig"]:
+        """
+        Get text-to-speech configuration for a given provider.
+        """
+        from litellm.llms.base_llm.text_to_speech.transformation import (
+            BaseTextToSpeechConfig,
+        )
+
+        if litellm.LlmProviders.AZURE == provider:
+            # Only return Azure AVA config for Azure Speech Service models (speech/)
+            # Azure OpenAI TTS models (azure/azure-tts) should not use this config
+            if model.startswith("speech/"):
+                from litellm.llms.azure.text_to_speech.transformation import (
+                    AzureAVATextToSpeechConfig,
+                )
+
+                return AzureAVATextToSpeechConfig()
+        return None
 
     @staticmethod
     def get_provider_google_genai_generate_content_config(

@@ -37,6 +37,7 @@ const sidebars = {
           "proxy/guardrails/azure_content_guardrail",
           "proxy/guardrails/bedrock",
           "proxy/guardrails/enkryptai",
+          "proxy/guardrails/grayswan",
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
@@ -355,7 +356,6 @@ const sidebars = {
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
           items: [
             "pass_through/intro",
-            "proxy/pass_through",
             "pass_through/anthropic_completion",
             "pass_through/assembly_ai",
             "pass_through/bedrock",
@@ -365,8 +365,16 @@ const sidebars = {
             "pass_through/langfuse",
             "pass_through/mistral",
             "pass_through/openai_passthrough",
-            "pass_through/vertex_ai",
-            "pass_through/vllm"
+            {
+              type: "category",
+              label: "Vertex AI",
+              items: [
+                "pass_through/vertex_ai",
+                "pass_through/vertex_ai_live_websocket",
+              ]
+            },
+            "pass_through/vllm",
+            "proxy/pass_through"
           ]
         },
         "realtime",
@@ -394,6 +402,11 @@ const sidebars = {
       },
       items: [
         {
+          type: "doc",
+          id: "provider_registration/index",
+          label: "Integrate as a Model Provider",
+        },
+        {
           type: "category",
           label: "OpenAI",
           items: [
@@ -411,6 +424,7 @@ const sidebars = {
             "providers/azure/azure",
             "providers/azure/azure_responses",
             "providers/azure/azure_embedding",
+            "providers/azure/azure_speech",
           ]
         },
         {
@@ -418,6 +432,8 @@ const sidebars = {
           label: "Azure AI",
           items: [
             "providers/azure_ai",
+            "providers/azure_ocr",
+            "providers/azure_ai_speech",
             "providers/azure_ai_img",
           ]
         },
@@ -572,7 +588,8 @@ const sidebars = {
         "guides/finetuned_models",
         "guides/security_settings",
         "proxy/veo_video_generation",
-        "reasoning_content"
+        "reasoning_content",
+        "extras/creating_adapters",
       ]
     },
 
@@ -729,11 +746,6 @@ const sidebars = {
         "proxy/customer_routing",
         "proxy_server",
       ],
-    },
-    {
-      type: "doc",
-      id: "provider_registration/index",
-      label: "Integrate as a Model Provider",
     },
     "troubleshoot",
   ],

@@ -1092,12 +1092,18 @@ class MCPServerManager:
             GuardrailRaisedException: If guardrails block the call
             HTTPException: If an HTTP error occurs
         """
-        # Get server-specific auth header if available
+        # Get server-specific auth header if available (case-insensitive)
+        # FIX: Added case-insensitive matching to handle auth header keys that may not match
+        # the exact case of server alias/name (e.g., '1litellmagcgateway' vs '1LiteLLMAGCGateway')
         server_auth_header: Optional[Union[Dict[str, str], str]] = None
-        if mcp_server_auth_headers and mcp_server.alias:
-            server_auth_header = mcp_server_auth_headers.get(mcp_server.alias)
-        elif mcp_server_auth_headers and mcp_server.server_name:
-            server_auth_header = mcp_server_auth_headers.get(mcp_server.server_name)
+        if mcp_server_auth_headers:
+            # Normalize keys for case-insensitive lookup
+            normalized_headers = {k.lower(): v for k, v in mcp_server_auth_headers.items()}
+            
+            if mcp_server.alias:
+                server_auth_header = normalized_headers.get(mcp_server.alias.lower())
+            if server_auth_header is None and mcp_server.server_name:
+                server_auth_header = normalized_headers.get(mcp_server.server_name.lower())
 
         # Fall back to deprecated mcp_auth_header if no server-specific header found
         if server_auth_header is None:

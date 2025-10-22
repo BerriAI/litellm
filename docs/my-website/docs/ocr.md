@@ -1,5 +1,12 @@
 # /ocr
 
+| Feature | Supported | 
+|---------|-----------|
+| Cost Tracking | ✅ |
+| Logging | ✅ (Basic Logging not supported) |
+| Load Balancing | ✅ |
+| Supported Providers | `mistral`, `azure_ai` |
+
 :::tip
 
 LiteLLM follows the [Mistral API request/response for the OCR API](https://docs.mistral.ai/capabilities/vision/#optical-character-recognition-ocr)
@@ -254,4 +261,5 @@ The response follows Mistral's OCR format with the following structure:
 | Provider    | Link to Usage      |
 |-------------|--------------------|
 | Mistral AI  |   [Usage](#quick-start)                 |
+| Azure AI    |   [Usage](../docs/providers/azure_ocr)                 |
 
