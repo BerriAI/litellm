@@ -6,6 +6,8 @@ from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreCon
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    VectorStoreCreateOptionalRequestParams,
+    VectorStoreCreateResponse,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
@@ -225,3 +227,15 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 status_code=response.status_code,
                 headers=response.headers,
             )
+
+    def transform_create_vector_store_request(
+        self,
+        vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
+        api_base: str,
+    ) -> Tuple[str, Dict]:
+        raise NotImplementedError
+
+    def transform_create_vector_store_response(
+        self, response: httpx.Response
+    ) -> VectorStoreCreateResponse:
+        raise NotImplementedError
