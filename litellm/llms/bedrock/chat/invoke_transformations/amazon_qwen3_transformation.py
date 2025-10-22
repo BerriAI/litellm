@@ -6,12 +6,17 @@ Inherits from `AmazonInvokeConfig`
 Qwen3 + Invoke API Tutorial: https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
 """
 
-from typing import List, Optional
+from typing import Any, List, Optional, Union
+
+import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
+    LiteLLMLoggingObj,
 )
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
 
 
 class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
@@ -41,7 +46,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
                 setattr(self.__class__, key, value)
         AmazonInvokeConfig.__init__(self)
 
-    def get_supported_openai_params(self, model: str) -> List:
+    def get_supported_openai_params(self, model: str) -> List[str]:
         return [
             "max_tokens",
             "temperature",
@@ -76,7 +81,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List,
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -106,7 +111,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
             
         return request_body
 
-    def _convert_messages_to_prompt(self, messages: List) -> str:
+    def _convert_messages_to_prompt(self, messages: List[AllMessageValues]) -> str:
         """
         Convert OpenAI messages format to Qwen3 prompt format
         Supports tool calls, multimodal content, and various message types
@@ -154,17 +159,17 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
     def transform_response(
         self,
         model: str,
-        raw_response: any,
-        model_response: any,
-        logging_obj: any,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List,
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: any,
+        encoding: Any,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> any:
+    ) -> ModelResponse:
         """
         Transform Qwen3 Bedrock response to OpenAI format
         """
