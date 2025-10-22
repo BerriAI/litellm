@@ -4382,7 +4382,7 @@ class BaseLLMHTTPHandler:
         if after is not None:
             params["after"] = after
         if limit is not None:
-            params["limit"] = limit
+            params["limit"] = str(limit)
         if order is not None:
             params["order"] = order
 
