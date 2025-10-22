@@ -1512,6 +1512,14 @@ async def test_basic_openai_responses_with_websearch(stream):
 
 @pytest.mark.asyncio
 async def test_openai_responses_api_token_limit_error():
+    """
+    Relevant issue: https://github.com/BerriAI/litellm/issues/15785
+
+
+    When this fails you'll see:
+    "pydantic_core._pydantic_core.ValidationError: 3 validation errors for ErrorEvent"
+    in the console.
+    """
     litellm._turn_on_debug()
 
     # Generate text with >400k tokens to trigger token limit error
