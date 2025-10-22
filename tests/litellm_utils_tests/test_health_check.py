@@ -304,6 +304,15 @@ def test_update_litellm_params_for_health_check():
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     assert "voice" not in updated_params
 
+    # Test with Bedrock model
+    model_info = {}
+    litellm_params = {
+        "model": "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "anthropic.claude-3-7-sonnet-20250219-v1:0"
+
 @pytest.mark.asyncio
 async def test_perform_health_check_with_health_check_model():
     """
