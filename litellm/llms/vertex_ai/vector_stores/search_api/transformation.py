@@ -6,8 +6,6 @@ from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreCon
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
-    VectorStoreCreateOptionalRequestParams,
-    VectorStoreCreateResponse,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
