@@ -262,9 +262,13 @@ def search(
             country=country,
         )
         
+        # Internal LiteLLM parameters that should not be passed to providers
+        litellm_internal_params = {"litellm_call_id", "litellm_logging_obj", "litellm_params"}
+        
         # Add remaining kwargs to optional_params (for provider-specific params)
+        # Filter out internal LiteLLM parameters
         for key, value in kwargs.items():
-            if key not in optional_params:
+            if key not in optional_params and key not in litellm_internal_params:
                 optional_params[key] = value
         
         verbose_logger.debug(f"Search optional_params: {optional_params}")

@@ -2548,6 +2548,7 @@ class SearchProviders(str, Enum):
     PARALLEL_AI = "parallel_ai"
     EXA_AI = "exa_ai"
     GOOGLE_PSE = "google_pse"
+    DATAFORSEO = "dataforseo"
 
 
 # Create a set of all search provider values for quick lookup
