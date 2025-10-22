@@ -8,10 +8,7 @@ from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
 
-
-from ..chat.transformation import SnowflakeBaseConfig
-
-from ..utils import SnowflakeException
+from ..utils import SnowflakeException, SnowflakeBaseConfig
 
 
 class SnowflakeEmbeddingConfig(SnowflakeBaseConfig, BaseEmbeddingConfig):
