@@ -17,9 +17,9 @@ class TestPerplexitySearch(BaseSearchTest):
     Tests for Perplexity Search functionality.
     """
     
-    def get_custom_llm_provider(self) -> str:
+    def get_search_provider(self) -> str:
         """
-        Return custom_llm_provider for Perplexity Search.
+        Return search_provider for Perplexity Search.
         """
         return "perplexity"
 

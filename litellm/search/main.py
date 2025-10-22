@@ -56,7 +56,7 @@ def _build_search_optional_params(
 @client
 async def asearch(
     query: Union[str, List[str]],
-    custom_llm_provider: str,
+    search_provider: str,
     max_results: Optional[int] = None,
     search_domain_filter: Optional[List[str]] = None,
     max_tokens_per_page: Optional[int] = None,
@@ -72,7 +72,7 @@ async def asearch(
     
     Args:
         query: Search query (string or list of strings)
-        custom_llm_provider: Provider name (e.g., "perplexity")
+        search_provider: Provider name (e.g., "perplexity")
         max_results: Optional maximum number of results (1-20), default 10
         search_domain_filter: Optional list of domains to filter (max 20)
         max_tokens_per_page: Optional max tokens per page, default 1024
@@ -93,13 +93,13 @@ async def asearch(
         # Basic search
         response = await litellm.asearch(
             query="latest AI developments 2024",
-            custom_llm_provider="perplexity"
+            search_provider="perplexity"
         )
         
         # Search with options
         response = await litellm.asearch(
             query="AI developments",
-            custom_llm_provider="perplexity",
+            search_provider="perplexity",
             max_results=10,
             search_domain_filter=["arxiv.org", "nature.com"],
             max_tokens_per_page=1024,
@@ -120,7 +120,7 @@ async def asearch(
         func = partial(
             search,
             query=query,
-            custom_llm_provider=custom_llm_provider,
+            search_provider=search_provider,
             max_results=max_results,
             search_domain_filter=search_domain_filter,
             max_tokens_per_page=max_tokens_per_page,
@@ -150,7 +150,7 @@ async def asearch(
     except Exception as e:
         raise litellm.exception_type(
             model="",
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=search_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
@@ -160,7 +160,7 @@ async def asearch(
 @client
 def search(
     query: Union[str, List[str]],
-    custom_llm_provider: str,
+    search_provider: str,
     max_results: Optional[int] = None,
     search_domain_filter: Optional[List[str]] = None,
     max_tokens_per_page: Optional[int] = None,
@@ -176,7 +176,7 @@ def search(
     
     Args:
         query: Search query (string or list of strings)
-        custom_llm_provider: Provider name (e.g., "perplexity")
+        search_provider: Provider name (e.g., "perplexity")
         max_results: Optional maximum number of results (1-20), default 10
         search_domain_filter: Optional list of domains to filter (max 20)
         max_tokens_per_page: Optional max tokens per page, default 1024
@@ -197,13 +197,13 @@ def search(
         # Basic search
         response = litellm.search(
             query="latest AI developments 2024",
-            custom_llm_provider="perplexity"
+            search_provider="perplexity"
         )
         
         # Search with options
         response = litellm.search(
             query="AI developments",
-            custom_llm_provider="perplexity",
+            search_provider="perplexity",
             max_results=10,
             search_domain_filter=["arxiv.org", "nature.com"],
             max_tokens_per_page=1024,
@@ -213,7 +213,7 @@ def search(
         # Multi-query search
         response = litellm.search(
             query=["AI developments", "machine learning trends"],
-            custom_llm_provider="perplexity"
+            search_provider="perplexity"
         )
         
         # Access results
@@ -240,17 +240,17 @@ def search(
         # Get provider config
         search_provider_config: Optional[BaseSearchConfig] = (
             ProviderConfigManager.get_provider_search_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
+                provider=litellm.LlmProviders(search_provider),
             )
         )
 
         if search_provider_config is None:
             raise ValueError(
-                f"Search is not supported for provider: {custom_llm_provider}"
+                f"Search is not supported for provider: {search_provider}"
             )
 
         verbose_logger.debug(
-            f"Search call - provider: {custom_llm_provider}"
+            f"Search call - provider: {search_provider}"
         )
 
         # Build optional_params from explicit parameters
@@ -260,6 +260,11 @@ def search(
             max_tokens_per_page=max_tokens_per_page,
             country=country,
         )
+        
+        # Add remaining kwargs to optional_params (for provider-specific params)
+        for key, value in kwargs.items():
+            if key not in optional_params:
+                optional_params[key] = value
         
         verbose_logger.debug(f"Search optional_params: {optional_params}")
 
@@ -284,7 +289,7 @@ def search(
                 "litellm_call_id": litellm_call_id,
                 "api_base": complete_url,
             },
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=search_provider,
         )
 
         # Call the handler
@@ -295,7 +300,7 @@ def search(
             logging_obj=litellm_logging_obj,
             api_key=api_key,
             api_base=complete_url,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=search_provider,
             asearch=_is_async,
             headers=headers,
             provider_config=search_provider_config,
@@ -305,7 +310,7 @@ def search(
     except Exception as e:
         raise litellm.exception_type(
             model="",
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=search_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,

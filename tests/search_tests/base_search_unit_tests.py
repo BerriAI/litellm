@@ -14,12 +14,12 @@ class BaseSearchTest(ABC):
     Abstract base test class that enforces common Search tests across all providers.
     
     Each provider-specific test class should inherit from this and implement
-    get_custom_llm_provider() to return provider name.
+    get_search_provider() to return provider name.
     """
 
     @abstractmethod
-    def get_custom_llm_provider(self) -> str:
-        """Must return the custom_llm_provider for the specific provider"""
+    def get_search_provider(self) -> str:
+        """Must return the search_provider for the specific provider"""
         pass
 
     @pytest.fixture(autouse=True)
@@ -38,13 +38,13 @@ class BaseSearchTest(ABC):
         Test basic search functionality with a simple query.
         """
         litellm._turn_on_debug()
-        custom_llm_provider = self.get_custom_llm_provider()
-        print("Custom LLM Provider=", custom_llm_provider)
+        search_provider = self.get_search_provider()
+        print("Search Provider=", search_provider)
 
         try:
             response = await litellm.asearch(
                 query="latest developments in AI",
-                custom_llm_provider=custom_llm_provider,
+                search_provider=search_provider,
             )
             print("Search response=", response.model_dump_json(indent=4))
 
@@ -85,11 +85,11 @@ class BaseSearchTest(ABC):
         Test that the Search response has the correct structure.
         """
         litellm.set_verbose = True
-        custom_llm_provider = self.get_custom_llm_provider()
+        search_provider = self.get_search_provider()
 
         response = litellm.search(
             query="artificial intelligence recent news",
-            custom_llm_provider=custom_llm_provider,
+            search_provider=search_provider,
         )
 
         # Validate response structure
@@ -119,11 +119,11 @@ class BaseSearchTest(ABC):
         Test search with optional parameters.
         """
         litellm.set_verbose = True
-        custom_llm_provider = self.get_custom_llm_provider()
+        search_provider = self.get_search_provider()
 
         response = litellm.search(
             query="machine learning",
-            custom_llm_provider=custom_llm_provider,
+            search_provider=search_provider,
             max_results=5,
         )
 
