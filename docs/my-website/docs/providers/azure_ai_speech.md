@@ -136,6 +136,168 @@ response = speech(
 | `wav` | riff-24khz-16bit-mono-pcm | 24kHz |
 | `pcm` | raw-24khz-16bit-mono-pcm | 24kHz |
 
+## Sending Azure-Specific Params
+
+Azure AI Speech supports advanced SSML features through optional parameters:
+
+- `style`: Speaking style (e.g., "cheerful", "sad", "angry", "whispering")
+- `styledegree`: Style intensity (0.01 to 2)
+- `role`: Voice role (e.g., "Girl", "Boy", "SeniorFemale", "SeniorMale")
+- `lang`: Language code for multilingual voices (e.g., "es-ES", "fr-FR", "hi-IN")
+
+### **LiteLLM SDK**
+
+#### Custom Azure Voice
+
+```python showLineNumbers title="Custom Azure Voice"
+from litellm import speech
+
+response = speech(
+    model="azure/speech/azure-tts",
+    voice="en-US-AndrewNeural",       # Use Azure voice directly
+    input="Hello, this is a test",
+    api_base="https://eastus.tts.speech.microsoft.com",
+    api_key=os.environ["AZURE_TTS_API_KEY"],
+    response_format="mp3"
+)
+response.stream_to_file("speech.mp3")
+```
+
+#### Speaking Style
+
+```python showLineNumbers title="Speaking Style"
+from litellm import speech
+
+response = speech(
+    model="azure/speech/azure-tts",
+    voice="en-US-JennyNeural",        # Must be a voice that supports styles
+    input="Who are you? What is chicken dinner?",
+    api_base="https://eastus.tts.speech.microsoft.com",
+    api_key=os.environ["AZURE_TTS_API_KEY"],
+    style="whispering",               # Azure-specific: cheerful, sad, angry, whispering, etc.
+)
+response.stream_to_file("speech.mp3")
+```
+
+#### Style with Degree and Role
+
+```python showLineNumbers title="Style with Degree and Role"
+from litellm import speech
+
+response = speech(
+    model="azure/speech/azure-tts",
+    voice="en-US-AriaNeural",
+    input="Good morning! How are you today?",
+    api_base="https://eastus.tts.speech.microsoft.com",
+    api_key=os.environ["AZURE_TTS_API_KEY"],
+    style="cheerful",                 # Azure-specific: Speaking style
+    styledegree="2",                  # Azure-specific: 0.01 to 2 (intensity)
+    role="SeniorFemale",              # Azure-specific: Girl, Boy, SeniorFemale, etc.
+)
+response.stream_to_file("speech.mp3")
+```
+
+#### Language Override for Multilingual Voices
+
+```python showLineNumbers title="Language Override"
+from litellm import speech
+
+response = speech(
+    model="azure/speech/azure-tts",
+    voice="en-US-AvaMultilingualNeural",  # Multilingual voice
+    input="आप कौन हैं? चिकन डिनर क्या है?",  # Hindi text
+    api_base="https://eastus.tts.speech.microsoft.com",
+    api_key=os.environ["AZURE_TTS_API_KEY"],
+    lang="hi-IN",                         # Azure-specific: Override language
+)
+response.stream_to_file("speech.mp3")
+```
+
+### **LiteLLM AI Gateway (CURL)**
+
+First, ensure you have set up your proxy config as shown in the [LiteLLM Proxy setup](#quick-start) above.
+
+**Using the model name from your config:**
+
+```yaml
+model_list:
+  - model_name: azure-speech  # This is what you'll use in your API calls
+    litellm_params:
+      model: azure/speech/azure-tts
+      api_base: https://eastus.tts.speech.microsoft.com
+      api_key: os.environ/AZURE_TTS_API_KEY
+```
+
+#### Custom Azure Voice
+
+```bash
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "azure-speech",
+    "voice": "en-US-AndrewNeural",
+    "input": "Hello, this is a test"
+  }' \
+  --output speech.mp3
+```
+
+#### Speaking Style
+
+```bash
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "azure-speech",
+    "input": "Who are you? What is chicken dinner?",
+    "voice": "en-US-JennyNeural",
+    "style": "whispering"
+  }' \
+  --output speech.mp3
+```
+
+#### Style with Degree and Role
+
+```bash
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "azure-speech",
+    "voice": "en-US-AriaNeural",
+    "input": "Good morning! How are you today?",
+    "style": "cheerful",
+    "styledegree": "2",
+    "role": "SeniorFemale"
+  }' \
+  --output speech.mp3
+```
+
+#### Language Override
+
+```bash
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "azure-speech",
+    "input": "आप कौन हैं? चिकन डिनर क्या है?",
+    "voice": "en-US-AvaMultilingualNeural",
+    "lang": "hi-IN"
+  }' \
+  --output speech.mp3
+```
+
+### Azure-Specific Parameters Reference
+
+| Parameter | Description | Example Values | Notes |
+|-----------|-------------|----------------|-------|
+| `style` | Speaking style | `cheerful`, `sad`, `angry`, `excited`, `friendly`, `hopeful`, `shouting`, `terrified`, `unfriendly`, `whispering` | Only supported by certain voices. See [Azure voice styles documentation](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-synthesis-markup-voice#use-speaking-styles-and-roles) |
+| `styledegree` | Style intensity | `0.01` to `2` | Higher values = more intense. Default is `1` |
+| `role` | Voice role | `Girl`, `Boy`, `YoungAdultFemale`, `YoungAdultMale`, `OlderAdultFemale`, `OlderAdultMale`, `SeniorFemale`, `SeniorMale` | Only supported by certain voices |
+| `lang` | Language code | `es-ES`, `fr-FR`, `de-DE`, `hi-IN`, etc. | For multilingual voices. Overrides the default language |
+
 ## Async Support
 
 ```python showLineNumbers title="Async Usage"
