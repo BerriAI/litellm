@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm.integrations.arize import _utils
+from litellm.integrations.arize._utils import ArizeOTELAttributes
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.types.integrations.arize import ArizeConfig
 from litellm.types.services import ServiceLoggerPayload
@@ -33,7 +34,7 @@ class ArizeLogger(OpenTelemetry):
 
     @staticmethod
     def set_arize_attributes(span: Span, kwargs, response_obj):
-        _utils.set_attributes(span, kwargs, response_obj)
+        _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
         return
 
     @staticmethod
@@ -107,39 +108,38 @@ class ArizeLogger(OpenTelemetry):
     async def async_health_check(self):
         """
         Performs a health check for Arize integration.
-        
+
         Returns:
             dict: Health check result with status and message
         """
         try:
             config = self.get_arize_config()
-            
+
             if not config.space_key:
                 return {
                     "status": "unhealthy",
-                    "error_message": "ARIZE_SPACE_KEY environment variable not set"
+                    "error_message": "ARIZE_SPACE_KEY environment variable not set",
                 }
-            
+
             if not config.api_key:
                 return {
-                    "status": "unhealthy", 
-                    "error_message": "ARIZE_API_KEY environment variable not set"
+                    "status": "unhealthy",
+                    "error_message": "ARIZE_API_KEY environment variable not set",
                 }
-            
+
             return {
                 "status": "healthy",
-                "message": "Arize credentials are configured properly"
+                "message": "Arize credentials are configured properly",
             }
-            
+
         except Exception as e:
             return {
                 "status": "unhealthy",
-                "error_message": f"Arize health check failed: {str(e)}"
+                "error_message": f"Arize health check failed: {str(e)}",
             }
 
     def construct_dynamic_otel_headers(
-        self, 
-        standard_callback_dynamic_params: StandardCallbackDynamicParams
+        self, standard_callback_dynamic_params: StandardCallbackDynamicParams
     ) -> Optional[dict]:
         """
         Construct dynamic Arize headers from standard callback dynamic params
@@ -163,7 +163,7 @@ class ArizeLogger(OpenTelemetry):
             dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get(
                 "arize_space_key"
             )
-        
+
         #########################################################
         # `api_key` handling
         #########################################################
@@ -171,5 +171,5 @@ class ArizeLogger(OpenTelemetry):
             dynamic_headers["api_key"] = standard_callback_dynamic_params.get(
                 "arize_api_key"
             )
-        
+
         return dynamic_headers

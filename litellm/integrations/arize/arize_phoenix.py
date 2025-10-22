@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
+from litellm.integrations.arize._utils import ArizeOTELAttributes
 from litellm.types.integrations.arize_phoenix import ArizePhoenixConfig
 
 if TYPE_CHECKING:
@@ -28,7 +29,7 @@ ARIZE_HOSTED_PHOENIX_ENDPOINT = "https://app.phoenix.arize.com/v1/traces"
 class ArizePhoenixLogger:
     @staticmethod
     def set_arize_phoenix_attributes(span: Span, kwargs, response_obj):
-        _utils.set_attributes(span, kwargs, response_obj)
+        _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
         return
 
     @staticmethod
@@ -70,7 +71,9 @@ class ArizePhoenixLogger:
             otlp_auth_headers = f"api_key={api_key}"
         elif api_key is not None:
             # api_key/auth is optional for self hosted phoenix
-            otlp_auth_headers = f"Authorization={urllib.parse.quote(f'Bearer {api_key}')}"
+            otlp_auth_headers = (
+                f"Authorization={urllib.parse.quote(f'Bearer {api_key}')}"
+            )
 
         return ArizePhoenixConfig(
             otlp_auth_headers=otlp_auth_headers, protocol=protocol, endpoint=endpoint

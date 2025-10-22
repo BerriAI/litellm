@@ -1,82 +1,95 @@
 import json
-from typing import TYPE_CHECKING, Any, Optional, Union
+from abc import ABC
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
+
+from typing_extensions import override
 
 from litellm._logging import verbose_logger
+from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (
+    BaseLLMObsOTELAttributes,
+    safe_set_attribute,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
-    Span = Union[_Span, Any]
-else:
-    Span = Any
+    from opentelemetry.trace import Span
 
 
-def cast_as_primitive_value_type(value) -> Union[str, bool, int, float]:
-    """
-    Converts a value to an OTEL-supported primitive for Arize/Phoenix observability.
-    """
-    if value is None:
-        return ""
-    if isinstance(value, (str, bool, int, float)):
-        return value
-    try:
-        return str(value)
-    except Exception:
-        return ""
+class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
 
-
-def safe_set_attribute(span: Span, key: str, value: Any):
-    """
-    Sets a span attribute safely with OTEL-compliant primitive typing for Arize/Phoenix.
-    """
-    primitive_value = cast_as_primitive_value_type(value)
-    span.set_attribute(key, primitive_value)
-
-
-def set_response_output_messages(span: Span, response_obj):
-    """
-    Sets output message attributes on the span from the LLM response.
-
-    Args:
-        span: The OpenTelemetry span to set attributes on
-        response_obj: The response object containing choices with messages
-    """
-    from litellm.integrations._types.open_inference import (
-        MessageAttributes,
-        SpanAttributes,
-    )
-
-    safe_set_attribute(
-        span,
-        "langfuse.observation.output",
-        response_obj.model_dump_json(),
-    )
-
-    for idx, choice in enumerate(response_obj.get("choices", [])):
-        response_message = choice.get("message", {})
-        safe_set_attribute(
-            span,
-            SpanAttributes.OUTPUT_VALUE,
-            response_message.get("content", ""),
+    @staticmethod
+    @override
+    def set_messages(span: "Span", messages: List[Dict[str, Any]]):
+        from litellm.integrations._types.open_inference import (
+            MessageAttributes,
+            SpanAttributes,
         )
 
-        # This shows up under `output_messages` tab on the span page.
-        prefix = f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}"
-        safe_set_attribute(
-            span,
-            f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
-            response_message.get("role"),
-        )
-        safe_set_attribute(
-            span,
-            f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
-            response_message.get("content", ""),
+        # for /chat/completions
+        # https://docs.arize.com/arize/large-language-models/tracing/semantic-conventions
+        if messages:
+            last_message = messages[-1]
+            safe_set_attribute(
+                span,
+                SpanAttributes.INPUT_VALUE,
+                last_message.get("content", ""),
+            )
+
+            # LLM_INPUT_MESSAGES shows up under `input_messages` tab on the span page.
+            for idx, msg in enumerate(messages):
+                prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}"
+                # Set the role per message.
+                safe_set_attribute(
+                    span, f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role")
+                )
+                # Set the content per message.
+                safe_set_attribute(
+                    span,
+                    f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
+                    msg.get("content", ""),
+                )
+
+    @staticmethod
+    @override
+    def set_response_output_messages(span: "Span", response_obj):
+        """
+        Sets output message attributes on the span from the LLM response.
+
+        Args:
+            span: The OpenTelemetry span to set attributes on
+            response_obj: The response object containing choices with messages
+        """
+        from litellm.integrations._types.open_inference import (
+            MessageAttributes,
+            SpanAttributes,
         )
 
+        for idx, choice in enumerate(response_obj.get("choices", [])):
+            response_message = choice.get("message", {})
+            safe_set_attribute(
+                span,
+                SpanAttributes.OUTPUT_VALUE,
+                response_message.get("content", ""),
+            )
 
-def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
+            # This shows up under `output_messages` tab on the span page.
+            prefix = f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}"
+            safe_set_attribute(
+                span,
+                f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
+                response_message.get("role"),
+            )
+            safe_set_attribute(
+                span,
+                f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
+                response_message.get("content", ""),
+            )
+
+
+def set_attributes(
+    span: "Span", kwargs, response_obj, attributes: Type[BaseLLMObsOTELAttributes]
+):  # noqa: PLR0915
     """
     Populates span with OpenInference-compliant LLM attributes for Arize and Phoenix tracing.
     """
@@ -194,35 +207,7 @@ def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
         )
         messages = kwargs.get("messages")
 
-        safe_set_attribute(
-            span,
-            "langfuse.observation.input",
-            json.dumps(messages),
-        )
-
-        # for /chat/completions
-        # https://docs.arize.com/arize/large-language-models/tracing/semantic-conventions
-        if messages:
-            last_message = messages[-1]
-            safe_set_attribute(
-                span,
-                SpanAttributes.INPUT_VALUE,
-                last_message.get("content", ""),
-            )
-
-            # LLM_INPUT_MESSAGES shows up under `input_messages` tab on the span page.
-            for idx, msg in enumerate(messages):
-                prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}"
-                # Set the role per message.
-                safe_set_attribute(
-                    span, f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role")
-                )
-                # Set the content per message.
-                safe_set_attribute(
-                    span,
-                    f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
-                    msg.get("content", ""),
-                )
+        attributes.set_messages(span, messages)
 
         # Capture tools (function definitions) used in the LLM call.
         tools = optional_params.get("tools")
@@ -282,7 +267,7 @@ def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
 
         # Captures response tokens, message, and content.
         if hasattr(response_obj, "get"):
-            set_response_output_messages(span, response_obj)
+            attributes.set_response_output_messages(span, response_obj)
 
             # Token usage info.
             usage = response_obj and response_obj.get("usage")
