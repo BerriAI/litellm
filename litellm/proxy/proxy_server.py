@@ -262,7 +262,9 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -310,7 +312,9 @@ from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -331,6 +335,7 @@ from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
@@ -9800,6 +9805,7 @@ app.include_router(batches_router)
 app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
+app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(vector_store_router)
