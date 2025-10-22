@@ -369,7 +369,7 @@ disable_copilot_system_to_assistant: bool = False  # If false (default), convert
 public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
 #### REQUEST PRIORITIZATION #######
-priority_reservation: Optional[Dict[str, float]] = None
+priority_reservation: Optional[Dict[str, Union[float, Dict]]] = None
 priority_reservation_settings: "PriorityReservationSettings" = (
     PriorityReservationSettings()
 )
