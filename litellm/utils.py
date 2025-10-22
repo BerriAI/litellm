@@ -7627,6 +7627,9 @@ class ProviderConfigManager:
         """
         Get Search configuration for a given provider.
         """
+        from litellm.llms.exa_ai.search.transformation import (
+            ExaAISearchConfig,
+        )
         from litellm.llms.parallel_ai.search.transformation import (
             ParallelAISearchConfig,
         )
@@ -7641,6 +7644,7 @@ class ProviderConfigManager:
             litellm.LlmProviders.PERPLEXITY: PerplexitySearchConfig,
             litellm.LlmProviders.TAVILY: TavilySearchConfig,
             litellm.LlmProviders.PARALLEL_AI: ParallelAISearchConfig,
+            litellm.LlmProviders.EXA_AI: ExaAISearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

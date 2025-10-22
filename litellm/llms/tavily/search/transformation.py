@@ -118,63 +118,26 @@ class TavilySearchConfig(BaseSearchConfig):
             "query": query,
         }
         
-        # Map max_results (same field name)
+        # Transform Perplexity unified spec parameters to Tavily format
         if "max_results" in optional_params:
             request_data["max_results"] = optional_params["max_results"]
         
-        # Map search_domain_filter → include_domains (different field name in Tavily)
         if "search_domain_filter" in optional_params:
             request_data["include_domains"] = optional_params["search_domain_filter"]
         
-        # Map exclude_domains (same field name)
-        if "exclude_domains" in optional_params:
-            request_data["exclude_domains"] = optional_params["exclude_domains"]
-        
-        # Map topic (same field name)
-        if "topic" in optional_params:
-            request_data["topic"] = optional_params["topic"]
-        
-        # Map search_depth (same field name)
-        if "search_depth" in optional_params:
-            request_data["search_depth"] = optional_params["search_depth"]
-        
-        # Map include_answer (same field name)
-        if "include_answer" in optional_params:
-            request_data["include_answer"] = optional_params["include_answer"]
-        
-        # Map include_raw_content (same field name)
-        if "include_raw_content" in optional_params:
-            request_data["include_raw_content"] = optional_params["include_raw_content"]
-        
-        # Map include_images (same field name)
-        if "include_images" in optional_params:
-            request_data["include_images"] = optional_params["include_images"]
-        
-        # Map include_image_descriptions (same field name)
-        if "include_image_descriptions" in optional_params:
-            request_data["include_image_descriptions"] = optional_params["include_image_descriptions"]
-        
-        # Map include_favicon (same field name)
-        if "include_favicon" in optional_params:
-            request_data["include_favicon"] = optional_params["include_favicon"]
-        
-        # Map time_range (same field name)
-        if "time_range" in optional_params:
-            request_data["time_range"] = optional_params["time_range"]
-        
-        # Map start_date (same field name)
-        if "start_date" in optional_params:
-            request_data["start_date"] = optional_params["start_date"]
-        
-        # Map end_date (same field name)
-        if "end_date" in optional_params:
-            request_data["end_date"] = optional_params["end_date"]
-        
-        # Map country (same field name, but lowercase for Tavily)
         if "country" in optional_params:
+            # Tavily expects lowercase country names
             request_data["country"] = optional_params["country"].lower()
         
-        return dict(request_data)
+        # Convert to dict before dynamic key assignments
+        result_data = dict(request_data)
+        
+        # pass through all other parameters as-is
+        for param, value in optional_params.items():
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
+                result_data[param] = value
+        
+        return result_data
 
     def transform_search_response(
         self,
