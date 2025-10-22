@@ -485,7 +485,7 @@ async def test_e2e_generate_cold_storage_object_key_successful():
     response_id = "chatcmpl-test-12345"
     team_alias = "test-team"
     
-    with patch("litellm.configured_cold_storage_logger", return_value="s3"), \
+    with patch("litellm.cold_storage_custom_logger", return_value="s3"), \
          patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key:
         
         # Mock the S3 object key generation to return a predictable result
@@ -530,7 +530,7 @@ async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path()
     mock_custom_logger = MagicMock()
     mock_custom_logger.s3_path = "storage"
     
-    with patch("litellm.configured_cold_storage_logger", "s3_v2"), \
+    with patch("litellm.cold_storage_custom_logger", "s3_v2"), \
          patch("litellm.logging_callback_manager.get_active_custom_logger_for_callback_name") as mock_get_logger, \
          patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key:
         
@@ -577,7 +577,7 @@ async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
     mock_custom_logger = MagicMock()
     mock_custom_logger.s3_path = None  # or could be missing attribute
     
-    with patch("litellm.configured_cold_storage_logger", "s3_v2"), \
+    with patch("litellm.cold_storage_custom_logger", "s3_v2"), \
          patch("litellm.logging_callback_manager.get_active_custom_logger_for_callback_name") as mock_get_logger, \
          patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key:
         
@@ -620,7 +620,7 @@ async def test_e2e_generate_cold_storage_object_key_not_configured():
     team_alias = "another-team"
 
     # Use patch to ensure test isolation
-    with patch.object(litellm, 'configured_cold_storage_logger', None):
+    with patch.object(litellm, 'cold_storage_custom_logger', None):
         # Call the function
         result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
             start_time=start_time,

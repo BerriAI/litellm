@@ -156,7 +156,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "cloudzero",
     "posthog",
 ]
-configured_cold_storage_logger: Optional[
+cold_storage_custom_logger: Optional[
     _custom_logger_compatible_callbacks_literal
 ] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
