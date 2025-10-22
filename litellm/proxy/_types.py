@@ -1628,6 +1628,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=0.0,
         description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
     )
+    auth: bool = Field(
+        default=False,
+        description="Whether authentication is required for the pass-through endpoint. If True, requests to the endpoint will require a valid LiteLLM API key.",
+    )
 
 
 class PassThroughEndpointResponse(LiteLLMPydanticObjectBase):

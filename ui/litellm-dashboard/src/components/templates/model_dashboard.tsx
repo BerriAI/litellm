@@ -1364,6 +1364,7 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                     userRole={userRole}
                     userID={userID}
                     modelData={modelData}
+                    premiumUser={premiumUser}
                   />
                 </TabPanel>
                 <TabPanel>
