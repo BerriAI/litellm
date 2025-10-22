@@ -4,7 +4,7 @@ Azure AVA (Cognitive Services) Text-to-Speech transformation
 Maps OpenAI TTS spec to Azure Cognitive Services TTS API
 """
 
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import httpx
@@ -32,6 +32,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
     """
 
     # Azure endpoint domains
+    DEFAULT_VOICE = "en-US-AriaNeural"
     COGNITIVE_SERVICES_DOMAIN = "api.cognitive.microsoft.com"
     TTS_SPEECH_DOMAIN = "tts.speech.microsoft.com"
     TTS_ENDPOINT_PATH = "/cognitiveservices/v1"
@@ -159,23 +160,25 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         optional_params: Dict,
-        drop_params: bool,
-    ) -> Dict:
+        voice: Optional[Union[str, Dict]] = None,
+        drop_params: bool = False,
+    ) -> Tuple[Optional[str], Dict]:
         """
         Map OpenAI parameters to Azure AVA TTS parameters
         """
         mapped_params = {}
-        
+        ##########################################################
         # Map voice
-        if "voice" in optional_params:
-            voice = optional_params["voice"]
-            # If it's already an Azure voice, use it directly
-            if isinstance(voice, str):
-                if voice in self.VOICE_MAPPINGS:
-                    mapped_params["voice"] = self.VOICE_MAPPINGS[voice]
-                else:
-                    # Assume it's already an Azure voice name
-                    mapped_params["voice"] = voice
+        # OpenAI uses voice as a required param, hence not in optional_params
+        ##########################################################
+        # If it's already an Azure voice, use it directly
+        mapped_voice: Optional[str] = None
+        if isinstance(voice, str):
+            if voice in self.VOICE_MAPPINGS:
+                mapped_voice = self.VOICE_MAPPINGS[voice]
+            else:
+                # Assume it's already an Azure voice name
+                mapped_voice = voice
         
         # Map response format
         if "response_format" in optional_params:
@@ -195,7 +198,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             if speed is not None:
                 mapped_params["rate"] = self._convert_speed_to_azure_rate(speed=speed)
         
-        return mapped_params
+        return mapped_voice, mapped_params
 
     def validate_environment(
         self,
@@ -319,7 +322,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             TextToSpeechRequestData: Contains SSML body and Azure-specific headers
         """
         # Get voice (already mapped in main.py, or use default)
-        azure_voice = optional_params.get("voice", "en-US-AriaNeural")
+        azure_voice = voice or self.DEFAULT_VOICE
         
         # Get output format (already mapped in main.py)
         output_format = optional_params.get(
