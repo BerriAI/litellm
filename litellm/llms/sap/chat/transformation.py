@@ -94,6 +94,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         template = messages
 
         tools = optional_params.pop("tools", None)
+        response_format = model_params.pop("response_format", None)
         stream = model_params.pop("stream", False)
         stream_config = {}
         if stream or "stream_options" in model_params:
@@ -112,6 +113,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                             "prompt": {
                                 "template": template,
                                 "tools": tools if tools else [],
+                                "response_format": response_format if response_format else {"type": "text"},
                             },
                             "model": {
                                 "name": model,
