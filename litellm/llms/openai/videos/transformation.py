@@ -228,7 +228,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         response_data = raw_response.json()
         video_response = VideoResponse(**response_data)
         # Convert VideoResponse object to dictionary to match base class return type
-        return [VideoObject(**video) for video in video_response.data]
+        return [VideoObject(**video) if isinstance(video, dict) else video for video in video_response.data]
 
     def transform_video_delete_response(
         self,

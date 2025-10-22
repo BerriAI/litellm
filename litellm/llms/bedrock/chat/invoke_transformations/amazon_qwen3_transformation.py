@@ -6,7 +6,7 @@ Inherits from `AmazonInvokeConfig`
 Qwen3 + Invoke API Tutorial: https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
 """
 
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional
 
 import httpx
 
@@ -122,7 +122,6 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
             role = message.get("role", "")
             content = message.get("content", "")
             tool_calls = message.get("tool_calls", [])
-            tool_call_id = message.get("tool_call_id", "")
             
             if role == "system":
                 prompt_parts.append(f"<|im_start|>system\n{content}<|im_end|>")
@@ -139,7 +138,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
                     content = "".join(text_content)
                 prompt_parts.append(f"<|im_start|>user\n{content}<|im_end|>")
             elif role == "assistant":
-                if tool_calls:
+                if tool_calls and isinstance(tool_calls, list):
                     # Handle tool calls
                     for tool_call in tool_calls:
                         function_name = tool_call.get("function", {}).get("name", "")
@@ -190,8 +189,14 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
             
             # Set the content in the existing model_response structure
             if hasattr(model_response, 'choices') and len(model_response.choices) > 0:
-                model_response.choices[0].message.content = generated_text
-                model_response.choices[0].finish_reason = "stop"
+                choice = model_response.choices[0]
+                if hasattr(choice, 'message'):
+                    choice.message.content = generated_text
+                    choice.finish_reason = "stop"
+                else:
+                    # Handle streaming choices
+                    choice.delta.content = generated_text
+                    choice.finish_reason = "stop"
             
             # Set usage information if available in response
             if "usage" in response_data:
