@@ -7,6 +7,7 @@ from typing import Dict, List, Literal, Optional, Union
 
 import httpx
 
+from litellm.constants import DEFAULT_DATAFORSEO_LOCATION_CODE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
@@ -135,9 +136,9 @@ class DataForSEOSearchConfig(BaseSearchConfig):
         if "language_code" not in task and "language_name" not in task:
             task["language_code"] = "en"
         
-        # DataForSEO requires a location - default to United States (2840) if not specified
+        # DataForSEO requires a location - use default from constants if not specified
         if "location_code" not in task and "location_name" not in task:
-            task["location_code"] = 2840
+            task["location_code"] = DEFAULT_DATAFORSEO_LOCATION_CODE
         
         # Pass through all other parameters as-is
         for param, value in optional_params.items():
