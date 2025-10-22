@@ -841,6 +841,11 @@ def _extract_fields_recursive(
                 "TypeVar",
             ):
                 continue
+            # Handle Optional[T] where T is still a TypeVar
+            if hasattr(field_annotation, "__args__"):
+                non_none_args = [arg for arg in field_annotation.__args__ if arg is not type(None)]
+                if non_none_args and isinstance(non_none_args[0], TypeVar):
+                    continue
 
         # Get field metadata
         description = field.description or field_name
