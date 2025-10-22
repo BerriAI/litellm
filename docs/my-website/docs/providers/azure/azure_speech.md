@@ -57,9 +57,7 @@ Azure OpenAI supports the following voices:
 
 ## Supported Parameters
 
-### OpenAI-Compatible Parameters
-
-```python showLineNumbers title="Standard Parameters"
+```python showLineNumbers title="All Parameters"
 response = speech(
     model="azure/<your-deployment-name>",
     voice="alloy",                    # Required: Voice selection
@@ -68,88 +66,6 @@ response = speech(
     response_format="mp3"             # Optional: mp3, opus, aac, flac, wav, pcm
 )
 ```
-
-## Sending Azure-Specific Params
-
-Azure TTS supports additional SSML features through optional parameters:
-
-- style: Speaking style (e.g., "cheerful", "sad", "angry")
-- styledegree: Style intensity (0.01 to 2)
-- role: Voice role (e.g., "Girl", "Boy", "SeniorFemale", "SeniorMale")
-- lang: Language code for multilingual voices (e.g., "es-ES", "fr-FR")
-
-
-#### **Using LiteLLM AI Gateway (CURL)**
-
-#### Custom Azure Voice
-
-```bash
-curl -X POST 'http://0.0.0.0:4000/v1/audio/speech' \
-  -H 'Authorization: Bearer sk-1234' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model": "azure-tts",
-    "voice": "en-US-AndrewNeural",
-    "input": "Hello, this is a test"
-  }' \
-  --output speech.mp3
-```
-
-#### Speaking Style
-
-```bash
-curl -X POST 'http://0.0.0.0:4000/v1/audio/speech' \
-  -H 'Authorization: Bearer sk-1234' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model": "azure-tts",
-    "voice": "en-US-AriaNeural",
-    "input": "That would be just amazing!",
-    "style": "cheerful"
-  }' \
-  --output speech.mp3
-```
-
-#### Style with Degree and Role
-
-```bash
-curl -X POST 'http://0.0.0.0:4000/v1/audio/speech' \
-  -H 'Authorization: Bearer sk-1234' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model": "azure-tts",
-    "voice": "en-US-AriaNeural",
-    "input": "Good morning! How are you today?",
-    "style": "cheerful",
-    "styledegree": "2",
-    "role": "SeniorFemale"
-  }' \
-  --output speech.mp3
-```
-
-#### Language Override
-
-```bash
-curl -X POST 'http://0.0.0.0:4000/v1/audio/speech' \
-  -H 'Authorization: Bearer sk-1234' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model": "azure-tts",
-    "voice": "en-US-AvaMultilingualNeural",
-    "input": "Hola, ¿cómo estás?",
-    "lang": "es-ES"
-  }' \
-  --output speech.mp3
-```
-
-## Azure-Specific Parameters Reference
-
-| Parameter | Description | Example Values | Notes |
-|-----------|-------------|----------------|-------|
-| `style` | Speaking style | `cheerful`, `sad`, `angry`, `excited`, `friendly`, `hopeful`, `shouting`, `terrified`, `unfriendly`, `whispering` | Only supported by certain voices. See [Azure voice styles documentation](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-synthesis-markup-voice#use-speaking-styles-and-roles) |
-| `styledegree` | Style intensity | `0.01` to `2` | Higher values = more intense. Default is `1` |
-| `role` | Voice role | `Girl`, `Boy`, `YoungAdultFemale`, `YoungAdultMale`, `OlderAdultFemale`, `OlderAdultMale`, `SeniorFemale`, `SeniorMale` | Only supported by certain voices |
-| `lang` | Language code | `es-ES`, `fr-FR`, `de-DE`, etc. | For multilingual voices. Overrides the default language |
 
 ## Supported Models
 
