@@ -1593,16 +1593,19 @@ class BaseLLMHTTPHandler:
             headers=headers or {},
         )
 
-        # Get complete URL
-        complete_url = provider_config.get_complete_url(
-            api_base=api_base,
-            optional_params=optional_params,
-        )
+
 
         # Transform the request
         data = provider_config.transform_search_request(
             query=query,
             optional_params=optional_params,
+        )
+
+        # Get complete URL (pass data for providers that need request body for URL construction)
+        complete_url = provider_config.get_complete_url(
+            api_base=api_base,
+            optional_params=optional_params,
+            data=data,
         )
 
         ## LOGGING
@@ -1619,14 +1622,25 @@ class BaseLLMHTTPHandler:
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()
 
+        # Check HTTP method from provider config
+        http_method = provider_config.get_http_method()
+
         try:
-            # Make the POST request with JSON data
-            response = client.post(
-                url=complete_url,
-                headers=headers,
-                json=data,
-                timeout=timeout,
-            )
+            if http_method == "GET":
+                # Make GET request (URL already contains query params from get_complete_url)
+                # Note: timeout is set on the client itself, not per-request for GET
+                response = client.get(
+                    url=complete_url,
+                    headers=headers,
+                )
+            else:
+                # Make POST request with JSON data
+                response = client.post(
+                    url=complete_url,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -1663,16 +1677,17 @@ class BaseLLMHTTPHandler:
             headers=headers or {},
         )
 
-        # Get complete URL
-        complete_url = provider_config.get_complete_url(
-            api_base=api_base,
-            optional_params=optional_params,
-        )
-
-        # Transform the request
+        # Transform the request first
         data = provider_config.transform_search_request(
             query=query,
             optional_params=optional_params,
+        )
+        
+        # Get complete URL (pass data for providers that need request body for URL construction)
+        complete_url = provider_config.get_complete_url(
+            api_base=api_base,
+            optional_params=optional_params,
+            data=data,
         )
 
         ## LOGGING
@@ -1687,20 +1702,33 @@ class BaseLLMHTTPHandler:
         )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
+            # For search providers, use special Search provider type
+            from litellm.types.llms.custom_http import httpxSpecialProvider
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                llm_provider=httpxSpecialProvider.Search
             )
         else:
             async_httpx_client = client
 
+        # Check HTTP method from provider config
+        http_method = provider_config.get_http_method().upper()
+
         try:
-            # Make the async POST request with JSON data
-            response = await async_httpx_client.post(
-                url=complete_url,
-                headers=headers,
-                json=data,
-                timeout=timeout,
-            )
+            if http_method == "GET":
+                # Make async GET request (URL already contains query params from get_complete_url)
+                # Note: timeout is set on the client itself, not per-request for GET
+                response = await async_httpx_client.get(
+                    url=complete_url,
+                    headers=headers,
+                )
+            else:
+                # Make async POST request with JSON data
+                response = await async_httpx_client.post(
+                    url=complete_url,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 

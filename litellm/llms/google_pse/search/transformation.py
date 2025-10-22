@@ -90,20 +90,22 @@ class GooglePSESearchConfig(BaseSearchConfig):
         self,
         api_base: Optional[str],
         optional_params: dict,
+        data: Optional[dict] = None,
         **kwargs,
     ) -> str:
         """
         Get complete URL for Search endpoint with query parameters.
         
         Google PSE uses GET requests, so we build the full URL with query params here.
+        The transformed request body (data) contains the parameters needed for the URL.
         """
         from urllib.parse import urlencode
         
         api_base = api_base or get_secret_str("GOOGLE_PSE_API_BASE") or self.GOOGLE_PSE_API_BASE
         
-        # Build query parameters - they're stored in optional_params by transform_search_request
-        if "_google_pse_params" in optional_params:
-            params = optional_params["_google_pse_params"]
+        # Build query parameters from the transformed request body
+        if data and "_google_pse_params" in data:
+            params = data["_google_pse_params"]
             query_string = urlencode(params)
             return f"{api_base}?{query_string}"
         

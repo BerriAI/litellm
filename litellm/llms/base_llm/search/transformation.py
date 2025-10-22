@@ -92,11 +92,25 @@ class BaseSearchConfig:
         self,
         api_base: Optional[str],
         optional_params: dict,
+        data: Optional[dict] = None,
         **kwargs,
     ) -> str:
         """
         Get complete URL for Search endpoint.
-        Override in provider-specific implementations.
+        
+        Args:
+            api_base: Base URL for the API
+            optional_params: Optional parameters for the request
+            data: Transformed request body from transform_search_request().
+                  Some providers (e.g., Google PSE) use GET requests and need
+                  the request body to construct query parameters in the URL.
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            Complete URL for the search endpoint
+            
+        Note:
+            Override in provider-specific implementations.
         """
         raise NotImplementedError("get_complete_url must be implemented by provider")
 
