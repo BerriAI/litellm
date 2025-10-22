@@ -1,6 +1,6 @@
 from typing import List, Dict, Literal, Optional, Tuple, Callable, Optional, TYPE_CHECKING, Union
 import urllib
-import time
+import collections
 import json
 from aiohttp import ClientSession
 from functools import cached_property
@@ -25,6 +25,48 @@ class GenAIHubOrchestrationError(Exception):
         self.status_code = status_code
         self.message = message
         super().__init__(self.message)
+
+class StreamCleaner:
+    def __init__(self, response, is_async=False):
+        self.response = response
+        self.is_async = is_async
+        self._iterator = None
+
+    def __iter__(self):
+        self._iterator = self.response
+        return self
+
+    def __next__(self):
+        for line in self.response:
+            if not line:
+                continue
+            if line.startswith('data: '):
+                line = line[len('data: '):].strip()
+                if line == "[DONE]":
+                    raise StopIteration
+                try:
+                    return json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+        raise StopIteration
+
+    def __aiter__(self):
+        self._iterator = self.response
+        return self
+
+    async def __anext__(self):
+        async for line in self.response:
+            if not line:
+                continue
+            if line.startswith('data: '):
+                line = line[len('data: '):].strip()
+                if line == "[DONE]":
+                    raise StopAsyncIteration
+                try:
+                    return json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+        raise StopAsyncIteration
 
 
 class GenAIHubOrchestration(BaseLLM):
@@ -55,7 +97,7 @@ class GenAIHubOrchestration(BaseLLM):
                     config_details = client.get(self.base_url + f'/lm/configurations/{deployment["configurationId"]}', headers=self.headers).json()
                     if config_details["executableId"] == 'orchestration':
                         valid_deployments.append((deployment["deploymentUrl"], deployment["createdAt"]))
-            return sorted(valid_deployments, key=lambda x: x[1], reverse=True)[0]
+            return sorted(valid_deployments, key=lambda x: x[1], reverse=True)[0][0]
 
 
     def validate_environment(
@@ -100,7 +142,6 @@ class GenAIHubOrchestration(BaseLLM):
             if client is None or not isinstance(client, AsyncHTTPHandler):
                 client = litellm.AsyncHTTPHandler(shared_session=shared_session)
             data = config
-            data["stream"] = {"enabled": True}
             response = await client.post(
                 url=api_base,
                 headers=headers,
@@ -109,11 +150,14 @@ class GenAIHubOrchestration(BaseLLM):
                 stream=True
             )
             response.raise_for_status()
-            completion_stream = ModelResponseIterator(
-                streaming_response=response.aiter_lines(), sync_stream=False
+            completion_stream = StreamCleaner(
+                response=response.aiter_lines(), is_async=True
             )
         except httpx.HTTPStatusError as err:
-            raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
+            raise GenAIHubOrchestrationError(
+                status_code=err.response.status_code,
+                message=err.response.text
+            )
         except httpx.TimeoutException:
             raise GenAIHubOrchestrationError(
                 status_code=408, message="Timeout error occurred."
@@ -192,7 +236,7 @@ class GenAIHubOrchestration(BaseLLM):
             if client is None or not isinstance(client, HTTPHandler):
                 client = litellm.module_level_client
             data = config
-            data["stream"] = {"enabled": True}
+            # data["stream"] = {"enabled": True}
             response = client.post(
                 url=api_base,
                 headers=headers,
@@ -200,8 +244,8 @@ class GenAIHubOrchestration(BaseLLM):
                 stream=True,
                 timeout=timeout)
             response.raise_for_status()
-            completion_stream = ModelResponseIterator(
-                streaming_response=response.iter_lines(), sync_stream=True
+            completion_stream = StreamCleaner(
+                response=response.iter_lines(), is_async=False
             )
         except httpx.HTTPStatusError as err:
             raise GenAIHubOrchestrationError(
@@ -284,7 +328,7 @@ class GenAIHubOrchestration(BaseLLM):
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
         **kwargs
     ):
-        stream = optional_params.pop("stream", None)
+        stream = optional_params.get("stream", None)
 
         api_base, headers = self.validate_environment(
             endpoint_type="chat_completions"
@@ -333,6 +377,8 @@ class GenAIHubOrchestration(BaseLLM):
             return self._async_streaming(
                 config=config,
                 model=model,
+                api_base=api_base,
+                headers=headers,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 timeout=timeout,

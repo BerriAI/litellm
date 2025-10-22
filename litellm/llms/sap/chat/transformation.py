@@ -4,7 +4,6 @@ Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orches
 
 from typing import List, Optional, Union, Dict
 
-
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -85,7 +84,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         model: str,
         messages: List[Dict[str, str]],
         optional_params: dict,
-        litellm_params: dict | None = None,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
         model_params = {
@@ -95,6 +94,16 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         template = messages
 
         tools = optional_params.pop("tools", None)
+        stream = model_params.pop("stream", False)
+        stream_config = {}
+        if stream or "stream_options" in model_params:
+            stream_config["enabled"] = True
+            stream_options = model_params.pop("stream_options", {})
+            stream_config["chunk_size"] = stream_options.get("chunk_size", 100)
+            if "delimiters" in stream_options:
+                stream_config["delimiters"] = stream_options.get("delimiters")
+        else:
+            stream_config["enabled"] = False
         config = {
             'config':
                 {
@@ -110,9 +119,10 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                                 "version": model_version,
                             },
 
-                            },
-                        }
-                    }
+                        },
+                    },
+                    "stream": stream_config,
+                }
         }
 
 
