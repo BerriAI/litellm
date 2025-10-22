@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, TypedDict, Union
 
 import httpx
 
@@ -68,8 +68,9 @@ class BaseTextToSpeechConfig(ABC):
         self,
         model: str,
         optional_params: Dict,
-        drop_params: bool,
-    ) -> Dict:
+        voice: Optional[Union[str, Dict]] = None,
+        drop_params: bool = False,
+    ) -> Tuple[Optional[str], Dict]:
         """
         Map OpenAI TTS parameters to provider-specific parameters
         """
