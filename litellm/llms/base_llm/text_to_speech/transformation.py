@@ -70,6 +70,7 @@ class BaseTextToSpeechConfig(ABC):
         optional_params: Dict,
         voice: Optional[Union[str, Dict]] = None,
         drop_params: bool = False,
+        kwargs: Dict = {},
     ) -> Tuple[Optional[str], Dict]:
         """
         Map OpenAI TTS parameters to provider-specific parameters
