@@ -1197,7 +1197,7 @@ class Logging(LiteLLMLoggingBaseClass):
             total_cost=total_cost,
             tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
         )
-        
+
         # Store discount information if provided
         if original_cost is not None:
             self.cost_breakdown["original_cost"] = original_cost
@@ -1205,7 +1205,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.cost_breakdown["discount_percent"] = discount_percent
         if discount_amount is not None:
             self.cost_breakdown["discount_amount"] = discount_amount
-        
+
 
 
     def _response_cost_calculator(
@@ -3103,7 +3103,7 @@ def _get_masked_values(
                 (
                     v[: unmasked_length // 2]
                     + "*" * number_of_asterisks
-                    + v[-unmasked_length // 2 :]
+                    + v[-unmasked_length // 2:]
                 )
                 if (
                     isinstance(v, str)
@@ -3114,7 +3114,7 @@ def _get_masked_values(
                     (
                         v[: unmasked_length // 2]
                         + "*" * (len(v) - unmasked_length)
-                        + v[-unmasked_length // 2 :]
+                        + v[-unmasked_length // 2:]
                     )
                     if (isinstance(v, str) and len(v) > unmasked_length)
                     else ("*****" if isinstance(v, str) else v)
@@ -3165,6 +3165,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                     event_scrubber=EventScrubber(
                         denylist=SENTRY_DENYLIST, pii_denylist=SENTRY_PII_DENYLIST
                     ),
+                    environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
                 )
                 capture_exception = sentry_sdk_instance.capture_exception
                 add_breadcrumb = sentry_sdk_instance.add_breadcrumb
@@ -4280,8 +4281,8 @@ class StandardLoggingPayloadSetup:
         from litellm.integrations.s3 import get_s3_object_key
 
         # Only generate object key if cold storage is configured
-        configured_cold_storage_logger = litellm.configured_cold_storage_logger
-        if configured_cold_storage_logger is None:
+        cold_storage_custom_logger = litellm.cold_storage_custom_logger
+        if cold_storage_custom_logger is None:
             return None
 
         try:
@@ -4294,7 +4295,7 @@ class StandardLoggingPayloadSetup:
             # Try to get the actual logger instance from the logger name
             try:
                 custom_logger = litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(
-                    configured_cold_storage_logger
+                    cold_storage_custom_logger
                 )
                 if (
                     custom_logger
@@ -4471,12 +4472,12 @@ def _get_status_fields(
 ) -> "StandardLoggingPayloadStatusFields":
     """
     Determine status fields based on request status and guardrail information.
-    
+
     Args:
         status: Overall request status ("success" or "failure")
         guardrail_information: Guardrail information from metadata
         error_str: Error string if any
-        
+
     Returns:
         StandardLoggingPayloadStatusFields with llm_api_status and guardrail_status
     """
@@ -4489,10 +4490,10 @@ def _get_status_fields(
         "guardrail_failed_to_respond": "guardrail_failed_to_respond",  # direct
         "not_run": "not_run"
     }
-    
+
     # Set LLM API status
     llm_api_status: StandardLoggingPayloadStatus = status
-    
+
 
     #########################################################
     # Map - guardrail_information.guardrail_status to guardrail_status
