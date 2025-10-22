@@ -227,6 +227,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         optional_params: Dict,
         voice: Optional[Union[str, Dict]] = None,
         drop_params: bool = False,
+        kwargs: Dict = {},
     ) -> Tuple[Optional[str], Dict]:
         """
         Map OpenAI parameters to Azure AVA TTS parameters
@@ -264,18 +265,17 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
                 mapped_params["rate"] = self._convert_speed_to_azure_rate(speed=speed)
         
         # Pass through Azure-specific SSML parameters
-        if "style" in optional_params:
-            mapped_params["style"] = optional_params["style"]
+        if "style" in kwargs:
+            mapped_params["style"] = kwargs["style"]
         
-        if "styledegree" in optional_params:
-            mapped_params["styledegree"] = optional_params["styledegree"]
+        if "styledegree" in kwargs:
+            mapped_params["styledegree"] = kwargs["styledegree"]
         
-        if "role" in optional_params:
-            mapped_params["role"] = optional_params["role"]
+        if "role" in kwargs:
+            mapped_params["role"] = kwargs["role"]
         
-        if "lang" in optional_params:
-            mapped_params["lang"] = optional_params["lang"]
-        
+        if "lang" in kwargs:
+            mapped_params["lang"] = kwargs["lang"]
         return mapped_voice, mapped_params
 
     def validate_environment(
