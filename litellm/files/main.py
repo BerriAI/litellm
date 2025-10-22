@@ -275,7 +275,7 @@ def create_file(
 @client
 async def afile_retrieve(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "hosted_vllm"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -316,7 +316,7 @@ async def afile_retrieve(
 @client
 def file_retrieve(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "hosted_vllm"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
