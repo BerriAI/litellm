@@ -35,6 +35,47 @@ def safe_set_attribute(span: Span, key: str, value: Any):
     span.set_attribute(key, primitive_value)
 
 
+def set_response_output_messages(span: Span, response_obj):
+    """
+    Sets output message attributes on the span from the LLM response.
+
+    Args:
+        span: The OpenTelemetry span to set attributes on
+        response_obj: The response object containing choices with messages
+    """
+    from litellm.integrations._types.open_inference import (
+        MessageAttributes,
+        SpanAttributes,
+    )
+
+    safe_set_attribute(
+        span,
+        "langfuse.observation.output",
+        response_obj.model_dump_json(),
+    )
+
+    for idx, choice in enumerate(response_obj.get("choices", [])):
+        response_message = choice.get("message", {})
+        safe_set_attribute(
+            span,
+            SpanAttributes.OUTPUT_VALUE,
+            response_message.get("content", ""),
+        )
+
+        # This shows up under `output_messages` tab on the span page.
+        prefix = f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}"
+        safe_set_attribute(
+            span,
+            f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
+            response_message.get("role"),
+        )
+        safe_set_attribute(
+            span,
+            f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
+            response_message.get("content", ""),
+        )
+
+
 def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
     """
     Populates span with OpenInference-compliant LLM attributes for Arize and Phoenix tracing.
@@ -153,6 +194,12 @@ def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
         )
         messages = kwargs.get("messages")
 
+        safe_set_attribute(
+            span,
+            "langfuse.observation.input",
+            json.dumps(messages),
+        )
+
         # for /chat/completions
         # https://docs.arize.com/arize/large-language-models/tracing/semantic-conventions
         if messages:
@@ -235,26 +282,7 @@ def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
 
         # Captures response tokens, message, and content.
         if hasattr(response_obj, "get"):
-            for idx, choice in enumerate(response_obj.get("choices", [])):
-                response_message = choice.get("message", {})
-                safe_set_attribute(
-                    span,
-                    SpanAttributes.OUTPUT_VALUE,
-                    response_message.get("content", ""),
-                )
-
-                # This shows up under `output_messages` tab on the span page.
-                prefix = f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}"
-                safe_set_attribute(
-                    span,
-                    f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
-                    response_message.get("role"),
-                )
-                safe_set_attribute(
-                    span,
-                    f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
-                    response_message.get("content", ""),
-                )
+            set_response_output_messages(span, response_obj)
 
             # Token usage info.
             usage = response_obj and response_obj.get("usage")
