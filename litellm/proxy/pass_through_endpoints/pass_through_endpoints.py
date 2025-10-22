@@ -395,7 +395,6 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 requested_query_params=requested_query_params,
             )
         else:
-
             # Generic httpx method
             response = await async_client.request(
                 method=request.method,

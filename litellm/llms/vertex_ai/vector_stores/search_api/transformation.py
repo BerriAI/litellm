@@ -70,7 +70,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         """
         vertex_location = self.get_vertex_ai_location(litellm_params)
         vertex_project = self.get_vertex_ai_project(litellm_params)
-        engine_id = litellm_params.get("vector_store_id")
+        engine_id = litellm_params.get("vertex_app_id")
         collection_id = (
             litellm_params.get("vertex_collection_id") or "default_collection"
         )
