@@ -5706,17 +5706,19 @@ def speech(  # noqa: PLR0915
     
     # Map OpenAI params to provider-specific params if config exists
     if text_to_speech_provider_config is not None:
-        optional_params = text_to_speech_provider_config.map_openai_params(
+        voice, optional_params = text_to_speech_provider_config.map_openai_params(
             model=model,
             optional_params=optional_params,
+            voice=voice,
             drop_params=False,
+            kwargs=kwargs,
         )
     
     logging_obj: Logging = cast(Logging, kwargs.get("litellm_logging_obj"))
     logging_obj.update_environment_variables(
         model=model,
         user=user,
-        optional_params={},
+        optional_params=optional_params,
         litellm_params={
             "litellm_call_id": litellm_call_id,
             "proxy_server_request": proxy_server_request,

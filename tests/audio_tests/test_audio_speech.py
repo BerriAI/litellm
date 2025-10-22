@@ -376,6 +376,93 @@ async def test_azure_ava_tts_async():
         # assert response cost is greater than 0
         print("Response cost: ", response._hidden_params["response_cost"])
         assert response._hidden_params["response_cost"] > 0
-
+    
     except Exception as e:
         pytest.fail(f"Test failed with exception: {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_azure_ava_tts_with_custom_voice():
+    """
+    Test that when using a custom Azure voice (en-US-AndrewNeural),
+    the SSML request body contains the selected voice.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+    import httpx
+    
+    # Mock response
+    mock_response_content = b"fake_audio_data"
+    mock_httpx_response = MagicMock(spec=httpx.Response)
+    mock_httpx_response.content = mock_response_content
+    mock_httpx_response.status_code = 200
+    mock_httpx_response.headers = {"content-type": "audio/mpeg"}
+    
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+        mock_post.return_value = mock_httpx_response
+        
+        response = await litellm.aspeech(
+            model="azure/speech/azure-tts",
+            voice="en-US-AndrewNeural",
+            input="Hello, this is a test",
+            api_base="https://eastus.tts.speech.microsoft.com",
+            api_key="fake-key",
+            response_format="mp3",
+        )
+        
+        # Verify the mock was called
+        assert mock_post.called
+        
+        # Get the call arguments
+        call_args = mock_post.call_args
+        ssml_body = call_args.kwargs.get("data")
+        
+        # Verify the SSML contains the custom voice
+        assert ssml_body is not None
+        assert "en-US-AndrewNeural" in ssml_body
+        assert "Hello, this is a test" in ssml_body
+        assert "<speak" in ssml_body
+        assert "<voice" in ssml_body
+
+
+@pytest.mark.asyncio
+async def test_azure_ava_tts_fable_voice_mapping():
+    """
+    Test that when using OpenAI voice 'fable',
+    it gets mapped to Azure voice 'en-GB-RyanNeural' in the SSML.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+    import httpx
+    
+    # Mock response
+    mock_response_content = b"fake_audio_data"
+    mock_httpx_response = MagicMock(spec=httpx.Response)
+    mock_httpx_response.content = mock_response_content
+    mock_httpx_response.status_code = 200
+    mock_httpx_response.headers = {"content-type": "audio/mpeg"}
+    
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+        mock_post.return_value = mock_httpx_response
+        
+        response = await litellm.aspeech(
+            model="azure/speech/azure-tts",
+            voice="fable",
+            input="Testing voice mapping",
+            api_base="https://eastus.tts.speech.microsoft.com",
+            api_key="fake-key",
+            response_format="mp3",
+        )
+        
+        # Verify the mock was called
+        assert mock_post.called
+        
+        # Get the call arguments
+        call_args = mock_post.call_args
+        ssml_body = call_args.kwargs.get("data")
+        
+        # Verify the SSML contains the mapped voice (en-GB-RyanNeural, not 'fable')
+        assert ssml_body is not None
+        assert "en-GB-RyanNeural" in ssml_body
+        assert "fable" not in ssml_body.lower()
+        assert "Testing voice mapping" in ssml_body
+        assert "<speak" in ssml_body
+        assert "<voice" in ssml_body
