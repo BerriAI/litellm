@@ -92,7 +92,7 @@ class BaseSearchConfig:
         self,
         api_base: Optional[str],
         optional_params: dict,
-        data: Optional[dict] = None,
+        data: Optional[Union[Dict, List[Dict]]] = None,
         **kwargs,
     ) -> str:
         """
@@ -104,6 +104,7 @@ class BaseSearchConfig:
             data: Transformed request body from transform_search_request().
                   Some providers (e.g., Google PSE) use GET requests and need
                   the request body to construct query parameters in the URL.
+                  Can be a dict or list of dicts depending on provider.
             **kwargs: Additional keyword arguments
             
         Returns:

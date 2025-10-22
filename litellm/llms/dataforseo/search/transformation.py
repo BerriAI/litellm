@@ -3,7 +3,7 @@ Calls DataForSEO SERP API to search the web.
 
 DataForSEO API Reference: https://docs.dataforseo.com/v3/serp/google/organic/live/advanced/?bash
 """
-from typing import Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import httpx
 
@@ -75,7 +75,7 @@ class DataForSEOSearchConfig(BaseSearchConfig):
         self,
         api_base: Optional[str],
         optional_params: dict,
-        data: Optional[dict] = None,
+        data: Optional[Union[Dict, List[Dict]]] = None,
         **kwargs,
     ) -> str:
         """
@@ -108,7 +108,7 @@ class DataForSEOSearchConfig(BaseSearchConfig):
             List[Dict]: Request body for DataForSEO API (array of task objects as required by API)
         """
         # DataForSEO expects an array of task objects
-        task = {}
+        task: Dict[str, Any] = {}
         
         # Convert query to string if it's a list
         if isinstance(query, list):
