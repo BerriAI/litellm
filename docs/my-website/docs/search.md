@@ -13,6 +13,11 @@ LiteLLM follows the [Perplexity API request/response for the Search API](https:/
 
 :::
 
+:::info
+
+Supported from LiteLLM v1.78.7+
+:::
+
 ## **LiteLLM Python SDK Usage**
 ### Quick Start 
 
