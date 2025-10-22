@@ -5706,9 +5706,10 @@ def speech(  # noqa: PLR0915
     
     # Map OpenAI params to provider-specific params if config exists
     if text_to_speech_provider_config is not None:
-        optional_params = text_to_speech_provider_config.map_openai_params(
+        voice, optional_params = text_to_speech_provider_config.map_openai_params(
             model=model,
             optional_params=optional_params,
+            voice=voice,
             drop_params=False,
         )
     
