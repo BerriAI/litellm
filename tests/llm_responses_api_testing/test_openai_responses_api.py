@@ -1508,3 +1508,29 @@ async def test_basic_openai_responses_with_websearch(stream):
             print("chunk=", json.dumps(chunk, indent=4, default=str))
     else:
         print("response=", json.dumps(response, indent=4, default=str))
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_api_token_limit_error():
+    """
+    Relevant issue: https://github.com/BerriAI/litellm/issues/15785
+
+
+    When this fails you'll see:
+    "pydantic_core._pydantic_core.ValidationError: 3 validation errors for ErrorEvent"
+    in the console.
+    """
+    litellm._turn_on_debug()
+
+    # Generate text with >400k tokens to trigger token limit error
+    oversized_text = "This is a test sentence. " * 50000  # ~400k tokens
+
+    # This will raise ValidationError instead of showing the real error
+    response = await litellm.aresponses(
+        model="gpt-5-mini",
+        input=oversized_text,
+        stream=True
+    )
+
+    async for event in response:
+        print(event)  # Never reaches here - ValidationError is raised
