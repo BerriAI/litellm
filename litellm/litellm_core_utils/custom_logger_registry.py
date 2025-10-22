@@ -36,6 +36,7 @@ from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.opik.opik import OpikLogger
 from litellm.integrations.posthog import PostHogLogger
+from litellm.integrations.rubrik import RubrikLogger
 
 try:
     from litellm_enterprise.integrations.prometheus import PrometheusLogger
@@ -96,6 +97,7 @@ class CustomLoggerRegistry:
         "gitlab": GitLabPromptManager,
         "cloudzero": CloudZeroLogger,
         "posthog": PostHogLogger,
+        "rubrik": RubrikLogger,
     }
 
     try:
