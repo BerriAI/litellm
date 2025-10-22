@@ -66,6 +66,7 @@ class TavilySearchConfig(BaseSearchConfig):
         self,
         api_base: Optional[str],
         optional_params: dict,
+        data: Optional[dict] = None,
         **kwargs,
     ) -> str:
         """

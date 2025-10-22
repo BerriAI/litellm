@@ -119,7 +119,7 @@ class BaseSearchConfig:
         query: Union[str, List[str]],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> Union[Dict, List[Dict]]:
         """
         Transform Search request to provider-specific format.
         Override in provider-specific implementations.
