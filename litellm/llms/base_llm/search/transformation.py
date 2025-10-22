@@ -49,6 +49,22 @@ class BaseSearchConfig:
     def __init__(self) -> None:
         pass
 
+    @staticmethod
+    def get_supported_perplexity_optional_params() -> set:
+        """
+        Get the set of Perplexity unified search parameters.
+        These are the standard parameters that providers should transform from.
+        
+        Returns:
+            Set of parameter names that are part of the unified spec
+        """
+        return {
+            "max_results",
+            "search_domain_filter",
+            "country",
+            "max_tokens_per_page",
+        }
+
     def validate_environment(
         self,
         headers: Dict,
