@@ -135,6 +135,9 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
     def get_supported_openai_params(self, model: str) -> list:
         """
         Azure AVA TTS supports these OpenAI parameters
+        
+        Note: Azure also supports additional SSML-specific parameters (style, styledegree, role)
+        which can be passed but are not part of the OpenAI spec
         """
         return ["voice", "response_format", "speed"]
 
@@ -155,6 +158,39 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         """
         rate_percentage = int((speed - 1.0) * 100)
         return f"{rate_percentage:+d}%"
+    
+    def _build_express_as_element(
+        self,
+        content: str,
+        style: Optional[str] = None,
+        styledegree: Optional[str] = None,
+        role: Optional[str] = None,
+    ) -> str:
+        """
+        Build mstts:express-as element with optional style, styledegree, and role attributes
+        
+        Args:
+            content: The inner content to wrap
+            style: Speaking style (e.g., "cheerful", "sad", "angry")
+            styledegree: Style intensity (0.01 to 2)
+            role: Voice role (e.g., "Girl", "Boy", "SeniorFemale", "SeniorMale")
+        
+        Returns:
+            Content wrapped in mstts:express-as if any attributes provided, otherwise raw content
+        """
+        if not (style or styledegree or role):
+            return content
+        
+        express_as_attrs = []
+        if style:
+            express_as_attrs.append(f"style='{style}'")
+        if styledegree:
+            express_as_attrs.append(f"styledegree='{styledegree}'")
+        if role:
+            express_as_attrs.append(f"role='{role}'")
+        
+        express_as_attrs_str = " ".join(express_as_attrs)
+        return f"<mstts:express-as {express_as_attrs_str}>{content}</mstts:express-as>"
 
     def map_openai_params(
         self,
@@ -197,6 +233,16 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             speed = optional_params["speed"]
             if speed is not None:
                 mapped_params["rate"] = self._convert_speed_to_azure_rate(speed=speed)
+        
+        # Pass through Azure-specific SSML parameters
+        if "style" in optional_params:
+            mapped_params["style"] = optional_params["style"]
+        
+        if "styledegree" in optional_params:
+            mapped_params["styledegree"] = optional_params["styledegree"]
+        
+        if "role" in optional_params:
+            mapped_params["role"] = optional_params["role"]
         
         return mapped_voice, mapped_params
 
@@ -318,6 +364,11 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         
         Note: optional_params should already be mapped via map_openai_params in main.py
         
+        Supports Azure-specific SSML features:
+        - style: Speaking style (e.g., "cheerful", "sad", "angry")
+        - styledegree: Style intensity (0.01 to 2)
+        - role: Voice role (e.g., "Girl", "Boy", "SeniorFemale", "SeniorMale")
+        
         Returns:
             TextToSpeechRequestData: Contains SSML body and Azure-specific headers
         """
@@ -332,6 +383,9 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         
         # Build SSML
         rate = optional_params.get("rate", "0%")
+        style = optional_params.get("style")
+        styledegree = optional_params.get("styledegree")
+        role = optional_params.get("role")
         
         # Escape XML special characters in input text
         escaped_input = (
@@ -342,15 +396,31 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             .replace("'", "&apos;")
         )
         
-        ssml_body = f"""
-        <speak version='1.0' xml:lang='en-US'>
-            <voice name='{azure_voice}'>
-                <prosody rate='{rate}'>
-                    {escaped_input}
-                </prosody>
-            </voice>
-        </speak>
-        """
+        # Determine if we need mstts namespace (for express-as element)
+        use_mstts = style or role or styledegree
+        
+        # Build the xmlns attributes
+        if use_mstts:
+            xmlns = "xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='https://www.w3.org/2001/mstts'"
+        else:
+            xmlns = "xmlns='http://www.w3.org/2001/10/synthesis'"
+        
+        # Build the inner content with prosody
+        prosody_content = f"<prosody rate='{rate}'>{escaped_input}</prosody>"
+        
+        # Wrap in mstts:express-as if style or role is specified
+        voice_content = self._build_express_as_element(
+            content=prosody_content,
+            style=style,
+            styledegree=styledegree,
+            role=role,
+        )
+        
+        ssml_body = f"""<speak version='1.0' {xmlns} xml:lang='en-US'>
+    <voice name='{azure_voice}'>
+        {voice_content}
+    </voice>
+</speak>"""
         
         return {
             "ssml_body": ssml_body,
