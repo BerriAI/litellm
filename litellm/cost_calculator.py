@@ -315,6 +315,16 @@ def cost_per_token(  # noqa: PLR0915
             custom_llm_provider=custom_llm_provider,
             duration=audio_transcription_file_duration,
         )
+    elif call_type == "search" or call_type == "asearch":
+        # Search providers use per-query pricing
+        from litellm.search import search_provider_cost_per_query
+        
+        return search_provider_cost_per_query(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            number_of_queries=number_of_queries or 1,
+            optional_params=response._hidden_params if response and hasattr(response, "_hidden_params") else None
+        )
     elif custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
             model=model_without_prefix,
