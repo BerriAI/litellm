@@ -375,9 +375,6 @@ async def test_fallback_request_object_not_mutated_for_vision_models():
             messages_arg = kwargs.get('messages') 
 
             if "openai" in model:
-                # Simulate a mutation that litellm.acompletion might perform for OpenAI vision models
-                # This mutation will affect the 'messages_arg' object directly,
-                # which is the same object passed by the router.
                 if messages_arg and isinstance(messages_arg, list):
                     for message in messages_arg:
                         if message.get('role') == 'user' and isinstance(message.get('content'), list):
@@ -389,10 +386,7 @@ async def test_fallback_request_object_not_mutated_for_vision_models():
                 
                 raise litellm.exceptions.AuthenticationError(message="Invalid API key", llm_provider="openai", model=model)
             elif "gemini" in model:
-                # This is the fallback call. Capture the messages.
-                # If the router doesn't deepcopy, this will be the mutated object from the OpenAI call.
                 captured_messages_on_fallback = copy.deepcopy(messages_arg)
-                # Return a dummy success response
                 return litellm.ModelResponse(
                     id="chatcmpl-123",
                     choices=[litellm.Choices(finish_reason="stop", index=0, message=litellm.Message(content="hello", role="assistant"))],
