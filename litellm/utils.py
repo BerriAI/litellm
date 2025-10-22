@@ -7564,6 +7564,12 @@ class ProviderConfigManager:
             )
 
             return OpenAIVideoConfig()
+        elif LlmProviders.AZURE == provider:
+            from litellm.llms.azure.videos.transformation import (
+                AzureVideoConfig,
+            )
+
+            return AzureVideoConfig()
         return None
 
 
