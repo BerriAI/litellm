@@ -2,13 +2,14 @@
 Shared utility functions for rate limiter hooks.
 """
 
-from typing import Dict, Optional, Union
+from typing import Optional, Union
 
 from litellm.types.router import ModelGroupInfo
+from litellm.types.utils import PriorityReservationDict
 
 
 def convert_priority_to_percent(
-    value: Union[float, Dict], model_info: Optional[ModelGroupInfo]
+    value: Union[float, PriorityReservationDict], model_info: Optional[ModelGroupInfo]
 ) -> float:
     """
     Convert priority reservation value to percentage (0.0-1.0).
