@@ -20,11 +20,13 @@ class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
 
     @staticmethod
     @override
-    def set_messages(span: "Span", messages: List[Dict[str, Any]]):
+    def set_messages(span: "Span", kwargs: Dict[str, Any]):
         from litellm.integrations._types.open_inference import (
             MessageAttributes,
             SpanAttributes,
         )
+
+        messages = kwargs.get("messages")
 
         # for /chat/completions
         # https://docs.arize.com/arize/large-language-models/tracing/semantic-conventions
@@ -205,9 +207,7 @@ def set_attributes(
             SpanAttributes.OPENINFERENCE_SPAN_KIND,
             OpenInferenceSpanKindValues.LLM.value,
         )
-        messages = kwargs.get("messages")
-
-        attributes.set_messages(span, messages)
+        attributes.set_messages(span, kwargs)
 
         # Capture tools (function definitions) used in the LLM call.
         tools = optional_params.get("tools")

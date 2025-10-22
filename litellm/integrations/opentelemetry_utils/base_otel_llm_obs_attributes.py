@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 
 class BaseLLMObsOTELAttributes(ABC):
     @staticmethod
-    def set_messages(span: "Span", messages: List[Dict[str, Any]]):
+    def set_messages(span: "Span", kwargs: Dict[str, Any]):
         pass
 
     @staticmethod
