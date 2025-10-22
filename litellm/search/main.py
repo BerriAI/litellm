@@ -14,7 +14,7 @@ from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.types.search import SearchProvider
+from litellm.types.utils import SearchProviders
 from litellm.utils import ProviderConfigManager, client
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -57,7 +57,7 @@ def _build_search_optional_params(
 @client
 async def asearch(
     query: Union[str, List[str]],
-    search_provider: SearchProvider,
+    search_provider: str,
     max_results: Optional[int] = None,
     search_domain_filter: Optional[List[str]] = None,
     max_tokens_per_page: Optional[int] = None,
@@ -161,7 +161,7 @@ async def asearch(
 @client
 def search(
     query: Union[str, List[str]],
-    search_provider: SearchProvider,
+    search_provider: str,
     max_results: Optional[int] = None,
     search_domain_filter: Optional[List[str]] = None,
     max_tokens_per_page: Optional[int] = None,
@@ -241,7 +241,7 @@ def search(
         # Get provider config
         search_provider_config: Optional[BaseSearchConfig] = (
             ProviderConfigManager.get_provider_search_config(
-                provider=litellm.LlmProviders(search_provider),
+                provider=SearchProviders(search_provider),
             )
         )
 
@@ -262,9 +262,13 @@ def search(
             country=country,
         )
         
+        # Internal LiteLLM parameters that should not be passed to providers
+        litellm_internal_params = {"litellm_call_id", "litellm_logging_obj", "litellm_params"}
+        
         # Add remaining kwargs to optional_params (for provider-specific params)
+        # Filter out internal LiteLLM parameters
         for key, value in kwargs.items():
-            if key not in optional_params:
+            if key not in optional_params and key not in litellm_internal_params:
                 optional_params[key] = value
         
         verbose_logger.debug(f"Search optional_params: {optional_params}")

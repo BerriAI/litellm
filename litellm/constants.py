@@ -274,6 +274,11 @@ ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
 }
 DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
 
+### DATAFORSEO CONSTANTS ###
+DEFAULT_DATAFORSEO_LOCATION_CODE = int(
+    os.getenv("DEFAULT_DATAFORSEO_LOCATION_CODE", 2250)
+)  # Default to France (2250) - lower number, commonly used location
+
 LITELLM_CHAT_PROVIDERS = [
     "openai",
     "openai_like",

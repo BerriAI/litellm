@@ -4,15 +4,10 @@ LiteLLM Search API Types
 This module defines types for the unified search API across different providers.
 """
 
-from typing import Literal
+from litellm.types.utils import SearchProviders
 
-# Supported search providers
-SearchProvider = Literal[
-    "perplexity",
-    "tavily", 
-    "parallel_ai",
-    "exa_ai",
-]
+# Re-export SearchProviders as SearchProvider for backwards compatibility
+SearchProvider = SearchProviders
 
-__all__ = ["SearchProvider"]
+__all__ = ["SearchProvider", "SearchProviders"]
 
