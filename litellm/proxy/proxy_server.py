@@ -2,6 +2,7 @@ import asyncio
 import copy
 import inspect
 import io
+import orjson
 import os
 import random
 import secrets
@@ -3684,7 +3685,7 @@ async def async_assistants_data_generator(
 
             # chunk = chunk.model_dump_json(exclude_none=True)
             async for c in chunk:  # type: ignore
-                c = c.model_dump_json(exclude_none=True)
+                c = orjson.dumps(c.model_dump(exclude_none=True)).decode("utf-8")
                 try:
                     yield f"data: {c}\n\n"
                 except Exception as e:
@@ -3719,7 +3720,7 @@ async def async_assistants_data_generator(
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
         )
-        error_returned = json.dumps({"error": proxy_exception.to_dict()})
+        error_returned = orjson.dumps({"error": proxy_exception.to_dict()}).decode("utf-8")
         yield f"data: {error_returned}\n\n"
 
 
@@ -3752,7 +3753,7 @@ async def async_data_generator(
                 str_so_far += response_str
 
             if isinstance(chunk, BaseModel):
-                chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+                chunk = orjson.dumps(chunk.model_dump(exclude_none=True, exclude_unset=True)).decode("utf-8")
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
                 break
@@ -3796,7 +3797,7 @@ async def async_data_generator(
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
         )
-        error_returned = json.dumps({"error": proxy_exception.to_dict()})
+        error_returned = orjson.dumps({"error": proxy_exception.to_dict()}).decode("utf-8")
         yield f"data: {error_returned}\n\n"
 
 
