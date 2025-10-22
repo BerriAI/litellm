@@ -1550,6 +1550,93 @@ def test_get_deployment_model_info_base_model_merge_priority():
     print("✓ Base model merge priority test passed!")
 
 
+@pytest.mark.asyncio
+async def test_fallback_request_object_not_mutated_for_vision_models():
+    """
+    Tests that when a call to a vision model fails and falls back to another,
+    the `messages` object in the request is not mutated.
+    """
+    model_list = [
+        {
+            "model_name": "openai-vision-fail",
+            "litellm_params": {
+                "model": "openai/gpt-4-vision-preview",
+                "api_key": "bad-key",
+            },
+        },
+        {
+            "model_name": "gemini-vision-success",
+            "litellm_params": {
+                "model": "gemini/gemini-pro-vision",
+                "api_key": "mock-gemini-api-key",
+            },
+        },
+    ]
+
+    router = litellm.Router(
+        model_list=model_list,
+        fallbacks=[{"openai-vision-fail": ["gemini-vision-success"]}],
+        num_retries=0,
+    )
+
+    original_messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                    },
+                },
+            ],
+        }
+    ]
+
+    messages_for_call = copy.deepcopy(original_messages)
+
+    with patch('litellm.router.litellm.acompletion', new_callable=AsyncMock) as mock_acompletion:
+
+        captured_messages_on_fallback = None
+
+        async def side_effect(*args, **kwargs):
+            nonlocal captured_messages_on_fallback
+            model = kwargs.get('model')
+            messages_arg = kwargs.get('messages') 
+
+            if "openai" in model:
+                if messages_arg and isinstance(messages_arg, list):
+                    for message in messages_arg:
+                        if message.get('role') == 'user' and isinstance(message.get('content'), list):
+                            for content_item in message['content']:
+                                if content_item.get('type') == 'image_url':
+                                    # Simulate adding a provider-specific key or modifying structure
+                                    content_item['image_url']['openai_processed_field'] = True
+                                    break 
+                
+                raise litellm.exceptions.AuthenticationError(message="Invalid API key", llm_provider="openai", model=model)
+            elif "gemini" in model:
+                captured_messages_on_fallback = copy.deepcopy(messages_arg)
+                return litellm.ModelResponse(
+                    id="chatcmpl-123",
+                    choices=[litellm.Choices(finish_reason="stop", index=0, message=litellm.Message(content="hello", role="assistant"))],
+                    model="gemini/gemini-pro-vision",
+                )
+
+        mock_acompletion.side_effect = side_effect
+
+        response = await router.acompletion(
+            model="openai-vision-fail",
+            messages=messages_for_call,
+        )
+
+        assert response is not None
+        assert captured_messages_on_fallback is not None
+        assert captured_messages_on_fallback == original_messages
+        assert messages_for_call == original_messages
+
+
 def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
     """
     Test that _add_deployment_model_to_endpoint_for_llm_passthrough_route correctly strips bedrock provider prefix
