@@ -276,6 +276,24 @@ class CallTypes(str, Enum):
     file_content = "file_content"
     create_fine_tuning_job = "create_fine_tuning_job"
     acreate_fine_tuning_job = "acreate_fine_tuning_job"
+    
+    #########################################################
+    # Video Generation Call Types
+    #########################################################
+    create_video = "create_video"
+    acreate_video = "acreate_video"
+    avideo_retrieve = "avideo_retrieve"
+    video_retrieve = "video_retrieve"
+    avideo_content = "avideo_content"
+    video_content = "video_content"
+    video_remix = "video_remix"
+    avideo_remix = "avideo_remix"
+    video_list = "video_list"
+    avideo_list = "avideo_list"
+    video_retrieve_job = "video_retrieve_job"
+    avideo_retrieve_job = "avideo_retrieve_job"
+    video_delete = "video_delete"
+    avideo_delete = "avideo_delete"
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
     alist_fine_tuning_jobs = "alist_fine_tuning_jobs"
@@ -1153,7 +1171,6 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         super().__init__(**kwargs)
 
 
-from openai.types.chat import ChatCompletionChunk
 
 
 class ModelResponseBase(OpenAIObject):
