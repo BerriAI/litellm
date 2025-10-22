@@ -674,7 +674,9 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
 
 class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total=False):
     cache_control: ChatCompletionCachedContent
-    thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]]
+    thinking_blocks: Optional[
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+    ]
 
 
 class ChatCompletionToolMessage(TypedDict):
@@ -1410,9 +1412,9 @@ class ImageGenerationPartialImageEvent(BaseLiteLLMOpenAIResponseObject):
 
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.ERROR]
-    code: Optional[str]
-    message: str
-    param: Optional[str]
+    code: Optional[str] = None
+    message: Optional[str] = None
+    param: Optional[str] = None
 
 
 class GenericEvent(BaseLiteLLMOpenAIResponseObject):
