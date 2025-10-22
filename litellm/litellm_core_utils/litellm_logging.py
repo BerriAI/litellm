@@ -4281,8 +4281,8 @@ class StandardLoggingPayloadSetup:
         from litellm.integrations.s3 import get_s3_object_key
 
         # Only generate object key if cold storage is configured
-        configured_cold_storage_logger = litellm.configured_cold_storage_logger
-        if configured_cold_storage_logger is None:
+        cold_storage_custom_logger = litellm.cold_storage_custom_logger
+        if cold_storage_custom_logger is None:
             return None
 
         try:
@@ -4295,7 +4295,7 @@ class StandardLoggingPayloadSetup:
             # Try to get the actual logger instance from the logger name
             try:
                 custom_logger = litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(
-                    configured_cold_storage_logger
+                    cold_storage_custom_logger
                 )
                 if (
                     custom_logger
