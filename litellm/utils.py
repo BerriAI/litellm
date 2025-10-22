@@ -7628,6 +7628,9 @@ class ProviderConfigManager:
         """
         Get Search configuration for a given provider.
         """
+        from litellm.llms.dataforseo.search.transformation import (
+            DataForSEOSearchConfig,
+        )
         from litellm.llms.exa_ai.search.transformation import (
             ExaAISearchConfig,
         )
@@ -7650,6 +7653,7 @@ class ProviderConfigManager:
             SearchProviders.PARALLEL_AI: ParallelAISearchConfig,
             SearchProviders.EXA_AI: ExaAISearchConfig,
             SearchProviders.GOOGLE_PSE: GooglePSESearchConfig,
+            SearchProviders.DATAFORSEO: DataForSEOSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
