@@ -239,6 +239,8 @@ class CallTypes(str, Enum):
     speech = "speech"
     rerank = "rerank"
     arerank = "arerank"
+    search = "search"
+    asearch = "asearch"
     arealtime = "_arealtime"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
@@ -321,6 +323,8 @@ CallTypesLiteral = Literal[
     "speech",
     "rerank",
     "arerank",
+    "search",
+    "asearch",
     "_arealtime",
     "create_batch",
     "acreate_batch",
