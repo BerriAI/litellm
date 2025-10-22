@@ -10,9 +10,9 @@ class TestParallelAISearch(BaseSearchTest):
     Tests for Parallel AI Search functionality.
     """
     
-    def get_custom_llm_provider(self) -> str:
+    def get_search_provider(self) -> str:
         """
-        Return custom_llm_provider for Parallel AI Search.
+        Return search_provider for Parallel AI Search.
         """
         return "parallel_ai"
 
