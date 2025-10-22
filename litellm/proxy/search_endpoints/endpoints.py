@@ -12,6 +12,18 @@ router = APIRouter()
 
 
 @router.post(
+    "/v1/search/{search_tool_name}",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["search"],
+)
+@router.post(
+    "/search/{search_tool_name}",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["search"],
+)
+@router.post(
     "/v1/search",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,
@@ -27,6 +39,7 @@ async def search(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    search_tool_name: Optional[str] = None,
 ):
     """
     Search endpoint for performing web searches.
@@ -34,7 +47,24 @@ async def search(
     Follows the Perplexity Search API spec:
     https://docs.perplexity.ai/api-reference/search-post
     
-    Example:
+    The search_tool_name can be passed either:
+    1. In the URL path: /v1/search/{search_tool_name}
+    2. In the request body: {"search_tool_name": "..."}
+    
+    Example with search_tool_name in URL (recommended - keeps body Perplexity-compatible):
+    ```bash
+    curl -X POST "http://localhost:4000/v1/search/litellm-search" \
+        -H "Authorization: Bearer sk-1234" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "query": "latest AI developments 2024",
+            "max_results": 5,
+            "search_domain_filter": ["arxiv.org", "nature.com"],
+            "country": "US"
+        }'
+    ```
+    
+    Example with search_tool_name in body:
     ```bash
     curl -X POST "http://localhost:4000/v1/search" \
         -H "Authorization: Bearer sk-1234" \
@@ -48,8 +78,15 @@ async def search(
         }'
     ```
     
-    Request Body Parameters:
-    - search_tool_name (str, required): Name of the search tool configured in router
+    Request Body Parameters (when search_tool_name not in URL):
+    - search_tool_name (str, required if not in URL): Name of the search tool configured in router
+    - query (str or list[str], required): Search query
+    - max_results (int, optional): Maximum number of results (1-20), default 10
+    - search_domain_filter (list[str], optional): List of domains to filter (max 20)
+    - max_tokens_per_page (int, optional): Max tokens per page, default 1024
+    - country (str, optional): Country code filter (e.g., 'US', 'GB', 'DE')
+    
+    When using URL path parameter, only Perplexity-compatible parameters are needed in body:
     - query (str or list[str], required): Search query
     - max_results (int, optional): Maximum number of results (1-20), default 10
     - search_domain_filter (list[str], optional): List of domains to filter (max 20)
@@ -89,6 +126,10 @@ async def search(
     # Read request body
     body = await request.body()
     data = orjson.loads(body)
+    
+    # If search_tool_name is provided in URL path, use it (takes precedence over body)
+    if search_tool_name is not None:
+        data["search_tool_name"] = search_tool_name
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
