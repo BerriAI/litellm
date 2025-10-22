@@ -402,6 +402,11 @@ const sidebars = {
       },
       items: [
         {
+          type: "doc",
+          id: "provider_registration/index",
+          label: "Integrate as a Model Provider",
+        },
+        {
           type: "category",
           label: "OpenAI",
           items: [
@@ -583,7 +588,8 @@ const sidebars = {
         "guides/finetuned_models",
         "guides/security_settings",
         "proxy/veo_video_generation",
-        "reasoning_content"
+        "reasoning_content",
+        "extras/creating_adapters",
       ]
     },
 
@@ -740,11 +746,6 @@ const sidebars = {
         "proxy/customer_routing",
         "proxy_server",
       ],
-    },
-    {
-      type: "doc",
-      id: "provider_registration/index",
-      label: "Integrate as a Model Provider",
     },
     "troubleshoot",
   ],
