@@ -37,17 +37,17 @@ class StreamCleaner:
         return self
 
     def __next__(self):
-        for line in self.response:
-            if not line:
-                continue
-            if line.startswith('data: '):
-                line = line[len('data: '):].strip()
-                if line == "[DONE]":
-                    raise StopIteration
-                try:
-                    return json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+        line = next(self.response)
+        while not line:
+            line = next(self.response)
+        if line.startswith('data: '):
+            line = line[len('data: '):].strip()
+            if line == "[DONE]":
+                raise StopIteration
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                raise StopIteration
         raise StopIteration
 
     def __aiter__(self):
@@ -55,17 +55,17 @@ class StreamCleaner:
         return self
 
     async def __anext__(self):
-        async for line in self.response:
-            if not line:
-                continue
-            if line.startswith('data: '):
-                line = line[len('data: '):].strip()
-                if line == "[DONE]":
-                    raise StopAsyncIteration
-                try:
-                    return json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+        line = await anext(self.response)
+        while not line:
+            line = await anext(self.response)
+        if line.startswith('data: '):
+            line = line[len('data: '):].strip()
+            if line == "[DONE]":
+                raise StopAsyncIteration
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                raise StopAsyncIteration
         raise StopAsyncIteration
 
 
