@@ -255,6 +255,23 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             json_mode=json_mode,
         )
 
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        """
+        Get the complete URL for Cohere v2 chat completion.
+        The api_base should already include the full path.
+        """
+        if api_base is None:
+            raise ValueError("api_base is required")
+        return api_base
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:

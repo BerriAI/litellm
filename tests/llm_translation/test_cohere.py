@@ -37,7 +37,7 @@ async def test_chat_completion_cohere_citations(stream):
             },
         ]
         response = await litellm.acompletion(
-            model="cohere_chat/command-r",
+            model="cohere_chat/v1/command-r",
             messages=messages,
             documents=[
                 {"title": "Tall penguins", "text": "Emperor penguins are the tallest."},
@@ -96,7 +96,7 @@ def test_completion_cohere_command_r_plus_function_call():
     try:
         # test without max tokens
         response = completion(
-            model="command-r-plus",
+            model="cohere_chat/v1/command-r-plus",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -128,7 +128,7 @@ def test_completion_cohere():
             },
         ]
         response = completion(
-            model="command-r",
+            model="cohere_chat/v1/command-r",
             messages=messages,
         )
         print(response)
@@ -152,13 +152,13 @@ async def test_chat_completion_cohere(sync_mode):
         ]
         if sync_mode is False:
             response = await litellm.acompletion(
-                model="cohere_chat/command-r",
+                model="cohere_chat/v1/command-r",
                 messages=messages,
                 max_tokens=10,
             )
         else:
             response = completion(
-                model="cohere_chat/command-r",
+                model="cohere_chat/v1/command-r",
                 messages=messages,
                 max_tokens=10,
             )
@@ -181,7 +181,7 @@ async def test_chat_completion_cohere_stream(sync_mode):
         ]
         if sync_mode is False:
             response = await litellm.acompletion(
-                model="cohere_chat/command-r",
+                model="cohere_chat/v1/command-r",
                 messages=messages,
                 max_tokens=10,
                 stream=True,
@@ -191,7 +191,7 @@ async def test_chat_completion_cohere_stream(sync_mode):
                 print(chunk)
         else:
             response = completion(
-                model="cohere_chat/command-r",
+                model="cohere_chat/v1/command-r",
                 messages=messages,
                 max_tokens=10,
                 stream=True,
@@ -242,7 +242,7 @@ async def test_cohere_request_body_with_allowed_params():
     with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post", return_value=mock_response) as mock_post:
         try:
             await litellm.acompletion(
-                model="cohere/command",
+                model="cohere/v1/command",
                 messages=[{"content": "what llm are you", "role": "user"}],
                 allowed_openai_params=["tools", "response_format", "reasoning_effort"],
                 response_format=test_response_format,

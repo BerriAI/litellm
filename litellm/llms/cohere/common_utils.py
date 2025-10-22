@@ -76,14 +76,14 @@ class CohereModelInfo(BaseLLMModelInfo):
             model: The model name (e.g., "cohere_chat/v2/command-r-plus", "command-r-plus")
             
         Returns:
-            "v1" for standard Cohere v1 API, "v2" for Cohere v2 API
+            "v2" for standard Cohere v2 API (default), "v1" for Cohere v1 API
         """
-        # Check for explicit v2 route
-        if "v2/" in model:
-            return "v2"
+        # Check for explicit v1 route
+        if "v1/" in model:
+            return "v1"
         
-        # Default to v1 for all other cases
-        return "v1"
+        # Default to v2 for all other cases
+        return "v2"
 
 def validate_environment(
     headers: dict,

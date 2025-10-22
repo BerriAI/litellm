@@ -15,24 +15,7 @@ os.environ["COHERE_API_KEY"] = ""
 
 ### LiteLLM Python SDK
 
-#### Cohere v1 API (Default)
-
-```python showLineNumbers
-from litellm import completion
-
-## set ENV variables
-os.environ["COHERE_API_KEY"] = "cohere key"
-
-# cohere v1 call
-response = completion(
-    model="command-a-03-2025", 
-    messages = [{ "content": "Hello, how are you?","role": "user"}]
-)
-```
-
-#### Cohere v2 API
-
-To use the Cohere v2/chat API, prefix your model name with `cohere_chat/v2/`:
+#### Cohere v2 API (Default)
 
 ```python showLineNumbers
 from litellm import completion
@@ -42,14 +25,14 @@ os.environ["COHERE_API_KEY"] = "cohere key"
 
 # cohere v2 call
 response = completion(
-    model="cohere_chat/v2/command-r-plus", 
+    model="cohere_chat/command-a-03-2025", 
     messages = [{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
 
-#### Streaming
+#### Cohere v1 API
 
-**Cohere v1 Streaming:**
+To use the Cohere v1/chat API, prefix your model name with `cohere_chat/v1/`:
 
 ```python showLineNumbers
 from litellm import completion
@@ -57,16 +40,14 @@ from litellm import completion
 ## set ENV variables
 os.environ["COHERE_API_KEY"] = "cohere key"
 
-# cohere v1 streaming
+# cohere v1 call
 response = completion(
-    model="command-a-03-2025", 
-    messages = [{ "content": "Hello, how are you?","role": "user"}],
-    stream=True
+    model="cohere_chat/v1/command-a-03-2025", 
+    messages = [{ "content": "Hello, how are you?","role": "user"}]
 )
-
-for chunk in response:
-    print(chunk)
 ```
+
+#### Streaming
 
 **Cohere v2 Streaming:**
 
@@ -78,7 +59,7 @@ os.environ["COHERE_API_KEY"] = "cohere key"
 
 # cohere v2 streaming
 response = completion(
-    model="cohere_chat/v2/command-r-plus", 
+    model="cohere_chat/command-a-03-2025", 
     messages = [{ "content": "Hello, how are you?","role": "user"}],
     stream=True
 )
@@ -87,6 +68,25 @@ for chunk in response:
     print(chunk)
 ```
 
+
+**Cohere v1 Streaming:**
+
+```python showLineNumbers
+from litellm import completion
+
+## set ENV variables
+os.environ["COHERE_API_KEY"] = "cohere key"
+
+# cohere v1 streaming
+response = completion(
+    model="cohere_chat/v1/command-a-03-2025", 
+    messages = [{ "content": "Hello, how are you?","role": "user"}],
+    stream=True
+)
+
+for chunk in response:
+    print(chunk)
+```
 
 
 ## Usage with LiteLLM Proxy 
@@ -108,7 +108,7 @@ Define the cohere models you want to use in the config.yaml
 model_list:
   - model_name: command-a-03-2025 
     litellm_params:
-      model: command-a-03-2025
+      model: cohere_chat/v1/command-a-03-2025
       api_key: "os.environ/COHERE_API_KEY"
 ```
 
@@ -117,7 +117,7 @@ model_list:
 model_list:
   - model_name: command-a-03-2025-v2
     litellm_params:
-      model: cohere_chat/v2/command-a-03-2025
+      model: cohere_chat/command-a-03-2025
       api_key: "os.environ/COHERE_API_KEY"
 ```
 
