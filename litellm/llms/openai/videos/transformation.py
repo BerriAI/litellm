@@ -242,7 +242,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         response_data = raw_response.json()
         
         # Transform the response data
-        video_obj = VideoObject(**response_data)
+        video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
 
         return video_obj
 
