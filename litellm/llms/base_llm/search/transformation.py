@@ -1,7 +1,7 @@
 """
 Base Search transformation configuration.
 """
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import httpx
 from pydantic import PrivateAttr
@@ -48,6 +48,16 @@ class BaseSearchConfig:
 
     def __init__(self) -> None:
         pass
+    
+    def get_http_method(self) -> Literal["GET", "POST"]:
+        """
+        Get HTTP method for search requests.
+        Override in provider-specific implementations if needed.
+        
+        Returns:
+            HTTP method ('GET' or 'POST'). Default is 'POST'.
+        """
+        return "POST"
 
     @staticmethod
     def get_supported_perplexity_optional_params() -> set:
