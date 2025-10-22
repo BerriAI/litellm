@@ -15,6 +15,33 @@ from litellm.proxy.guardrails.guardrail_hooks.lasso import (
     LassoGuardrailMissingSecrets,
     LassoGuardrailAPIError,
 )
+from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+
+
+def test_lasso_guard_config():
+    """Test Lasso guard configuration with init_guardrails_v2."""
+    litellm.set_verbose = True
+    litellm.guardrail_name_config_map = {}
+
+    # Set environment variable for testing
+    os.environ["LASSO_API_KEY"] = "test-key"
+
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "violence-guard",
+                "litellm_params": {
+                    "guardrail": "lasso",
+                    "mode": "pre_call",
+                    "default_on": True,
+                },
+            }
+        ],
+        config_file_path="",
+    )
+
+    # Clean up
+    del os.environ["LASSO_API_KEY"]
 
 
 class TestLassoGuardrail:
