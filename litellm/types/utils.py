@@ -2513,9 +2513,6 @@ class LlmProviders(str, Enum):
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
-    TAVILY = "tavily"
-    PARALLEL_AI = "parallel_ai"
-    EXA_AI = "exa_ai"
     ASSEMBLYAI = "assemblyai"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
@@ -2539,6 +2536,23 @@ class LlmProviders(str, Enum):
 
 # Create a set of all provider values for quick lookup
 LlmProvidersSet = {provider.value for provider in LlmProviders}
+
+
+class SearchProviders(str, Enum):
+    """
+    Enum for search provider types.
+    Separate from LlmProviders for semantic clarity.
+    """
+    PERPLEXITY = "perplexity"
+    TAVILY = "tavily"
+    PARALLEL_AI = "parallel_ai"
+    EXA_AI = "exa_ai"
+    GOOGLE_PSE = "google_pse"
+    DATAFORSEO = "dataforseo"
+
+
+# Create a set of all search provider values for quick lookup
+SearchProvidersSet = {provider.value for provider in SearchProviders}
 
 
 class LiteLLMLoggingBaseClass:

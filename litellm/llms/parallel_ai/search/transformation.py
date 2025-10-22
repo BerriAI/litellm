@@ -67,6 +67,7 @@ class ParallelAISearchConfig(BaseSearchConfig):
         self,
         api_base: Optional[str],
         optional_params: dict,
+        data: Optional[Union[Dict, List[Dict]]] = None,
         **kwargs,
     ) -> str:
         """

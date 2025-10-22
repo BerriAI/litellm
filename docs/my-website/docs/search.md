@@ -2,7 +2,7 @@
 
 | Feature | Supported | 
 |---------|-----------|
-| Supported Providers | `perplexity`, `tavily`, `parallel_ai`, `exa_ai` |
+| Supported Providers | `perplexity`, `tavily`, `parallel_ai`, `exa_ai`, `google_pse`, `dataforseo` |
 | Cost Tracking | ❌ |
 | Logging | ✅ |
 | Load Balancing | ❌ |
@@ -205,7 +205,7 @@ See the [official Perplexity Search documentation](https://docs.perplexity.ai/ap
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `query` | string or array | Yes | Search query. Can be a single string or array of strings |
-| `search_provider` | string | Yes (SDK) | The search provider to use: `"perplexity"`, `"tavily"`, `"parallel_ai"`, or `"exa_ai"` |
+| `search_provider` | string | Yes (SDK) | The search provider to use: `"perplexity"`, `"tavily"`, `"parallel_ai"`, `"exa_ai"`, or `"google_pse"` |
 | `search_tool_name` | string | Yes (Proxy) | Name of the search tool configured in `config.yaml` |
 | `max_results` | integer | No | Maximum number of results to return (1-20). Default: 10 |
 | `search_domain_filter` | array | No | List of domains to filter results (max 20 domains) |
@@ -265,6 +265,8 @@ The response follows Perplexity's search format with the following structure:
 | Tavily | `TAVILY_API_KEY` | `tavily` |
 | Exa AI | `EXA_API_KEY` | `exa_ai` |
 | Parallel AI | `PARALLEL_AI_API_KEY` | `parallel_ai` |
+| Google PSE | `GOOGLE_PSE_API_KEY`, `GOOGLE_PSE_ENGINE_ID` | `google_pse` |
+| DataForSEO | `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD` | `dataforseo` |
 
 ### Perplexity AI
 
@@ -494,6 +496,153 @@ curl http://0.0.0.0:4000/v1/search/parallel-search \
   }'
 ```
 
+### Google Programmable Search Engine (PSE)
+
+**Get API Key:** [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+**Create Search Engine:** [Programmable Search Engine](https://programmablesearchengine.google.com/)
+
+#### Setup
+
+1. Go to [Google Developers Programmable Search Engine](https://programmablesearchengine.google.com/) and log in or create an account
+2. Click the **Add** button in the control panel
+3. Enter a search engine name and configure properties:
+   - Choose which sites to search (entire web or specific sites)
+   - Set language and other preferences
+   - Verify you're not a robot
+4. Click **Create** button
+5. Once created, you'll see:
+   - **Search engine ID (cx)** - Copy this for `GOOGLE_PSE_ENGINE_ID`
+   - Instructions to get your API key
+6. Generate API key:
+   - Go to [Google Cloud Console - Credentials](https://console.cloud.google.com/apis/credentials)
+   - Create a new API key or use existing one
+   - Enable **Custom Search API** for your project
+   - Copy the API key for `GOOGLE_PSE_API_KEY`
+
+#### LiteLLM Python SDK
+
+```python showLineNumbers title="Google PSE Search"
+import os
+from litellm import search
+
+os.environ["GOOGLE_PSE_API_KEY"] = "AIza..."
+os.environ["GOOGLE_PSE_ENGINE_ID"] = "your-search-engine-id"
+
+response = search(
+    query="latest AI developments",
+    search_provider="google_pse",
+    max_results=10
+)
+```
+
+#### LiteLLM AI Gateway
+
+**1. Setup config.yaml**
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+
+search_tools:
+  - search_tool_name: google-search
+    litellm_params:
+      search_provider: google_pse
+      api_key: os.environ/GOOGLE_PSE_API_KEY
+      search_engine_id: os.environ/GOOGLE_PSE_ENGINE_ID
+```
+
+**2. Start the proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**3. Test the search endpoint**
+
+```bash showLineNumbers title="Test Request"
+curl http://0.0.0.0:4000/v1/search/google-search \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "latest AI developments",
+    "max_results": 10
+  }'
+```
+
+### DataForSEO
+
+**Get API Access:** [DataForSEO](https://dataforseo.com/)
+
+#### Setup
+
+1. Go to [DataForSEO](https://dataforseo.com/) and create an account
+2. Navigate to your account dashboard
+3. Generate API credentials:
+   - You'll receive a **login** (username)
+   - You'll receive a **password**
+4. Set up your environment variables:
+   - `DATAFORSEO_LOGIN` - Your DataForSEO login/username
+   - `DATAFORSEO_PASSWORD` - Your DataForSEO password
+
+#### LiteLLM Python SDK
+
+```python showLineNumbers title="DataForSEO Search"
+import os
+from litellm import search
+
+os.environ["DATAFORSEO_LOGIN"] = "your-login"
+os.environ["DATAFORSEO_PASSWORD"] = "your-password"
+
+response = search(
+    query="latest AI developments",
+    search_provider="dataforseo",
+    max_results=10
+)
+```
+
+#### LiteLLM AI Gateway
+
+**1. Setup config.yaml**
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+
+search_tools:
+  - search_tool_name: dataforseo-search
+    litellm_params:
+      search_provider: dataforseo
+      api_key: "os.environ/DATAFORSEO_LOGIN:os.environ/DATAFORSEO_PASSWORD"
+```
+
+**2. Start the proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**3. Test the search endpoint**
+
+```bash showLineNumbers title="Test Request"
+curl http://0.0.0.0:4000/v1/search/dataforseo-search \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "latest AI developments",
+    "max_results": 10
+  }'
+```
+
 
 
 ## Provider-specific parameters
@@ -555,5 +704,50 @@ response = search(
     # Parallel AI-specific parameters
     processor="pro",                 # 'base' or 'pro'
     max_chars_per_result=500         # Max characters per result
+)
+```
+
+#### Google PSE Search
+
+```python showLineNumbers title="Google PSE Search"
+import os
+from litellm import search
+
+os.environ["GOOGLE_PSE_API_KEY"] = "AIza..."
+os.environ["GOOGLE_PSE_ENGINE_ID"] = "your-search-engine-id"
+
+response = search(
+    query="latest AI research papers",
+    search_provider="google_pse",
+    max_results=10,
+    search_domain_filter=["arxiv.org"],
+    # Google PSE-specific parameters (use actual Google PSE API parameter names)
+    dateRestrict="m6",               # 'm6' = last 6 months, 'd7' = last 7 days
+    lr="lang_en",                    # Language restriction (e.g., 'lang_en', 'lang_es')
+    safe="active",                   # Search safety level ('active' or 'off')
+    exactTerms="machine learning",   # Phrase that all documents must contain
+    fileType="pdf"                   # File type to restrict results to
+)
+```
+
+#### DataForSEO Search
+
+```python showLineNumbers title="DataForSEO Search"
+import os
+from litellm import search
+
+os.environ["DATAFORSEO_LOGIN"] = "your-login"
+os.environ["DATAFORSEO_PASSWORD"] = "your-password"
+
+response = search(
+    query="AI developments",
+    search_provider="dataforseo",
+    max_results=10,
+    # DataForSEO-specific parameters
+    country="United States",       # Country name for location_name
+    language_code="en",            # Language code
+    depth=20,                      # Number of results (max 700)
+    device="desktop",              # Device type ('desktop', 'mobile', 'tablet')
+    os="windows"                   # Operating system
 )
 ```

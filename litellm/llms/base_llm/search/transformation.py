@@ -1,7 +1,7 @@
 """
 Base Search transformation configuration.
 """
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import httpx
 from pydantic import PrivateAttr
@@ -48,6 +48,16 @@ class BaseSearchConfig:
 
     def __init__(self) -> None:
         pass
+    
+    def get_http_method(self) -> Literal["GET", "POST"]:
+        """
+        Get HTTP method for search requests.
+        Override in provider-specific implementations if needed.
+        
+        Returns:
+            HTTP method ('GET' or 'POST'). Default is 'POST'.
+        """
+        return "POST"
 
     @staticmethod
     def get_supported_perplexity_optional_params() -> set:
@@ -82,11 +92,26 @@ class BaseSearchConfig:
         self,
         api_base: Optional[str],
         optional_params: dict,
+        data: Optional[Union[Dict, List[Dict]]] = None,
         **kwargs,
     ) -> str:
         """
         Get complete URL for Search endpoint.
-        Override in provider-specific implementations.
+        
+        Args:
+            api_base: Base URL for the API
+            optional_params: Optional parameters for the request
+            data: Transformed request body from transform_search_request().
+                  Some providers (e.g., Google PSE) use GET requests and need
+                  the request body to construct query parameters in the URL.
+                  Can be a dict or list of dicts depending on provider.
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            Complete URL for the search endpoint
+            
+        Note:
+            Override in provider-specific implementations.
         """
         raise NotImplementedError("get_complete_url must be implemented by provider")
 
@@ -95,7 +120,7 @@ class BaseSearchConfig:
         query: Union[str, List[str]],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> Union[Dict, List[Dict]]:
         """
         Transform Search request to provider-specific format.
         Override in provider-specific implementations.
