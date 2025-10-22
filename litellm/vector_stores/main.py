@@ -386,7 +386,7 @@ def search(
                 pass
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
 
         ## MOCK RESPONSE LOGIC
         if litellm_params.mock_response and isinstance(

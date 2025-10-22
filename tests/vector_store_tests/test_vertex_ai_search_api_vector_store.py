@@ -83,7 +83,6 @@ class TestVertexAISearchAPIVectorStore:
                     query="what is LiteLLM?",
                     vector_store_id="test-litellm-app_1761094730750",
                     custom_llm_provider="vertex_ai/search_api",
-                    vertex_engine_id="test-litellm-app_1761094730750",
                     vertex_project="test-vector-store-db",
                     vertex_location="us-central1",
                 )
@@ -145,7 +144,6 @@ class TestVertexAISearchAPIVectorStore:
                     query="what is LiteLLM?",
                     vector_store_id="test-litellm-app_1761094730750",
                     custom_llm_provider="vertex_ai/search_api",
-                    vertex_engine_id="test-litellm-app_1761094730750",
                     vertex_project="test-vector-store-db",
                     vertex_location="us-central1",
                 )

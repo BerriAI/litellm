@@ -162,9 +162,6 @@ class CredentialLiteLLMParams(BaseModel):
     watsonx_region_name: Optional[str] = None
 
 
-
-
-
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
     LiteLLM Params without 'model' arg (used across completion / assistants api)
@@ -208,6 +205,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # Batch/File API Params
     s3_bucket_name: Optional[str] = None
     gcs_bucket_name: Optional[str] = None
+
+    # Vector Store Params
+    vector_store_id: Optional[str] = None
 
     def __init__(
         self,
