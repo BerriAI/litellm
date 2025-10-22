@@ -1138,6 +1138,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import
 from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
     AmazonInvokeNovaConfig,
 )
+from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
+    AmazonQwen3Config,
+)
 from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
     AmazonAnthropicConfig,
 )

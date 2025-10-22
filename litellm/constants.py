@@ -810,6 +810,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "ai21",
     "nova",
     "deepseek_r1",
+    "qwen3",
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[

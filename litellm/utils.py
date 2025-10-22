@@ -7152,6 +7152,8 @@ class ProviderConfigManager:
                 return litellm.AmazonDeepSeekR1Config()
             elif bedrock_invoke_provider == "nova":
                 return litellm.AmazonInvokeNovaConfig()
+            elif bedrock_invoke_provider == "qwen3":
+                return litellm.AmazonQwen3Config()
             else:
                 return litellm.AmazonInvokeConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
