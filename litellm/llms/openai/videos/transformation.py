@@ -221,14 +221,14 @@ class OpenAIVideoConfig(BaseVideoConfig):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> Dict[str, Any]:
+    ) -> List[VideoObject]:
         """
         Transform the OpenAI video list response.
         """
         response_data = raw_response.json()
         video_response = VideoResponse(**response_data)
         # Convert VideoResponse object to dictionary to match base class return type
-        return video_response.model_dump()
+        return [VideoObject(**video) for video in video_response.data]
 
     def transform_video_delete_response(
         self,

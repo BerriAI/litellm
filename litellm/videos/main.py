@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Coroutine, Literal, Optional, Union, overload, Dict
+from typing import Any, Coroutine, Literal, Optional, Union, overload, Dict, List
 
 import json
 import litellm
@@ -695,7 +695,7 @@ async def avideo_list(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Dict[str, Any]:
+) -> List[VideoObject]:
     """
     Asynchronously calls the `video_list` function with the given arguments and keyword arguments.
 
@@ -776,7 +776,7 @@ def video_list(
     *,
     avideo_list: Literal[True],
     **kwargs,
-) -> Coroutine[Any, Any, Dict[str, Any]]:
+) -> Coroutine[Any, Any, List[VideoObject]]:
     ...
 
 
@@ -794,7 +794,7 @@ def video_list(
     *,
     avideo_list: Literal[False] = False,
     **kwargs,
-) -> Dict[str, Any]:
+) -> List[VideoObject]:
     ...
 
 # fmt: on
@@ -815,8 +815,8 @@ def video_list(  # noqa: PLR0915
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Union[
-    Dict[str, Any],
-    Coroutine[Any, Any, Dict[str, Any]],
+    List[VideoObject],
+    Coroutine[Any, Any, List[VideoObject]],
 ]:
     """
     Maps the https://api.openai.com/v1/videos endpoint.
@@ -834,7 +834,7 @@ def video_list(  # noqa: PLR0915
         if mock_response is not None:
             if isinstance(mock_response, str):
                 mock_response = json.loads(mock_response)
-            return mock_response
+            return [VideoObject(**item) for item in mock_response]
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
