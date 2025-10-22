@@ -269,7 +269,7 @@ class TestLiteLLMCompletionResponsesConfig:
         # Only assert ID format if an ID is present
         if hasattr(reasoning_item, 'id') and reasoning_item.id:
             assert reasoning_item.id.startswith("rs_"), f"Expected ID to start with 'rs_', got: {reasoning_item.id}"
-        assert reasoning_item.status == "stop"
+        assert reasoning_item.status == "completed"
         assert reasoning_item.role == "assistant"
         assert len(reasoning_item.content) == 1
         assert reasoning_item.content[0].type == "output_text"
