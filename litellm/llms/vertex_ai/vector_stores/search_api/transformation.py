@@ -143,7 +143,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             results = response_json.get("results", [])
 
             # Transform results to standard format
-            search_results = []
+            search_results: List[VectorStoreSearchResult] = []
             for result in results:
                 document = result.get("document", {})
                 derived_data = document.get("derivedStructData", {})
