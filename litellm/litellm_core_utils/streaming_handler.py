@@ -2,6 +2,7 @@ import asyncio
 import collections.abc
 import datetime
 import json
+import orjson
 import threading
 import time
 import traceback
@@ -267,7 +268,7 @@ class CustomStreamWrapper:
             finish_reason = ""
             print_verbose(f"chunk: {chunk}")
             if chunk.startswith("data:"):
-                data_json = json.loads(chunk[5:])
+                data_json = orjson.loads(chunk[5:])
                 print_verbose(f"data json: {data_json}")
                 if "token" in data_json and "text" in data_json["token"]:
                     text = data_json["token"]["text"]
@@ -301,7 +302,7 @@ class CustomStreamWrapper:
 
     def handle_ai21_chunk(self, chunk):  # fake streaming
         chunk = chunk.decode("utf-8")
-        data_json = json.loads(chunk)
+        data_json = orjson.loads(chunk)
         try:
             text = data_json["completions"][0]["data"]["text"]
             is_finished = True
@@ -316,7 +317,7 @@ class CustomStreamWrapper:
 
     def handle_maritalk_chunk(self, chunk):  # fake streaming
         chunk = chunk.decode("utf-8")
-        data_json = json.loads(chunk)
+        data_json = orjson.loads(chunk)
         try:
             text = data_json["answer"]
             is_finished = True
@@ -337,7 +338,7 @@ class CustomStreamWrapper:
             if self.model and "dolphin" in self.model:
                 chunk = self.process_chunk(chunk=chunk)
             else:
-                data_json = json.loads(chunk)
+                data_json = orjson.loads(chunk)
                 chunk = data_json["generated_text"]
             text = chunk
             if "[DONE]" in text:
@@ -354,7 +355,7 @@ class CustomStreamWrapper:
 
     def handle_aleph_alpha_chunk(self, chunk):
         chunk = chunk.decode("utf-8")
-        data_json = json.loads(chunk)
+        data_json = orjson.loads(chunk)
         try:
             text = data_json["completions"][0]["completion"]
             is_finished = True
