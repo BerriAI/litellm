@@ -417,8 +417,9 @@ class ToolPermissionGuardrailConfigModel(BaseModel):
 class ZscalerAIGuardConfigModel(BaseModel):
     """Configuration parameters for the Zscaler AI Guard guardrail"""
 
-    policy_id: int = Field(
-        description="Policy ID for Zscaler AI Guard (required)"
+    policy_id: Optional[int] = Field(
+        default=None,
+        description="Policy ID for Zscaler AI Guard. Can also be set via ZSCALER_AI_GUARD_POLICY_ID environment variable"
     )
     send_user_api_key_alias: Optional[bool] = Field(
         default=False, description="Whether to send user_API_key_alias in headers"
