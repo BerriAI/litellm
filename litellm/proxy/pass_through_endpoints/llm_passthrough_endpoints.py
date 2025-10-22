@@ -1223,7 +1223,6 @@ async def _base_vertex_proxy_route(
             "Using vector store credentials to override vertex project and location"
         )
         litellm_params = router_credentials.get("litellm_params", {})
-        # [TODO]: ADD LITELLM_CREDENTIALS SUPPORT
         if litellm_params:
             # Extract vertex_project and vertex_location from litellm_params
             vector_store_project = litellm_params.get("vertex_project")
@@ -1280,9 +1279,7 @@ async def _base_vertex_proxy_route(
         headers.pop("host", None)
     else:
         if router_credentials is not None:
-            vertex_project = router_credentials.get("vertex_project")
-            vertex_location = router_credentials.get("vertex_location")
-            vertex_credentials_str = router_credentials.get("vertex_credentials")
+            vertex_credentials_str = None
         elif vertex_credentials is not None:
             vertex_project = vertex_credentials.vertex_project
             vertex_location = vertex_credentials.vertex_location
