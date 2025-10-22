@@ -191,6 +191,35 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         
         express_as_attrs_str = " ".join(express_as_attrs)
         return f"<mstts:express-as {express_as_attrs_str}>{content}</mstts:express-as>"
+    
+    def _get_voice_language(
+        self,
+        voice_name: Optional[str],
+        explicit_lang: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Get the language for the voice element's xml:lang attribute
+        
+        Args:
+            voice_name: The Azure voice name (e.g., "en-US-AriaNeural")
+            explicit_lang: Explicitly provided language code (takes precedence)
+        
+        Returns:
+            Language code if available (e.g., "es-ES"), or None
+        
+        Examples:
+            - explicit_lang="es-ES" → "es-ES" (explicit takes precedence)
+            - voice_name="en-US-AriaNeural", explicit_lang=None → None (use default from voice)
+            - voice_name="en-US-AvaMultilingualNeural", explicit_lang="fr-FR" → "fr-FR"
+        """
+        # If explicit language is provided, use it (for multilingual voices)
+        if explicit_lang:
+            return explicit_lang
+        
+        # For non-multilingual voices, we don't need to set xml:lang on the voice element
+        # The voice name already encodes the language (e.g., en-US-AriaNeural)
+        # Only return a language if explicitly set
+        return None
 
     def map_openai_params(
         self,
@@ -243,6 +272,9 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         
         if "role" in optional_params:
             mapped_params["role"] = optional_params["role"]
+        
+        if "lang" in optional_params:
+            mapped_params["lang"] = optional_params["lang"]
         
         return mapped_voice, mapped_params
 
@@ -368,6 +400,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         - style: Speaking style (e.g., "cheerful", "sad", "angry")
         - styledegree: Style intensity (0.01 to 2)
         - role: Voice role (e.g., "Girl", "Boy", "SeniorFemale", "SeniorMale")
+        - lang: Language code for multilingual voices (e.g., "es-ES", "fr-FR")
         
         Returns:
             TextToSpeechRequestData: Contains SSML body and Azure-specific headers
@@ -386,6 +419,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         style = optional_params.get("style")
         styledegree = optional_params.get("styledegree")
         role = optional_params.get("role")
+        lang = optional_params.get("lang")
         
         # Escape XML special characters in input text
         escaped_input = (
@@ -416,8 +450,15 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             role=role,
         )
         
+        # Build voice element with optional xml:lang attribute
+        voice_lang = self._get_voice_language(
+            voice_name=azure_voice,
+            explicit_lang=lang,
+        )
+        voice_lang_attr = f" xml:lang='{voice_lang}'" if voice_lang else ""
+        
         ssml_body = f"""<speak version='1.0' {xmlns} xml:lang='en-US'>
-    <voice name='{azure_voice}'>
+    <voice name='{azure_voice}'{voice_lang_attr}>
         {voice_content}
     </voice>
 </speak>"""
