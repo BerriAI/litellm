@@ -100,6 +100,7 @@ async def route_request(
         "avector_store_search",
         "avector_store_create",
         "aocr",
+        "asearch",
     ],
 ):
     """
