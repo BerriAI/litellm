@@ -3,7 +3,7 @@
 | Feature | Supported | 
 |---------|-----------|
 | Supported Providers | `perplexity`, `tavily`, `parallel_ai`, `exa_ai`, `google_pse`, `dataforseo` |
-| Cost Tracking | ❌ |
+| Cost Tracking | ✅ |
 | Logging | ✅ |
 | Load Balancing | ❌ |
 
