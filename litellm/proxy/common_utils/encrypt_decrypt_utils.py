@@ -61,9 +61,12 @@ def decrypt_value_helper(
         verbose_proxy_logger.debug(
             f"Unable to decrypt value={value} for key: {key}, returning None"
         )
-        verbose_proxy_logger.exception(error_message)
-        # [Non-Blocking Exception. - this should not block decrypting other values]
-        return value if return_original_value else None
+        if return_original_value:
+            return value
+        else:
+            verbose_proxy_logger.exception(error_message)
+            # [Non-Blocking Exception. - this should not block decrypting other values]
+            return None
 
 
 def encrypt_value(value: str, signing_key: str):

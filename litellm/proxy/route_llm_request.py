@@ -25,6 +25,8 @@ ROUTE_ENDPOINT_MAPPING = {
     "alist_input_items": "/responses/{response_id}/input_items",
     "aimage_edit": "/images/edits",
     "acancel_responses": "/responses/{response_id}/cancel",
+    "aocr": "/ocr",
+    "asearch": "/search",
 }
 
 
@@ -98,6 +100,8 @@ async def route_request(
         "allm_passthrough_route",
         "avector_store_search",
         "avector_store_create",
+        "aocr",
+        "asearch",
     ],
 ):
     """
@@ -180,6 +184,7 @@ async def route_request(
                 "alist_input_items",
                 "avector_store_create",
                 "avector_store_search",
+                "asearch"
             ]:
                 # moderation endpoint does not require `model` parameter
                 return getattr(llm_router, f"{route_type}")(**data)

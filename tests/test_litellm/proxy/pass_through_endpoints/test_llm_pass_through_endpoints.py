@@ -18,12 +18,12 @@ import litellm
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
+    bedrock_llm_proxy_route,
     create_pass_through_route,
     llm_passthrough_factory_proxy_route,
-    vllm_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
-    bedrock_llm_proxy_route,
+    vllm_proxy_route,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
@@ -995,6 +995,64 @@ class TestBedrockLLMProxyRoute:
             # For regular models, model should be just the model ID
             assert call_kwargs["model"] == "anthropic.claude-3-sonnet-20240229-v1:0"
             assert result == "success"
+
+    @pytest.mark.asyncio
+    async def test_bedrock_error_handling_returns_actual_error(self):
+        """
+        Test that when Bedrock API returns an error, it is properly propagated to the user
+        instead of being returned as a generic "Internal Server Error".
+        """
+        from fastapi import HTTPException
+
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            handle_bedrock_passthrough_router_model,
+        )
+        
+        mock_request = Mock()
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        
+        mock_request_body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"textaaa": "Hello"}]
+                }
+            ]
+        }
+        
+        bedrock_error_message = '{"message":"ContentBlock object at messages.0.content.0 must set one of the following keys: text, image, toolUse, toolResult, document, video."}'
+        
+        # Create a mock httpx.Response for the error
+        mock_error_response = Mock(spec=httpx.Response)
+        mock_error_response.status_code = 400
+        mock_error_response.aread = AsyncMock(return_value=bedrock_error_message.encode('utf-8'))
+        
+        # Create the HTTPStatusError
+        mock_http_error = httpx.HTTPStatusError(
+            message="Bad Request",
+            request=Mock(spec=httpx.Request),
+            response=mock_error_response,
+        )
+        
+        mock_llm_router = Mock()
+        mock_llm_router.allm_passthrough_route = AsyncMock(side_effect=mock_http_error)
+        
+        endpoint = "model/test-model/converse"
+        model = "test-model"
+        
+        with pytest.raises(HTTPException) as exc_info:
+            await handle_bedrock_passthrough_router_model(
+                model=model,
+                endpoint=endpoint,
+                request=mock_request,
+                request_body=mock_request_body,
+                llm_router=mock_llm_router,
+            )
+        
+        assert exc_info.value.status_code == 400
+        assert "ContentBlock object at messages.0.content.0 must set one of the following keys" in str(exc_info.value.detail)
 
 
 class TestLLMPassthroughFactoryProxyRoute:

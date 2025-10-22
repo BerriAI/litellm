@@ -382,3 +382,30 @@ def test_get_tags_from_request_body_no_tags():
     result = get_tags_from_request_body(request_body=request_body)
     
     assert result == []
+
+
+def test_get_tags_from_request_body_with_dict_tags():
+    """
+    Test that function handles dict tags gracefully without crashing.
+    When tags is a dict instead of a list, it should be ignored and return empty list.
+    """
+    request_body = {
+        "model": "aws/anthropic/bedrock-claude-3-5-sonnet-v1",
+        "messages": [
+            {
+                "role": "user",
+                "content": "aloha"
+            }
+        ],
+        "metadata": {
+            "tags": {
+                "litellm_id": "litellm_ratelimit_test",
+                "llm_id": "llmid_ratelimit_test"
+            }
+        }
+    }
+    
+    result = get_tags_from_request_body(request_body=request_body)
+    
+    assert result == []
+    assert isinstance(result, list)

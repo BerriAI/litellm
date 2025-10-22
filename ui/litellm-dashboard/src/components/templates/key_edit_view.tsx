@@ -15,6 +15,7 @@ import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -272,6 +273,24 @@ export function KeyEditView({
                   : "Select or enter prompts"
             }
             options={promptsList.map((name) => ({ value: name, label: name }))}
+          />
+        </Tooltip>
+      </Form.Item>
+
+      <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
+        <Tooltip title={!premiumUser ? "Setting allowed pass through routes by key is a premium feature" : ""} placement="top">
+          <PassThroughRoutesSelector
+            onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+            value={form.getFieldValue("allowed_passthrough_routes")}
+            accessToken={accessToken || ""}
+            placeholder={
+              !premiumUser
+                ? "Premium feature - Upgrade to set allowed pass through routes by key"
+                : Array.isArray(keyData.metadata?.allowed_passthrough_routes) && keyData.metadata.allowed_passthrough_routes.length > 0
+                  ? `Current: ${keyData.metadata.allowed_passthrough_routes.join(", ")}`
+                  : "Select or enter allowed pass through routes"
+            }
+            disabled={!premiumUser}
           />
         </Tooltip>
       </Form.Item>

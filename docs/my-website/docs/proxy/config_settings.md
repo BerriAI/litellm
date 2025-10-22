@@ -340,6 +340,7 @@ router_settings:
 | router_general_settings | RouterGeneralSettings | [SDK-Only] Router general settings - contains optimizations like 'async_only_mode'. [Docs](../routing.md#router-general-settings) |
 | optional_pre_call_checks | List[str] | List of pre-call checks to add to the router. Currently supported: 'router_budget_limiting', 'prompt_caching' |
 | ignore_invalid_deployments | boolean | If true, ignores invalid deployments. Default for proxy is True - to prevent invalid models from blocking other models from being loaded. |
+| search_tools | List[SearchToolTypedDict] | List of search tool configurations for Search API integration. Each tool specifies a search_tool_name and litellm_params with search_provider, api_key, api_base, etc. [Further Docs](../search.md) |
 
 
 ### environment variables - Reference
@@ -470,6 +471,7 @@ router_settings:
 | DEFAULT_MAX_RETRIES | Default maximum retry attempts. Default is 2
 | DEFAULT_MAX_TOKENS | Default maximum tokens for LLM calls. Default is 4096
 | DEFAULT_MAX_TOKENS_FOR_TRITON | Default maximum tokens for Triton models. Default is 2000
+| DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE | Default maximum size for redis batch cache. Default is 1000
 | DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT | Default token count for mock response completions. Default is 20
 | DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT | Default token count for mock response prompts. Default is 10
 | DEFAULT_MODEL_CREATED_AT_TIME | Default creation timestamp for models. Default is 1677610602
@@ -500,6 +502,7 @@ router_settings:
 | DISABLE_AIOHTTP_TRANSPORT | Flag to disable aiohttp transport. When this is set to True, litellm will use httpx instead of aiohttp. **Default is False**
 | DISABLE_AIOHTTP_TRUST_ENV | Flag to disable aiohttp trust environment. When this is set to True, litellm will not trust the environment for aiohttp eg. `HTTP_PROXY` and `HTTPS_PROXY` environment variables will not be used when this is set to True. **Default is False**
 | DISABLE_SCHEMA_UPDATE | Toggle to disable schema updates
+| DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE | Threshold for deployment failures per minute before enforcing rate limits in parallel request limiter. Default is 1
 | DOCS_DESCRIPTION | Description text for documentation pages
 | DOCS_FILTERED | Flag indicating filtered documentation
 | DOCS_TITLE | Title of the documentation pages
@@ -533,6 +536,7 @@ router_settings:
 | GENERIC_CLIENT_ID | Client ID for generic OAuth providers
 | GENERIC_CLIENT_SECRET | Client secret for generic OAuth providers
 | GENERIC_CLIENT_STATE | State parameter for generic client authentication
+| GENERIC_CLIENT_USE_PKCE | Enable PKCE (Proof Key for Code Exchange) for generic OAuth providers. Set to "true" when your OAuth provider requires PKCE. **Default is false**
 | GENERIC_SSO_HEADERS | Comma-separated list of additional headers to add to the request - e.g. Authorization=Bearer `<token>`, Content-Type=application/json, etc.
 | GENERIC_INCLUDE_CLIENT_ID | Include client ID in requests for OAuth
 | GENERIC_SCOPE | Scope settings for generic OAuth providers
@@ -555,6 +559,8 @@ router_settings:
 | GITHUB_COPILOT_ACCESS_TOKEN_FILE | File to store GitHub Copilot access token for `github_copilot` llm provider
 | GREENSCALE_API_KEY | API key for Greenscale service
 | GREENSCALE_ENDPOINT | Endpoint URL for Greenscale service
+| GRAYSWAN_API_BASE | Base URL for GraySwan API. Default is https://api.grayswan.ai
+| GRAYSWAN_API_KEY | API key for GraySwan Cygnal service
 | GOOGLE_APPLICATION_CREDENTIALS | Path to Google Cloud credentials JSON file
 | GOOGLE_CLIENT_ID | Client ID for Google OAuth
 | GOOGLE_CLIENT_SECRET | Client secret for Google OAuth
@@ -715,6 +721,7 @@ router_settings:
 | PROXY_BATCH_POLLING_INTERVAL | Time in seconds to wait before polling a batch, to check if it's completed. Default is 6000s (1 hour)
 | PROXY_BUDGET_RESCHEDULER_MAX_TIME | Maximum time in seconds to wait before checking database for budget resets. Default is 605
 | PROXY_BUDGET_RESCHEDULER_MIN_TIME | Minimum time in seconds to wait before checking database for budget resets. Default is 597
+| PYTHON_GC_THRESHOLD | GC thresholds ('gen0,gen1,gen2', e.g. '1000,50,50'); defaults to Python’s values.
 | PROXY_LOGOUT_URL | URL for logging out of the proxy service
 | QDRANT_API_BASE | Base URL for Qdrant API
 | QDRANT_API_KEY | API key for Qdrant service
@@ -730,6 +737,7 @@ router_settings:
 | REDIS_GCP_SSL_CA_CERTS | Path to SSL CA certificate file for secure GCP Memorystore Redis connections
 | REDOC_URL | The path to the Redoc Fast API documentation. **By default this is "/redoc"**
 | REPEATED_STREAMING_CHUNK_LIMIT | Limit for repeated streaming chunks to detect looping. Default is 100
+| REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES | Maximum size in bytes for WebSocket messages in realtime connections. Default is None.
 | REPLICATE_MODEL_NAME_WITH_ID_LENGTH | Length of Replicate model names with ID. Default is 64
 | REPLICATE_POLLING_DELAY_SECONDS | Delay in seconds for Replicate polling operations. Default is 0.5
 | REQUEST_TIMEOUT | Timeout in seconds for requests. Default is 6000
@@ -752,6 +760,7 @@ router_settings:
 | SPEND_LOGS_URL | URL for retrieving spend logs
 | SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000
 | SSL_CERTIFICATE | Path to the SSL certificate file
+| SSL_ECDH_CURVE | ECDH curve for SSL/TLS key exchange (e.g., 'X25519' to disable PQC).
 | SSL_SECURITY_LEVEL | [BETA] Security level for SSL/TLS connections. E.g. `DEFAULT@SECLEVEL=1`
 | SSL_VERIFY | Flag to enable or disable SSL certificate verification
 | SSL_CERT_FILE | Path to the SSL certificate file for custom CA bundle

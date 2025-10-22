@@ -699,6 +699,9 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["prompt_integration"] = (
                 vector_store_custom_logger.__class__.__name__
             )
+            # Add to global callbacks so post-call hooks are invoked
+            if vector_store_custom_logger and vector_store_custom_logger not in litellm.callbacks:
+                litellm.logging_callback_manager.add_litellm_callback(vector_store_custom_logger)
             return vector_store_custom_logger
 
         return None
@@ -1171,6 +1174,9 @@ class Logging(LiteLLMLoggingBaseClass):
         output_cost: float,
         total_cost: float,
         cost_for_built_in_tools_cost_usd_dollar: float,
+        original_cost: Optional[float] = None,
+        discount_percent: Optional[float] = None,
+        discount_amount: Optional[float] = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1180,6 +1186,9 @@ class Logging(LiteLLMLoggingBaseClass):
             output_cost: Cost of output/completion tokens
             cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
             total_cost: Total cost of request
+            original_cost: Cost before discount
+            discount_percent: Discount percentage (0.05 = 5%)
+            discount_amount: Discount amount in USD
         """
 
         self.cost_breakdown = CostBreakdown(
@@ -1188,9 +1197,16 @@ class Logging(LiteLLMLoggingBaseClass):
             total_cost=total_cost,
             tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
         )
-        verbose_logger.debug(
-            f"Cost breakdown set - input: {input_cost}, output: {output_cost}, cost_for_built_in_tools_cost_usd_dollar: {cost_for_built_in_tools_cost_usd_dollar}, total: {total_cost}"
-        )
+
+        # Store discount information if provided
+        if original_cost is not None:
+            self.cost_breakdown["original_cost"] = original_cost
+        if discount_percent is not None:
+            self.cost_breakdown["discount_percent"] = discount_percent
+        if discount_amount is not None:
+            self.cost_breakdown["discount_amount"] = discount_amount
+
+
 
     def _response_cost_calculator(
         self,
@@ -3087,7 +3103,7 @@ def _get_masked_values(
                 (
                     v[: unmasked_length // 2]
                     + "*" * number_of_asterisks
-                    + v[-unmasked_length // 2 :]
+                    + v[-unmasked_length // 2:]
                 )
                 if (
                     isinstance(v, str)
@@ -3098,7 +3114,7 @@ def _get_masked_values(
                     (
                         v[: unmasked_length // 2]
                         + "*" * (len(v) - unmasked_length)
-                        + v[-unmasked_length // 2 :]
+                        + v[-unmasked_length // 2:]
                     )
                     if (isinstance(v, str) and len(v) > unmasked_length)
                     else ("*****" if isinstance(v, str) else v)
@@ -3149,6 +3165,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                     event_scrubber=EventScrubber(
                         denylist=SENTRY_DENYLIST, pii_denylist=SENTRY_PII_DENYLIST
                     ),
+                    environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
                 )
                 capture_exception = sentry_sdk_instance.capture_exception
                 add_breadcrumb = sentry_sdk_instance.add_breadcrumb
@@ -4455,12 +4472,12 @@ def _get_status_fields(
 ) -> "StandardLoggingPayloadStatusFields":
     """
     Determine status fields based on request status and guardrail information.
-    
+
     Args:
         status: Overall request status ("success" or "failure")
         guardrail_information: Guardrail information from metadata
         error_str: Error string if any
-        
+
     Returns:
         StandardLoggingPayloadStatusFields with llm_api_status and guardrail_status
     """
@@ -4473,10 +4490,10 @@ def _get_status_fields(
         "guardrail_failed_to_respond": "guardrail_failed_to_respond",  # direct
         "not_run": "not_run"
     }
-    
+
     # Set LLM API status
     llm_api_status: StandardLoggingPayloadStatus = status
-    
+
 
     #########################################################
     # Map - guardrail_information.guardrail_status to guardrail_status

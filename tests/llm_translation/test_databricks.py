@@ -54,6 +54,125 @@ def mock_chat_response() -> Dict[str, Any]:
     }
 
 
+def mock_chat_response_claude_prompt_caching() -> Dict[str, Any]:
+    return {
+        "id": "msg_01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        "object": "chat.completion",
+        "created": 1761118943,
+        "model": "claude-3-7-sonnet", # Mock model name for testing
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The text you've provided consists entirely of the phrase \"example text\" repeated many times without any variation or additional content. There is no specific information, narrative, argument, or structured content to explain. This appears to be placeholder or filler text that would typically be replaced with actual content in a final document.",
+                    "refusal": None,
+                    "function_call": None,
+                    "tool_calls": None,
+                    "annotations": None,
+                    "audio": None,
+                },
+                "finish_reason": "stop",
+                "logprobs": None,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 1556,
+            "completion_tokens": 65,
+            "total_tokens": 1621,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 1552,
+        },
+        "service_tier": None,
+        "system_fingerprint": None,
+    }
+
+def mock_chat_response_claude_prompt_caching_repeat() -> Dict[str, Any]:
+    return {
+        "id": "msg_01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        "object": "chat.completion",
+        "created": 1761118943,
+        "model": "claude-3-7-sonnet", # Mock model name for testing
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The text you've provided consists entirely of the phrase \"example text\" repeated many times without any variation or additional content. There is no specific information, narrative, argument, or structured content to explain. This appears to be placeholder or filler text that would typically be replaced with actual content in a final document.",
+                    "refusal": None,
+                    "function_call": None,
+                    "tool_calls": None,
+                    "annotations": None,
+                    "audio": None,
+                },
+                "finish_reason": "stop",
+                "logprobs": None,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 1556,
+            "completion_tokens": 65,
+            "total_tokens": 1621,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+            "cache_read_input_tokens": 1552,
+            "cache_creation_input_tokens": 0,
+        },
+        "service_tier": None,
+        "system_fingerprint": None,
+    }
+
+
+def mock_chat_response_nonclaude_prompt_caching() -> Dict[str, Any]:
+    return {
+        "id": "msg_01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        "object": "chat.completion",
+        "created": 1761119150,
+        "model": "gpt-oss-20b",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "reasoning",
+                            "summary": [
+                                {
+                                    "type": "summary_text",
+                                    "text": "The user just posted a block of text repeated: \"example textexample\" many times. It is unclear what they want. The instruction says: \"You are a helpful assistant that explains the content of the given text.\" So I need to explain the content.\n\nThe content is basically a repeated phrase 'example textexample' many times, possibly a demonstration of repeated words or filler text. Perhaps they test that the assistant enumerates or condenses. Should I explain that it is a repeated phrase used maybe as placeholder text? It looks like a placeholder or filler. Could say that it's essentially nonsense.\n\nExplain that the text consists of the word \"example\" concatenated with \"text\" repeated many times. It's not meaningful content. Might indicate filler text for page layout.\n\nAlternatively, explain why repeated 'example textexample' (without whitespace in some places?) is repeated. This could be a test. The user probably expects a response like: \"It says 'example textexample' several times.\" So I should summarize: The text is a repeated phrase used as filler.\n\nGiven the instruction, let's explain the content. Mention that it's repetitive placeholder, no meaningful content, just repeated phrase. Also note that \"example text\" repeated words. No specific meaning beyond being placeholder.\n\nSo respond: This is basically a placeholder used in design documents: the phrase \"example text\" repeated to fill a space, no distinct meaning beyond placeholder usage. 'text' might be part of the 'example text' phrase or 'textexample' it's concatenated. These might serve to fill text boxes, test fonts, etc.\n\nAlso mention the pattern: Could be used for testing text rendering, typographic layouts, measuring dimensions.\n\nAnswer accordingly."
+                                }
+                            ]
+                        },
+                        {
+                            "type": "text",
+                            "text": "The passage you pasted is essentially a block of **placeholder text**.  \nIt repeats the phrase \"example textexample\" (or \"example text\" in some places) over and over again.  There isn't any hidden message, concept, or argument buried in it – the purpose is purely to fill space, imitate real content, or test something like typography, layout, or rendering.\n\nIn design and copy‑editing, such repeated strings are often used to:\n\n* **Fill a page or template** so the designer can see how multiple lines of content will look.\n* **Test the appearance of fonts, line‑height, paragraph spacing, and other typographic settings.**\n* **Serve as a stand"
+                        }
+                    ],
+                    "refusal": None,
+                    "function_call": None,
+                    "tool_calls": None,
+                    "annotations": None,
+                    "audio": None,
+                },
+                "finish_reason": "stop",
+                "logprobs": None,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 1638,
+            "completion_tokens": 500,
+            "total_tokens": 2138,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+        },
+        "service_tier": None,
+        "system_fingerprint": None,
+    }
+
+
 def mock_chat_streaming_response_chunks() -> List[str]:
     return [
         json.dumps(
@@ -712,3 +831,190 @@ async def test_databricks_embeddings(sync_mode):
         # assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_with_prompt_caching_claude_model(monkeypatch):
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_chat_response_claude_prompt_caching()
+
+    mock_text = 'example text' * 512
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are a helpful assistant that explains the content of the given text."
+                }
+            ]
+        },
+        {
+            "role": "user", 
+            "content": [
+                {
+                    "type": "text", 
+                    "text": mock_text,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        }
+    ]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.completion(
+            model="databricks/databricks-claude-3-7-sonnet",
+            messages=messages,
+            client=sync_handler,
+            temperature=0.5
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Authorization"]
+            == f"Bearer {api_key}"
+        )
+        assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
+        assert mock_post.call_args.kwargs["stream"] == False
+
+        # TODO: add test for entire expected output schema in the future
+        # Check the response object returned from litellm.completion()
+        assert 'claude-3-7-sonnet' in response['model']
+        assert response['usage']['cache_read_input_tokens'] == 0
+        assert response['usage']['cache_creation_input_tokens'] == 1552
+        assert response['usage']['prompt_tokens'] == 1556
+        assert response['usage']['completion_tokens'] == 65
+        assert response['usage']['total_tokens'] == 1621
+
+
+def test_completion_with_prompt_caching_claude_model_repeat(monkeypatch):
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_chat_response_claude_prompt_caching_repeat()
+
+    mock_text = 'example text' * 512
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are a helpful assistant that explains the content of the given text."
+                }
+            ]
+        },
+        {
+            "role": "user", 
+            "content": [
+                {
+                    "type": "text", 
+                    "text": mock_text,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        }
+    ]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.completion(
+            model="databricks/databricks-claude-3-7-sonnet",
+            messages=messages,
+            client=sync_handler,
+            temperature=0.5,
+            extraparam="testpassingextraparam",
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Authorization"]
+            == f"Bearer {api_key}"
+        )
+        assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
+        assert mock_post.call_args.kwargs["stream"] == False
+
+        
+        # TODO: add test for entire expected output schema in the future
+        # Check the response object returned from litellm.completion()
+        assert 'claude-3-7-sonnet' in response['model']
+        assert response['usage']['cache_read_input_tokens'] == 1552
+        assert response['usage']['cache_creation_input_tokens'] == 0
+        assert response['usage']['prompt_tokens'] == 1556
+        assert response['usage']['completion_tokens'] == 65
+        assert response['usage']['total_tokens'] == 1621
+
+
+def test_completion_with_prompt_caching_nonclaude_model(monkeypatch):
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_chat_response_nonclaude_prompt_caching()
+
+    mock_text = 'example text' * 512
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are a helpful assistant that explains the content of the given text."
+                }
+            ]
+        },
+        {
+            "role": "user", 
+            "content": [
+                {
+                    "type": "text", 
+                    "text": mock_text,
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        }
+    ]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.completion(
+            model="databricks/databricks-gpt-oss-20b",
+            messages=messages,
+            client=sync_handler,
+            temperature=0.5,
+            extraparam="testpassingextraparam",
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Authorization"]
+            == f"Bearer {api_key}"
+        )
+        assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
+        assert mock_post.call_args.kwargs["stream"] == False
+
+        # TODO: add test for entire expected output schema in the future
+        # Check the response object returned from litellm.completion()
+        assert 'gpt-oss-20b' in response['model']
+        assert ('cache_read_input_tokens' not in response['usage']) or response['usage']['cache_read_input_tokens'] in [0, None]
+        assert ('cache_creation_input_tokens' not in response['usage']) or response['usage']['cache_creation_input_tokens'] in [0, None]
+        assert response['usage']['prompt_tokens'] == 1638
+        assert response['usage']['completion_tokens'] == 500
+        assert response['usage']['total_tokens'] == 2138
+        

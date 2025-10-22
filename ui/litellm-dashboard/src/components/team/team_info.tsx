@@ -42,6 +42,8 @@ import { fetchMCPAccessGroups } from "../networking";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import NotificationsManager from "../molecules/notifications_manager";
+import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
+import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 
 export interface TeamMembership {
   user_id: string;
@@ -322,6 +324,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         },
         organization_id: values.organization_id,
       };
+
+      updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
 
       if (values.team_member_budget !== undefined) {
         updateData.team_member_budget = Number(values.team_member_budget);
@@ -664,6 +668,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       value={form.getFieldValue("vector_stores")}
                       accessToken={accessToken || ""}
                       placeholder="Select vector stores"
+                    />
+                  </Form.Item>
+
+                  <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
+                    <PassThroughRoutesSelector
+                      onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+                      value={form.getFieldValue("allowed_passthrough_routes")}
+                      accessToken={accessToken || ""}
+                      placeholder="Select pass through routes"
                     />
                   </Form.Item>
 

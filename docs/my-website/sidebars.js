@@ -37,6 +37,7 @@ const sidebars = {
           "proxy/guardrails/azure_content_guardrail",
           "proxy/guardrails/bedrock",
           "proxy/guardrails/enkryptai",
+          "proxy/guardrails/grayswan",
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
@@ -187,6 +188,15 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "Spend Tracking",
+          items: [
+            "proxy/cost_tracking",
+            "proxy/custom_pricing",
+            "proxy/billing",
+          ],
+        },
+        {
+          type: "category",
           label: "Budgets + Rate Limits",
           items: [
             "proxy/users",
@@ -251,15 +261,6 @@ const sidebars = {
             "oidc"
           ]
         },
-        {
-          type: "category",
-          label: "Spend Tracking",
-          items: [
-            "proxy/billing",
-            "proxy/cost_tracking",
-            "proxy/custom_pricing"
-          ],
-        },
       ]
     },
     {
@@ -307,6 +308,7 @@ const sidebars = {
           ],
         },
         "text_completion",
+        "bedrock_converse",
         "embedding/supported_embedding",
         {
           type: "category",
@@ -326,6 +328,7 @@ const sidebars = {
         },
           "generateContent",
           "apply_guardrail",
+          "bedrock_invoke",
         {
           type: "category",
           label: "/images",
@@ -346,7 +349,9 @@ const sidebars = {
             "mcp_guardrail",
           ]
         },
+        "anthropic_unified",
         "moderation",
+        "ocr",
         {
           type: "category",
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
@@ -361,7 +366,14 @@ const sidebars = {
             "pass_through/langfuse",
             "pass_through/mistral",
             "pass_through/openai_passthrough",
-            "pass_through/vertex_ai",
+            {
+              type: "category",
+              label: "Vertex AI",
+              items: [
+                "pass_through/vertex_ai",
+                "pass_through/vertex_ai_live_websocket",
+              ]
+            },
             "pass_through/vllm",
             "proxy/pass_through"
           ]
@@ -369,7 +381,7 @@ const sidebars = {
         "realtime",
         "rerank",
         "response_api",
-        "anthropic_unified",
+        "search",
         {
           type: "category",
           label: "/vector_stores",
@@ -391,6 +403,11 @@ const sidebars = {
       },
       items: [
         {
+          type: "doc",
+          id: "provider_registration/index",
+          label: "Integrate as a Model Provider",
+        },
+        {
           type: "category",
           label: "OpenAI",
           items: [
@@ -408,6 +425,7 @@ const sidebars = {
             "providers/azure/azure",
             "providers/azure/azure_responses",
             "providers/azure/azure_embedding",
+            "providers/azure/azure_speech",
           ]
         },
         {
@@ -415,6 +433,8 @@ const sidebars = {
           label: "Azure AI",
           items: [
             "providers/azure_ai",
+            "providers/azure_ocr",
+            "providers/azure_ai_speech",
             "providers/azure_ai_img",
           ]
         },
@@ -536,6 +556,7 @@ const sidebars = {
         "providers/datarobot",
         "providers/ovhcloud",  
         "providers/wandb_inference",
+        "providers/cometapi",
       ],
     },
     {
@@ -568,7 +589,8 @@ const sidebars = {
         "guides/finetuned_models",
         "guides/security_settings",
         "proxy/veo_video_generation",
-        "reasoning_content"
+        "reasoning_content",
+        "extras/creating_adapters",
       ]
     },
 
@@ -725,11 +747,6 @@ const sidebars = {
         "proxy/customer_routing",
         "proxy_server",
       ],
-    },
-    {
-      type: "doc",
-      id: "provider_registration/index",
-      label: "Integrate as a Model Provider",
     },
     "troubleshoot",
   ],
