@@ -29,6 +29,7 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.azure.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
 )
+from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.bedrock.cost_calculation import (
     cost_per_token as bedrock_cost_per_token,
 )
@@ -1104,6 +1105,7 @@ def response_cost_calculator(
         LiteLLMRealtimeStreamLoggingObject,
         OpenAIModerationResponse,
         Response,
+        SearchResponse,
     ],
     model: str,
     custom_llm_provider: Optional[str],
@@ -1124,6 +1126,8 @@ def response_cost_calculator(
         "speech",
         "rerank",
         "arerank",
+        "search",
+        "asearch",
     ],
     optional_params: dict,
     cache_hit: Optional[bool] = None,
