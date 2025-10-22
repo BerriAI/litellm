@@ -7824,6 +7824,11 @@
                 ]
             }
         ]
+    },
+    "perplexity/search": {
+        "input_cost_per_query": 5e-03,
+        "litellm_provider": "perplexity",
+        "mode": "search"
     },    
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
