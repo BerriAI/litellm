@@ -11,7 +11,7 @@ sys.path.insert(
 
 import litellm
 from litellm.types.videos.main import VideoObject, VideoResponse
-from litellm.videos.main import video_generation, avideo_generation
+from litellm.videos.main import video_generation, avideo_generation, video_status, avideo_status
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.cost_calculator import default_video_cost_calculator
 
@@ -376,6 +376,289 @@ class TestVideoGeneration:
         json_data = response.json()
         assert len(json_data["data"]) == 1
         assert json_data["data"][0]["id"] == "test_id"
+
+    def test_video_status_basic(self):
+        """Test basic video status functionality."""
+        # Mock the video status response
+        mock_response = VideoObject(
+            id="video_123",
+            object="video",
+            status="completed",
+            created_at=1712697600,
+            completed_at=1712697660,
+            model="sora-2",
+            progress=100,
+            size="720x1280",
+            seconds="8"
+        )
+        
+        with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
+            mock_handler.video_status_handler.return_value = mock_response
+            
+            response = video_status(
+                video_id="video_123",
+                model="sora-2"
+            )
+            
+            assert isinstance(response, VideoObject)
+            assert response.id == "video_123"
+            assert response.status == "completed"
+            assert response.progress == 100
+            assert response.model == "sora-2"
+
+    def test_video_status_with_mock_response(self):
+        """Test video status with mock response."""
+        mock_data = {
+            "id": "video_456",
+            "object": "video",
+            "status": "processing",
+            "created_at": 1712697600,
+            "model": "sora-2",
+            "progress": 75,
+            "size": "1280x720",
+            "seconds": "10"
+        }
+        
+        response = video_status(
+            video_id="video_456",
+            model="sora-2",
+            mock_response=mock_data
+        )
+        
+        assert isinstance(response, VideoObject)
+        assert response.id == "video_456"
+        assert response.status == "processing"
+        assert response.progress == 75
+        assert response.model == "sora-2"
+
+    def test_video_status_async(self):
+        """Test async video status functionality."""
+        mock_response = VideoObject(
+            id="video_async_123",
+            object="video",
+            status="queued",
+            created_at=1712697600,
+            model="sora-2",
+            progress=0
+        )
+        
+        with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
+            mock_handler.video_status_handler.return_value = mock_response
+            
+            import asyncio
+            
+            async def test_async():
+                response = await avideo_status(
+                    video_id="video_async_123",
+                    model="sora-2"
+                )
+                return response
+            
+            response = asyncio.run(test_async())
+            
+            assert isinstance(response, VideoObject)
+            assert response.id == "video_async_123"
+            assert response.status == "queued"
+            assert response.progress == 0
+
+    def test_video_status_parameter_validation(self):
+        """Test video status parameter validation."""
+        # Test with minimal required parameters
+        response = video_status(
+            video_id="test_video_id",
+            model="sora-2",
+            mock_response={"id": "test", "object": "video", "status": "completed", "created_at": 1712697600}
+        )
+        
+        assert isinstance(response, VideoObject)
+        assert response.id == "test"
+
+    def test_video_status_error_handling(self):
+        """Test video status error handling."""
+        with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
+            mock_handler.video_status_handler.side_effect = Exception("API Error")
+            
+            with pytest.raises(Exception):
+                video_status(
+                    video_id="test_video_id",
+                    model="sora-2"
+                )
+
+    def test_video_status_request_transformation(self):
+        """Test video status request transformation."""
+        config = OpenAIVideoConfig()
+        
+        # Test request transformation
+        url, data = config.transform_video_status_retrieve_request(
+            video_id="video_123",
+            model="sora-2",
+            api_base="https://api.openai.com/v1/videos",
+            litellm_params=MagicMock(),
+            headers={}
+        )
+        
+        assert url == "https://api.openai.com/v1/videos/video_123"
+        assert data == {}
+
+    def test_video_status_response_transformation(self):
+        """Test video status response transformation."""
+        config = OpenAIVideoConfig()
+        
+        # Mock HTTP response
+        mock_http_response = MagicMock()
+        mock_http_response.json.return_value = {
+            "id": "video_789",
+            "object": "video",
+            "status": "completed",
+            "created_at": 1712697600,
+            "completed_at": 1712697660,
+            "model": "sora-2",
+            "progress": 100,
+            "size": "1280x720",
+            "seconds": "12"
+        }
+        
+        response = config.transform_video_status_retrieve_response(
+            model="sora-2",
+            raw_response=mock_http_response,
+            logging_obj=MagicMock()
+        )
+        
+        assert isinstance(response, VideoObject)
+        assert response.id == "video_789"
+        assert response.status == "completed"
+        assert response.progress == 100
+        assert response.model == "sora-2"
+
+    def test_video_status_different_states(self):
+        """Test video status with different video states."""
+        # Test queued state
+        queued_response = video_status(
+            video_id="video_queued",
+            model="sora-2",
+            mock_response={
+                "id": "video_queued",
+                "object": "video",
+                "status": "queued",
+                "created_at": 1712697600,
+                "model": "sora-2",
+                "progress": 0
+            }
+        )
+        assert queued_response.status == "queued"
+        assert queued_response.progress == 0
+        
+        # Test processing state
+        processing_response = video_status(
+            video_id="video_processing",
+            model="sora-2",
+            mock_response={
+                "id": "video_processing",
+                "object": "video",
+                "status": "processing",
+                "created_at": 1712697600,
+                "model": "sora-2",
+                "progress": 50
+            }
+        )
+        assert processing_response.status == "processing"
+        assert processing_response.progress == 50
+        
+        # Test completed state
+        completed_response = video_status(
+            video_id="video_completed",
+            model="sora-2",
+            mock_response={
+                "id": "video_completed",
+                "object": "video",
+                "status": "completed",
+                "created_at": 1712697600,
+                "completed_at": 1712697660,
+                "model": "sora-2",
+                "progress": 100
+            }
+        )
+        assert completed_response.status == "completed"
+        assert completed_response.progress == 100
+
+    def test_video_status_with_remix_info(self):
+        """Test video status with remix information."""
+        mock_data = {
+            "id": "video_remix_123",
+            "object": "video",
+            "status": "completed",
+            "created_at": 1712697600,
+            "completed_at": 1712697660,
+            "model": "sora-2",
+            "progress": 100,
+            "remixed_from_video_id": "video_original_123",
+            "size": "720x1280",
+            "seconds": "8"
+        }
+        
+        response = video_status(
+            video_id="video_remix_123",
+            model="sora-2",
+            mock_response=mock_data
+        )
+        
+        assert isinstance(response, VideoObject)
+        assert response.id == "video_remix_123"
+        assert response.status == "completed"
+        assert hasattr(response, 'remixed_from_video_id')
+        assert response.remixed_from_video_id == "video_original_123"
+
+    def test_video_status_async_inside_async_function(self):
+        """Test that sync video_status works inside async functions (no asyncio.run issues)."""
+        mock_response = VideoObject(
+            id="video_sync_in_async",
+            object="video",
+            status="completed",
+            created_at=1712697600,
+            model="sora-2",
+            progress=100
+        )
+        
+        with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
+            mock_handler.video_status_handler.return_value = mock_response
+            
+            import asyncio
+            
+            async def test_sync_in_async():
+                # This should work without asyncio.run() issues
+                response = video_status(
+                    video_id="video_sync_in_async",
+                    model="sora-2"
+                )
+                return response
+            
+            response = asyncio.run(test_sync_in_async())
+            
+            assert isinstance(response, VideoObject)
+            assert response.id == "video_sync_in_async"
+            assert response.status == "completed"
+
+    def test_video_status_url_construction(self):
+        """Test video status URL construction."""
+        config = OpenAIVideoConfig()
+        
+        # Test with different API bases
+        test_cases = [
+            ("https://api.openai.com/v1/videos", "video_123", "https://api.openai.com/v1/videos/video_123"),
+            ("https://api.openai.com/v1/videos/", "video_123", "https://api.openai.com/v1/videos/video_123"),
+            ("https://custom-api.com/v1/videos", "video_456", "https://custom-api.com/v1/videos/video_456"),
+        ]
+        
+        for api_base, video_id, expected_url in test_cases:
+            url, data = config.transform_video_status_retrieve_request(
+                video_id=video_id,
+                model="sora-2",
+                api_base=api_base,
+                litellm_params=MagicMock(),
+                headers={}
+            )
+            assert url == expected_url
+            assert data == {}
 
 
 if __name__ == "__main__":
