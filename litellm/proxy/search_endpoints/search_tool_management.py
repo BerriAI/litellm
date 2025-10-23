@@ -2,7 +2,7 @@
 CRUD ENDPOINTS FOR SEARCH TOOLS
 """
 from datetime import datetime
-from typing import List, Union, cast
+from typing import Any, Dict, List, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -431,7 +431,7 @@ async def get_available_search_providers():
     """
     Get the list of available search providers with their configuration fields.
     
-    This auto-discovers search providers from the SearchProviders enum.
+    Auto-discovers search providers and their UI-friendly names from transformation configs.
 
     Example Request:
     ```bash
@@ -441,80 +441,46 @@ async def get_available_search_providers():
 
     Example Response:
     ```json
-    [
-        {
-            "provider": "perplexity",
-            "display_name": "Perplexity",
-            "fields": [
-                {
-                    "name": "api_key",
-                    "type": "string",
-                    "required": false,
-                    "description": "API key for Perplexity"
-                },
-                {
-                    "name": "api_base",
-                    "type": "string",
-                    "required": false,
-                    "description": "API base URL"
-                }
-            ]
-        }
-    ]
+    {
+        "providers": [
+            {
+                "provider_name": "perplexity",
+                "ui_friendly_name": "Perplexity"
+            },
+            {
+                "provider_name": "tavily",
+                "ui_friendly_name": "Tavily"
+            }
+        ]
+    }
     ```
     """
     try:
-        available_providers: List[AvailableSearchProvider] = []
+        from litellm.utils import ProviderConfigManager
         
-        # Common fields for all search providers
-        common_fields = [
-            {
-                "name": "api_key",
-                "type": "string",
-                "required": False,
-                "description": "API key for the search provider",
-            },
-            {
-                "name": "api_base",
-                "type": "string",
-                "required": False,
-                "description": "Custom API base URL (optional)",
-            },
-            {
-                "name": "timeout",
-                "type": "number",
-                "required": False,
-                "description": "Request timeout in seconds",
-            },
-            {
-                "name": "max_retries",
-                "type": "number",
-                "required": False,
-                "description": "Maximum number of retry attempts",
-            },
-        ]
-
-        # Provider display name mapping
-        provider_display_names = {
-            SearchProviders.PERPLEXITY: "Perplexity",
-            SearchProviders.TAVILY: "Tavily",
-            SearchProviders.PARALLEL_AI: "Parallel AI",
-            SearchProviders.EXA_AI: "Exa AI",
-            SearchProviders.GOOGLE_PSE: "Google PSE",
-            SearchProviders.DATAFORSEO: "DataForSEO",
-        }
-
+        available_providers = []
+        
         # Auto-discover providers from SearchProviders enum
         for provider in SearchProviders:
-            available_providers.append(
-                AvailableSearchProvider(
-                    provider=provider.value,
-                    display_name=provider_display_names.get(provider, provider.value.title()),
-                    fields=common_fields,
+            try:
+                # Get the config class for this provider
+                config = ProviderConfigManager.get_provider_search_config(provider=provider)
+                
+                if config is not None:
+                    # Get the UI-friendly name from the config class
+                    ui_name = config.ui_friendly_name()
+                    
+                    available_providers.append({
+                        "provider_name": provider.value,
+                        "ui_friendly_name": ui_name,
+                    })
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Could not get config for search provider {provider.value}: {e}"
                 )
-            )
-
-        return available_providers
+                continue
+        
+        return {"providers": available_providers}
     except Exception as e:
         verbose_proxy_logger.exception(f"Error getting available search providers: {e}")
         raise HTTPException(status_code=500, detail=str(e))
