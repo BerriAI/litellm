@@ -17,4 +17,7 @@ search_tools:
     litellm_params:
       search_provider: perplexity
       api_key: os.environ/PERPLEXITYAI_API_KEY
-
+  - search_tool_name: exa-search
+    litellm_params:
+      search_provider: exa_ai
+      api_key: os.environ/EXA_API_KEY
