@@ -86,21 +86,17 @@ class TestOpenTelemetry(unittest.TestCase):
     HERE = os.path.dirname(__file__)
 
     def setUp(self):
-        """Set up clean state before each test."""
-        # Clean up environment variables
         os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", None)
         os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", None)
         
-        # Reset global providers to ensure clean state
         self._reset_global_providers()
 
     def tearDown(self):
         """Clean up global OpenTelemetry providers after each test to prevent conflicts."""
-        # Clean up environment variables that might affect other tests
+
         os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", None)
         os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", None)
         
-        # Reset global providers to prevent conflicts between tests
         self._reset_global_providers()
 
     def _reset_global_providers(self):
