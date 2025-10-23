@@ -391,6 +391,110 @@ async def get_search_tool_info(search_tool_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class TestSearchToolConnectionRequest(BaseModel):
+    litellm_params: Dict[str, Any]
+
+
+@router.post(
+    "/search_tools/test_connection",
+    tags=["Search Tools"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
+    """
+    Test connection to a search provider with the given configuration.
+    
+    Makes a simple test search query to verify the API key and configuration are valid.
+
+    Example Request:
+    ```bash
+    curl -X POST "http://localhost:4000/search_tools/test_connection" \\
+        -H "Authorization: Bearer <your_api_key>" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "litellm_params": {
+                "search_provider": "perplexity",
+                "api_key": "sk-..."
+            }
+        }'
+    ```
+
+    Example Response (Success):
+    ```json
+    {
+        "status": "success",
+        "message": "Successfully connected to perplexity search provider",
+        "test_query": "test",
+        "results_count": 5
+    }
+    ```
+
+    Example Response (Failure):
+    ```json
+    {
+        "status": "error",
+        "message": "Authentication failed: Invalid API key",
+        "error_type": "AuthenticationError"
+    }
+    ```
+    """
+    try:
+        from litellm.search import asearch
+
+        # Extract params from request
+        litellm_params = request.litellm_params
+        search_provider = litellm_params.get("search_provider")
+        api_key = litellm_params.get("api_key")
+        api_base = litellm_params.get("api_base")
+        
+        if not search_provider:
+            raise HTTPException(
+                status_code=400,
+                detail="search_provider is required in litellm_params"
+            )
+        
+        verbose_proxy_logger.debug(
+            f"Testing connection to search provider: {search_provider}"
+        )
+        
+        # Make a simple test search query with max_results=1 to minimize cost
+        test_query = "test"
+        response = await asearch(
+            query=test_query,
+            search_provider=search_provider,
+            api_key=api_key,
+            api_base=api_base,
+            max_results=1,  # Minimize results to reduce cost
+            timeout=10.0,  # 10 second timeout for test
+        )
+        
+        verbose_proxy_logger.info(
+            f"Successfully tested connection to {search_provider} search provider"
+        )
+        
+        return {
+            "status": "success",
+            "message": f"Successfully connected to {search_provider} search provider",
+            "test_query": test_query,
+            "results_count": len(response.results) if response and response.results else 0,
+        }
+        
+    except Exception as e:
+        error_message = str(e)
+        error_type = type(e).__name__
+        
+        verbose_proxy_logger.exception(
+            f"Failed to connect to search provider: {error_message}"
+        )
+        
+        # Return error details in a structured format
+        return {
+            "status": "error",
+            "message": error_message,
+            "error_type": error_type,
+        }
+
+
 @router.get(
     "/search_tools/ui/available_providers",
     tags=["Search Tools"],
