@@ -3527,6 +3527,7 @@ class ProxyConfig:
             IN_MEMORY_SEARCH_TOOL_HANDLER,
             SearchToolRegistry,
         )
+        from litellm.types.search import SearchTool
         try:
             search_tools = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
             for search_tool in search_tools:
