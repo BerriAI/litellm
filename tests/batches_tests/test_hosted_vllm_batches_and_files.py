@@ -22,7 +22,7 @@ sys.path.insert(
 import litellm
 
 
-SERVER_URL = "https://exampleopenaiendpoint-production-0ee2.up.railway.app/"
+SERVER_URL = "https://exampleopenaiendpoint-production-0ee2.up.railway.app/v1"
 
 
 @pytest.mark.asyncio()
