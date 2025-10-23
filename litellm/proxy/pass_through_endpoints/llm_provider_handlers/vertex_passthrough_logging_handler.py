@@ -228,6 +228,11 @@ class VertexPassthroughLoggingHandler:
             standard_pass_through_response_object: StandardPassThroughResponseObject = {
                 "response": json.dumps(litellm_vs_response),
             }
+
+            kwargs["response_cost"] = response_cost
+            kwargs["model"] = "vertex_ai/search_api"
+            logging_obj.model_call_details["response_cost"] = response_cost
+
             return {
                 "result": standard_pass_through_response_object,
                 "kwargs": kwargs,
