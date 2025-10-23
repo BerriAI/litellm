@@ -3325,6 +3325,9 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="prompts"):
             await self._init_prompts_in_db(prisma_client=prisma_client)
 
+        if self._should_load_db_object(object_type="search_tools"):
+            await self._init_search_tools_in_db(prisma_client=prisma_client)
+
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
 
@@ -3518,7 +3521,23 @@ class ProxyConfig:
                     str(e)
                 )
             )
-
+    
+    async def _init_search_tools_in_db(self, prisma_client: PrismaClient):
+        from litellm.proxy.search_endpoints.search_tool_registry import (
+            IN_MEMORY_SEARCH_TOOL_HANDLER,
+            SearchToolRegistry,
+        )
+        try:
+            search_tools = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
+            for search_tool in search_tools:
+                IN_MEMORY_SEARCH_TOOL_HANDLER.add_search_tool(search_tool=cast(SearchTool, search_tool))
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_search_tools_in_db - {}".format(
+                    str(e)
+                )
+            )
+    
     async def _init_pass_through_endpoints_in_db(self):
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             initialize_pass_through_endpoints_in_db,
