@@ -3,7 +3,6 @@ Wrapper around router cache. Meant to store model id when prompt caching support
 """
 
 import hashlib
-import json
 import orjson
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
