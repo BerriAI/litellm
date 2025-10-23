@@ -305,7 +305,6 @@ class TestAzureVideoConfig:
     def test_video_create_with_file_upload(self):
         """Test video creation with file upload (input_reference)."""
         video_params = {
-            "prompt": "A video with reference image",
             "seconds": 10,
             "input_reference": "test_image.png"
         }
