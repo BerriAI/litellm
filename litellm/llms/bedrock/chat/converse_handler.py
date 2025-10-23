@@ -119,6 +119,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
+            headers=headers,
         )
         data = json.dumps(request_data)
 
@@ -185,8 +186,10 @@ class BedrockConverseLLM(BaseAWSLLM):
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
+            headers=headers,
         )
         data = json.dumps(request_data)
+        
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
@@ -276,8 +279,13 @@ class BedrockConverseLLM(BaseAWSLLM):
         else:
             modelId = self.encode_model_id(model_id=model)
 
-        if stream is True and "ai21" in modelId:
-            fake_stream = True
+        fake_stream = litellm.AmazonConverseConfig().should_fake_stream(
+            fake_stream=fake_stream,
+            model=model,
+            stream=stream,
+            custom_llm_provider="bedrock",
+        )
+
 
         ### SET REGION NAME ###
         aws_region_name = self._get_aws_region_name(
@@ -299,6 +307,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
         aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
+        aws_external_id = optional_params.pop("aws_external_id", None)
         optional_params.pop("aws_region_name", None)
 
         litellm_params[
@@ -315,6 +324,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             aws_role_name=aws_role_name,
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
+            aws_external_id=aws_external_id,
         )
 
         ### SET RUNTIME ENDPOINT ###
@@ -385,8 +395,10 @@ class BedrockConverseLLM(BaseAWSLLM):
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
+            headers=extra_headers,
         )
         data = json.dumps(_data)
+        
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=aws_region_name,

@@ -66,8 +66,18 @@ class OpenMeterLogger(CustomLogger):
             }
 
         user_param = kwargs.get("user", None)  # end-user passed in via 'user' param
+        
+        # If no user provided directly, try to get it from token user_id
         if user_param is None:
-            raise Exception("OpenMeter: user is required")
+            # Check if user_id is available from the API key metadata
+            litellm_params = kwargs.get("litellm_params", {})
+            metadata = litellm_params.get("metadata", {})
+            user_api_key_user_id = metadata.get("user_api_key_user_id", None)
+            
+            if user_api_key_user_id is not None:
+                user_param = user_api_key_user_id
+            else:
+                raise Exception("OpenMeter: user is required")
         
         # Ensure subject is always a string for OpenMeter API
         subject = str(user_param)

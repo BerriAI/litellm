@@ -22,6 +22,7 @@ import {
   } from "antd";
 
 import NumericalInput from "./shared/numerical_input";
+import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
 
 interface EditUserModalProps {
   visible: boolean;
@@ -125,6 +126,14 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
             >
               <NumericalInput min={0} step={0.01} />
             </Form.Item>
+
+            <Form.Item label="Reset Budget" name="budget_duration"> 
+              <BudgetDurationDropdown />
+            </Form.Item>
+
+            <div style={{ textAlign: "right", marginTop: "10px" }}>
+              <Button2 htmlType="submit">Save</Button2>
+            </div>
 
             <div style={{ textAlign: "right", marginTop: "10px" }}>
                 <Button2 htmlType="submit">Save</Button2>

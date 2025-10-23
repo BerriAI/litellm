@@ -18,6 +18,7 @@ import {
   message,
 } from "antd";
 import { budgetCreateCall } from "../networking";
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface BudgetModalProps {
   isModalVisible: boolean;
@@ -47,18 +48,18 @@ const BudgetModal: React.FC<BudgetModalProps> = ({
       return;
     }
     try {
-      message.info("Making API Call");
+      NotificationsManager.info("Making API Call");
       // setIsModalVisible(true);
       const response = await budgetCreateCall(accessToken, formValues);
       console.log("key create Response:", response);
       setBudgetList((prevData) =>
         prevData ? [...prevData, response] : [response]
       ); // Check if prevData is null
-      message.success("Budget Created");
+      NotificationsManager.success("Budget Created");
       form.resetFields();
     } catch (error) {
       console.error("Error creating the key:", error);
-      message.error(`Error creating the key: ${error}`, 20);
+      NotificationsManager.fromBackend(`Error creating the key: ${error}`);
     }
   };
 

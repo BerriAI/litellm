@@ -4,6 +4,7 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
+from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import LiteLLM_Params
 
@@ -16,8 +17,7 @@ if TYPE_CHECKING:
 class LiteLLMProxyChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> List:
         params_list = super().get_supported_openai_params(model)
-        params_list.append("thinking")
-        params_list.append("reasoning_effort")
+        params_list.extend(OPENAI_CHAT_COMPLETION_PARAMS)
         return params_list
 
     def _map_openai_params(

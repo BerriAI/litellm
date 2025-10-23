@@ -15,10 +15,11 @@ Pass-through endpoints for Vertex AI - call provider-specific endpoint, in nativ
 
 ## Supported Endpoints
 
-LiteLLM supports 2 vertex ai passthrough routes:
+LiteLLM supports 3 vertex ai passthrough routes:
 
 1. `/vertex_ai` → routes to `https://{vertex_location}-aiplatform.googleapis.com/`
 2. `/vertex_ai/discovery` → routes to [`https://discoveryengine.googleapis.com`](https://discoveryengine.googleapis.com/)
+3. `/vertex_ai/live` → upgrades to the Vertex AI Live API WebSocket (`google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent`)
 
 ## How to use
 
@@ -168,6 +169,50 @@ generateContent();
 
 </TabItem>
 </Tabs>
+
+
+## Vertex AI Live API WebSocket
+
+LiteLLM can now proxy the Vertex AI Live API to help you experiment with streaming audio/text from Gemini Live models without exposing Google credentials to clients.
+
+- Configure default Vertex credentials via `default_vertex_config` or environment variables (see examples above).
+- Connect to `wss://<PROXY_URL>/vertex_ai/live`. LiteLLM will exchange your saved credentials for a short-lived access token and forward messages bidirectionally.
+- Optional query params `vertex_project`, `vertex_location`, and `model` let you override defaults for multi-project setups or global-only models.
+
+```python title="client.py"
+import asyncio
+import json
+
+from websockets.asyncio.client import connect
+
+
+async def main() -> None:
+    headers = {
+        "x-litellm-api-key": "Bearer sk-your-litellm-key",
+        "Content-Type": "application/json",
+    }
+    async with connect(
+        "ws://localhost:4000/vertex_ai/live",
+        additional_headers=headers,
+    ) as ws:
+        await ws.send(
+            json.dumps(
+                {
+                    "setup": {
+                        "model": "projects/your-project/locations/us-central1/publishers/google/models/gemini-2.0-flash-live-preview-04-09",
+                        "generation_config": {"response_modalities": ["TEXT"]},
+                    }
+                }
+            )
+        )
+
+        async for message in ws:
+            print("server:", message)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
 
 
 ## Quick Start

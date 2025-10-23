@@ -1,4 +1,6 @@
-from typing import TYPE_CHECKING, Optional, TypedDict
+from typing import TYPE_CHECKING, Optional
+
+from typing_extensions import TypedDict
 
 from ..utils import CompletionTokensDetails, PromptTokensDetailsWrapper
 

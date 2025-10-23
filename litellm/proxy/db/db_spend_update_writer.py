@@ -154,7 +154,7 @@ class DBSpendUpdateWriter:
                     prisma_client=prisma_client,
                 )
             else:
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.debug(
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
                 )
 
@@ -252,7 +252,7 @@ class DBSpendUpdateWriter:
                         )
                     )
         except Exception as e:
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 "\033[91m"
                 + f"Update User DB call failed to execute {str(e)}\n{traceback.format_exc()}"
             )
@@ -294,7 +294,7 @@ class DBSpendUpdateWriter:
             except Exception:
                 pass
         except Exception as e:
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"Update Team DB failed to execute - {str(e)}\n{traceback.format_exc()}"
             )
             raise e
@@ -320,7 +320,7 @@ class DBSpendUpdateWriter:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"Update Org DB failed to execute - {str(e)}\n{traceback.format_exc()}"
             )
             raise e
@@ -331,7 +331,7 @@ class DBSpendUpdateWriter:
         prisma_client: Optional[PrismaClient] = None,
         spend_logs_url: Optional[str] = os.getenv("SPEND_LOGS_URL"),
     ) -> Optional[PrismaClient]:
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "Writing spend log to db - request_id: {}, spend: {}".format(
                 payload.get("request_id"), payload.get("spend")
             )
@@ -872,7 +872,8 @@ class DBSpendUpdateWriter:
                                     "model": transaction["model"],
                                     "custom_llm_provider": transaction.get(
                                         "custom_llm_provider"
-                                    ),
+                                    )
+                                    or "",
                                     "mcp_namespaced_tool_name": transaction.get(
                                         "mcp_namespaced_tool_name"
                                     )
@@ -892,7 +893,7 @@ class DBSpendUpdateWriter:
                                 "model_group": transaction.get("model_group"),
                                 "mcp_namespaced_tool_name": transaction.get(
                                     "mcp_namespaced_tool_name"
-                                ),
+                                ) or "",
                                 "custom_llm_provider": transaction.get(
                                     "custom_llm_provider"
                                 ),
@@ -958,7 +959,7 @@ class DBSpendUpdateWriter:
                                 },
                             )
 
-                    verbose_proxy_logger.info(
+                    verbose_proxy_logger.debug(
                         f"Processed {len(transactions_to_process)} daily {entity_type} transactions in {time.time() - start_time:.2f}s"
                     )
 
@@ -1086,7 +1087,7 @@ class DBSpendUpdateWriter:
             return None
 
         request_status = prisma_client.get_request_status(payload)
-        verbose_proxy_logger.info(f"Logged request status: {request_status}")
+        verbose_proxy_logger.debug(f"Logged request status: {request_status}")
         _metadata: SpendLogsMetadata = json.loads(payload["metadata"])
         usage_obj = _metadata.get("usage_object", {}) or {}
         if isinstance(payload["startTime"], datetime):

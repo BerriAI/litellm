@@ -12,7 +12,6 @@ All /team management endpoints
 import asyncio
 import json
 import traceback
-import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
@@ -22,6 +21,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import (
     BlockTeamRequest,
     CommonProxyErrors,
@@ -92,12 +92,148 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.proxy.management_endpoints.team_endpoints import (
+    BulkTeamMemberAddRequest,
+    BulkTeamMemberAddResponse,
     GetTeamMemberPermissionsResponse,
     TeamListResponse,
+    TeamMemberAddResult,
     UpdateTeamMemberPermissionsRequest,
 )
 
 router = APIRouter()
+
+
+class TeamMemberBudgetHandler:
+    """Helper class to handle team member budget, RPM, and TPM limit operations"""
+
+    @staticmethod
+    def should_create_budget(
+        team_member_budget: Optional[float] = None,
+        team_member_rpm_limit: Optional[int] = None,
+        team_member_tpm_limit: Optional[int] = None,
+    ) -> bool:
+        """Check if any team member limits are provided"""
+        return any(
+            [
+                team_member_budget is not None,
+                team_member_rpm_limit is not None,
+                team_member_tpm_limit is not None,
+            ]
+        )
+
+    @staticmethod
+    async def create_team_member_budget_table(
+        data: Union[NewTeamRequest, LiteLLM_TeamTable],
+        new_team_data_json: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        team_member_budget: Optional[float] = None,
+        team_member_rpm_limit: Optional[int] = None,
+        team_member_tpm_limit: Optional[int] = None,
+    ) -> dict:
+        """Create team member budget table with provided limits"""
+        from litellm.proxy._types import BudgetNewRequest
+        from litellm.proxy.management_endpoints.budget_management_endpoints import (
+            new_budget,
+        )
+
+        if data.team_alias is not None:
+            budget_id = (
+                f"team-{data.team_alias.replace(' ', '-')}-budget-{uuid.uuid4().hex}"
+            )
+        else:
+            budget_id = f"team-budget-{uuid.uuid4().hex}"
+
+        # Create budget request with all provided limits
+        budget_request = BudgetNewRequest(
+            budget_id=budget_id,
+            budget_duration=data.budget_duration,
+        )
+
+        if team_member_budget is not None:
+            budget_request.max_budget = team_member_budget
+        if team_member_rpm_limit is not None:
+            budget_request.rpm_limit = team_member_rpm_limit
+        if team_member_tpm_limit is not None:
+            budget_request.tpm_limit = team_member_tpm_limit
+
+        team_member_budget_table = await new_budget(
+            budget_obj=budget_request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # Add team_member_budget_id as metadata field to team table
+        if new_team_data_json.get("metadata") is None:
+            new_team_data_json["metadata"] = {}
+        new_team_data_json["metadata"][
+            "team_member_budget_id"
+        ] = team_member_budget_table.budget_id
+
+        # Remove team member fields from new_team_data_json
+        TeamMemberBudgetHandler._clean_team_member_fields(new_team_data_json)
+
+        return new_team_data_json
+
+    @staticmethod
+    async def upsert_team_member_budget_table(
+        team_table: LiteLLM_TeamTable,
+        user_api_key_dict: UserAPIKeyAuth,
+        updated_kv: dict,
+        team_member_budget: Optional[float] = None,
+        team_member_rpm_limit: Optional[int] = None,
+        team_member_tpm_limit: Optional[int] = None,
+    ) -> dict:
+        """Upsert team member budget table with provided limits"""
+        from litellm.proxy._types import BudgetNewRequest
+        from litellm.proxy.management_endpoints.budget_management_endpoints import (
+            update_budget,
+        )
+
+        if team_table.metadata is None:
+            team_table.metadata = {}
+
+        team_member_budget_id = team_table.metadata.get("team_member_budget_id")
+        if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
+            # Budget exists - create update request with only provided values
+            budget_request = BudgetNewRequest(budget_id=team_member_budget_id)
+
+            if team_member_budget is not None:
+                budget_request.max_budget = team_member_budget
+            if team_member_rpm_limit is not None:
+                budget_request.rpm_limit = team_member_rpm_limit
+            if team_member_tpm_limit is not None:
+                budget_request.tpm_limit = team_member_tpm_limit
+
+            budget_row = await update_budget(
+                budget_obj=budget_request,
+                user_api_key_dict=user_api_key_dict,
+            )
+            verbose_proxy_logger.info(
+                f"Updated team member budget table: {budget_row.budget_id}, with team_member_budget={team_member_budget}, team_member_rpm_limit={team_member_rpm_limit}, team_member_tpm_limit={team_member_tpm_limit}"
+            )
+            if updated_kv.get("metadata") is None:
+                updated_kv["metadata"] = {}
+            updated_kv["metadata"]["team_member_budget_id"] = budget_row.budget_id
+
+        else:  # budget does not exist
+            updated_kv = await TeamMemberBudgetHandler.create_team_member_budget_table(
+                data=team_table,
+                new_team_data_json=updated_kv,
+                user_api_key_dict=user_api_key_dict,
+                team_member_budget=team_member_budget,
+                team_member_rpm_limit=team_member_rpm_limit,
+                team_member_tpm_limit=team_member_tpm_limit,
+            )
+
+        # Remove team member fields from updated_kv
+        TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
+        return updated_kv
+
+    @staticmethod
+    def _clean_team_member_fields(data_dict: dict) -> None:
+        """Remove team member fields from data dictionary"""
+        data_dict.pop("team_member_budget", None)
+        data_dict.pop("team_member_rpm_limit", None)
+        data_dict.pop("team_member_tpm_limit", None)
 
 
 def _is_available_team(team_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -131,93 +267,6 @@ async def get_all_team_memberships(
         returned_tm.append(LiteLLM_TeamMembership(**tm.model_dump()))
 
     return returned_tm
-
-
-async def _create_team_member_budget_table(
-    data: Union[NewTeamRequest, LiteLLM_TeamTable],
-    new_team_data_json: dict,
-    user_api_key_dict: UserAPIKeyAuth,
-    team_member_budget: float,
-) -> dict:
-    """Allows admin to create 1 budget, that applies to all team members"""
-    from litellm.proxy._types import BudgetNewRequest
-    from litellm.proxy.management_endpoints.budget_management_endpoints import (
-        new_budget,
-    )
-
-    if data.team_alias is not None:
-        budget_id = (
-            f"team-{data.team_alias.replace(' ', '-')}-budget-{uuid.uuid4().hex}"
-        )
-    else:
-        budget_id = f"team-budget-{uuid.uuid4().hex}"
-
-    team_member_budget_table = await new_budget(
-        budget_obj=BudgetNewRequest(
-            max_budget=team_member_budget,
-            budget_duration=data.budget_duration,
-            budget_id=budget_id,
-        ),
-        user_api_key_dict=user_api_key_dict,
-    )
-
-    # Add team_member_budget_id as metadata field to team table
-    if new_team_data_json.get("metadata") is None:
-        new_team_data_json["metadata"] = {}
-    new_team_data_json["metadata"][
-        "team_member_budget_id"
-    ] = team_member_budget_table.budget_id
-    new_team_data_json.pop(
-        "team_member_budget", None
-    )  # remove team_member_budget from new_team_data_json
-
-    return new_team_data_json
-
-
-async def _upsert_team_member_budget_table(
-    team_table: LiteLLM_TeamTable,
-    user_api_key_dict: UserAPIKeyAuth,
-    team_member_budget: float,
-    updated_kv: dict,
-) -> dict:
-    """
-    Add budget if none exists
-
-    If budget exists, update it
-    """
-    from litellm.proxy._types import BudgetNewRequest
-    from litellm.proxy.management_endpoints.budget_management_endpoints import (
-        update_budget,
-    )
-
-    if team_table.metadata is None:
-        team_table.metadata = {}
-
-    team_member_budget_id = team_table.metadata.get("team_member_budget_id")
-    if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
-        # Budget exists
-        budget_row = await update_budget(
-            budget_obj=BudgetNewRequest(
-                budget_id=team_member_budget_id,
-                max_budget=team_member_budget,
-            ),
-            user_api_key_dict=user_api_key_dict,
-        )
-        verbose_proxy_logger.info(
-            f"Updated team member budget table: {budget_row.budget_id}, with team_member_budget={team_member_budget}"
-        )
-        if updated_kv.get("metadata") is None:
-            updated_kv["metadata"] = {}
-        updated_kv["metadata"]["team_member_budget_id"] = budget_row.budget_id
-        updated_kv.pop("team_member_budget", None)
-    else:  # budget does not exist
-        updated_kv = await _create_team_member_budget_table(
-            data=team_table,
-            new_team_data_json=updated_kv,
-            user_api_key_dict=user_api_key_dict,
-            team_member_budget=team_member_budget,
-        )
-    return updated_kv
 
 
 #### TEAM MANAGEMENT ####
@@ -257,12 +306,17 @@ async def new_team(  # noqa: PLR0915
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
     - members: Optional[List] - Control team members via `/team/member/add` and `/team/member/delete`.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
+    - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
+    - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
+    - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
+    - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
+    - prompts: Optional[List[str]] - List of allowed prompts for the team. If specified, the team will only be able to use these specific prompts.
     
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
@@ -330,6 +384,19 @@ async def new_team(  # noqa: PLR0915
                         "error": f"Team id = {data.team_id} already exists. Please use a different team id."
                     },
                 )
+
+        # If max_budget is not explicitly provided in the request,
+        # check for a default value in the proxy configuration.
+        if data.max_budget is None:
+            if (
+                isinstance(litellm.default_team_settings, list)
+                and len(litellm.default_team_settings) > 0
+                and isinstance(litellm.default_team_settings[0], dict)
+            ):
+                default_settings = litellm.default_team_settings[0]
+                default_budget = default_settings.get("max_budget")
+                if default_budget is not None:
+                    data.max_budget = default_budget
 
         if (
             user_api_key_dict.user_role is None
@@ -414,12 +481,18 @@ async def new_team(  # noqa: PLR0915
 
         ## Create Team Member Budget Table
         data_json = data.json()
-        if data.team_member_budget is not None:
-            data_json = await _create_team_member_budget_table(
+        if TeamMemberBudgetHandler.should_create_budget(
+            team_member_budget=data.team_member_budget,
+            team_member_rpm_limit=data.team_member_rpm_limit,
+            team_member_tpm_limit=data.team_member_tpm_limit,
+        ):
+            data_json = await TeamMemberBudgetHandler.create_team_member_budget_table(
                 data=data,
                 new_team_data_json=data_json,
                 user_api_key_dict=user_api_key_dict,
                 team_member_budget=data.team_member_budget,
+                team_member_rpm_limit=data.team_member_rpm_limit,
+                team_member_tpm_limit=data.team_member_tpm_limit,
             )
 
         ## ADD TO TEAM TABLE
@@ -431,7 +504,7 @@ async def new_team(  # noqa: PLR0915
 
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-            if getattr(data, field) is not None:
+            if getattr(data, field, None) is not None:
                 _set_object_metadata_field(
                     object_data=complete_team_data,
                     field_name=field,
@@ -689,13 +762,17 @@ async def update_team(
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
+    - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
+    - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
+    - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
+    - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     Example - update team TPM Limit
 
@@ -788,13 +865,21 @@ async def update_team(
         # set the budget_reset_at in DB
         updated_kv["budget_reset_at"] = reset_at
 
-    if data.team_member_budget is not None:
-        updated_kv = await _upsert_team_member_budget_table(
+    if TeamMemberBudgetHandler.should_create_budget(
+        team_member_budget=data.team_member_budget,
+        team_member_rpm_limit=data.team_member_rpm_limit,
+        team_member_tpm_limit=data.team_member_tpm_limit,
+    ):
+        updated_kv = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
             team_table=existing_team_row,
+            user_api_key_dict=user_api_key_dict,
             updated_kv=updated_kv,
             team_member_budget=data.team_member_budget,
-            user_api_key_dict=user_api_key_dict,
+            team_member_rpm_limit=data.team_member_rpm_limit,
+            team_member_tpm_limit=data.team_member_tpm_limit,
         )
+    else:
+        TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
 
     # Check object permission
     if data.object_permission is not None:
@@ -955,34 +1040,46 @@ def team_member_add_duplication_check(
     obvious duplicates where both user_id and user_email match exactly.
     """
 
+    invalid_team_members = []
+
     def _check_member_duplication(member: Member):
-        # Check by user_id if provided
         if member.user_id is not None:
             for existing_member in existing_team_row.members_with_roles:
                 if existing_member.user_id == member.user_id:
-                    raise ProxyException(
-                        message=f"User with user_id={member.user_id} already in team. Existing members={existing_team_row.members_with_roles}",
-                        type=ProxyErrorTypes.team_member_already_in_team,
-                        param="user_id",
-                        code="400",
-                    )
+                    invalid_team_members.append(member)
 
         # Check by user_email if provided
         if member.user_email is not None:
             for existing_member in existing_team_row.members_with_roles:
                 if existing_member.user_email == member.user_email:
-                    raise ProxyException(
-                        message=f"User with user_email={member.user_email} already in team. Existing members={existing_team_row.members_with_roles}",
-                        type=ProxyErrorTypes.team_member_already_in_team,
-                        param="user_email",
-                        code="400",
-                    )
+                    invalid_team_members.append(member)
 
+    # First, populate the invalid_team_members list by checking for duplicates
     if isinstance(data.member, Member):
         _check_member_duplication(data.member)
     elif isinstance(data.member, List):
         for m in data.member:
             _check_member_duplication(m)
+
+    # Then check the populated list and raise exceptions if needed
+    if isinstance(data.member, list) and len(invalid_team_members) == len(data.member):
+        raise ProxyException(
+            message=f"All users are already in team. Existing members={existing_team_row.members_with_roles}",
+            type=ProxyErrorTypes.team_member_already_in_team,
+            param="member",
+            code="400",
+        )
+    elif isinstance(data.member, Member) and len(invalid_team_members) == 1:
+        raise ProxyException(
+            message=f"User already in team. Member: user_id={data.member.user_id}, user_email={data.member.user_email}. Existing members={existing_team_row.members_with_roles}",
+            type=ProxyErrorTypes.team_member_already_in_team,
+            param="member",
+            code="400",
+        )
+    elif len(invalid_team_members) > 0:
+        verbose_proxy_logger.info(
+            f"Some users are already in team. Existing members={existing_team_row.members_with_roles}. Duplicate members={invalid_team_members}",
+        )
 
 
 async def _validate_team_member_add_permissions(
@@ -1268,6 +1365,32 @@ async def team_member_add(
     )
 
 
+def _cleanup_members_with_roles(
+    existing_team_row: LiteLLM_TeamTable,
+    data: TeamMemberDeleteRequest,
+) -> Tuple[bool, List[Member]]:
+    """Cleanup members_with_roles list for a team."""
+    is_member_in_team = False
+    new_team_members: List[Member] = []
+    for m in existing_team_row.members_with_roles:
+        if (
+            data.user_id is not None
+            and m.user_id is not None
+            and data.user_id == m.user_id
+        ):
+            is_member_in_team = True
+            continue
+        elif (
+            data.user_email is not None
+            and m.user_email is not None
+            and data.user_email == m.user_email
+        ):
+            is_member_in_team = True
+            continue
+        new_team_members.append(m)
+    return is_member_in_team, new_team_members
+
+
 @router.post(
     "/team/member_delete",
     tags=["team management"],
@@ -1340,24 +1463,10 @@ async def team_member_delete(
         )
 
     ## DELETE MEMBER FROM TEAM
-    is_member_in_team = False
-    new_team_members: List[Member] = []
-    for m in existing_team_row.members_with_roles:
-        if (
-            data.user_id is not None
-            and m.user_id is not None
-            and data.user_id == m.user_id
-        ):
-            is_member_in_team = True
-            continue
-        elif (
-            data.user_email is not None
-            and m.user_email is not None
-            and data.user_email == m.user_email
-        ):
-            is_member_in_team = True
-            continue
-        new_team_members.append(m)
+    is_member_in_team, new_team_members = _cleanup_members_with_roles(
+        existing_team_row=existing_team_row,
+        data=data,
+    )
 
     if not is_member_in_team:
         raise HTTPException(status_code=400, detail={"error": "User not found in team"})
@@ -1398,6 +1507,20 @@ async def team_member_delete(
                     },
                     data={"teams": {"set": team_list}},
                 )
+
+    # Also clean up any existing team membership rows for this user and team
+    user_ids_to_delete = set()
+    if data.user_id is not None:
+        user_ids_to_delete.add(data.user_id)
+    if existing_user_rows is not None and isinstance(existing_user_rows, list):
+        for existing_user in existing_user_rows:
+            if getattr(existing_user, "user_id", None):
+                user_ids_to_delete.add(existing_user.user_id)
+
+    for _uid in user_ids_to_delete:
+        await prisma_client.db.litellm_teammembership.delete_many(
+            where={"team_id": data.team_id, "user_id": _uid}
+        )
 
     return existing_team_row
 
@@ -1508,6 +1631,8 @@ async def team_member_update(
             max_budget=data.max_budget_in_team,
             existing_budget_id=identified_budget_id,
             user_api_key_dict=user_api_key_dict,
+            tpm_limit=data.tpm_limit,
+            rpm_limit=data.rpm_limit,
         )
 
     ### update team member role
@@ -1538,7 +1663,182 @@ async def team_member_update(
         user_id=received_user_id,
         user_email=data.user_email,
         max_budget_in_team=data.max_budget_in_team,
+        tpm_limit=data.tpm_limit,
+        rpm_limit=data.rpm_limit,
     )
+
+
+def _create_results_from_response(
+    members: List[Member],
+    response: TeamAddMemberResponse,
+) -> List[TeamMemberAddResult]:
+    """
+    Convert TeamAddMemberResponse into individual TeamMemberAddResult objects
+    """
+    results: List[TeamMemberAddResult] = []
+
+    for member in members:
+        # Find corresponding updated user
+        updated_user = None
+        for user in response.updated_users:
+            if (member.user_id and user.user_id == member.user_id) or (
+                member.user_email and user.user_email == member.user_email
+            ):
+                updated_user = user.model_dump()
+                break
+
+        # Find corresponding updated team membership
+        updated_team_membership = None
+        for tm in response.updated_team_memberships:
+            if member.user_id and tm.user_id == member.user_id:
+                updated_team_membership = tm.model_dump()
+                break
+
+        results.append(
+            TeamMemberAddResult(
+                user_id=member.user_id,
+                user_email=member.user_email,
+                success=True,
+                updated_user=updated_user,
+                updated_team_membership=updated_team_membership,
+            )
+        )
+
+    return results
+
+
+@router.post(
+    "/team/bulk_member_add",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=BulkTeamMemberAddResponse,
+)
+@management_endpoint_wrapper
+async def bulk_team_member_add(
+    data: BulkTeamMemberAddRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Bulk add multiple members to a team at once.
+    
+    This endpoint reuses the same logic as /team/member_add but provides a bulk-friendly response format.
+    
+    Parameters:
+    - team_id: str - The ID of the team to add members to
+    - members: List[Member] - List of members to add to the team
+    - all_users: Optional[bool] - Flag to add all users on Proxy to the team
+    - max_budget_in_team: Optional[float] - Maximum budget allocated to each user within the team
+    
+    Returns:
+    - results: List of individual member addition results
+    - total_requested: Total number of members requested for addition
+    - successful_additions: Number of successful additions  
+    - failed_additions: Number of failed additions
+    - updated_team: The updated team object
+    
+    Example request:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/team/bulk_member_add' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "team_id": "team-1234",
+        "members": [
+            {
+                "user_id": "user1",
+                "role": "user"
+            },
+            {
+                "user_email": "user2@example.com",
+                "role": "admin"
+            }
+        ],
+        "max_budget_in_team": 100.0
+    }'
+    ```
+    """
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if data.all_users:
+        # get all users from the database
+        all_users_in_db = await prisma_client.db.litellm_usertable.find_many(
+            order={"created_at": "desc"}
+        )
+        data.members = [
+            Member(
+                user_id=user.user_id,
+                user_email=user.user_email,
+                role="user",
+            )
+            for user in all_users_in_db
+        ]
+
+    if not data.members:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "At least one member is required"},
+        )
+
+    # Limit batch size to prevent overwhelming the system
+    MAX_BATCH_SIZE = 500
+    if len(data.members) > MAX_BATCH_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Maximum {MAX_BATCH_SIZE} members can be added at once"},
+        )
+
+    try:
+        # Reuse the existing team_member_add logic directly
+        response = await team_member_add(
+            data=TeamMemberAddRequest(
+                team_id=data.team_id,
+                member=data.members,  # Pass the entire list
+                max_budget_in_team=data.max_budget_in_team,
+            ),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # Convert to bulk response format
+        results = _create_results_from_response(data.members, response)
+
+        return BulkTeamMemberAddResponse(
+            team_id=data.team_id,
+            results=results,
+            total_requested=len(data.members),
+            successful_additions=len(results),  # All succeeded if we got here
+            failed_additions=0,
+            updated_team=response.model_dump(),
+        )
+
+    except Exception as e:
+        # If the entire operation fails, mark all members as failed
+        verbose_proxy_logger.exception(e)
+        error_message = str(e)
+        results = [
+            TeamMemberAddResult(
+                user_id=member.user_id,
+                user_email=member.user_email,
+                success=False,
+                error=error_message,
+            )
+            for member in data.members
+        ]
+
+        return BulkTeamMemberAddResponse(
+            team_id=data.team_id,
+            results=results,
+            total_requested=len(data.members),
+            successful_additions=0,
+            failed_additions=len(data.members),
+            updated_team=None,
+        )
 
 
 @router.post(
@@ -2023,6 +2323,7 @@ async def list_available_teams(
     response_model=TeamListResponse,
     dependencies=[Depends(user_api_key_auth)],
 )
+@management_endpoint_wrapper
 async def list_team_v2(
     http_request: Request,
     user_id: Optional[str] = fastapi.Query(
@@ -2081,6 +2382,18 @@ async def list_team_v2(
         raise HTTPException(
             status_code=500,
             detail={"error": f"No db connected. prisma client={prisma_client}"},
+        )
+
+    if not allowed_route_check_inside_route(
+        user_api_key_dict=user_api_key_dict, requested_user_id=user_id
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Only admin users can query all teams/other teams. Your user role={}".format(
+                    user_api_key_dict.user_role
+                )
+            },
         )
 
     if user_id is None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:

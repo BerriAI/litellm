@@ -24,7 +24,9 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingMetadata,
     StandardLoggingHiddenParams,
+    LiteLLMCommonStrings,
 )
+from litellm.types.integrations.datadog import DatadogInitParams
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -577,3 +579,53 @@ def test_get_datadog_tags():
     standard_logging_obj["request_tags"] = None
     tags_none_request = DataDogLogger._get_datadog_tags(standard_logging_obj)
     assert "request_tag:" not in tags_none_request
+
+
+@pytest.mark.asyncio
+async def test_datadog_message_redaction():
+    """
+    Test that DataDog logger correctly initializes with turn_off_message_logging=True 
+    from litellm.datadog_params
+    """
+    try:
+        # Test using litellm.datadog_params pattern
+        litellm.datadog_params = DatadogInitParams(turn_off_message_logging=True)
+        
+        os.environ["DD_SITE"] = "https://fake.datadoghq.com"
+        os.environ["DD_API_KEY"] = "anything"
+        
+        # Mock the periodic flush to avoid async issues
+        with patch("asyncio.create_task"):
+            dd_logger = DataDogLogger()
+
+        # Verify that turn_off_message_logging was set correctly from litellm.datadog_params
+        assert hasattr(dd_logger, 'turn_off_message_logging'), "DataDogLogger should have turn_off_message_logging attribute"
+        assert dd_logger.turn_off_message_logging is True, f"Expected turn_off_message_logging=True, got {dd_logger.turn_off_message_logging}"
+        
+        # Test the redaction method inherited from CustomLogger
+        model_call_details = {
+            "standard_logging_object": {
+                "messages": [{"role": "user", "content": "This is sensitive information that should be redacted"}],
+                "response": {"choices": [{"message": {"content": "This is a sensitive response that should be redacted"}}]}
+            }
+        }
+        
+        # Apply redaction using the inherited method
+        redacted_details = dd_logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
+        redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
+        
+        # Verify that messages are redacted
+        redacted_standard_obj = redacted_details["standard_logging_object"]
+        assert redacted_standard_obj["messages"][0]["content"] == redacted_str, f"Messages not redacted. Got: {redacted_standard_obj['messages'][0]['content']}"
+        
+        # Verify that response is redacted
+        assert redacted_standard_obj["response"]["choices"][0]["message"]["content"] == redacted_str, f"Response not redacted. Got: {redacted_standard_obj['response']['choices'][0]['message']['content']}"
+
+        print("✅ DataDog message redaction test passed")
+
+    except Exception as e:
+        pytest.fail(f"Test failed with exception: {str(e)}")
+    finally:
+        # Clean up
+        litellm.datadog_params = None
+        litellm.callbacks = []

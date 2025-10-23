@@ -28,7 +28,7 @@ from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
-import uuid
+from litellm._uuid import uuid
 import json
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 

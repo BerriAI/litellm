@@ -5,7 +5,7 @@ import asyncio
 import aiohttp, openai
 from openai import OpenAI, AsyncOpenAI
 from typing import Optional, List, Union
-import uuid
+from litellm._uuid import uuid
 
 LITELLM_MASTER_KEY = "sk-1234"
 

@@ -480,3 +480,209 @@ def test_gemini_25_implicit_caching_cost():
     ), f"Expected cost {expected_cost}, but got {result}"
 
     print(f"✓ Gemini 2.5 implicit caching cost calculation is correct: ${result:.8f}")
+
+
+def test_log_context_cost_calculation():
+    """
+    Test that log context cost calculation works correctly with tiered pricing.
+
+    This test verifies that when using extended context (above 200k tokens),
+    the log context costs are calculated using the appropriate tiered rates.
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import (
+        Choices,
+        Message,
+        ModelResponse,
+        PromptTokensDetailsWrapper,
+        Usage,
+    )
+
+    # Create a mock response with extended context usage
+    extended_context_response = ModelResponse(
+        id="test-extended-context-response",
+        created=1750733889,
+        model="claude-4-sonnet-20250514",
+        object="chat.completion",
+        system_fingerprint=None,
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="This is a test response for extended context cost calculation.",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                ),
+            )
+        ],
+        usage=Usage(
+            total_tokens=350000,  # Above 200k threshold
+            prompt_tokens=301000,  # Above 200k threshold
+            completion_tokens=50000,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=300000,
+                cached_tokens=0,  # No cache hits
+                audio_tokens=None,
+                image_tokens=None,
+                character_count=None,
+                video_length_seconds=None,
+                cache_creation_tokens=1000,
+            ),
+            completion_tokens_details=None,
+            _cache_creation_input_tokens=1000,  # Some tokens added to cache
+        ),
+    )
+
+    # Calculate the cost using the extended context model
+    result = completion_cost(
+        completion_response=extended_context_response,
+        model="claude-4-sonnet-20250514",
+        custom_llm_provider="anthropic",
+    )
+
+    # Debug: Print the actual result
+    print(f"DEBUG: Actual cost result: ${result:.6f}")
+
+    # Get model info to understand the pricing
+    from litellm import get_model_info
+
+    model_info = get_model_info(
+        model="claude-4-sonnet-20250514", custom_llm_provider="anthropic"
+    )
+
+    # Calculate expected cost based on actual model pricing
+    input_cost_per_token = model_info.get("input_cost_per_token", 0)
+    output_cost_per_token = model_info.get("output_cost_per_token", 0)
+    cache_creation_cost_per_token = model_info.get("cache_creation_input_token_cost", 0)
+
+    # Check if tiered pricing is applied
+    input_cost_above_200k = model_info.get(
+        "input_cost_per_token_above_200k_tokens", input_cost_per_token
+    )
+    output_cost_above_200k = model_info.get(
+        "output_cost_per_token_above_200k_tokens", output_cost_per_token
+    )
+    cache_creation_above_200k = model_info.get(
+        "cache_creation_input_token_cost_above_200k_tokens",
+        cache_creation_cost_per_token,
+    )
+
+    print(f"DEBUG: Base input cost per token: ${input_cost_per_token:.2e}")
+    print(f"DEBUG: Base output cost per token: ${output_cost_per_token:.2e}")
+    print(
+        f"DEBUG: Base cache creation cost per token: ${cache_creation_cost_per_token:.2e}"
+    )
+
+    # Handle tiered pricing - if not available, use base pricing
+    if input_cost_above_200k is not None:
+        print(
+            f"DEBUG: Tiered input cost per token (>200k): ${input_cost_above_200k:.2e}"
+        )
+    else:
+        print(f"DEBUG: No tiered input pricing available, using base pricing")
+        input_cost_above_200k = input_cost_per_token
+
+    if output_cost_above_200k is not None:
+        print(
+            f"DEBUG: Tiered output cost per token (>200k): ${output_cost_above_200k:.2e}"
+        )
+    else:
+        print(f"DEBUG: No tiered output pricing available, using base pricing")
+        output_cost_above_200k = output_cost_per_token
+
+    if cache_creation_above_200k is not None:
+        print(
+            f"DEBUG: Tiered cache creation cost per token (>200k): ${cache_creation_above_200k:.2e}"
+        )
+    else:
+        print(f"DEBUG: No tiered cache creation pricing available, using base pricing")
+        cache_creation_above_200k = cache_creation_cost_per_token
+
+    # Since we're above 200k tokens, we should use tiered pricing if available
+    expected_input_cost = 300000 * input_cost_above_200k
+    expected_output_cost = 50000 * output_cost_above_200k
+    expected_cache_cost = 1000 * cache_creation_above_200k
+    expected_total = expected_input_cost + expected_output_cost + expected_cache_cost
+
+    print(f"DEBUG: Expected total: ${expected_total:.6f}")
+
+    # Allow for small floating point differences
+    assert (
+        abs(result - expected_total) < 1e-6
+    ), f"Expected cost ${expected_total:.6f}, but got ${result:.6f}"
+
+    print(
+        f"✓ Log context cost calculation with tiered pricing is correct: ${result:.6f}"
+    )
+    print(f"  - Input tokens (300k): ${expected_input_cost:.6f}")
+    print(f"  - Output tokens (50k): ${expected_output_cost:.6f}")
+    print(f"  - Cache creation (1k): ${expected_cache_cost:.6f}")
+    print(f"  - Total: ${result:.6f}")
+
+
+def test_gemini_25_explicit_caching_cost_direct_usage():
+    """
+    Test that Gemini 2.5 models correctly calculate costs with explicit caching.
+
+    This test reproduces the issue from #11156 where cached tokens should receive
+    a 75% discount.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.types.utils import (
+        CompletionTokensDetailsWrapper,
+        PromptTokensDetailsWrapper,
+        Usage,
+    )
+    from litellm.utils import get_model_info
+
+    model_info = get_model_info(model="gemini-2.5-pro", custom_llm_provider="gemini")
+
+    usage = Usage(
+        completion_tokens=2522,
+        prompt_tokens=42001,
+        total_tokens=44523,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=1908,
+            rejected_prediction_tokens=None,
+            text_tokens=614,
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None, cached_tokens=40938, text_tokens=1063, image_tokens=None
+        ),
+    )
+
+    input_cost, output_cost = generic_cost_per_token(
+        model="gemini/gemini-2.5-pro",
+        usage=usage,
+        custom_llm_provider="gemini",
+    )
+
+    total_cost = input_cost + output_cost
+
+    expected_higher_than_actual_cost = (
+        model_info["input_cost_per_token"] * usage.prompt_tokens
+        + model_info["output_cost_per_token"] * usage.completion_tokens
+    )
+
+    print(f"expected_higher_than_actual_cost: {expected_higher_than_actual_cost}")
+
+    assert expected_higher_than_actual_cost > total_cost
+
+    expected_actual_cost = (
+        model_info["input_cost_per_token"] * usage.prompt_tokens_details.text_tokens
+        + model_info["cache_read_input_token_cost"]
+        * usage.prompt_tokens_details.cached_tokens
+        + model_info["output_cost_per_token"] * usage.completion_tokens
+    )
+
+    print(
+        f"model_info['input_cost_per_token']: {model_info['input_cost_per_token']}, usage.prompt_tokens_details.text_tokens: {usage.prompt_tokens_details.text_tokens}, model_info['cache_read_input_token_cost']: {model_info['cache_read_input_token_cost']}, model_info['output_cost_per_token']: {model_info['output_cost_per_token']}"
+    )
+
+    print(f"Expected actual cost: {expected_actual_cost}")
+
+    assert expected_actual_cost == total_cost

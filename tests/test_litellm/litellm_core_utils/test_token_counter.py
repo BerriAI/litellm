@@ -54,6 +54,15 @@ def test_token_counter_basic():
     )
 
 
+def test_token_counter_with_prefix():
+    messages = [
+        {"role": "user", "content": "Who won the world cup in 2022?"},
+        {"role": "assistant", "content": "Argentina", "prefix": True}
+    ]
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+    assert tokens == 22 , f"Expected 22 tokens, got {tokens}"
+
+
 def test_token_counter_normal_plus_function_calling():
     messages = [
         {"role": "system", "content": "System prompt"},
@@ -442,6 +451,7 @@ def test_img_url_token_counter(img_url):
 
 def test_token_encode_disallowed_special():
     encode(model="gpt-3.5-turbo", text="Hello, world! <|endoftext|>")
+    token_counter(model="gpt-3.5-turbo", text="Hello, world! <|endoftext|>")
 
 
 def test_token_counter():

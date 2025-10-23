@@ -164,7 +164,7 @@ ChatCompletionMessageParam = Union[
 
 class CompletionRequest(BaseModel):
     model: str
-    messages: List[str] = []
+    messages: List[ChatCompletionMessageParam] = []
     timeout: Optional[Union[float, int]] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None

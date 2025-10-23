@@ -1,6 +1,7 @@
-from typing import Optional, TypedDict, Union
+from typing import Optional, Union
 
 import httpx
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (

@@ -29,5 +29,6 @@ Common timezone values:
 - `US/Pacific` - Pacific Time
 - `Europe/London` - UK Time
 - `Asia/Kolkata` - Indian Standard Time (IST)
+- `Asia/Bangkok` - Indochina Time (ICT)
 - `Asia/Tokyo` - Japan Standard Time
 - `Australia/Sydney` - Australian Eastern Time

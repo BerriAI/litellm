@@ -65,7 +65,37 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
           <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onBack}>
             Back to All Servers
           </Button>
-          <Title>{mcpServer.alias}</Title>
+          <div className="flex items-center cursor-pointer">
+            <Title>{mcpServer.server_name}</Title>
+            <AntdButton
+              type="text"
+              size="small"
+              icon={copiedStates["mcp-server_name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              onClick={() => copyToClipboard(mcpServer.server_name, "mcp-server_name")}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["mcp-server_name"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
+            />
+            {mcpServer.alias && (
+              <>
+                <span className="ml-4 text-gray-500">Alias:</span>
+                <span className="ml-1 font-mono text-blue-600">{mcpServer.alias}</span>
+                <AntdButton
+                  type="text"
+                  size="small"
+                  icon={copiedStates["mcp-alias"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                  onClick={() => copyToClipboard(mcpServer.alias, "mcp-alias")}
+                  className={`left-2 z-10 transition-all duration-200 ${
+                    copiedStates["mcp-alias"]
+                      ? "text-green-600 bg-green-50 border-green-200"
+                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                  }`}
+                />
+              </>
+            )}
+          </div>
           <div className="flex items-center cursor-pointer">
             <Text className="text-gray-500 font-mono">{mcpServer.server_id}</Text>
             <AntdButton
@@ -78,7 +108,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   ? "text-green-600 bg-green-50 border-green-200"
                   : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
               }`}
-              />
+            />
           </div>
         </div>
       </div>
@@ -139,6 +169,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
               auth_type={mcpServer.auth_type}
               userRole={userRole}
               userID={userID}
+              serverAlias={mcpServer.alias}
             />
           </TabPanel>
 
@@ -165,6 +196,10 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 <div className="space-y-4">
                   <div>
                     <Text className="font-medium">Server Name</Text>
+                    <div>{mcpServer.server_name}</div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Alias</Text>
                     <div>{mcpServer.alias}</div>
                   </div>
                   <div>
@@ -187,12 +222,12 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     <div>{handleTransport(mcpServer.transport)}</div>
                   </div>
                   <div>
-                    <Text className="font-medium">Auth Type</Text>
-                    <div>{handleAuth(mcpServer.auth_type)}</div>
+                    <Text className="font-medium">Extra Headers</Text>
+                    <div>{mcpServer.extra_headers?.join(", ")}</div>
                   </div>
                   <div>
-                    <Text className="font-medium">Spec Version</Text>
-                    <div>{mcpServer.spec_version}</div>
+                    <Text className="font-medium">Auth Type</Text>
+                    <div>{handleAuth(mcpServer.auth_type)}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Access Groups</Text>
@@ -207,6 +242,25 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                         </div>
                       ) : (
                         <Text className="text-gray-500">No access groups defined</Text>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Allowed Tools</Text>
+                    <div>
+                      {mcpServer.allowed_tools && mcpServer.allowed_tools.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {mcpServer.allowed_tools.map((tool: string, index: number) => (
+                            <span
+                              key={index}
+                              className="px-2 py-1 bg-blue-50 border border-blue-200 rounded-md text-sm"
+                            >
+                              {tool}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <Text className="text-gray-500">All tools enabled</Text>
                       )}
                     </div>
                   </div>

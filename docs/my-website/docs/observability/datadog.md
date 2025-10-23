@@ -9,8 +9,14 @@ LiteLLM Supports logging to the following Datdog Integrations:
 - `datadog_llm_observability` [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/)
 - `ddtrace-run` [Datadog Tracing](#datadog-tracing)
 
-<Tabs>
-<TabItem value="datadog" label="Datadog Logs">
+## Datadog Logs
+
+| Feature | Details |
+|---------|---------|
+| **What is logged** | [StandardLoggingPayload](../proxy/logging_spec) |
+| **Events** | Success + Failure |
+| **Product Link** | [Datadog Logs](https://docs.datadoghq.com/logs/) |
+
 
 We will use the `--config` to set `litellm.callbacks = ["datadog"]` this will log all successful LLM calls to DataDog
 
@@ -26,8 +32,16 @@ litellm_settings:
   service_callback: ["datadog"] # logs redis, postgres failures on datadog
 ```
 
-</TabItem>
-<TabItem value="datadog_llm_observability" label="Datadog LLM Observability">
+
+## Datadog LLM Observability
+
+**Overview**
+
+| Feature | Details |
+|---------|---------|
+| **What is logged** | [StandardLoggingPayload](../proxy/logging_spec) |
+| **Events** | Success + Failure |
+| **Product Link** | [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/) |
 
 ```yaml
 model_list:
@@ -38,8 +52,7 @@ litellm_settings:
   callbacks: ["datadog_llm_observability"] # logs llm success logs on datadog
 ```
 
-</TabItem>
-</Tabs>
+
 
 **Step 2**: Set Required env variables for datadog
 
@@ -80,7 +93,53 @@ Expected output on Datadog
 
 <Image img={require('../../img/dd_small1.png')} />
 
-#### Datadog Tracing
+### Redacting Messages and Responses
+
+This section covers how to redact sensitive data from messages and responses in the logged payload on Datadog LLM Observability.
+
+
+When redaction is enabled, the actual message content and response text will be excluded from Datadog logs while preserving metadata like token counts, latency, and model information.
+
+**Step 1**: Configure redaction in your `config.yaml`
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  callbacks: ["datadog_llm_observability"] # logs llm success logs on datadog
+
+  # Params to apply only for "datadog_llm_observability" callback
+  datadog_llm_observability_params:
+    turn_off_message_logging: true # redacts input messages and output responses
+```
+
+**Step 2**: Send a chat completion request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
+```
+
+**Step 3**: Verify redaction in Datadog LLM Observability
+
+On the Datadog LLM Observability page, you should see that both input messages and output responses are redacted, while metadata (token counts, timing, model info) remains visible.
+
+<Image img={require('../../img/dd_llm_obs.png')} />
+
+
+
+### Datadog Tracing
 
 Use `ddtrace-run` to enable [Datadog Tracing](https://ddtrace.readthedocs.io/en/stable/installation_quickstart.html) on litellm proxy
 
@@ -104,7 +163,7 @@ docker run \
     --config /app/config.yaml --detailed_debug
 ```
 
-### Set DD variables (`DD_SERVICE` etc)
+## Set DD variables (`DD_SERVICE` etc)
 
 LiteLLM supports customizing the following Datadog environment variables
 

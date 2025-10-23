@@ -23,6 +23,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
         guard_name=litellm_params.guard_name,
+        guardrails_ai_api_input_format=getattr(
+            litellm_params, "guardrails_ai_api_input_format", "llmOutput"
+        ),
     )
     litellm.logging_callback_manager.add_litellm_callback(_guardrails_ai_callback)
 

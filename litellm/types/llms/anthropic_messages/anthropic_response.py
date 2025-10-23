@@ -1,6 +1,6 @@
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
-from typing_extensions import TypeAlias
+from typing_extensions import TypeAlias, TypedDict
 
 from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,

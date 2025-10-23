@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
+    _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import (
@@ -50,6 +51,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
     Usage,
+    _generate_id,
 )
 
 from ...base import BaseLLM
@@ -433,7 +435,9 @@ class AnthropicChatCompletion(BaseLLM):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    client = HTTPHandler(timeout=timeout)  # type: ignore
+                    client = _get_httpx_client(
+                        params={"timeout": timeout}
+                    )
                 else:
                     client = client
 
@@ -487,6 +491,8 @@ class ModelResponseIterator:
         self.content_blocks: List[ContentBlockDelta] = []
         self.tool_index = -1
         self.json_mode = json_mode
+        # Generate response ID once per stream to match OpenAI-compatible behavior
+        self.response_id = _generate_id()
 
         # Track if we're currently streaming a response_format tool
         self.is_response_format_tool: bool = False
@@ -637,7 +643,8 @@ class ModelResponseIterator:
                 ]
             ] = None
 
-            index = int(chunk.get("index", 0))
+            # Always use index=0 for OpenAI choice format (fixes multi-choice errors)
+            index = 0
             if type_chunk == "content_block_delta":
                 """
                 Anthropic content chunk
@@ -761,6 +768,7 @@ class ModelResponseIterator:
                     )
                 ],
                 usage=usage,
+                id=self.response_id,
             )
 
             return returned_chunk
@@ -932,4 +940,4 @@ class ModelResponseIterator:
             data_json = json.loads(str_line[5:])
             return self.chunk_parser(chunk=data_json)
         else:
-            return ModelResponseStream()
+            return ModelResponseStream(id=self.response_id)

@@ -48,12 +48,13 @@ async def test_get_end_user_object(customer_spend, customer_budget):
     )
     _cache = DualCache()
     _key = "end_user_id:{}".format(end_user_id)
-    _cache.set_cache(key=_key, value=end_user_obj)
+    _cache.set_cache(key=_key, value=end_user_obj.model_dump())
     try:
         await get_end_user_object(
             end_user_id=end_user_id,
             prisma_client="RANDOM VALUE",  # type: ignore
             user_api_key_cache=_cache,
+            route="/v1/chat/completions",
         )
         if customer_spend > customer_budget:
             pytest.fail(

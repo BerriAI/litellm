@@ -6,7 +6,7 @@ import sys
 import time
 import traceback
 from unittest.mock import patch
-
+from typing import Union
 import pytest
 
 sys.path.insert(
@@ -85,21 +85,11 @@ async def test_acompletion_caching_on_router():
         litellm.set_verbose = True
         model_list = [
             {
-                "model_name": "gpt-3.5-turbo",
+                "model_name": "gpt-4.1-nano",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo",
+                    "model": "gpt-4.1-nano",
                     "api_key": os.getenv("OPENAI_API_KEY"),
-                },
-                "tpm": 100000,
-                "rpm": 10000,
-            },
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "mock_response": "Hello world",
                 },
                 "tpm": 100000,
                 "rpm": 10000,
@@ -120,13 +110,13 @@ async def test_acompletion_caching_on_router():
             routing_strategy="simple-shuffle",
         )
         response1 = await router.acompletion(
-            model="gpt-3.5-turbo", messages=messages, temperature=1
+            model="gpt-4.1-nano", messages=messages, temperature=1
         )
         print(f"response1: {response1}")
         await asyncio.sleep(5)  # add cache is async, async sleep for cache to get set
 
         response2 = await router.acompletion(
-            model="gpt-3.5-turbo", messages=messages, temperature=1
+            model="gpt-4.1-nano", messages=messages, temperature=1
         )
         print(f"response2: {response2}")
         assert response1.id == response2.id
@@ -213,10 +203,8 @@ async def test_acompletion_caching_with_ttl_on_router():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "model": "gpt-4.1-nano",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
                 },
                 "tpm": 100000,
                 "rpm": 10000,
@@ -279,7 +267,7 @@ async def test_acompletion_caching_on_router_caching_groups():
             {
                 "model_name": "azure-gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -343,8 +331,8 @@ async def test_acompletion_caching_on_router_caching_groups():
     ],
 )
 def test_create_correct_redis_cache_instance(
-    startup_nodes: list[dict] | None,
-    expected_cache_type: type[RedisClusterCache | RedisCache],
+    startup_nodes: Union[list[dict], None],
+    expected_cache_type: Union[type[RedisClusterCache], type[RedisCache]],
 ):
     cache_config = dict(
         host="mockhost",

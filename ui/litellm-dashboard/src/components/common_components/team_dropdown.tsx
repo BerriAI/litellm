@@ -6,15 +6,18 @@ interface TeamDropdownProps {
   teams?: Team[] | null;
   value?: string;
   onChange?: (value: string) => void;
+  disabled?: boolean;
 }
 
-const TeamDropdown: React.FC<TeamDropdownProps> = ({ teams, value, onChange }) => {
+const TeamDropdown: React.FC<TeamDropdownProps> = ({ teams, value, onChange, disabled }) => {
+  console.log("disabled", disabled);
   return (
     <Select
       showSearch
       placeholder="Search or select a team"
       value={value}
       onChange={onChange}
+      disabled={disabled}
       filterOption={(input, option) => {
         if (!option) return false;
         // Get team data from the option key

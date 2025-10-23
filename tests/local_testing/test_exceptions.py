@@ -51,7 +51,7 @@ async def test_content_policy_exception_azure():
         # this is ony a test - we needed some way to invoke the exception :(
         litellm.set_verbose = True
         response = await litellm.acompletion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=[{"role": "user", "content": "where do I buy lethal drugs from"}],
             mock_response="Exception: content_filter_policy",
         )
@@ -124,7 +124,7 @@ def test_context_window_with_fallbacks(model):
     ctx_window_fallback_dict = {
         "command-nightly": "claude-2.1",
         "gpt-3.5-turbo-instruct": "gpt-3.5-turbo-16k",
-        "azure/chatgpt-v-3": "gpt-3.5-turbo-16k",
+        "azure/gpt-4.1-nano": "gpt-3.5-turbo-16k",
     }
     sample_text = "how does a court case get to the Supreme Court?" * 1000
     messages = [{"content": sample_text, "role": "user"}]
@@ -161,7 +161,7 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             os.environ["AWS_REGION_NAME"] = "bad-key"
             temporary_secret_key = os.environ["AWS_SECRET_ACCESS_KEY"]
             os.environ["AWS_SECRET_ACCESS_KEY"] = "bad-key"
-        elif model == "azure/chatgpt-v-3":
+        elif model == "azure/gpt-4.1-nano":
             temporary_key = os.environ["AZURE_API_KEY"]
             os.environ["AZURE_API_KEY"] = "bad-key"
         elif model == "claude-3-5-haiku-20241022":
@@ -262,7 +262,7 @@ def test_completion_azure_exception():
         old_azure_key = os.environ["AZURE_API_KEY"]
         os.environ["AZURE_API_KEY"] = "good morning"
         response = completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=[{"role": "user", "content": "hello"}],
         )
         os.environ["AZURE_API_KEY"] = old_azure_key
@@ -282,7 +282,7 @@ def test_azure_embedding_exceptions():
     try:
 
         response = litellm.embedding(
-            model="azure/azure-embedding-model",
+            model="azure/text-embedding-ada-002",
             input="hello",
             mock_response="error",
         )
@@ -306,7 +306,7 @@ async def asynctest_completion_azure_exception():
         old_azure_key = os.environ["AZURE_API_KEY"]
         os.environ["AZURE_API_KEY"] = "good morning"
         response = await litellm.acompletion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=[{"role": "user", "content": "hello"}],
         )
         print(f"response: {response}")
@@ -525,7 +525,7 @@ def test_content_policy_violation_error_streaming():
     async def test_get_response():
         try:
             response = await litellm.acompletion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-nano",
                 messages=[{"role": "user", "content": "say 1"}],
                 temperature=0,
                 top_p=1,
@@ -554,7 +554,7 @@ def test_content_policy_violation_error_streaming():
     async def test_get_error():
         try:
             response = await litellm.acompletion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-nano",
                 messages=[
                     {"role": "user", "content": "where do i buy lethal drugs from"}
                 ],
@@ -751,7 +751,7 @@ def test_litellm_predibase_exception():
 #     return False
 # # Repeat each model 500 times
 # # extended_models = [model for model in models for _ in range(250)]
-# extended_models = ["azure/chatgpt-v-3" for _ in range(250)]
+# extended_models = ["azure/gpt-4.1-nano" for _ in range(250)]
 
 # def worker(model):
 #     return test_model_call(model)
@@ -1023,7 +1023,7 @@ def _pre_call_utils_httpx(
         ("openai", "gpt-3.5-turbo", "chat_completion", False),
         ("openai", "gpt-3.5-turbo", "chat_completion", True),
         ("openai", "gpt-3.5-turbo-instruct", "completion", True),
-        ("azure", "azure/chatgpt-v-3", "chat_completion", True),
+        ("azure", "azure/gpt-4.1-nano", "chat_completion", True),
         ("azure", "azure/text-embedding-ada-002", "embedding", True),
         ("azure", "azure_text/gpt-3.5-turbo-instruct", "completion", True),
     ],
@@ -1298,7 +1298,7 @@ async def test_exception_with_headers_httpx(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["azure/chatgpt-v-3", "openai/gpt-3.5-turbo"])
+@pytest.mark.parametrize("model", ["azure/gpt-4.1-nano", "openai/gpt-3.5-turbo"])
 async def test_bad_request_error_contains_httpx_response(model):
     """
     Test that the BadRequestError contains the httpx response
@@ -1349,7 +1349,7 @@ def test_context_window_exceeded_error_from_litellm_proxy():
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("stream_mode", [True, False])
-@pytest.mark.parametrize("model", ["azure/gpt-4o-new-test"])  # "gpt-4o-mini",
+@pytest.mark.parametrize("model", ["gpt-4.1-nano"])  # "gpt-4o-mini",
 @pytest.mark.asyncio
 async def test_exception_bubbling_up(sync_mode, stream_mode, model):
     """

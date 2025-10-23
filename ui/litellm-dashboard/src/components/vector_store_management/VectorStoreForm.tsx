@@ -17,6 +17,7 @@ import {
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { CredentialItem, vectorStoreCreateCall } from "../networking";
 import { VectorStoreProviders, vectorStoreProviderLogoMap, vectorStoreProviderMap, getProviderSpecificFields, VectorStoreFieldConfig } from "../vector_store_providers";
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface VectorStoreFormProps {
   isVisible: boolean;
@@ -45,7 +46,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
       try {
         metadata = metadataJson.trim() ? JSON.parse(metadataJson) : {};
       } catch (e) {
-        message.error("Invalid JSON in metadata field");
+        NotificationsManager.fromBackend("Invalid JSON in metadata field");
         return;
       }
 
@@ -59,22 +60,23 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
         litellm_credential_name: formValues.litellm_credential_name,
       };
 
-      // Add provider-specific fields dynamically
+      // pass all provider fields as litellm params dict
       const providerFields = getProviderSpecificFields(formValues.custom_llm_provider);
-      providerFields.forEach(field => {
-        if (formValues[field.name]) {
-          payload[field.name] = formValues[field.name];
-        }
-      });
+      const litellmParams = providerFields.reduce((acc, field) => {
+        acc[field.name] = formValues[field.name];
+        return acc;
+      }, {} as Record<string, any>);
+
+      payload["litellm_params"] = litellmParams;
 
       await vectorStoreCreateCall(accessToken, payload);
-      message.success("Vector store created successfully");
+      NotificationsManager.success("Vector store created successfully");
       form.resetFields();
       setMetadataJson("{}");
       onSuccess();
     } catch (error) {
       console.error("Error creating vector store:", error);
-      message.error("Error creating vector store: " + error);
+      NotificationsManager.fromBackend("Error creating vector store: " + error);
     }
   };
 
@@ -163,6 +165,27 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
           />
         )}
 
+        {/* Vertex RAG Engine Setup Instructions */}
+        {selectedProvider === "vertex_rag_engine" && (
+          <Alert
+            message="Vertex AI RAG Engine Setup"
+            description={
+              <div>
+                <p>To use Vertex AI RAG Engine:</p>
+                <ol style={{ marginLeft: '16px', marginTop: '8px' }}>
+                  <li>Set up your Vertex AI RAG Engine corpus following the guide: <a href="https://cloud.google.com/vertex-ai/generative-ai/docs/rag-engine/rag-overview" target="_blank" rel="noopener noreferrer">Vertex AI RAG Engine Overview</a></li>
+                  <li>Create a corpus in your Google Cloud project</li>
+                  <li>Note the corpus ID from the Vertex AI console</li>
+                  <li>Enter the corpus ID in the Vector Store ID field below</li>
+                </ol>
+              </div>
+            }
+            type="info"
+            showIcon
+            style={{ marginBottom: '16px' }}
+          />
+        )}
+
         <Form.Item
           label={
               <span>
@@ -175,7 +198,13 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
           name="vector_store_id"
           rules={[{ required: true, message: "Please input the vector store ID from your api provider" }]}
         >
-          <TextInput />
+          <TextInput 
+            placeholder={
+              selectedProvider === "vertex_rag_engine" 
+                ? "6917529027641081856 (Get corpus ID from Vertex AI console)"
+                : "Enter vector store ID from your provider"
+            }
+          />
         </Form.Item>
 
         {/* Provider-specific fields */}

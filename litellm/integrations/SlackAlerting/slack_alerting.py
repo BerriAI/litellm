@@ -805,9 +805,9 @@ class SlackAlerting(CustomBatchLogger):
         ### UNIQUE CACHE KEY ###
         cache_key = provider + region_name
 
-        outage_value: Optional[ProviderRegionOutageModel] = (
-            await self.internal_usage_cache.async_get_cache(key=cache_key)
-        )
+        outage_value: Optional[
+            ProviderRegionOutageModel
+        ] = await self.internal_usage_cache.async_get_cache(key=cache_key)
 
         if (
             getattr(exception, "status_code", None) is None
@@ -1367,12 +1367,13 @@ Model Info:
         # Get the current timestamp
         current_time = datetime.now().strftime("%H:%M:%S")
         _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
+        # Use .name if it's an enum, otherwise use as is
+        alert_type_name = getattr(alert_type, 'name', alert_type)
+        alert_type_formatted = f"Alert type: `{alert_type_name}`"
         if alert_type == "daily_reports" or alert_type == "new_model_added":
-            formatted_message = message
+            formatted_message = alert_type_formatted + message
         else:
-            formatted_message = (
-                f"Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
-            )
+            formatted_message = f"{alert_type_formatted}\nLevel: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
 
         if kwargs:
             for key, value in kwargs.items():
@@ -1388,9 +1389,9 @@ Model Info:
             self.alert_to_webhook_url is not None
             and alert_type in self.alert_to_webhook_url
         ):
-            slack_webhook_url: Optional[Union[str, List[str]]] = (
-                self.alert_to_webhook_url[alert_type]
-            )
+            slack_webhook_url: Optional[
+                Union[str, List[str]]
+            ] = self.alert_to_webhook_url[alert_type]
         elif self.default_webhook_url is not None:
             slack_webhook_url = self.default_webhook_url
         else:

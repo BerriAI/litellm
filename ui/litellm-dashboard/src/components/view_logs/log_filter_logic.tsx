@@ -55,11 +55,18 @@ export function useLogFilterLogic({
   }), []);
 
   const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
-  const [filteredLogs, setFilteredLogs] = useState<PaginatedResponse>(logs);
+  const [backendFilteredLogs, setBackendFilteredLogs] = useState<PaginatedResponse>({
+    data: [],
+    total: 0,
+    page: 1,
+    page_size: 50,
+    total_pages: 0
+  });
   const lastSearchTimestamp = useRef(0);
   const performSearch = useCallback(async (filters: LogFilterState, page = 1) => {
     if (!accessToken) return;
 
+    console.log("Filters being sent to API:", filters);
     const currentTimestamp = Date.now();
     lastSearchTimestamp.current = currentTimestamp;
 
@@ -81,11 +88,12 @@ export function useLogFilterLogic({
         filters[FILTER_KEYS.USER_ID] || undefined,
         filters[FILTER_KEYS.END_USER] || undefined,
         filters[FILTER_KEYS.STATUS] || undefined,
-        filters[FILTER_KEYS.MODEL] || undefined
+        filters[FILTER_KEYS.MODEL] || undefined,
+        filters[FILTER_KEYS.KEY_ALIAS] || undefined
       );
 
       if (currentTimestamp === lastSearchTimestamp.current && response.data) {
-        setFilteredLogs(response);
+        setBackendFilteredLogs(response);
       }
     } catch (error) {
       console.error("Error searching users:", error);
@@ -111,21 +119,36 @@ export function useLogFilterLogic({
   });
   const allKeyAliases = queryAllKeysQuery.data || []
 
-  // Apply filters to keys whenever logs or filters change
-  useEffect(() => {
+  // Determine when backend filters are active (server-side filtering)
+  const hasBackendFilters = useMemo(() => (
+    !!(
+      filters[FILTER_KEYS.KEY_ALIAS] ||
+      filters[FILTER_KEYS.KEY_HASH] ||
+      filters[FILTER_KEYS.REQUEST_ID] ||
+      filters[FILTER_KEYS.USER_ID] ||
+      filters[FILTER_KEYS.END_USER]
+    )
+  ), [filters]);
+
+  // Compute client-side filtered logs directly from incoming logs and filters
+  const clientDerivedFilteredLogs: PaginatedResponse = useMemo(() => {
     if (!logs || !logs.data) {
-      setFilteredLogs({
+      return {
         data: [],
         total: 0,
         page: 1,
         page_size: 50,
         total_pages: 0
-      });
-      return;
+      };
     }
-  
+
+    // If backend filters are on, don't perform client-side filtering here
+    if (hasBackendFilters) {
+      return logs;
+    }
+
     let filteredData = [...logs.data];
-  
+
     if (filters[FILTER_KEYS.TEAM_ID]) {
       filteredData = filteredData.filter(
         log => log.team_id === filters[FILTER_KEYS.TEAM_ID]
@@ -160,39 +183,33 @@ export function useLogFilterLogic({
         log => log.end_user === filters[FILTER_KEYS.END_USER]
       );
     }
-    
-    // Add key alias filtering
-    if (filters[FILTER_KEYS.KEY_ALIAS]) {
-      // We need to fetch the key info to get the key hash for the selected alias
-        try {
-          // Get the key hash for the selected alias
-          const selectedKey = filters[FILTER_KEYS.KEY_ALIAS]
 
-          if (selectedKey) {
-            // Filter logs by the key hash
-            filteredData = filteredData.filter(
-              log => log.metadata?.user_api_key_alias === selectedKey
-            );
-          }
-        } catch (error) {
-          console.error("Error fetching key info for alias:", error);
-        }
-    }
-
-    const newFilteredLogs: PaginatedResponse = {
+    return {
       data: filteredData,
       total: logs.total,
       page: logs.page,
       page_size: logs.page_size,
       total_pages: logs.total_pages,
     };
-  
-    if (JSON.stringify(newFilteredLogs) !== JSON.stringify(filteredLogs)) {
-      setFilteredLogs(newFilteredLogs);
-    }
-  }, [logs, filters, filteredLogs, accessToken]);
+  }, [logs, filters, hasBackendFilters]);
 
-  
+  // Choose which filtered logs to expose: backend result when active, otherwise client-derived
+  const filteredLogs: PaginatedResponse = useMemo(() => {
+    if (hasBackendFilters) {
+      // Prefer backend result if present; otherwise fall back to latest logs
+      if (backendFilteredLogs && backendFilteredLogs.data && backendFilteredLogs.data.length > 0) {
+        return backendFilteredLogs;
+      }
+      return logs || {
+        data: [],
+        total: 0,
+        page: 1,
+        page_size: 50,
+        total_pages: 0
+      };
+    }
+    return clientDerivedFilteredLogs;
+  }, [hasBackendFilters, backendFilteredLogs, clientDerivedFilteredLogs, logs]);
 
   // Fetch all teams and users for potential filter dropdowns (optional, can be adapted)
   const { data: allTeams } = useQuery<Team[], Error>({
@@ -233,6 +250,15 @@ export function useLogFilterLogic({
   const handleFilterReset = () => {
     // Reset filters state
     setFilters(defaultFilters);
+    
+    // Clear backend filtered logs to ensure fresh render
+    setBackendFilteredLogs({
+      data: [],
+      total: 0,
+      page: 1,
+      page_size: 50,
+      total_pages: 0
+    });
     
     // Reset selections
     debouncedSearch(defaultFilters, 1);

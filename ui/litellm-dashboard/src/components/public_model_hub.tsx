@@ -18,6 +18,8 @@ import { EndpointType, getEndpointType } from "./chat_ui/mode_endpoint_mapping";
 import { MessageType } from "./chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 import Navbar from "./navbar";
+import { ThemeProvider } from "@/contexts/ThemeContext";
+import NotificationsManager from "./molecules/notifications_manager";
 // Simple approach without react-markdown dependency
 
 interface ModelGroupInfo {
@@ -222,7 +224,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    message.success("Copied to clipboard!");
+    NotificationsManager.success("Copied to clipboard!");
   };
 
   const formatCapabilityName = (key: string) => {
@@ -476,18 +478,19 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
   ];
 
   return (
-    <div className="min-h-screen bg-white">
-      {/* Navigation */}
-      <Navbar 
-        userID={null}
-        userEmail={null}
-        userRole={null}
-        premiumUser={false}
-        setProxySettings={setProxySettings}
-        proxySettings={proxySettings}
-        accessToken={accessToken || null}
-        isPublicPage={true}
-      />
+    <ThemeProvider accessToken={accessToken}>
+      <div className="min-h-screen bg-white">
+        {/* Navigation */}
+        <Navbar 
+          userID={null}
+          userEmail={null}
+          userRole={null}
+          premiumUser={false}
+          setProxySettings={setProxySettings}
+          proxySettings={proxySettings}
+          accessToken={accessToken || null}
+          isPublicPage={true}
+        />
 
       <div className="w-full px-8 py-12">
         {/* About Section */}
@@ -819,6 +822,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
     selectedTags: [],
     selectedVectorStores: [],
     selectedGuardrails: [],
+    selectedMCPTools: [],
     endpointType: getEndpointType(selectedModel.mode || 'chat'),
     selectedModel: selectedModel.model_group,
     selectedSdk: 'openai'
@@ -841,6 +845,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
                         selectedTags: [],
                         selectedVectorStores: [],
                         selectedGuardrails: [],
+                        selectedMCPTools: [],
                         endpointType: getEndpointType(selectedModel.mode || 'chat'),
                         selectedModel: selectedModel.model_group,
                         selectedSdk: 'openai'
@@ -856,7 +861,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
           </div>
         )}
       </Modal>
-    </div>
+      </div>
+    </ThemeProvider>
   );
 };
 

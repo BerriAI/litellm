@@ -12,6 +12,9 @@ class DeepInfraConfig(OpenAIGPTConfig):
 
     The class `DeepInfra` provides configuration for the DeepInfra's Chat Completions API interface. Below are the parameters:
     """
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "deepinfra"
 
     frequency_penalty: Optional[int] = None
     function_call: Optional[Union[str, dict]] = None
@@ -53,7 +56,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
-        return [
+        supported_openai_params = [
             "stream",
             "frequency_penalty",
             "function_call",
@@ -68,8 +71,15 @@ class DeepInfraConfig(OpenAIGPTConfig):
             "top_p",
             "response_format",
             "tools",
-            "tool_choice",
+            "tool_choice"
         ]
+
+        if litellm.supports_reasoning(
+            model=model,
+            custom_llm_provider=self.custom_llm_provider,
+        ):
+            supported_openai_params.append("reasoning_effort")
+        return supported_openai_params
 
     def map_openai_params(
         self,

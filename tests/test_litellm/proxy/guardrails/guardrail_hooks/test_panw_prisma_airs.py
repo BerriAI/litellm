@@ -280,7 +280,7 @@ class TestPanwAirsResponseScanning:
         mock_response = {"action": "allow", "category": "benign"}
 
         with patch.object(handler, "_call_panw_api", return_value=mock_response):
-            result = await handler.async_post_call_hook(
+            result = await handler.async_post_call_success_hook(
                 data=request_data,
                 user_api_key_dict=user_api_key_dict,
                 response=safe_response,
@@ -299,7 +299,7 @@ class TestPanwAirsResponseScanning:
 
         with patch.object(handler, "_call_panw_api", return_value=mock_response):
             with pytest.raises(HTTPException) as exc_info:
-                await handler.async_post_call_hook(
+                await handler.async_post_call_success_hook(
                     data=request_data,
                     user_api_key_dict=user_api_key_dict,
                     response=harmful_response,

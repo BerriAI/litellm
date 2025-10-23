@@ -1,4 +1,6 @@
-from typing import Literal, Optional, TypedDict
+from typing import Literal, Optional
+
+from typing_extensions import TypedDict
 
 
 class IntegrationHealthCheckStatus(TypedDict):

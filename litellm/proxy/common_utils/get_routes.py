@@ -2,9 +2,11 @@
 Utility class for getting routes from a FastAPI app.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from starlette.routing import BaseRoute
+
+from litellm._logging import verbose_logger
 
 
 class GetRoutes:
@@ -53,8 +55,25 @@ class GetRoutes:
                         "path": full_path,
                         "methods": getattr(sub_route, "methods", ["GET", "POST"]),
                         "name": getattr(sub_route, "name", None),
-                        "endpoint": endpoint_func.__name__ if callable(endpoint_func) else None,
+                        "endpoint": GetRoutes._safe_get_endpoint_name(endpoint_func),
                         "mounted_app": True,
                     }
                     routes.append(route_info)
         return routes
+    
+
+    @staticmethod
+    def _safe_get_endpoint_name(endpoint_function: Any) -> Optional[str]:
+        """
+        Safely get the name of the endpoint function.
+        """
+        try:
+            if hasattr(endpoint_function, '__name__'):
+                return getattr(endpoint_function, '__name__')
+            elif hasattr(endpoint_function, '__class__') and hasattr(endpoint_function.__class__, '__name__'):
+                return getattr(endpoint_function.__class__, '__name__')
+            else:
+                return None
+        except Exception:
+            verbose_logger.exception(f"Error getting endpoint name for route: {endpoint_function}")
+            return None

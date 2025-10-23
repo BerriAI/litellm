@@ -346,4 +346,109 @@ curl -i http://localhost:4000/v1/chat/completions \
 </Tabs>
 
 
+## **View Available Fallback Models**
+
+Use the `/v1/models` endpoint to discover available fallback models for a given model. This helps you understand which backup models are available when your primary model is unavailable or restricted.
+
+:::info Extension Point
+
+The `include_metadata` parameter serves as an extension point for exposing additional model metadata in the future. While currently focused on fallback models, this approach will be expanded to include other model metadata such as pricing information, capabilities, rate limits, and more.
+
+:::
+
+### Basic Usage
+
+Get all available models:
+
+```shell
+curl -X GET 'http://localhost:4000/v1/models' \
+  -H 'Authorization: Bearer <your-api-key>'
+```
+
+### Get Fallback Models with Metadata
+
+Include metadata to see fallback model information:
+
+```shell
+curl -X GET 'http://localhost:4000/v1/models?include_metadata=true' \
+  -H 'Authorization: Bearer <your-api-key>'
+```
+
+### Get Specific Fallback Types
+
+You can specify the type of fallbacks you want to see:
+
+<Tabs>
+<TabItem value="general" label="General Fallbacks">
+
+```shell
+curl -X GET 'http://localhost:4000/v1/models?include_metadata=true&fallback_type=general' \
+  -H 'Authorization: Bearer <your-api-key>'
+```
+
+General fallbacks are alternative models that can handle the same types of requests.
+
+</TabItem>
+
+<TabItem value="context_window" label="Context Window Fallbacks">
+
+```shell
+curl -X GET 'http://localhost:4000/v1/models?include_metadata=true&fallback_type=context_window' \
+  -H 'Authorization: Bearer <your-api-key>'
+```
+
+Context window fallbacks are models with larger context windows that can handle requests when the primary model's context limit is exceeded.
+
+</TabItem>
+
+<TabItem value="content_policy" label="Content Policy Fallbacks">
+
+```shell
+curl -X GET 'http://localhost:4000/v1/models?include_metadata=true&fallback_type=content_policy' \
+  -H 'Authorization: Bearer <your-api-key>'
+```
+
+Content policy fallbacks are models that can handle requests when the primary model rejects content due to safety policies.
+
+</TabItem>
+
+</Tabs>
+
+### Example Response
+
+When `include_metadata=true` is specified, the response includes fallback information:
+
+```json
+{
+  "data": [
+    {
+      "id": "gpt-4",
+      "object": "model",
+      "created": 1677610602,
+      "owned_by": "openai",
+      "fallbacks": {
+        "general": ["gpt-3.5-turbo", "claude-3-sonnet"],
+        "context_window": ["gpt-4-turbo", "claude-3-opus"],
+        "content_policy": ["claude-3-haiku"]
+      }
+    }
+  ]
+}
+```
+
+### Use Cases
+
+- **High Availability**: Identify backup models to ensure service continuity
+- **Cost Optimization**: Find cheaper alternatives when primary models are expensive
+- **Content Filtering**: Discover models with different content policies
+- **Context Length**: Find models that can handle larger inputs
+- **Load Balancing**: Distribute requests across multiple compatible models
+
+### API Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `include_metadata` | boolean | Include additional model metadata including fallbacks |
+| `fallback_type` | string | Filter fallbacks by type: `general`, `context_window`, or `content_policy` |
+
 ## [Role Based Access Control (RBAC)](./jwt_auth_arch)

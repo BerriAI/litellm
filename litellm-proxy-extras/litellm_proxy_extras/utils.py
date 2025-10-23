@@ -243,7 +243,6 @@ class ProxyExtrasDBManager:
             bool: True if setup was successful, False otherwise
         """
         schema_path = ProxyExtrasDBManager._get_prisma_dir() + "/schema.prisma"
-        use_migrate = str_to_bool(os.getenv("USE_PRISMA_MIGRATE")) or use_migrate
         for attempt in range(4):
             original_dir = os.getcwd()
             migrations_dir = ProxyExtrasDBManager._get_prisma_dir()
@@ -299,7 +298,7 @@ class ProxyExtrasDBManager:
                             and "database schema is not empty" in e.stderr
                         ):
                             logger.info(
-                                "Database schema is not empty, creating baseline migration"
+                                "Database schema is not empty, creating baseline migration. In read-only file system, please set an environment variable `LITELLM_MIGRATION_DIR` to a writable directory to enable migrations. Learn more - https://docs.litellm.ai/docs/proxy/prod#read-only-file-system"
                             )
                             ProxyExtrasDBManager._create_baseline_migration(schema_path)
                             logger.info(

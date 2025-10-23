@@ -1,7 +1,9 @@
 import os
 from datetime import datetime as dt
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, TypedDict
+from typing import Any, Dict, List, Literal, Optional, Set
+
+from typing_extensions import TypedDict
 
 
 class ArgillaItem(TypedDict):

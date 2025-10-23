@@ -115,3 +115,25 @@ tests:
           content:
             name: EXTRA_ENV_VAR
             value: EXTRA_ENV_VAR_VALUE
+  - it: should mount existing configmap when create=false
+    template: deployment.yaml
+    set:
+      proxyConfigMap:
+        create: false
+        name: my-litellm-config
+        key: custom.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: litellm-config
+            configMap:
+              name: my-litellm-config
+              items:
+                - key: custom.yaml
+                  path: config.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: litellm-config
+            mountPath: /etc/litellm/

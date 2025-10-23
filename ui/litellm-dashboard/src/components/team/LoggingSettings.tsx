@@ -4,8 +4,9 @@ import React, { useState } from 'react';
 import { Form, Select, Space, Tooltip, Divider } from 'antd';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Button, Card, TextInput } from '@tremor/react';
-import { PlusIcon, TrashIcon, CogIcon } from '@heroicons/react/outline';
-import { callbackInfo, Callbacks, callback_map } from '../callback_info_helpers';
+import { PlusIcon, TrashIcon, CogIcon, BanIcon } from '@heroicons/react/outline';
+import { callbackInfo, Callbacks, callback_map, mapDisplayToInternalNames } from '../callback_info_helpers';
+import NumericalInput from '../shared/numerical_input';
 
 const { Option } = Select;
 
@@ -18,16 +19,32 @@ interface LoggingConfig {
 interface LoggingSettingsProps {
   value?: LoggingConfig[];
   onChange?: (value: LoggingConfig[]) => void;
+  disabledCallbacks?: string[];
+  onDisabledCallbacksChange?: (disabledCallbacks: string[]) => void;
 }
 
-const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange }) => {
+const LoggingSettings: React.FC<LoggingSettingsProps> = ({ 
+  value = [], 
+  onChange,
+  disabledCallbacks = [],
+  onDisabledCallbacksChange
+}) => {
   // Get callbacks that support team and key logging
   const supportedCallbacks = Object.entries(callbackInfo)
     .filter(([_, info]) => info.supports_key_team_logging)
     .map(([name, _]) => name);
 
+  // Get all available callbacks for disabled selection
+  const allCallbacks = Object.keys(callbackInfo);
+
   const handleChange = (newValue: LoggingConfig[]) => {
     onChange?.(newValue);
+  };
+
+  const handleDisabledCallbacksChange = (newDisabledCallbacks: string[]) => {
+    // Map display names to internal callback values
+    const mappedDisabledCallbacks = mapDisplayToInternalNames(newDisabledCallbacks);
+    onDisabledCallbacksChange?.(mappedDisabledCallbacks);
   };
 
   const addLoggingConfig = () => {
@@ -110,13 +127,33 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange 
                     Sensitive
                   </span>
                 )}
+                {paramType === 'number' && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                    Number
+                  </span>
+                )}
               </label>
-              <TextInput
-                type={paramType === 'password' ? 'password' : 'text'}
-                placeholder={`os.environ/${paramName.toUpperCase()}`}
-                value={config.callback_vars[paramName] || ''}
-                onChange={(e) => updateCallbackVar(configIndex, paramName, e.target.value)}
-              />
+              {paramType === 'number' && (
+                <span className="text-xs text-gray-500">
+                  Value must be between 0 and 1
+                </span>
+              )}
+              {paramType === 'number' ? (
+                <NumericalInput
+                  step={0.01}
+                  width={400}
+                  placeholder={`os.environ/${paramName.toUpperCase()}`}
+                  value={config.callback_vars[paramName] || ''}
+                  onChange={(e: any) => updateCallbackVar(configIndex, paramName, e.target.value)}
+                />
+              ) : (
+                <TextInput
+                  type={paramType === 'password' ? 'password' : 'text'}
+                  placeholder={`os.environ/${paramName.toUpperCase()}`}
+                  value={config.callback_vars[paramName] || ''}
+                  onChange={(e) => updateCallbackVar(configIndex, paramName, e.target.value)}
+                />
+              )}
             </div>
           ))}
         </div>
@@ -126,6 +163,67 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange 
 
   return (
     <div className="space-y-6">
+      {/* Disabled Callbacks Section */}
+      <div className="space-y-4">
+        <div className="flex items-center space-x-2">
+          <BanIcon className="w-5 h-5 text-red-500" />
+          <span className="text-base font-semibold text-gray-800">Disabled Callbacks</span>
+          <Tooltip title="Select callbacks to disable for this key. Disabled callbacks will not receive any logging data.">
+            <InfoCircleOutlined className="text-gray-400 cursor-help" />
+          </Tooltip>
+        </div>
+        
+        <div className="space-y-2">
+          <label className="text-sm font-medium text-gray-700">Disabled Callbacks</label>
+          <Select
+            mode="multiple"
+            placeholder="Select callbacks to disable"
+            value={disabledCallbacks}
+            onChange={handleDisabledCallbacksChange}
+            style={{ width: '100%' }}
+            optionLabelProp="label"
+          >
+            {allCallbacks.map((callbackName) => {
+              const logo = callbackInfo[callbackName]?.logo;
+              const description = callbackInfo[callbackName]?.description;
+              return (
+                <Option key={callbackName} value={callbackName} label={callbackName}>
+                  <Tooltip title={description} placement="right">
+                    <div className="flex items-center space-x-2">
+                      {logo && (
+                        <img 
+                          src={logo} 
+                          alt={callbackName} 
+                          className="w-4 h-4 object-contain"
+                          onError={(e) => {
+                            // Create a div with callback initial as fallback
+                            const target = e.target as HTMLImageElement;
+                            const parent = target.parentElement;
+                            if (parent) {
+                              const fallbackDiv = document.createElement('div');
+                              fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                              fallbackDiv.textContent = callbackName.charAt(0);
+                              parent.replaceChild(fallbackDiv, target);
+                            }
+                          }}
+                        />
+                      )}
+                      <span>{callbackName}</span>
+                    </div>
+                  </Tooltip>
+                </Option>
+              );
+            })}
+          </Select>
+          <div className="text-xs text-gray-500">
+            Select callbacks that should be disabled for this key. These callbacks will not receive any logging data.
+          </div>
+        </div>
+      </div>
+
+      <Divider />
+
+      {/* Logging Integrations Section */}
       <div className="flex justify-between items-center">
         <div className="flex items-center space-x-2">
           <CogIcon className="w-5 h-5 text-blue-500" />
@@ -194,18 +292,32 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange 
                     >
                       {supportedCallbacks.map((callbackName) => {
                         const logo = callbackInfo[callbackName]?.logo;
+                        const description = callbackInfo[callbackName]?.description;
                         return (
                           <Option key={callbackName} value={callbackName} label={callbackName}>
-                            <div className="flex items-center space-x-2">
-                              {logo && (
-                                <img 
-                                  src={logo} 
-                                  alt={callbackName} 
-                                  className="w-4 h-4 object-contain" 
-                                />
-                              )}
-                              <span>{callbackName}</span>
-                            </div>
+                            <Tooltip title={description} placement="right">
+                              <div className="flex items-center space-x-2">
+                                {logo && (
+                                  <img 
+                                    src={logo} 
+                                    alt={callbackName} 
+                                    className="w-4 h-4 object-contain"
+                                    onError={(e) => {
+                                      // Create a div with callback initial as fallback
+                                      const target = e.target as HTMLImageElement;
+                                      const parent = target.parentElement;
+                                      if (parent) {
+                                        const fallbackDiv = document.createElement('div');
+                                        fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                                        fallbackDiv.textContent = callbackName.charAt(0);
+                                        parent.replaceChild(fallbackDiv, target);
+                                      }
+                                    }}
+                                  />
+                                )}
+                                <span>{callbackName}</span>
+                              </div>
+                            </Tooltip>
                           </Option>
                         );
                       })}

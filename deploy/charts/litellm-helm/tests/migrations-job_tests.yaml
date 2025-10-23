@@ -111,3 +111,17 @@ tests:
           content:
             name: CUSTOM_VAR
             value: "custom_value"
+
+  - it: should not include DATABASE_URL when deployStandalone is false
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      db:
+        deployStandalone: false
+        useExisting: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL

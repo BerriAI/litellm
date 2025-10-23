@@ -1,8 +1,9 @@
 from datetime import date
 from enum import Enum
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
 
 
 class GroupByDimension(str, Enum):
@@ -61,6 +62,9 @@ class BreakdownMetrics(BaseModel):
     models: Dict[str, MetricWithMetadata] = Field(
         default_factory=dict
     )  # model -> {metrics, metadata}
+    model_groups: Dict[str, MetricWithMetadata] = Field(
+        default_factory=dict
+    )  # model_group -> {metrics, metadata}
     providers: Dict[str, MetricWithMetadata] = Field(
         default_factory=dict
     )  # provider -> {metrics, metadata}

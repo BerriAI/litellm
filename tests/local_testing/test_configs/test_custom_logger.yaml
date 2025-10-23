@@ -1,7 +1,7 @@
 model_list: 
   - model_name: Azure OpenAI GPT-4 Canada
     litellm_params:
-      model: azure/chatgpt-v-3
+      model: azure/gpt-4.1-nano
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
       api_version: "2023-07-01-preview"
@@ -11,7 +11,7 @@ model_list:
       id: gm
   - model_name: azure-embedding-model
     litellm_params:
-      model: azure/azure-embedding-model
+      model: azure/text-embedding-ada-002
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
       api_version: "2023-07-01-preview"

@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import sys
-import uuid
+from litellm._uuid import uuid
 from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -224,10 +224,10 @@ class TestScimTransformations:
         result = ScimTransformations._get_scim_member_value(member_with_email)
         assert result == member_with_email.user_email
 
-        # Member without email
+        # Member without email should fall back to user_id
         member_without_email = Member(user_id="user-456", user_email=None, role="user")
         result = ScimTransformations._get_scim_member_value(member_without_email)
-        assert result == ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
+        assert result == member_without_email.user_id
 
 
 class TestSCIMPatchOperations:

@@ -6,6 +6,8 @@ from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, 
 import httpx
 from pydantic import BaseModel
 
+import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -55,6 +57,10 @@ class GroqChatConfig(OpenAILikeChatConfig):
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "groq"
+
     @classmethod
     def get_config(cls):
         return super().get_config()
@@ -65,6 +71,15 @@ class GroqChatConfig(OpenAILikeChatConfig):
             base_params.remove("max_retries")
         except ValueError:
             pass
+
+        try:
+            if litellm.supports_reasoning(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            ):
+                base_params.append("reasoning_effort")
+        except Exception as e:
+            verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
+
         return base_params
 
     @overload

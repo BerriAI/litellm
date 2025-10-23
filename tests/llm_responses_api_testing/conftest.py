@@ -11,6 +11,17 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 
+import asyncio
+
+@pytest.fixture(scope="session")
+def event_loop():
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
 
 @pytest.fixture(scope="function", autouse=True)
 def setup_and_teardown():

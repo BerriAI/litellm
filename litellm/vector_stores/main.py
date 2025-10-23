@@ -358,6 +358,22 @@ def search(
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("asearch", False) is True
 
+        # pull credentials from registry if available
+        vector_store_id_for_credentials = kwargs.get("vector_store_id", vector_store_id)
+        if (
+            litellm.vector_store_registry is not None
+            and vector_store_id_for_credentials is not None
+        ):
+            try:
+                registry_credentials = (
+                    litellm.vector_store_registry.get_credentials_for_vector_store(
+                        vector_store_id_for_credentials
+                    )
+                )
+                kwargs.update(registry_credentials)
+            except Exception:
+                pass
+
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
 

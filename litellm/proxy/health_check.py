@@ -137,11 +137,14 @@ def _update_litellm_params_for_health_check(
 
     - gets a short `messages` param for health check
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
+    - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
     """
     litellm_params["messages"] = _get_random_llm_message()
     _health_check_model = model_info.get("health_check_model", None)
     if _health_check_model is not None:
         litellm_params["model"] = _health_check_model
+    if model_info.get("mode", None) == "audio_speech":
+        litellm_params["voice"] = model_info.get("health_check_voice", "alloy")
     return litellm_params
 
 

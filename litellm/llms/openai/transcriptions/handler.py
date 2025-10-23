@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional, Union, cast
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
@@ -34,6 +34,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         - call openai_aclient.audio.transcriptions.create by default
         """
         try:
+
             raw_response = (
                 await openai_aclient.audio.transcriptions.with_raw_response.create(
                     **data, timeout=timeout
@@ -93,15 +94,14 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         Handle audio transcription request
         """
         if provider_config is not None:
-            data = provider_config.transform_audio_transcription_request(
+            transformed_data = provider_config.transform_audio_transcription_request(
                 model=model,
                 audio_file=audio_file,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
             )
 
-            if not isinstance(data, dict):
-                raise ValueError("OpenAI transformation route requires a dict")
+            data = cast(dict, transformed_data.data)
         else:
             data = {"model": model, "file": audio_file, **optional_params}
 

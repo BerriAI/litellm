@@ -1,5 +1,6 @@
 # What is this?
 ## API Handler for calling Vertex AI Partner Models
+from enum import Enum
 from typing import Callable, Optional, Union
 
 import httpx  # type: ignore
@@ -27,6 +28,16 @@ class VertexAIError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
+class PartnerModelPrefixes(str, Enum):
+    META_PREFIX = "meta/"
+    DEEPSEEK_PREFIX = "deepseek-ai"
+    MISTRAL_PREFIX = "mistral"
+    CODERESTAL_PREFIX = "codestral"
+    JAMBA_PREFIX = "jamba"
+    CLAUDE_PREFIX = "claude"
+    QWEN_PREFIX = "qwen"
+    GPT_OSS_PREFIX = "openai/gpt-oss-"
+
 
 class VertexAIPartnerModels(VertexBase):
     def __init__(self) -> None:
@@ -42,13 +53,27 @@ class VertexAIPartnerModels(VertexBase):
             bool: True if the model string is a Vertex AI Partner Model, False otherwise
         """
         if (
-            model.startswith("meta/")
-            or model.startswith("deepseek-ai")
-            or model.startswith("mistral")
-            or model.startswith("codestral")
-            or model.startswith("jamba")
-            or model.startswith("claude")
+            model.startswith(PartnerModelPrefixes.META_PREFIX)
+            or model.startswith(PartnerModelPrefixes.DEEPSEEK_PREFIX)
+            or model.startswith(PartnerModelPrefixes.MISTRAL_PREFIX)
+            or model.startswith(PartnerModelPrefixes.CODERESTAL_PREFIX)
+            or model.startswith(PartnerModelPrefixes.JAMBA_PREFIX)
+            or model.startswith(PartnerModelPrefixes.CLAUDE_PREFIX)
+            or model.startswith(PartnerModelPrefixes.QWEN_PREFIX)
+            or model.startswith(PartnerModelPrefixes.GPT_OSS_PREFIX)
         ):
+            return True
+        return False
+    
+    @staticmethod
+    def should_use_openai_handler(model: str):
+        OPENAI_LIKE_VERTEX_PROVIDERS = [
+            "llama",
+            PartnerModelPrefixes.DEEPSEEK_PREFIX,
+            PartnerModelPrefixes.QWEN_PREFIX,
+            PartnerModelPrefixes.GPT_OSS_PREFIX,
+        ]
+        if any(provider in model for provider in OPENAI_LIKE_VERTEX_PROVIDERS):
             return True
         return False
 
@@ -115,7 +140,7 @@ class VertexAIPartnerModels(VertexBase):
 
             optional_params["stream"] = stream
 
-            if "llama" in model or "deepseek-ai" in model:
+            if self.should_use_openai_handler(model):
                 partner = VertexPartnerProvider.llama
             elif "mistral" in model or "codestral" in model:
                 partner = VertexPartnerProvider.mistralai
@@ -191,7 +216,7 @@ class VertexAIPartnerModels(VertexBase):
                     client=client,
                     custom_llm_provider=LlmProviders.VERTEX_AI.value,
                 )
-            elif "llama" in model:
+            elif self.should_use_openai_handler(model):
                 return base_llm_http_handler.completion(
                     model=model,
                     stream=stream,

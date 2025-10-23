@@ -40,7 +40,9 @@ headers = {
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
 
 
-def get_ssl_configuration(ssl_verify: Optional[VerifyTypes] = None) -> Union[bool, str, ssl.SSLContext]:
+def get_ssl_configuration(
+    ssl_verify: Optional[VerifyTypes] = None,
+) -> Union[bool, str, ssl.SSLContext]:
     """
     Unified SSL configuration function that handles ssl_context and ssl_verify logic.
 
@@ -59,7 +61,7 @@ def get_ssl_configuration(ssl_verify: Optional[VerifyTypes] = None) -> Union[boo
             - False: Disable SSL verification
             - True: Enable SSL verification
             - str: Path to CA bundle file
-    
+
     Returns:
         Union[bool, str, ssl.SSLContext]: Appropriate SSL configuration
     """
@@ -72,7 +74,9 @@ def get_ssl_configuration(ssl_verify: Optional[VerifyTypes] = None) -> Union[boo
     # Get ssl_verify from environment or litellm settings if not provided
     if ssl_verify is None:
         ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
-        ssl_verify_bool = str_to_bool(ssl_verify) if isinstance(ssl_verify, str) else ssl_verify
+        ssl_verify_bool = (
+            str_to_bool(ssl_verify) if isinstance(ssl_verify, str) else ssl_verify
+        )
         if ssl_verify_bool is not None:
             ssl_verify = ssl_verify_bool
 
@@ -89,14 +93,9 @@ def get_ssl_configuration(ssl_verify: Optional[VerifyTypes] = None) -> Union[boo
             cafile = certifi.where()
 
     if ssl_verify is not False:
-        custom_ssl_context = ssl.create_default_context(
-            cafile=cafile
-        )
+        custom_ssl_context = ssl.create_default_context(cafile=cafile)
         # If security level is set, apply it to the SSL context
-        if (
-            ssl_security_level
-            and isinstance(ssl_security_level, str)
-        ):
+        if ssl_security_level and isinstance(ssl_security_level, str):
             # Create a custom SSL context with reduced security level
             custom_ssl_context.set_ciphers(ssl_security_level)
 
@@ -168,6 +167,7 @@ class AsyncHTTPHandler:
         concurrent_limit=1000,
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
+        shared_session: Optional["ClientSession"] = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -176,6 +176,7 @@ class AsyncHTTPHandler:
             concurrent_limit=concurrent_limit,
             event_hooks=event_hooks,
             ssl_verify=ssl_verify,
+            shared_session=shared_session,
         )
         self.client_alias = client_alias
 
@@ -185,6 +186,7 @@ class AsyncHTTPHandler:
         concurrent_limit: int,
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> httpx.AsyncClient:
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration(ssl_verify)
@@ -200,6 +202,7 @@ class AsyncHTTPHandler:
         transport = AsyncHTTPHandler._create_async_transport(
             ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
+            shared_session=shared_session,
         )
 
         return httpx.AsyncClient(
@@ -213,6 +216,7 @@ class AsyncHTTPHandler:
             verify=ssl_config,
             cert=cert,
             headers=headers,
+            follow_redirects=True,
         )
 
     async def close(self):
@@ -522,7 +526,9 @@ class AsyncHTTPHandler:
 
     @staticmethod
     def _create_async_transport(
-        ssl_context: Optional[ssl.SSLContext] = None, ssl_verify: Optional[bool] = None
+        ssl_context: Optional[ssl.SSLContext] = None,
+        ssl_verify: Optional[bool] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Optional[Union[LiteLLMAiohttpTransport, AsyncHTTPTransport]]:
         """
         - Creates a transport for httpx.AsyncClient
@@ -543,7 +549,9 @@ class AsyncHTTPHandler:
         #########################################################
         if AsyncHTTPHandler._should_use_aiohttp_transport():
             return AsyncHTTPHandler._create_aiohttp_transport(
-                ssl_context=ssl_context, ssl_verify=ssl_verify
+                ssl_context=ssl_context,
+                ssl_verify=ssl_verify,
+                shared_session=shared_session,
             )
 
         #########################################################
@@ -586,7 +594,7 @@ class AsyncHTTPHandler:
     ) -> Dict[str, Any]:
         """
         Helper method to get SSL connector initialization arguments for aiohttp TCPConnector.
-        
+
         SSL Configuration Priority:
         1. If ssl_context is provided -> use the custom SSL context
         2. If ssl_verify is False -> disable SSL verification (ssl=False)
@@ -597,20 +605,21 @@ class AsyncHTTPHandler:
         connector_kwargs: Dict[str, Any] = {
             "local_addr": ("0.0.0.0", 0) if litellm.force_ipv4 else None,
         }
-        
+
         if ssl_context is not None:
             # Priority 1: Use the provided custom SSL context
             connector_kwargs["ssl"] = ssl_context
         elif ssl_verify is False:
             # Priority 2: Explicitly disable SSL verification
             connector_kwargs["verify_ssl"] = False
-        
+
         return connector_kwargs
 
     @staticmethod
     def _create_aiohttp_transport(
         ssl_verify: Optional[bool] = None,
         ssl_context: Optional[ssl.SSLContext] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> LiteLLMAiohttpTransport:
         """
         Creates an AiohttpTransport with RequestNotRead error handling
@@ -634,6 +643,18 @@ class AsyncHTTPHandler:
             trust_env = True
 
         verbose_logger.debug("Creating AiohttpTransport...")
+
+        # Use shared session if provided and valid
+        if shared_session is not None and not shared_session.closed:
+            verbose_logger.debug(
+                f"SHARED SESSION: Reusing existing ClientSession (ID: {id(shared_session)})"
+            )
+            return LiteLLMAiohttpTransport(client=shared_session)
+
+        # Create new session only if none provided or existing one is invalid
+        verbose_logger.debug(
+            "NEW SESSION: Creating new ClientSession (no shared session provided)"
+        )
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
                 connector=TCPConnector(**connector_kwargs),
@@ -687,6 +708,7 @@ class HTTPHandler:
                 verify=ssl_config,
                 cert=cert,
                 headers=headers,
+                follow_redirects=True,
             )
         else:
             self.client = client
@@ -913,12 +935,13 @@ class HTTPHandler:
         if litellm.force_ipv4:
             return HTTPTransport(local_address="0.0.0.0")
         else:
-            return None
+            return getattr(litellm, 'sync_transport', None)
 
 
 def get_async_httpx_client(
     llm_provider: Union[LlmProviders, httpxSpecialProvider],
     params: Optional[dict] = None,
+    shared_session: Optional["ClientSession"] = None,
 ) -> AsyncHTTPHandler:
     """
     Retrieves the async HTTP client from the cache
@@ -940,10 +963,12 @@ def get_async_httpx_client(
         return _cached_client
 
     if params is not None:
+        params["shared_session"] = shared_session
         _new_client = AsyncHTTPHandler(**params)
     else:
         _new_client = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+            timeout=httpx.Timeout(timeout=600.0, connect=5.0),
+            shared_session=shared_session,
         )
 
     litellm.in_memory_llm_clients_cache.set_cache(

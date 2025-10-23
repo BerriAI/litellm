@@ -3,7 +3,7 @@
 
 import os
 import traceback
-import uuid
+from litellm._uuid import uuid
 from enum import Enum
 from typing import Any, Dict, NamedTuple
 

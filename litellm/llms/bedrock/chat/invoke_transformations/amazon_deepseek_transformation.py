@@ -3,7 +3,7 @@ from typing import Any, List, Optional, cast
 from httpx import Response
 
 from litellm import verbose_logger
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _parse_content_for_reasoning,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator

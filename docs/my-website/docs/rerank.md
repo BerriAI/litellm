@@ -109,6 +109,8 @@ curl http://0.0.0.0:4000/rerank \
 
 ## **Supported Providers**
 
+#### ⚡️See all supported models and providers at [models.litellm.ai](https://models.litellm.ai/)
+
 | Provider    | Link to Usage      |
 |-------------|--------------------|
 | Cohere (v1 + v2 clients)      |   [Usage](#quick-start)                 |
@@ -118,3 +120,5 @@ curl http://0.0.0.0:4000/rerank \
 | AWS Bedrock|   [Usage](../docs/providers/bedrock#rerank-api)                 |  
 | HuggingFace|   [Usage](../docs/providers/huggingface_rerank)                 |  
 | Infinity|   [Usage](../docs/providers/infinity)                 |  
+| vLLM|   [Usage](../docs/providers/vllm#rerank-endpoint)                 |  
+| DeepInfra|   [Usage](../docs/providers/deepinfra#rerank-endpoint)                 |  

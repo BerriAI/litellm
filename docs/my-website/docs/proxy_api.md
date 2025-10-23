@@ -27,7 +27,7 @@ Email us @ krrish@berri.ai
 ## Supported Models for LiteLLM Key
 These are the models that currently work with the "sk-litellm-.." keys.
 
-For a complete list of models/providers that you can call with LiteLLM, [check out our provider list](./providers/)
+For a complete list of models/providers that you can call with LiteLLM, [check out our provider list](./providers/) or check out [models.litellm.ai](https://models.litellm.ai/)
 
 * OpenAI models - [OpenAI docs](./providers/openai.md)
     * gpt-4

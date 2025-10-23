@@ -12,8 +12,9 @@ These are members of a Team on LiteLLM
 """
 
 import asyncio
+import json
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union, cast
 
@@ -25,7 +26,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    get_daily_activity,
+    get_daily_activity_aggregated,
+)
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -34,13 +38,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
-    BreakdownMetrics,
-    KeyMetadata,
-    KeyMetricWithMetadata,
-    LiteLLM_DailyUserSpend,
-    MetricWithMetadata,
     SpendAnalyticsPaginatedResponse,
-    SpendMetrics,
 )
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkUpdateUserRequest,
@@ -330,6 +328,7 @@ async def new_user(
     - key_alias: Optional[str] - Alias for the key auto-created on `/user/new`. Default is None.
     - sso_user_id: Optional[str] - The id of the user in the SSO provider.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
     - organizations: List[str] - List of organization id's the user is a member of
     Returns:
     - key: (str) The generated api key for the user
@@ -744,7 +743,9 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
-def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> dict:
+def _update_internal_user_params(
+    data_json: dict, data: Union[UpdateUserRequest, UpdateUserRequestNoUserIDorEmail]
+) -> dict:
     non_default_values = {}
     for k, v in data_json.items():
         if (
@@ -834,6 +835,16 @@ async def _update_single_user_helper(
         existing_user_row = LiteLLM_UserTable(
             **existing_user_row.model_dump(exclude_none=True)
         )
+        if not can_user_call_user_update(
+            user_api_key_dict=user_api_key_dict,
+            user_info=existing_user_row,
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "User does not have permission to update this user. Only PROXY_ADMIN can update other users."
+                },
+            )
 
     existing_metadata = (
         cast(Dict, getattr(existing_user_row, "metadata", {}) or {})
@@ -928,6 +939,20 @@ async def _update_single_user_helper(
     return response
 
 
+def can_user_call_user_update(
+    user_api_key_dict: UserAPIKeyAuth,
+    user_info: LiteLLM_UserTable,
+) -> bool:
+    """
+    Helper to check if the user has access to the key's info
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return True
+    elif user_api_key_dict.user_id == user_info.user_id:
+        return True
+    return False
+
+
 @router.post(
     "/user/update",
     tags=["Internal User management"],
@@ -982,10 +1007,12 @@ async def user_update(
         - duration: Optional[str] - [NOT IMPLEMENTED].
         - key_alias: Optional[str] - [NOT IMPLEMENTED].
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+        - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
     
     """
     try:
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
+
         response = await _update_single_user_helper(
             user_request=data,
             user_api_key_dict=user_api_key_dict,
@@ -1015,6 +1042,69 @@ async def user_update(
         )
 
 
+async def bulk_update_processed_users(
+    users_to_update: List[UpdateUserRequest],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str] = None,
+) -> BulkUpdateUserResponse:
+    results: List[UserUpdateResult] = []
+    successful_updates = 0
+    failed_updates = 0
+
+    # Process each user update independently
+    try:
+        for user_request in users_to_update:
+            try:
+                response = await _update_single_user_helper(
+                    user_request=user_request,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=litellm_changed_by,
+                )
+                # Record success
+                results.append(
+                    UserUpdateResult(
+                        user_id=(
+                            response.get("user_id")
+                            if response
+                            else user_request.user_id
+                        ),
+                        user_email=user_request.user_email,
+                        success=True,
+                        updated_user=response,
+                    )
+                )
+                successful_updates += 1
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    f"Failed to update user {user_request.user_id or user_request.user_email}: {e}"
+                )
+                # Record failure
+                error_message = str(e)
+                verbose_proxy_logger.error(
+                    f"Failed to update user {user_request.user_id or user_request.user_email}: {error_message}"
+                )
+
+                results.append(
+                    UserUpdateResult(
+                        user_id=user_request.user_id,
+                        user_email=user_request.user_email,
+                        success=False,
+                        error=error_message,
+                    )
+                )
+                failed_updates += 1
+
+        return BulkUpdateUserResponse(
+            results=results,
+            total_requested=len(users_to_update),
+            successful_updates=successful_updates,
+            failed_updates=failed_updates,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Failed to update users: {e}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
 @router.post(
     "/user/bulk_update",
     tags=["Internal User management"],
@@ -1037,7 +1127,9 @@ async def bulk_user_update(
     is processed independently - if some updates fail, others will still succeed.
     
     Parameters:
-    - users: List[UpdateUserRequest] - List of user update requests
+    - users: Optional[List[UpdateUserRequest]] - List of specific user update requests
+    - all_users: Optional[bool] - Set to true to update all users in the system
+    - user_updates: Optional[UpdateUserRequest] - Updates to apply when all_users=True
     
     Returns:
     - results: List of individual update results
@@ -1045,7 +1137,7 @@ async def bulk_user_update(
     - successful_updates: Number of successful updates
     - failed_updates: Number of failed updates
     
-    Example request:
+    Example request for specific users:
     ```bash
     curl --location 'http://0.0.0.0:4000/user/bulk_update' \
     --header 'Authorization: Bearer sk-1234' \
@@ -1065,8 +1157,22 @@ async def bulk_user_update(
         ]
     }'
     ```
+    
+    Example request for all users:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/user/bulk_update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "all_users": true,
+        "user_updates": {
+            "user_role": "internal_user",
+            "max_budget": 50.0
+        }
+    }'
+    ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     if prisma_client is None:
         raise HTTPException(
@@ -1074,69 +1180,130 @@ async def bulk_user_update(
             detail={"error": "Database not connected"},
         )
 
-    if not data.users:
+    # Determine the list of users to update
+    users_to_update: Union[
+        List[UpdateUserRequest], List[UpdateUserRequestNoUserIDorEmail]
+    ] = []
+
+    if data.all_users and data.user_updates:
+        # Optimized path for updating all users directly in database
+        all_users_in_db = await prisma_client.db.litellm_usertable.find_many(
+            order={"created_at": "desc"}
+        )
+
+        if not all_users_in_db:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "No users found to update"},
+            )
+
+        # Limit batch size to prevent overwhelming the system
+        MAX_BATCH_SIZE = 500  # Increased limit for all-users operations
+        if len(all_users_in_db) > MAX_BATCH_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Maximum {MAX_BATCH_SIZE} users can be updated at once. Found {len(all_users_in_db)} users."
+                },
+            )
+
+        # Apply update transformations (reuse existing logic)
+        data_json: dict = data.user_updates.model_dump(exclude_unset=True)
+        non_default_values = _update_internal_user_params(
+            data_json=data_json, data=data.user_updates
+        )
+
+        # Remove user identification fields since we're updating by user_id
+        non_default_values.pop("user_id", None)
+        non_default_values.pop("user_email", None)
+
+        successful_updates = 0
+        failed_updates = 0
+        results: List[UserUpdateResult] = []
+
+        try:
+            # Perform bulk database update
+            await prisma_client.db.litellm_usertable.update_many(
+                where={}, data=non_default_values  # Update all users
+            )
+
+            # Create individual success results
+            for user in all_users_in_db:
+                results.append(
+                    UserUpdateResult(
+                        user_id=user.user_id,
+                        user_email=user.user_email,
+                        success=True,
+                        updated_user={"user_id": user.user_id, **non_default_values},
+                    )
+                )
+                successful_updates += 1
+
+            # Create single audit log entry for bulk operation
+            try:
+                asyncio.create_task(
+                    UserManagementEventHooks.create_internal_user_audit_log(
+                        user_id=user_api_key_dict.user_id or "",
+                        action="updated",
+                        litellm_changed_by=litellm_changed_by
+                        or user_api_key_dict.user_id,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        before_value=f"Updated {len(all_users_in_db)} users",
+                        after_value=json.dumps(non_default_values),
+                    )
+                )
+            except Exception as audit_error:
+                verbose_proxy_logger.warning(
+                    f"Failed to create bulk audit log: {audit_error}"
+                )
+
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Failed to perform bulk update: {e}")
+            # Fall back to individual updates if bulk update fails
+            for user in all_users_in_db:
+                user_update_request = data.user_updates.model_copy()
+                user_update_request.user_id = user.user_id
+                users_to_update.append(user_update_request)  # type: ignore
+
+        if successful_updates > 0:
+            return BulkUpdateUserResponse(
+                results=results,
+                total_requested=len(all_users_in_db),
+                successful_updates=successful_updates,
+                failed_updates=failed_updates,
+            )
+
+    elif data.users:
+        users_to_update = data.users
+    else:
         raise HTTPException(
             status_code=400,
-            detail={"error": "At least one user update request is required"},
+            detail={
+                "error": "Must specify either 'users' for individual updates or 'all_users=True' with 'user_updates' for bulk updates"
+            },
+        )
+
+    if not users_to_update:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "No users found to update"},
         )
 
     # Limit batch size to prevent overwhelming the system
-    MAX_BATCH_SIZE = 100
-    if len(data.users) > MAX_BATCH_SIZE:
+    MAX_BATCH_SIZE = 500  # Increased limit for all-users operations
+    if len(users_to_update) > MAX_BATCH_SIZE:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"Maximum {MAX_BATCH_SIZE} users can be updated at once"},
+            detail={
+                "error": f"Maximum {MAX_BATCH_SIZE} users can be updated at once. Found {len(users_to_update)} users."
+            },
         )
 
-    results: List[UserUpdateResult] = []
-    successful_updates = 0
-    failed_updates = 0
-
-    # Process each user update independently
-    for user_request in data.users:
-        try:
-            response = await _update_single_user_helper(
-                user_request=user_request,
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=litellm_changed_by,
-            )
-            # Record success
-            results.append(
-                UserUpdateResult(
-                    user_id=(
-                        response.get("user_id") if response else user_request.user_id
-                    ),
-                    user_email=user_request.user_email,
-                    success=True,
-                    updated_user=response,
-                )
-            )
-            successful_updates += 1
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Failed to update user {user_request.user_id or user_request.user_email}: {e}"
-            )
-            # Record failure
-            error_message = str(e)
-            verbose_proxy_logger.error(
-                f"Failed to update user {user_request.user_id or user_request.user_email}: {error_message}"
-            )
-
-            results.append(
-                UserUpdateResult(
-                    user_id=user_request.user_id,
-                    user_email=user_request.user_email,
-                    success=False,
-                    error=error_message,
-                )
-            )
-            failed_updates += 1
-
-    return BulkUpdateUserResponse(
-        results=results,
-        total_requested=len(data.users),
-        successful_updates=successful_updates,
-        failed_updates=failed_updates,
+    return await bulk_update_processed_users(
+        users_to_update=cast(List[UpdateUserRequest], users_to_update),
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
     )
 
 
@@ -1403,6 +1570,9 @@ async def delete_user(
     Parameters:
     - user_ids: List[str] - The list of user id's to be deleted.
     """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _cleanup_members_with_roles,
+    )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
         litellm_proxy_admin_name,
@@ -1451,6 +1621,34 @@ async def delete_user(
                     )
                 )
 
+        ## CLEANUP MEMBERS_WITH_ROLES
+        fetch_all_teams = await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": user_row.teams}}
+        )
+        teams_to_update = []
+        for team in fetch_all_teams:
+            is_member_in_team, new_team_members = _cleanup_members_with_roles(
+                existing_team_row=LiteLLM_TeamTable(**team.model_dump()),
+                data=TeamMemberDeleteRequest(
+                    team_id=team.team_id,
+                    user_id=user_row.user_id,
+                    user_email=user_row.user_email,
+                ),
+            )
+            if is_member_in_team:
+                _db_new_team_members: List[dict] = [
+                    m.model_dump() for m in new_team_members
+                ]
+                team.members_with_roles = json.dumps(_db_new_team_members)
+                teams_to_update.append(team)
+
+        ## update teams
+
+        for team in teams_to_update:
+            await prisma_client.db.litellm_teamtable.update(
+                where={"team_id": team.team_id},
+                data={"members_with_roles": team.members_with_roles},
+            )
     # End of Audit logging
 
     ## DELETE ASSOCIATED KEYS
@@ -1465,6 +1663,11 @@ async def delete_user(
 
     ## DELETE ASSOCIATED ORGANIZATION MEMBERSHIPS
     await prisma_client.db.litellm_organizationmembership.delete_many(
+        where={"user_id": {"in": data.user_ids}}
+    )
+
+    ## DELETE ASSOCIATED TEAM MEMBERSHIPS
+    await prisma_client.db.litellm_teammembership.delete_many(
         where={"user_id": {"in": data.user_ids}}
     )
 
@@ -1603,71 +1806,7 @@ async def ui_view_users(
         raise HTTPException(status_code=500, detail=f"Error searching users: {str(e)}")
 
 
-def update_metrics(
-    group_metrics: SpendMetrics, record: LiteLLM_DailyUserSpend
-) -> SpendMetrics:
-    group_metrics.spend += record.spend
-    group_metrics.prompt_tokens += record.prompt_tokens
-    group_metrics.completion_tokens += record.completion_tokens
-    group_metrics.cache_read_input_tokens += record.cache_read_input_tokens
-    group_metrics.cache_creation_input_tokens += record.cache_creation_input_tokens
-    group_metrics.total_tokens += record.prompt_tokens + record.completion_tokens
-    group_metrics.api_requests += record.api_requests
-    group_metrics.successful_requests += record.successful_requests
-    group_metrics.failed_requests += record.failed_requests
-    return group_metrics
-
-
-def update_breakdown_metrics(
-    breakdown: BreakdownMetrics,
-    record: LiteLLM_DailyUserSpend,
-    model_metadata: Dict[str, Dict[str, Any]],
-    provider_metadata: Dict[str, Dict[str, Any]],
-    api_key_metadata: Dict[str, Dict[str, Any]],
-) -> BreakdownMetrics:
-    """Updates breakdown metrics for a single record using the existing update_metrics function"""
-
-    # Update model breakdown
-    if record.model:
-        if record.model not in breakdown.models:
-            breakdown.models[record.model] = MetricWithMetadata(
-                metrics=SpendMetrics(),
-                metadata=model_metadata.get(
-                    record.model, {}
-                ),  # Add any model-specific metadata here
-            )
-        breakdown.models[record.model].metrics = update_metrics(
-            breakdown.models[record.model].metrics, record
-        )
-
-    # Update provider breakdown
-    provider = record.custom_llm_provider or "unknown"
-    if provider not in breakdown.providers:
-        breakdown.providers[provider] = MetricWithMetadata(
-            metrics=SpendMetrics(),
-            metadata=provider_metadata.get(
-                provider, {}
-            ),  # Add any provider-specific metadata here
-        )
-    breakdown.providers[provider].metrics = update_metrics(
-        breakdown.providers[provider].metrics, record
-    )
-
-    # Update api key breakdown
-    if record.api_key not in breakdown.api_keys:
-        breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
-            metrics=SpendMetrics(),
-            metadata=KeyMetadata(
-                key_alias=api_key_metadata.get(record.api_key, {}).get(
-                    "key_alias", None
-                )
-            ),  # Add any api_key-specific metadata here
-        )
-    breakdown.api_keys[record.api_key].metrics = update_metrics(
-        breakdown.api_keys[record.api_key].metrics, record
-    )
-
-    return breakdown
+# Using shared metric helper implementations from common_daily_activity
 
 
 @router.get(
@@ -1676,6 +1815,7 @@ def update_breakdown_metrics(
     dependencies=[Depends(user_api_key_auth)],
     response_model=SpendAnalyticsPaginatedResponse,
 )
+@management_endpoint_wrapper
 async def get_user_daily_activity(
     start_date: Optional[str] = fastapi.Query(
         default=None,
@@ -1753,6 +1893,77 @@ async def get_user_daily_activity(
     except Exception as e:
         verbose_proxy_logger.exception(
             "/spend/daily/analytics: Exception occured - {}".format(str(e))
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": f"Failed to fetch analytics: {str(e)}"},
+        )
+
+
+@router.get(
+    "/user/daily/activity/aggregated",
+    tags=["Budget & Spend Tracking", "Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+@management_endpoint_wrapper
+async def get_user_daily_activity_aggregated(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Start date in YYYY-MM-DD format",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="End date in YYYY-MM-DD format",
+    ),
+    model: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific model",
+    ),
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific API key",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> SpendAnalyticsPaginatedResponse:
+    """
+    Aggregated analytics for a user's daily activity without pagination.
+    Returns the same response shape as the paginated endpoint with page metadata set to single-page.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+
+    try:
+        entity_id: Optional[str] = None
+        if not _user_has_admin_view(user_api_key_dict):
+            entity_id = user_api_key_dict.user_id
+
+        return await get_daily_activity_aggregated(
+            prisma_client=prisma_client,
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id=entity_id,
+            entity_metadata_field=None,
+            start_date=start_date,
+            end_date=end_date,
+            model=model,
+            api_key=api_key,
+        )
+
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "/user/daily/activity/aggregated: Exception occured - {}".format(str(e))
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -5,6 +5,10 @@ import TabItem from '@theme/TabItem';
 # ✨ SSO for Admin UI
 
 :::info
+From v1.76.0, SSO is now Free for up to 5 users.
+:::
+
+:::info
 
 ✨ SSO is on LiteLLM Enterprise
 
@@ -14,29 +18,7 @@ import TabItem from '@theme/TabItem';
 
 :::
 
-### SSO for UI
-
-#### Step 1: Set upperbounds for keys
-Control the upperbound that users can use for `max_budget`, `budget_duration` or any `key/generate` param per key. 
-
-```yaml
-litellm_settings:
-  upperbound_key_generate_params:
-    max_budget: 100 # Optional[float], optional): upperbound of $100, for all /key/generate requests
-    budget_duration: "10d" # Optional[str], optional): upperbound of 10 days for budget_duration values
-    duration: "30d" # Optional[str], optional): upperbound of 30 days for all /key/generate requests
-    max_parallel_requests: 1000 # (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
-    tpm_limit: 1000 #(Optional[int], optional): Tpm limit. Defaults to None.
-    rpm_limit: 1000 #(Optional[int], optional): Rpm limit. Defaults to None.
-
-```
-
-** Expected Behavior **
-
-- Send a `/key/generate` request with `max_budget=200`
-- Key will be created with `max_budget=100` since 100 is the upper bound
-
-#### Step 2: Setup Oauth Client
+### Usage (Google, Microsoft, Okta, etc.)
 
 <Tabs>
 <TabItem value="okta" label="Okta SSO">
@@ -257,6 +239,13 @@ Example setting a local image (on your container)
 ```shell
 UI_LOGO_PATH="ui_images/logo.jpg"
 ```
+
+#### Or set your logo directly from Admin UI:
+<div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+  <Image img={require('../../img/admin_settings_ui_theme.png')} />
+  <Image img={require('../../img/admin_settings_ui_theme_logo.png')} />
+</div>
+
 #### Set Custom Color Theme
 - Navigate to [/enterprise/enterprise_ui](https://github.com/BerriAI/litellm/blob/main/enterprise/enterprise_ui/_enterprise_colors.json)
 - Inside the `enterprise_ui` directory, rename `_enterprise_colors.json` to `enterprise_colors.json`

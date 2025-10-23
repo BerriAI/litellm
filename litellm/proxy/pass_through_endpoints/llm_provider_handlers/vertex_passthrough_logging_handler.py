@@ -81,6 +81,9 @@ class VertexPassthroughLoggingHandler:
             from litellm.llms.vertex_ai.image_generation.image_generation_handler import (
                 VertexImageGeneration,
             )
+            from litellm.llms.vertex_ai.multimodal_embeddings.transformation import (
+                VertexAIMultimodalEmbeddingConfig,
+            )
             from litellm.types.utils import PassthroughCallTypes
 
             vertex_image_generation_class = VertexImageGeneration()
@@ -106,6 +109,23 @@ class VertexPassthroughLoggingHandler:
                 logging_obj.call_type = (
                     PassthroughCallTypes.passthrough_image_generation.value
                 )
+            elif VertexPassthroughLoggingHandler._is_multimodal_embedding_response(
+                json_response=_json_response,
+            ):
+                # Use multimodal embedding transformation
+                vertex_multimodal_config = VertexAIMultimodalEmbeddingConfig()
+                litellm_prediction_response = (
+                    vertex_multimodal_config.transform_embedding_response(
+                        model=model,
+                        raw_response=httpx_response,
+                        model_response=litellm.EmbeddingResponse(),
+                        logging_obj=logging_obj,
+                        api_key="",
+                        request_data={},
+                        optional_params={},
+                        litellm_params={},
+                    )
+                )
             else:
                 litellm_prediction_response = litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
                     response=_json_response,
@@ -117,6 +137,15 @@ class VertexPassthroughLoggingHandler:
 
             logging_obj.model = model
             logging_obj.model_call_details["model"] = logging_obj.model
+            response_cost = litellm.completion_cost(
+                completion_response=litellm_prediction_response,
+                model=model,
+                custom_llm_provider="vertex_ai",
+            )
+
+            kwargs["response_cost"] = response_cost
+            kwargs["model"] = model
+            logging_obj.model_call_details["response_cost"] = response_cost
 
             return {
                 "result": litellm_prediction_response,
@@ -201,7 +230,9 @@ class VertexPassthroughLoggingHandler:
         - Logs in litellm callbacks
         """
         kwargs: Dict[str, Any] = {}
-        model = model or VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
+        model = model or VertexPassthroughLoggingHandler.extract_model_from_url(
+            url_route
+        )
         complete_streaming_response = (
             VertexPassthroughLoggingHandler._build_complete_streaming_response(
                 all_chunks=all_chunks,
@@ -314,6 +345,39 @@ class VertexPassthroughLoggingHandler:
         ):
             return litellm.LlmProviders.GEMINI.value
         return litellm.LlmProviders.VERTEX_AI.value
+
+    @staticmethod
+    def _is_multimodal_embedding_response(json_response: dict) -> bool:
+        """
+        Detect if the response is from a multimodal embedding request.
+
+        Check if the response contains multimodal embedding fields:
+            - Docs: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/multimodal-embeddings-api#response-body
+
+
+        Args:
+            json_response: The JSON response from Vertex AI
+
+        Returns:
+            bool: True if this is a multimodal embedding response
+        """
+        # Check if response contains multimodal embedding fields
+        if "predictions" in json_response:
+            predictions = json_response["predictions"]
+            for prediction in predictions:
+                if isinstance(prediction, dict):
+                    # Check for multimodal embedding response fields
+                    if any(
+                        key in prediction
+                        for key in [
+                            "textEmbedding",
+                            "imageEmbedding",
+                            "videoEmbeddings",
+                        ]
+                    ):
+                        return True
+
+        return False
 
     @staticmethod
     def _create_vertex_response_logging_payload_for_generate_content(

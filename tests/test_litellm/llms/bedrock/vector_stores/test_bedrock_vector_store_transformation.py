@@ -20,6 +20,7 @@ def test_transform_search_request():
         vector_store_search_optional_params={},
         api_base="https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases",
         litellm_logging_obj=mock_log,
+        litellm_params={},
     )
 
     assert url.endswith("/kb123/retrieve")

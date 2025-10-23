@@ -1,18 +1,27 @@
 export enum VectorStoreProviders {
     Bedrock = "Amazon Bedrock",
-    PgVector = "PostgreSQL pgvector (LiteLLM Connector)"
+    PgVector = "PostgreSQL pgvector (LiteLLM Connector)",
+    VertexRagEngine = "Vertex AI RAG Engine",
+    OpenAI = "OpenAI",
+    Azure = "Azure OpenAI"
 }
 
 export const vectorStoreProviderMap: Record<string, string> = {
     Bedrock: "bedrock",
-    PgVector: "pg_vector"
+    PgVector: "pg_vector",
+    VertexRagEngine: "vertex_ai",
+    OpenAI: "openai",
+    Azure: "azure"
 };
 
-const asset_logos_folder = '/assets/logos/';
+const asset_logos_folder = '/ui/assets/logos/';
 
 export const vectorStoreProviderLogoMap: Record<string, string> = {
     [VectorStoreProviders.Bedrock]: `${asset_logos_folder}bedrock.svg`,
     [VectorStoreProviders.PgVector]: `${asset_logos_folder}postgresql.svg`, // Fallback to a generic database icon if needed
+    [VectorStoreProviders.VertexRagEngine]: `${asset_logos_folder}google.svg`,
+    [VectorStoreProviders.OpenAI]: `${asset_logos_folder}openai_small.svg`,
+    [VectorStoreProviders.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
 };
 
 // Define field types for provider-specific configurations
@@ -44,6 +53,35 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
             placeholder: "your-deployed-api-key",
             required: true,
             type: "password"
+        }
+    ],
+    vertex_rag_engine: [],
+    openai: [
+        {
+            name: "api_key",
+            label: "API Key",
+            tooltip: "Enter your OpenAI API key",
+            placeholder: "sk-...",
+            required: true,
+            type: "password"
+        }
+    ],
+    azure: [
+        {
+            name: "api_key",
+            label: "API Key",
+            tooltip: "Enter your Azure OpenAI API key",
+            placeholder: "your-azure-api-key",
+            required: true,
+            type: "password"
+        },
+        {
+            name: "api_base",
+            label: "API Base",
+            tooltip: "Enter your Azure OpenAI endpoint (e.g., https://your-resource.openai.azure.com/)",
+            placeholder: "https://your-resource.openai.azure.com/",
+            required: true,
+            type: "text"
         }
     ]
 };

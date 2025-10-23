@@ -95,6 +95,7 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
             "moderation",
             "audio_transcription",
             "responses",
+            "mcp_call",
         ],
     ):
         """

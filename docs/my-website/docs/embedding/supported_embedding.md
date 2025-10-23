@@ -266,7 +266,59 @@ print(response)
 | Titan Embeddings - G1 | `embedding(model="amazon.titan-embed-text-v1", input=input)` |
 | Cohere Embeddings - English | `embedding(model="cohere.embed-english-v3", input=input)` |
 | Cohere Embeddings - Multilingual | `embedding(model="cohere.embed-multilingual-v3", input=input)` |
+| TwelveLabs Marengo (Async) | `embedding(model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0", input=input, input_type="text")` | [Async Invoke Docs](../providers/bedrock_embedding#async-invoke-embedding) |
 
+## TwelveLabs Bedrock Embedding Models
+
+TwelveLabs Marengo models support multimodal embeddings (text, image, video, audio) and require the `input_type` parameter to specify the input format.
+
+### Usage
+
+```python
+from litellm import embedding
+import os
+
+# Set AWS credentials
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = "us-east-1"
+
+# Text embedding
+response = embedding(
+    model="bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",
+    input=["Hello world from LiteLLM!"],
+    input_type="text"  # Required parameter
+)
+
+# Image embedding (base64)
+response = embedding(
+    model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
+    input=["data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ..."],
+    input_type="image",  # Required parameter
+    output_s3_uri="s3://your-bucket/async-invoke-output/"
+)
+
+# Video embedding (S3 URL)
+response = embedding(
+    model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
+    input=["s3://your-bucket/video.mp4"],
+    input_type="video",  # Required parameter
+    output_s3_uri="s3://your-bucket/async-invoke-output/"
+)
+```
+
+### Required Parameters
+
+| Parameter | Description | Values |
+|-----------|-------------|--------|
+| `input_type` | Type of input content | `"text"`, `"image"`, `"video"`, `"audio"` |
+
+### Supported Models
+
+| Model Name | Function Call | Notes |
+|------------|---------------|-------|
+| TwelveLabs Marengo 2.7 (Sync) | `embedding(model="bedrock/us.twelvelabs.marengo-embed-2-7-v1:0", input=input, input_type="text")` | Text embeddings only |
+| TwelveLabs Marengo 2.7 (Async) | `embedding(model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0", input=input, input_type="text/image/video/audio")` | All input types, requires `output_s3_uri` |
 
 ## Cohere Embedding Models
 https://docs.cohere.com/reference/embed

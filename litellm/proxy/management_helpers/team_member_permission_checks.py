@@ -127,7 +127,7 @@ class TeamMemberPermissionChecks:
             route=route, allowed_routes=team_member_permissions
         ):
             raise ProxyException(
-                message=f"Team member does not have permissions for endpoint: {route}. You only have access to the following endpoints: {team_member_permissions} for team {team_table.team_id}",
+                message=f"Team member does not have permissions for endpoint: {route}. You only have access to the following endpoints: {team_member_permissions} for team {team_table.team_id}. To create keys for this team, please ask your proxy admin to check the team member permission settings and update the settings to allow team member users to create keys.",
                 type=ProxyErrorTypes.team_member_permission_error,
                 param=route,
                 code=401,
@@ -171,7 +171,7 @@ class TeamMemberPermissionChecks:
         """
         all_available_permissions = []
         for route in LiteLLMRoutes.key_management_routes.value:
-            all_available_permissions.append(route.value)
+            all_available_permissions.append(route)
         return all_available_permissions
 
     @staticmethod

@@ -178,3 +178,14 @@ class TestGitHubCopilotAuthenticator:
             authenticator._get_device_code.assert_called_once()
             authenticator._poll_for_access_token.assert_called_once_with("mock-device-code")
             mock_print.assert_called_once()
+
+    def test_get_api_base_from_file(self, authenticator):
+        """Test retrieving the API base endpoint from a file."""
+        mock_api_key_data = json.dumps({
+            "token": "mock-api-key",
+            "expires_at": (datetime.now() + timedelta(hours=1)).timestamp(),
+            "endpoints": {"api": "https://api.enterprise.githubcopilot.com"}
+        })
+        with patch("builtins.open", mock_open(read_data=mock_api_key_data)):
+            api_base = authenticator.get_api_base()
+            assert api_base == "https://api.enterprise.githubcopilot.com"

@@ -7,6 +7,8 @@ from litellm.types.llms.bedrock import (
     AmazonNovaCanvasColorGuidedGenerationParams,
     AmazonNovaCanvasColorGuidedRequest,
     AmazonNovaCanvasImageGenerationConfig,
+    AmazonNovaCanvasInpaintingParams,
+    AmazonNovaCanvasInpaintingRequest,
     AmazonNovaCanvasRequestBase,
     AmazonNovaCanvasTextToImageParams,
     AmazonNovaCanvasTextToImageRequest,
@@ -52,9 +54,8 @@ class AmazonNovaCanvasConfig:
         Nova models follow this pattern:
 
         """
-        if model:
-            if "amazon.nova-canvas" in model:
-                return True
+        if model and "amazon.nova-canvas" in model:
+            return True
         return False
 
     @classmethod
@@ -66,6 +67,11 @@ class AmazonNovaCanvasConfig:
         """
         task_type = optional_params.pop("taskType", "TEXT_IMAGE")
         image_generation_config = optional_params.pop("imageGenerationConfig", {})
+
+        # Extract model_id parameter to prevent "extraneous key" error from Bedrock API
+        # Following the same pattern as chat completions and embeddings
+        unencoded_model_id = optional_params.pop("model_id", None)  # noqa: F841
+
         image_generation_config = {**image_generation_config, **optional_params}
         if task_type == "TEXT_IMAGE":
             text_to_image_params: Dict[str, Any] = image_generation_config.pop(
@@ -124,6 +130,34 @@ class AmazonNovaCanvasConfig:
             return AmazonNovaCanvasColorGuidedRequest(
                 taskType=task_type,
                 colorGuidedGenerationParams=color_guided_generation_params_typed,
+                imageGenerationConfig=image_generation_config_typed,
+            )
+        if task_type == "INPAINTING":
+            inpainting_params: Dict[str, Any] = image_generation_config.pop(
+                "inpaintingParams", {}
+            )
+            inpainting_params = {"text": text, **inpainting_params}
+            try:
+                inpainting_params_typed = AmazonNovaCanvasInpaintingParams(
+                    **inpainting_params  # type: ignore
+                )
+            except Exception as e:
+                raise ValueError(
+                    f"Error transforming inpainting params: {e}. Got params: {inpainting_params}, Expected params: {AmazonNovaCanvasInpaintingParams.__annotations__}"
+                )
+
+            try:
+                image_generation_config_typed = AmazonNovaCanvasImageGenerationConfig(
+                    **image_generation_config
+                )
+            except Exception as e:
+                raise ValueError(
+                    f"Error transforming image generation config: {e}. Got params: {image_generation_config}, Expected params: {AmazonNovaCanvasImageGenerationConfig.__annotations__}"
+                )
+
+            return AmazonNovaCanvasInpaintingRequest(
+                taskType=task_type,
+                inpaintingParams=inpainting_params_typed,
                 imageGenerationConfig=image_generation_config_typed,
             )
         raise NotImplementedError(f"Task type {task_type} is not supported")

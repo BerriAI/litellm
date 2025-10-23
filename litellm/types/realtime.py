@@ -1,4 +1,6 @@
-from typing import List, Literal, Optional, TypedDict, Union
+from typing import List, Literal, Optional, Union
+
+from typing_extensions import TypedDict
 
 from .llms.openai import (
     OpenAIRealtimeEvents,
@@ -41,3 +43,9 @@ class RealtimeModalityResponseTransformOutput(TypedDict):
     current_conversation_id: Optional[str]
     current_delta_chunks: Optional[List[OpenAIRealtimeResponseDelta]]
     current_delta_type: Optional[ALL_DELTA_TYPES]
+
+
+class RealtimeQueryParams(TypedDict, total=False):
+    model: str
+    intent: Optional[str]
+    # Add more fields as needed

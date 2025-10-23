@@ -1,11 +1,14 @@
 from typing import Optional
 
-from .http_client import HTTPClient
-from .models import ModelsManagementClient
-from .model_groups import ModelGroupsManagementClient
+from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
+
 from .chat import ChatClient
-from .keys import KeysManagementClient
 from .credentials import CredentialsManagementClient
+from .http_client import HTTPClient
+from .keys import KeysManagementClient
+from .model_groups import ModelGroupsManagementClient
+from .models import ModelsManagementClient
+from .teams import TeamsManagementClient
 
 
 class Client:
@@ -26,7 +29,7 @@ class Client:
             timeout: Request timeout in seconds (default: 30)
         """
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
-        self._api_key = api_key
+        self._api_key = get_litellm_gateway_api_key() or api_key
 
         # Initialize resource clients
 
@@ -36,3 +39,4 @@ class Client:
         self.chat = ChatClient(base_url=self._base_url, api_key=self._api_key)
         self.keys = KeysManagementClient(base_url=self._base_url, api_key=self._api_key)
         self.credentials = CredentialsManagementClient(base_url=self._base_url, api_key=self._api_key)
+        self.teams = TeamsManagementClient(base_url=self._base_url, api_key=self._api_key)

@@ -23,10 +23,9 @@ class LowestTPMLoggingHandler(CustomLogger):
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
     def __init__(
-        self, router_cache: DualCache, model_list: list, routing_args: dict = {}
+        self, router_cache: DualCache, routing_args: dict = {}
     ):
         self.router_cache = router_cache
-        self.model_list = model_list
         self.routing_args = RoutingArgs(**routing_args)
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):

@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Union
 
 from pydantic import BaseModel, validator
@@ -16,6 +17,7 @@ class AnthropicInputSchema(TypedDict, total=False):
     type: Optional[str]
     properties: Optional[dict]
     additionalProperties: Optional[bool]
+    required: Optional[List[str]]
 
 
 class AnthropicMessagesTool(TypedDict, total=False):
@@ -172,6 +174,7 @@ class AnthropicMessagesDocumentParam(TypedDict, total=False):
 class AnthropicMessagesToolResultContent(TypedDict):
     type: Literal["text"]
     text: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 class AnthropicMessagesToolResultParam(TypedDict, total=False):
@@ -438,3 +441,16 @@ ANTHROPIC_API_ONLY_HEADERS = {  # fails if calling anthropic on vertex ai / bedr
 class AnthropicThinkingParam(TypedDict, total=False):
     type: Literal["enabled"]
     budget_tokens: int
+
+class ANTHROPIC_HOSTED_TOOLS(str, Enum):
+    WEB_SEARCH = "web_search"
+    BASH = "bash"
+    TEXT_EDITOR = "text_editor"
+    CODE_EXECUTION = "code_execution"
+    WEB_FETCH = "web_fetch"
+
+class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
+    """
+    Known beta header values for Anthropic.
+    """
+    WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"

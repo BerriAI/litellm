@@ -12,6 +12,7 @@ import {
 } from "@tremor/react";
 import {
   TrashIcon,
+  PencilAltIcon,
   SwitchVerticalIcon,
   ChevronUpIcon,
   ChevronDownIcon,
@@ -30,11 +31,15 @@ import { getProviderLogoAndName } from "../provider_info_helpers";
 
 interface VectorStoreTableProps {
   data: VectorStore[];
+  onView: (vectorStoreId: string) => void;
+  onEdit: (vectorStoreId: string) => void;
   onDelete: (vectorStoreId: string) => void;
 }
 
 const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
   data,
+  onView,
+  onEdit,
   onDelete,
 }) => {
   const [sorting, setSorting] = React.useState<SortingState>([
@@ -48,13 +53,15 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
       cell: ({ row }) => {
         const vectorStore = row.original;
         return (
-          <div className="overflow-hidden">
-            <Tooltip title={vectorStore.vector_store_id}>
-              <span className="font-mono text-blue-500 text-xs font-normal">
-                {vectorStore.vector_store_id}
-              </span>
-            </Tooltip>
-          </div>
+          <button
+            onClick={() => onView(vectorStore.vector_store_id)}
+            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
+          >
+            {vectorStore.vector_store_id.length > 15
+              ? `${vectorStore.vector_store_id.slice(0, 15)}...`
+              : vectorStore.vector_store_id
+            }
+          </button>
         );
       },
     },
@@ -101,7 +108,7 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
       },
     },
     {
-      header: "Created",
+      header: "Created At",
       accessorKey: "created_at",
       sortingFn: "datetime",
       cell: ({ row }) => {
@@ -114,12 +121,31 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
       },
     },
     {
+      header: "Updated At",
+      accessorKey: "updated_at",
+      sortingFn: "datetime",
+      cell: ({ row }) => {
+        const vectorStore = row.original;
+        return (
+          <span className="text-xs">
+            {new Date(vectorStore.updated_at).toLocaleDateString()}
+          </span>
+        );
+      },
+    },
+    {
       id: "actions",
       header: "",
       cell: ({ row }) => {
         const vectorStore = row.original;
         return (
           <div className="flex space-x-2">
+            <Icon
+              icon={PencilAltIcon}
+              size="sm"
+              onClick={() => onEdit(vectorStore.vector_store_id)}
+              className="cursor-pointer"
+            />
             <Icon
               icon={TrashIcon}
               size="sm"

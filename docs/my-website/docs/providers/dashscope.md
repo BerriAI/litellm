@@ -1,4 +1,4 @@
-# Dashscope
+# Dashscope (Qwen API)
 https://dashscope.console.aliyun.com/
 
 **We support ALL Qwen models, just set `dashscope/` as a prefix when sending completion requests**

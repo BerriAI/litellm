@@ -1,5 +1,5 @@
 import asyncio
-import uuid
+from litellm._uuid import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger

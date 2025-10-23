@@ -92,24 +92,22 @@ async def test_router_with_caching():
     """
     try:
 
-        def get_azure_params(deployment_name: str):
+        def get_openai_params():
             params = {
-                "model": f"azure/{deployment_name}",
-                "api_key": os.environ["AZURE_API_KEY"],
-                "api_version": os.environ["AZURE_API_VERSION"],
-                "api_base": os.environ["AZURE_API_BASE"],
+                "model": "gpt-4.1-nano",
+                "api_key": os.environ["OPENAI_API_KEY"],
             }
             return params
 
         model_list = [
             {
                 "model_name": "azure/gpt-4",
-                "litellm_params": get_azure_params("gpt-4o-new-test"),
+                "litellm_params": get_openai_params(),
                 "tpm": 100,
             },
             {
                 "model_name": "azure/gpt-4",
-                "litellm_params": get_azure_params("gpt-4o-new-test"),
+                "litellm_params": get_openai_params(),
                 "tpm": 1000,
             },
         ]

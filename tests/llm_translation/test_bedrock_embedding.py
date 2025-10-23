@@ -76,3 +76,187 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
+
+
+def test_e2e_bedrock_embedding():
+    """
+    Test text embedding with TwelveLabs Marengo.
+    Validates that the transformation properly extracts embedding data from TwelveLabs response format.
+    """
+    print("Testing text embedding...")
+    original_region_name = os.environ.get("AWS_REGION_NAME")
+    
+    os.environ["AWS_REGION_NAME"] = "us-east-1"
+
+    litellm._turn_on_debug()
+    response = litellm.embedding(
+        model="bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",
+        input=["Hello world from LiteLLM with TwelveLabs Marengo!"],
+    )
+    
+    # Validate response structure
+    assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
+    assert hasattr(response, 'data'), "Response should have 'data' attribute"
+    assert len(response.data) > 0, "Response data should not be empty"
+    
+    # Validate first embedding
+    embedding_obj = response.data[0]
+    assert hasattr(embedding_obj, 'embedding'), "Embedding object should have 'embedding' attribute"
+    assert isinstance(embedding_obj.embedding, list), "Embedding should be a list of floats"
+    assert len(embedding_obj.embedding) > 0, "Embedding vector should not be empty"
+    assert all(isinstance(x, (int, float)) for x in embedding_obj.embedding), "All embedding values should be numeric"
+    
+    # Validate embedding properties
+    assert embedding_obj.index == 0, "First embedding should have index 0"
+    assert embedding_obj.object == "embedding", "Embedding object type should be 'embedding'"
+    
+    # Validate usage information
+    assert hasattr(response, 'usage'), "Response should have usage information"
+    assert response.usage is not None, "Usage should not be None"
+    assert response.usage.total_tokens >= 0, "Total tokens should be non-negative"
+    
+    print(f"Text embedding successful! Vector size: {len(embedding_obj.embedding)}, Response: {response}")
+
+    # Restore original region name
+    if original_region_name:
+        os.environ["AWS_REGION_NAME"] = original_region_name
+
+def test_e2e_bedrock_embedding_image_twelvelabs_marengo():
+    """
+    Test image embedding with TwelveLabs Marengo.
+    Validates that the transformation properly extracts embedding data from TwelveLabs response format for images.
+    """
+    print("Testing image embedding...")
+    original_region_name = os.environ.get("AWS_REGION_NAME")
+    os.environ["AWS_REGION_NAME"] = "us-east-1"
+    litellm._turn_on_debug()
+    
+    # Load duck.png and convert to base64
+    duck_img_path = os.path.join(os.path.dirname(__file__), "duck.png")
+    with open(duck_img_path, "rb") as img_file:
+        duck_img_data = base64.b64encode(img_file.read()).decode('utf-8')
+        duck_img_base64 = f"data:image/png;base64,{duck_img_data}"
+    
+        response = litellm.embedding(
+            model="bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",
+            input=[duck_img_base64],
+            aws_region_name="us-east-1",
+            input_type="image"
+        )
+        
+        # Validate response structure
+        assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
+        assert hasattr(response, 'data'), "Response should have 'data' attribute"
+        assert len(response.data) > 0, "Response data should not be empty"
+        
+        # Validate first embedding
+        embedding_obj = response.data[0]
+        assert hasattr(embedding_obj, 'embedding'), "Embedding object should have 'embedding' attribute"
+        assert isinstance(embedding_obj.embedding, list), "Embedding should be a list of floats"
+        assert len(embedding_obj.embedding) > 0, "Embedding vector should not be empty"
+        assert all(isinstance(x, (int, float)) for x in embedding_obj.embedding), "All embedding values should be numeric"
+        
+        # Validate embedding properties
+        assert embedding_obj.index == 0, "First embedding should have index 0"
+        assert embedding_obj.object == "embedding", "Embedding object type should be 'embedding'"
+        
+        # Validate usage information
+        assert hasattr(response, 'usage'), "Response should have usage information"
+        assert response.usage is not None, "Usage should not be None"
+        assert response.usage.total_tokens >= 0, "Total tokens should be non-negative"
+        
+        # TwelveLabs Marengo should return 1024-dimensional embeddings
+        expected_dimension = 1024
+        assert len(embedding_obj.embedding) == expected_dimension, f"TwelveLabs Marengo should return {expected_dimension}-dimensional embeddings, got {len(embedding_obj.embedding)}"
+        
+        print(f"Image embedding successful! Vector size: {len(embedding_obj.embedding)}, Response: {response}")
+
+    # Restore original region name
+    if original_region_name:
+        os.environ["AWS_REGION_NAME"] = original_region_name
+
+
+def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo():
+    """
+    Test async invoke embedding with TwelveLabs Marengo.
+    Validates that async invoke responses include job ID in hidden parameters.
+    """
+    print("Testing async invoke embedding...")
+    original_region_name = os.environ.get("AWS_REGION_NAME")
+    os.environ["AWS_REGION_NAME"] = "us-east-1"
+    litellm._turn_on_debug()
+    
+    # Mock the HTTP call to return async invoke response
+    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_sync_call") as mock_call:
+        mock_call.return_value = {
+            "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"
+        }
+        
+        response = litellm.embedding(
+            model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
+            input=["Hello world from LiteLLM async invoke!"],
+            aws_region_name="us-east-1",
+            inputType="text",
+            output_s3_uri="s3://test-bucket/async-invoke-output/"
+        )
+        
+        # Validate response structure
+        assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
+        assert hasattr(response, '_hidden_params'), "Response should have _hidden_params"
+        assert response._hidden_params is not None, "Hidden params should not be None"
+        
+        # Validate hidden params contain invocation ARN
+        assert hasattr(response._hidden_params, '_invocation_arn'), "Hidden params should have _invocation_arn"
+        assert response._hidden_params._invocation_arn == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123", "Invocation ARN should be preserved"
+        
+        # Validate embedding structure
+        assert len(response.data) == 1, "Should have one embedding"
+        assert response.data[0].object == "embedding", "Embedding object should be 'embedding'"
+        assert response.data[0].embedding == [], "Embedding should be empty for async jobs"
+        
+        print(f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}")
+    
+    # Restore original region name
+    if original_region_name:
+        os.environ["AWS_REGION_NAME"] = original_region_name
+
+
+@pytest.mark.asyncio
+async def test_e2e_bedrock_async_invoke_embedding_async_twelvelabs_marengo():
+    """
+    Test async invoke embedding with async calls.
+    Validates that async invoke responses work with aembedding.
+    """
+    print("Testing async invoke embedding with async calls...")
+    original_region_name = os.environ.get("AWS_REGION_NAME")
+    os.environ["AWS_REGION_NAME"] = "us-east-1"
+    litellm._turn_on_debug()
+    
+    # Mock the async HTTP call to return async invoke response
+    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_async_call") as mock_call:
+        mock_call.return_value = {
+            "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-async-job-456"
+        }
+        
+        response = await litellm.aembedding(
+            model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
+            input=["Hello world from LiteLLM async invoke async!"],
+            aws_region_name="us-east-1",
+            inputType="text",
+            output_s3_uri="s3://test-bucket/async-invoke-output/"
+        )
+        
+        # Validate response structure
+        assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
+        assert hasattr(response, '_hidden_params'), "Response should have _hidden_params"
+        assert response._hidden_params is not None, "Hidden params should not be None"
+        
+        # Validate hidden params contain invocation ARN
+        assert hasattr(response._hidden_params, '_invocation_arn'), "Hidden params should have _invocation_arn"
+        assert response._hidden_params._invocation_arn == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-async-job-456", "Invocation ARN should be preserved"
+        
+        print(f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}")
+    
+    # Restore original region name
+    if original_region_name:
+        os.environ["AWS_REGION_NAME"] = original_region_name

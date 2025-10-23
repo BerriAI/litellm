@@ -68,4 +68,4 @@ def test_bedrock_embed_v2_with_drop_params():
         custom_llm_provider=custom_llm_provider,
     )
     print(f"received optional_params: {optional_params}")
-    assert optional_params == {"dimensions": 512}
+    assert optional_params == {"dimensions": 512, "embeddingTypes": ["binary"]}

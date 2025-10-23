@@ -26,6 +26,20 @@ import { Tooltip } from "antd"
 import { InfoCircleOutlined } from "@ant-design/icons"
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key"
 import { useQueryClient } from "@tanstack/react-query"
+import NotificationsManager from "./molecules/notifications_manager"
+
+// Helper function to generate UUID compatible across all environments
+const generateUUID = (): string => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID()
+  }
+  // Fallback UUID generation for environments without crypto.randomUUID
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0
+    const v = c == 'x' ? r : (r & 0x3 | 0x8)
+    return v.toString(16)
+  })
+}
 
 interface CreateuserProps {
   userID: string
@@ -107,7 +121,7 @@ const Createuser: React.FC<CreateuserProps> = ({
 
   const handleCreate = async (formValues: { user_id: string; models?: string[]; user_role: string }) => {
     try {
-      message.info("Making API Call")
+      NotificationsManager.info("Making API Call")
       if (!isEmbedded) {
         setIsModalVisible(true)
       }
@@ -141,7 +155,7 @@ const Createuser: React.FC<CreateuserProps> = ({
         // create an InvitationLink Object for this user for the SSO flow
         // for SSO the invite link is the proxy base url since the User just needs to login
         const invitationLink: InvitationLink = {
-          id: crypto.randomUUID(), // Generate a unique ID
+          id: generateUUID(), // Generate a unique ID
           user_id: user_id,
           is_accepted: false,
           accepted_at: null,
@@ -156,12 +170,12 @@ const Createuser: React.FC<CreateuserProps> = ({
         setIsInvitationLinkModalVisible(true)
       }
 
-      message.success("API user Created")
+      NotificationsManager.success("API user Created")
       form.resetFields()
       localStorage.removeItem("userData" + userID)
     } catch (error: any) {
       const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user"
-      message.error(errorMessage)
+      NotificationsManager.fromBackend(errorMessage)
       console.error("Error creating the user:", error)
     }
   }

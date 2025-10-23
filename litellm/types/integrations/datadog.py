@@ -1,5 +1,9 @@
 from enum import Enum
-from typing import Optional, TypedDict
+from typing import Optional
+
+from typing_extensions import TypedDict
+
+from litellm.types.integrations.custom_logger import StandardCustomLoggerInitParams
 
 DD_MAX_BATCH_SIZE = 1000
 
@@ -21,6 +25,14 @@ class DatadogPayload(TypedDict, total=False):
 
 class DD_ERRORS(Enum):
     DATADOG_413_ERROR = "Datadog API Error - Payload too large (batch is above 5MB uncompressed). If you want this logged either disable request/response logging or set `DD_BATCH_SIZE=50`"
+
+
+class DatadogInitParams(StandardCustomLoggerInitParams):
+    """
+    Params for initializing a DataDog logger on litellm
+    """
+
+    pass
 
 
 class DatadogProxyFailureHookJsonMessage(TypedDict, total=False):

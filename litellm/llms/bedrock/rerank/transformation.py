@@ -4,7 +4,7 @@ Translates from Cohere's `/v1/rerank` input format to Bedrock's `/rerank` input 
 Why separate file? Make it easy to see how transformation works
 """
 
-import uuid
+from litellm._uuid import uuid
 from typing import List, Optional, Union
 
 from litellm.types.llms.bedrock import (

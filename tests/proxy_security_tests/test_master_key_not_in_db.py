@@ -4,13 +4,13 @@ from fastapi.testclient import TestClient
 from litellm.proxy.proxy_server import app, ProxyLogging
 from litellm.caching import DualCache
 
-TEST_DB_ENV_VAR_NAME = "MASTER_KEY_CHECK_DB_URL"
-
 
 @pytest.fixture(autouse=True)
 def override_env_settings(monkeypatch):
     # Set environment variables only for tests using-monkeypatch (function scope by default).
-    monkeypatch.setenv("DATABASE_URL", os.environ[TEST_DB_ENV_VAR_NAME])
+    # Use DATABASE_URL from environment (set by CircleCI to local postgres)
+    if "DATABASE_URL" not in os.environ:
+        pytest.fail("DATABASE_URL not set - this test requires a local postgres database to be running")
     monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-1234")
     monkeypatch.setenv("LITELLM_LOG", "DEBUG")
 
@@ -38,7 +38,7 @@ async def test_master_key_not_inserted(test_client):
     from litellm.proxy.utils import PrismaClient
 
     prisma_client = PrismaClient(
-        database_url=os.environ[TEST_DB_ENV_VAR_NAME],
+        database_url=os.environ["DATABASE_URL"],
         proxy_logging_obj=ProxyLogging(
             user_api_key_cache=DualCache(), premium_user=True
         ),
