@@ -803,6 +803,14 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.ClarifaiConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "tars":
+        # TARS (Tetrate Agent Router Service) is OpenAI compatible
+        api_base = (
+            api_base
+            or get_secret_str("TARS_API_BASE")
+            or "https://api.router.tetrate.ai/v1"
+        )  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("TARS_API_KEY")
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))

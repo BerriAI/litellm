@@ -30,6 +30,7 @@ export enum Providers {
   Openrouter = "Openrouter",
   Oracle = "Oracle Cloud Infrastructure (OCI)",
   Perplexity = "Perplexity",
+  TARS = "TARS (Tetrate Agent Router Service)",
   Sambanova = "Sambanova",
   Snowflake = "Snowflake",
   TogetherAI = "TogetherAI",
@@ -66,6 +67,7 @@ export const provider_map: Record<string, string> = {
   Perplexity: "perplexity",
   TogetherAI: "together_ai",
   Openrouter: "openrouter",
+  TARS: "tars",
   Oracle: "oci",
   Snowflake: "snowflake",
   FireworksAI: "fireworks_ai",
@@ -124,6 +126,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
   [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
   [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`,
+  [Providers.TARS]: `${asset_logos_folder}openai_small.svg`,
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string; displayName: string } => {

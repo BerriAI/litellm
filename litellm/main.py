@@ -2017,6 +2017,49 @@ def completion(  # type: ignore # noqa: PLR0915
             logging.post_call(
                 input=messages, api_key=api_key, original_response=response
             )
+        elif custom_llm_provider == "tars":
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("TARS_API_BASE")
+                or "https://api.router.tetrate.ai/v1"
+            )
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or get_secret("TARS_API_KEY")
+            )
+
+            ## Load Config
+            config = litellm.TarsConfig.get_config()
+            for k, v in config.items():
+                if k not in optional_params:
+                    optional_params[k] = v
+
+            ## COMPLETION CALL
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                custom_llm_provider="tars",
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+            )
+            ## LOGGING
+            logging.post_call(
+                input=messages, api_key=api_key, original_response=response
+            )
         elif (
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "custom_openai"
@@ -4492,6 +4535,27 @@ def embedding(  # noqa: PLR0915
                 or litellm.api_base
                 or get_secret_str("NEBIUS_API_BASE")
                 or "api.studio.nebius.ai/v1"
+            )
+
+            response = openai_chat_completions.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider == "tars":
+            api_key = api_key or litellm.api_key or get_secret("TARS_API_KEY")
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("TARS_API_BASE")
+                or "https://api.router.tetrate.ai/v1"
             )
 
             response = openai_chat_completions.embedding(

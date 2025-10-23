@@ -460,6 +460,22 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       required: true,
     },
   ],
+  [Providers.TARS]: [
+    {
+      key: "api_base",
+      label: "API Base",
+      placeholder: "https://api.router.tetrate.ai/v1",
+      defaultValue: "https://api.router.tetrate.ai/v1",
+      tooltip: "The base URL for TARS API. Default: https://api.router.tetrate.ai/v1",
+    },
+    {
+      key: "api_key",
+      label: "TARS API Key",
+      type: "password",
+      required: true,
+      tooltip: "Get your API key from https://router.tetrate.ai",
+    },
+  ],
   [Providers.FireworksAI]: [
     {
       key: "api_key",

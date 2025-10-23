@@ -348,7 +348,8 @@ LITELLM_CHAT_PROVIDERS = [
     "vercel_ai_gateway",
     "wandb",
     "ovhcloud",
-    "lemonade"
+    "lemonade",
+    "tars"
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -534,6 +535,7 @@ openai_compatible_providers: List = [
     "wandb",
     "cometapi",
     "clarifai",
+    "tars",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
