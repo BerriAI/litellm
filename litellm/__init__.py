@@ -156,7 +156,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "cloudzero",
     "posthog",
 ]
-configured_cold_storage_logger: Optional[
+cold_storage_custom_logger: Optional[
     _custom_logger_compatible_callbacks_literal
 ] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -1141,6 +1141,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import
 from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
     AmazonInvokeNovaConfig,
 )
+from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
+    AmazonQwen3Config,
+)
 from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
     AmazonAnthropicConfig,
 )
@@ -1336,6 +1339,7 @@ from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
 from .ocr.main import *
+from .search.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *

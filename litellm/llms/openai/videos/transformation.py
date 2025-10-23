@@ -158,7 +158,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         
         # Transform the response data
     
-        video_obj = VideoObject(**response_data)
+        video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
         
         # Create usage object with duration information for cost calculation
         # Video generation API doesn't provide usage, so we create one with duration
@@ -200,7 +200,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         response_data = raw_response.json()
         
         # Transform the response data
-        video_obj = VideoObject(**response_data)
+        video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
         
         # Create usage object with duration information for cost calculation
         # Video remix API doesn't provide usage, so we create one with duration
@@ -228,7 +228,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         response_data = raw_response.json()
         video_response = VideoResponse(**response_data)
         # Convert VideoResponse object to dictionary to match base class return type
-        return [VideoObject(**video) for video in video_response.data]
+        return [VideoObject(**video) if isinstance(video, dict) else video for video in video_response.data]  # type: ignore[arg-type]
 
     def transform_video_delete_response(
         self,
@@ -242,7 +242,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         response_data = raw_response.json()
         
         # Transform the response data
-        video_obj = VideoObject(**response_data)
+        video_obj = VideoObject(**response_data)  # type: ignore[arg-type]  # type: ignore[arg-type]
 
         return video_obj
 
