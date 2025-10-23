@@ -108,12 +108,48 @@ class BaseVideoConfig(ABC):
         pass
 
     @abstractmethod
+    def transform_video_content_request(
+        self,
+        video_id: str,
+        model: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the video content request into a URL and data/params
+        
+        Returns:
+            Tuple[str, Dict]: (url, params) for the video content request
+        """
+        pass
+
+    @abstractmethod
     def transform_video_content_response(
         self,
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> bytes:
+        pass
+
+    @abstractmethod
+    def transform_video_remix_request(
+        self,
+        video_id: str,
+        prompt: str,
+        model: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the video remix request into a URL and data
+        
+        Returns:
+            Tuple[str, Dict]: (url, data) for the video remix request
+        """
         pass
 
     @abstractmethod
@@ -126,16 +162,79 @@ class BaseVideoConfig(ABC):
         pass
 
     @abstractmethod
+    def transform_video_list_request(
+        self,
+        model: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        after: Optional[str] = None,
+        limit: Optional[int] = None,
+        order: Optional[str] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the video list request into a URL and params
+        
+        Returns:
+            Tuple[str, Dict]: (url, params) for the video list request
+        """
+        pass
+
+    @abstractmethod
     def transform_video_list_response(
         self,
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> List[VideoObject]:
+    ) -> Dict[str,str]:
+        pass
+
+    @abstractmethod
+    def transform_video_delete_request(
+        self,
+        video_id: str,
+        model: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the video delete request into a URL and data
+        
+        Returns:
+            Tuple[str, Dict]: (url, data) for the video delete request
+        """
         pass
 
     @abstractmethod
     def transform_video_delete_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> VideoObject:
+        pass
+
+    @abstractmethod
+    def transform_video_status_retrieve_request(
+        self,
+        video_id: str,
+        model: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the video retrieve request into a URL and data/params
+        
+        Returns:
+            Tuple[str, Dict]: (url, params) for the video retrieve request
+        """
+        pass
+
+    @abstractmethod
+    def transform_video_status_retrieve_response(
         self,
         model: str,
         raw_response: httpx.Response,
