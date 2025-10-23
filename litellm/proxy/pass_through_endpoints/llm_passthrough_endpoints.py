@@ -545,12 +545,23 @@ async def handle_bedrock_passthrough_router_model(
     request: Request,
     request_body: dict,
     llm_router: litellm.Router,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj,
+    general_settings: dict,
+    proxy_config,
+    select_data_generator,
+    user_model: Optional[str],
+    user_temperature: Optional[float],
+    user_request_timeout: Optional[float],
+    user_max_tokens: Optional[int],
+    user_api_base: Optional[str],
+    version: Optional[str],
 ) -> Union[Response, StreamingResponse]:
     """
     Handle Bedrock passthrough for router models (models defined in config.yaml).
     
-    This helper delegates to llm_router.allm_passthrough_route for proper credential
-    and configuration management from the router.
+    Uses the same common processing path as non-router models to ensure
+    metadata and hooks are properly initialized.
     
     Args:
         model: The router model name (e.g., "aws/anthropic/bedrock-claude-3-5-sonnet-v1")
@@ -558,10 +569,16 @@ async def handle_bedrock_passthrough_router_model(
         request: The FastAPI request object
         request_body: The parsed request body
         llm_router: The LiteLLM router instance
+        user_api_key_dict: The user API key authentication dictionary
+        (additional args for common processing)
         
     Returns:
         Response or StreamingResponse depending on endpoint type
     """
+    from fastapi import Response as FastAPIResponse
+
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
     # Detect streaming based on endpoint
     is_streaming = any(action in endpoint for action in BEDROCK_STREAMING_ACTIONS)
     
@@ -569,83 +586,45 @@ async def handle_bedrock_passthrough_router_model(
         f"Bedrock router passthrough: model='{model}', endpoint='{endpoint}', streaming={is_streaming}"
     )
     
-    # Call router passthrough
+    # Use the common processing path (same as non-router models)
+    # This ensures all metadata, hooks, and logging are properly initialized
+    data: Dict[str, Any] = {}
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+    
+    data["model"] = model
+    data["method"] = request.method
+    data["endpoint"] = endpoint
+    data["data"] = request_body
+    data["custom_llm_provider"] = "bedrock"
+    
+    # Use the common passthrough processing to handle metadata and hooks
+    # This also handles all response formatting (streaming/non-streaming) and exceptions
     try:
-        result = await llm_router.allm_passthrough_route(
+        result = await base_llm_response_processor.base_passthrough_process_llm_request(
+            request=request,
+            fastapi_response=FastAPIResponse(),
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
             model=model,
-            method=request.method,
-            endpoint=endpoint,
-            request_query_params=request.query_params,
-            request_headers=dict(request.headers),
-            stream=is_streaming,
-            content=None,
-            data=None,
-            files=None,
-            json=(
-                request_body
-                if request.headers.get("content-type") == "application/json"
-                else None
-            ),
-            params=None,
-            headers=None,
-            cookies=None,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
         )
-    except httpx.HTTPStatusError as e:
-        # Handle HTTP errors from the provider by converting to HTTPException
-        error_body = await e.response.aread()
-        error_text = error_body.decode("utf-8")
-        
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail={"error": error_text},
-        )
+        return result
     except Exception as e:
-        from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
-        # If it's a BaseLLMException (from non-HTTP errors), convert to HTTPException
-        if isinstance(e, BaseLLMException):
-            raise HTTPException(
-                status_code=e.status_code,
-                detail={"error": e.message},
-            )
-        # Re-raise any other exceptions
-        raise e
-    
-    # Handle streaming response
-    if is_streaming:
-        import inspect
-        
-        if inspect.isasyncgen(result):
-            # AsyncGenerator case
-            return StreamingResponse(
-                content=result,
-                status_code=200,
-                headers={"content-type": "application/vnd.amazon.eventstream"},
-            )
-        else:
-            # httpx.Response case
-            result = cast(httpx.Response, result)
-            return StreamingResponse(
-                content=result.aiter_bytes(),
-                status_code=result.status_code,
-                headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                    headers=result.headers,
-                    custom_headers=None,
-                ),
-            )
-    
-    # Handle non-streaming response
-    result = cast(httpx.Response, result)
-    content = await result.aread()
-    
-    return Response(
-        content=content,
-        status_code=result.status_code,
-        headers=HttpPassThroughEndpointHelpers.get_response_headers(
-            headers=result.headers,
-            custom_headers=None,
-        ),
-    )
+        # Use common exception handling
+        raise await base_llm_response_processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
 
 async def handle_bedrock_count_tokens(
@@ -778,6 +757,7 @@ async def bedrock_llm_proxy_route(
     )
 
     # If router model, use dedicated router passthrough handler
+    # This uses the same common processing path as non-router models
     if is_router_model and llm_router:
         return await handle_bedrock_passthrough_router_model(
             model=model,
@@ -785,6 +765,17 @@ async def bedrock_llm_proxy_route(
             request=request,
             request_body=request_body,
             llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
         )
 
     # Fall back to existing implementation for direct Bedrock models
