@@ -1,4 +1,4 @@
-import json
+import orjson
 from typing import Any, Union
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -49,4 +49,4 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
                 return "Unserializable Object"
 
     safe_data = _serialize(data, set(), 0)
-    return json.dumps(safe_data, default=str)
+    return orjson.dumps(safe_data, default=str).decode("utf-8")
