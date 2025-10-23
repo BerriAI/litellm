@@ -114,6 +114,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
+    VectorStoreSearchResponse,
 )
 from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 
@@ -1304,6 +1305,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return None
 
         try:
+
             response_cost = litellm.response_cost_calculator(
                 **response_cost_calculator_kwargs
             )
@@ -1617,6 +1619,8 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OpenAIFileObject)
             or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
             or isinstance(logging_result, OpenAIModerationResponse)
+            or isinstance(logging_result, dict)
+            and logging_result.get("object") == "vector_store.search_results.page"
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
             return True

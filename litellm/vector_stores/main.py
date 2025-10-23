@@ -435,7 +435,7 @@ def search(
 
         # Pre Call logging
         litellm_logging_obj.update_environment_variables(
-            model=None,
+            model=api_type,
             optional_params={
                 "vector_store_id": vector_store_id,
                 "query": query,

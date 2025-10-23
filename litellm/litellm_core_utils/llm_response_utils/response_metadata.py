@@ -85,7 +85,7 @@ class ResponseMetadata:
         # Set total response time if supported
         if self.supports_response_time:
             self.result._response_ms = total_response_time_ms
-        
+
         #########################################################
         # 1. Add _response_ms total duration
         #########################################################
@@ -106,12 +106,21 @@ class ResponseMetadata:
                     "litellm_overhead_time_ms": overhead_ms,
                 }
             )
-        
+
         #########################################################
         # 3. Add duration for reading from cache
         # In this case overhead from litellm is the difference between the cache read duration and the total response time
         #########################################################
-        if logging_obj.caching_details is not None and logging_obj.caching_details.get("cache_hit") is True and (cache_duration_ms := logging_obj.caching_details.get("cache_duration_ms")) is not None:
+        if (
+            logging_obj.caching_details is not None
+            and logging_obj.caching_details.get("cache_hit") is True
+            and (
+                cache_duration_ms := logging_obj.caching_details.get(
+                    "cache_duration_ms"
+                )
+            )
+            is not None
+        ):
             overhead_ms = total_response_time_ms - cache_duration_ms
             self._update_hidden_params(
                 {
