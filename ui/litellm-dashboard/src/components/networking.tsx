@@ -6829,6 +6829,40 @@ export const vectorStoreSearchCall = async (
   }
 };
 
+export const searchToolQueryCall = async (
+  accessToken: string,
+  searchToolName: string,
+  query: string,
+  maxResults?: number,
+): Promise<any> => {
+  try {
+    const url = `${getProxyBaseUrl()}/v1/search/${searchToolName}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query: query,
+        max_results: maxResults || 5,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      await handleError(errorData);
+      return null;
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error querying search tool:", error);
+    throw error;
+  }
+};
+
 export const userAgentAnalyticsCall = async (
   accessToken: string,
   startTime: Date,
