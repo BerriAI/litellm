@@ -239,6 +239,8 @@ class CallTypes(str, Enum):
     speech = "speech"
     rerank = "rerank"
     arerank = "arerank"
+    search = "search"
+    asearch = "asearch"
     arealtime = "_arealtime"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
@@ -321,6 +323,8 @@ CallTypesLiteral = Literal[
     "speech",
     "rerank",
     "arerank",
+    "search",
+    "asearch",
     "_arealtime",
     "create_batch",
     "acreate_batch",
@@ -2537,6 +2541,23 @@ class LlmProviders(str, Enum):
 
 # Create a set of all provider values for quick lookup
 LlmProvidersSet = {provider.value for provider in LlmProviders}
+
+
+class SearchProviders(str, Enum):
+    """
+    Enum for search provider types.
+    Separate from LlmProviders for semantic clarity.
+    """
+    PERPLEXITY = "perplexity"
+    TAVILY = "tavily"
+    PARALLEL_AI = "parallel_ai"
+    EXA_AI = "exa_ai"
+    GOOGLE_PSE = "google_pse"
+    DATAFORSEO = "dataforseo"
+
+
+# Create a set of all search provider values for quick lookup
+SearchProvidersSet = {provider.value for provider in SearchProviders}
 
 
 class LiteLLMLoggingBaseClass:
