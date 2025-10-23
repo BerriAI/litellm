@@ -1,7 +1,8 @@
 """
 CRUD ENDPOINTS FOR SEARCH TOOLS
 """
-from typing import List, cast
+from datetime import datetime
+from typing import List, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -24,6 +25,23 @@ from litellm.types.utils import SearchProviders
 
 router = APIRouter()
 SEARCH_TOOL_REGISTRY = SearchToolRegistry()
+
+
+def _convert_datetime_to_str(value: Union[datetime, str, None]) -> Union[str, None]:
+    """
+    Convert datetime object to ISO format string.
+    
+    Args:
+        value: datetime object, string, or None
+        
+    Returns:
+        ISO format string or original value if already string or None
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
 
 
 @router.get(
@@ -81,8 +99,8 @@ async def list_search_tools():
                     search_tool_name=search_tool.get("search_tool_name", ""),
                     litellm_params=dict(search_tool.get("litellm_params", {})),
                     search_tool_info=search_tool.get("search_tool_info"),
-                    created_at=search_tool.get("created_at"),
-                    updated_at=search_tool.get("updated_at"),
+                    created_at=_convert_datetime_to_str(search_tool.get("created_at")),
+                    updated_at=_convert_datetime_to_str(search_tool.get("updated_at")),
                 )
             )
 
@@ -394,8 +412,8 @@ async def get_search_tool_info(search_tool_id: str):
             search_tool_name=result.get("search_tool_name", ""),
             litellm_params=masked_litellm_params_dict,
             search_tool_info=result.get("search_tool_info"),
-            created_at=result.get("created_at"),
-            updated_at=result.get("updated_at"),
+            created_at=_convert_datetime_to_str(result.get("created_at")),
+            updated_at=_convert_datetime_to_str(result.get("updated_at")),
         )
     except HTTPException as e:
         raise e
