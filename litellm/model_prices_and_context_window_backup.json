@@ -12,7 +12,7 @@
         "max_input_tokens": "max input tokens, if the provider specifies it. if not default to max_tokens",
         "max_output_tokens": "max output tokens, if the provider specifies it. if not default to max_tokens",
         "max_tokens": "LEGACY parameter. set to max_output_tokens if provider specifies it. IF not set to max_input_tokens, if provider specifies it.",
-        "mode": "one of: chat, embedding, completion, image_generation, audio_transcription, audio_speech, image_generation, moderation, rerank",
+        "mode": "one of: chat, embedding, completion, image_generation, audio_transcription, audio_speech, image_generation, moderation, rerank, search",
         "output_cost_per_reasoning_token": 0.0,
         "output_cost_per_token": 0.0,
         "search_context_cost_per_query": {
@@ -6460,6 +6460,11 @@
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
     },
+    "dataforseo/search": {
+        "input_cost_per_query": 0.003,
+        "litellm_provider": "dataforseo",
+        "mode": "search"
+    },
     "davinci-002": {
         "input_cost_per_token": 2e-06,
         "litellm_provider": "text-completion-openai",
@@ -7800,6 +7805,31 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 2560
     },
+    "exa_ai/search": {
+        "litellm_provider": "exa_ai",
+        "mode": "search",
+        "tiered_pricing": [
+            {
+                "input_cost_per_query": 5e-03,
+                "max_results_range": [
+                    0,
+                    25
+                ]
+            },
+            {
+                "input_cost_per_query": 25e-03,
+                "max_results_range": [
+                    26,
+                    100
+                ]
+            }
+        ]
+    },
+    "perplexity/search": {
+        "input_cost_per_query": 5e-03,
+        "litellm_provider": "perplexity",
+        "mode": "search"
+    },    
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",
@@ -12210,6 +12240,11 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "google_pse/search": {
+        "input_cost_per_query": 0.005,
+        "litellm_provider": "google_pse",
+        "mode": "search"
     },
     "global.anthropic.claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -18802,6 +18837,16 @@
         "output_cost_per_token": 1.25e-07,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
+    "parallel_ai/search": {
+        "input_cost_per_query": 0.004,
+        "litellm_provider": "parallel_ai",
+        "mode": "search"
+    },
+    "parallel_ai/search-pro": {
+        "input_cost_per_query": 0.009,
+        "litellm_provider": "parallel_ai",
+        "mode": "search"
+    },
     "perplexity/codellama-34b-instruct": {
         "input_cost_per_token": 3.5e-07,
         "litellm_provider": "perplexity",
@@ -19811,6 +19856,16 @@
         "litellm_provider": "openai",
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0
+    },
+    "tavily/search": {
+        "input_cost_per_query": 0.008,
+        "litellm_provider": "tavily",
+        "mode": "search"
+    },
+    "tavily/search-advanced": {
+        "input_cost_per_query": 0.016,
+        "litellm_provider": "tavily",
+        "mode": "search"
     },
     "text-bison": {
         "input_cost_per_character": 2.5e-07,
