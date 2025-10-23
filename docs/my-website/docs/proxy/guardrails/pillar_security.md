@@ -262,9 +262,9 @@ fallback_on_error: "allow"  # Default - recommended for production resilience
 **Available Options:**
 
 - **`allow` (Default - Recommended)**: Proceed without scanning when Pillar is unavailable
-  - ✅ **No service interruption** if Pillar is down
-  - ✅ **Best for production** where availability is critical
-  - ⚠️ Security scans are skipped during outages (logged as warnings)
+  - **No service interruption** if Pillar is down
+  - **Best for production** where availability is critical
+  - Security scans are skipped during outages (logged as warnings)
 
   ```yaml
   guardrails:
@@ -275,8 +275,8 @@ fallback_on_error: "allow"  # Default - recommended for production resilience
   ```
 
 - **`block`**: Reject all requests when Pillar is unavailable
-  - 🛡️ **Fail-secure approach** - no request proceeds without scanning
-  - ⚠️ **Service interruption** during Pillar outages
+  - **Fail-secure approach** - no request proceeds without scanning
+  - **Service interruption** during Pillar outages
   - Returns 503 Service Unavailable error
 
   ```yaml
@@ -291,38 +291,6 @@ fallback_on_error: "allow"  # Default - recommended for production resilience
 
 Configure how long to wait for Pillar API responses:
 
-```yaml
-timeout: 5.0  # Default: 5 seconds
-```
-
-**Why 5 seconds?**
-- Most Pillar API calls complete in 1-3 seconds under normal conditions
-- 5 seconds provides buffer for network variance while failing fast on outages
-- Combined with `fallback_on_error: "allow"`, timeouts trigger graceful degradation
-- Fast failure detection = better user experience (no waiting when service is down)
-- Users experiencing timeouts can increase if needed for their network conditions
-
-**Timeout Recommendations by Use Case:**
-
-- **Production with Graceful Degradation (Default)**: 5 seconds
-  - Fast failure detection
-  - Timeouts trigger graceful degradation, not hard failures
-  - Optimal user experience
-
-- **Production with Fail-Secure**: 10-15 seconds
-  - Higher timeout to avoid false positives when blocking is enabled
-  - Use when `fallback_on_error: "block"`
-  - Ensures legitimate slow responses don't get blocked
-
-- **High-traffic / Low-latency**: 3-5 seconds
-  - Prevents request queuing
-  - Requires reliable network connectivity
-  - Only use with `fallback_on_error: "allow"`
-
-- **High-latency Networks**: 10-15 seconds
-  - For deployments with high network latency
-  - Accommodate slower connections
-
 **Example Configurations:**
 
 ```yaml
@@ -333,22 +301,6 @@ guardrails:
       guardrail: pillar
       timeout: 5.0               # Default - fast failure detection
       fallback_on_error: "allow"  # Graceful degradation (required)
-
-# Fail-secure: Higher timeout to avoid false blocks
-guardrails:
-  - guardrail_name: "pillar-secure"
-    litellm_params:
-      guardrail: pillar
-      timeout: 15.0              # Higher timeout for reliability
-      fallback_on_error: "block"  # Block if scan fails
-
-# High-latency network: Increased tolerance
-guardrails:
-  - guardrail_name: "pillar-tolerant"
-    litellm_params:
-      guardrail: pillar
-      timeout: 10.0              # More buffer for slow networks
-      fallback_on_error: "allow"  # Still degrade gracefully
 ```
 
 **Environment Variables:**
