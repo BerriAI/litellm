@@ -21,7 +21,7 @@ try:
 
     HTTPX_AVAILABLE = True
 except ImportError:
-    httpx = None
+    httpx = None  # type: ignore
     HTTPX_AVAILABLE = False
 
 from fastapi import HTTPException
@@ -115,7 +115,7 @@ class LassoGuardrail(CustomGuardrail):
         Falls back to UUID if ULID library is not available.
         """
         if ULID_AVAILABLE:
-            return str(ULID())
+            return str(ULID())  # type: ignore
         else:
             verbose_proxy_logger.debug("ULID library not available, using UUID")
             return str(uuid.uuid4())
@@ -229,8 +229,9 @@ class LassoGuardrail(CustomGuardrail):
                         self._process_lasso_response(lasso_response)
 
                         # Apply masking to the actual response if masked content is available
-                        if lasso_response.get("violations_detected") and lasso_response.get("messages"):
-                            self._apply_masking_to_model_response(response, lasso_response["messages"])
+                        masked_messages = lasso_response.get("messages")
+                        if lasso_response.get("violations_detected") and masked_messages:
+                            self._apply_masking_to_model_response(response, masked_messages)
                             verbose_proxy_logger.debug("Applied Lasso masking to model response")
                     except Exception as e:
                         if isinstance(e, HTTPException):
@@ -355,7 +356,8 @@ class LassoGuardrail(CustomGuardrail):
             self._process_lasso_response(response)
             return data
         except Exception as e:
-            return await self._handle_api_error(e, message_type)
+            await self._handle_api_error(e, message_type)
+            return data  # This line won't be reached due to exception, but satisfies type checker
 
     async def _handle_masking(
         self,
@@ -375,11 +377,12 @@ class LassoGuardrail(CustomGuardrail):
             # Apply masking to messages if violations detected and masked messages are available
             if response.get("violations_detected") and response.get("messages"):
                 data["messages"] = response["messages"]
-                self._log_masking_applied(message_type, response)
+                self._log_masking_applied(message_type, dict(response))
 
             return data
         except Exception as e:
-            return await self._handle_api_error(e, message_type)
+            await self._handle_api_error(e, message_type)
+            return data  # This line won't be reached due to exception, but satisfies type checker
 
     async def _handle_api_error(
         self,
