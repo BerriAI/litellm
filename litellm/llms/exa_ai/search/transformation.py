@@ -67,7 +67,7 @@ class ExaAISearchConfig(BaseSearchConfig):
         self,
         api_base: Optional[str],
         optional_params: dict,
-        data: Optional[dict] = None,
+        data: Optional[Union[Dict, List[Dict]]] = None,
         **kwargs,
     ) -> str:
         """

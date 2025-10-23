@@ -149,8 +149,9 @@ async def asearch(
 
         return response
     except Exception as e:
+        model_name = f"{search_provider}/search"
         raise litellm.exception_type(
-            model="",
+            model=model_name,
             custom_llm_provider=search_provider,
             original_exception=e,
             completion_kwargs=local_vars,
@@ -287,8 +288,9 @@ def search(
         )
 
         # Pre Call logging
+        model_name = f"{search_provider}/search"
         litellm_logging_obj.update_environment_variables(
-            model="",
+            model=model_name,
             optional_params=optional_params,
             litellm_params={
                 "litellm_call_id": litellm_call_id,
@@ -313,8 +315,9 @@ def search(
 
         return response
     except Exception as e:
+        model_name = f"{search_provider}/search"
         raise litellm.exception_type(
-            model="",
+            model=model_name,
             custom_llm_provider=search_provider,
             original_exception=e,
             completion_kwargs=local_vars,

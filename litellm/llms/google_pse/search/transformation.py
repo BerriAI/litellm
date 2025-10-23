@@ -90,7 +90,7 @@ class GooglePSESearchConfig(BaseSearchConfig):
         self,
         api_base: Optional[str],
         optional_params: dict,
-        data: Optional[dict] = None,
+        data: Optional[Union[Dict, List[Dict]]] = None,
         **kwargs,
     ) -> str:
         """
@@ -104,7 +104,7 @@ class GooglePSESearchConfig(BaseSearchConfig):
         api_base = api_base or get_secret_str("GOOGLE_PSE_API_BASE") or self.GOOGLE_PSE_API_BASE
         
         # Build query parameters from the transformed request body
-        if data and "_google_pse_params" in data:
+        if data and isinstance(data, dict) and "_google_pse_params" in data:
             params = data["_google_pse_params"]
             query_string = urlencode(params)
             return f"{api_base}?{query_string}"
