@@ -231,6 +231,10 @@ class VertexPassthroughLoggingHandler:
 
             kwargs["response_cost"] = response_cost
             kwargs["model"] = "vertex_ai/search_api"
+            logging_obj.model_call_details.setdefault("litellm_params", {})
+            logging_obj.model_call_details["litellm_params"][
+                "base_model"
+            ] = "vertex_ai/search_api"
             logging_obj.model_call_details["response_cost"] = response_cost
 
             return {
