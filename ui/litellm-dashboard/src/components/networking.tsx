@@ -5421,6 +5421,189 @@ export const deleteMCPServer = async (accessToken: string, serverId: string) => 
   }
 };
 
+// Search Tools API calls
+export const fetchSearchTools = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/search_tools/list` : `/search_tools/list`;
+    console.log("Fetching search tools from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Fetched search tools:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch search tools:", error);
+    throw error;
+  }
+};
+
+export const fetchSearchToolById = async (accessToken: string, searchToolId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/search_tools/${searchToolId}` : `/search_tools/${searchToolId}`;
+    console.log("Fetching search tool by ID from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Fetched search tool:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch search tool:", error);
+    throw error;
+  }
+};
+
+export const createSearchTool = async (accessToken: string, formValues: Record<string, any>) => {
+  try {
+    console.log("Creating search tool with values:", formValues);
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/search_tools` : `/search_tools`;
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.POST,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        search_tool: formValues,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Created search tool:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create search tool:", error);
+    throw error;
+  }
+};
+
+export const updateSearchTool = async (accessToken: string, searchToolId: string, formValues: Record<string, any>) => {
+  try {
+    console.log("Updating search tool with ID:", searchToolId, "values:", formValues);
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/search_tools/${searchToolId}` : `/search_tools/${searchToolId}`;
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.PUT,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        search_tool: formValues,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Updated search tool:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update search tool:", error);
+    throw error;
+  }
+};
+
+export const deleteSearchTool = async (accessToken: string, searchToolId: string) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/search_tools/${searchToolId}`;
+    console.log("Deleting search tool:", searchToolId);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.DELETE,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Deleted search tool:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to delete search tool:", error);
+    throw error;
+  }
+};
+
+export const fetchAvailableSearchProviders = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/search_tools/ui/available_providers` 
+      : `/search_tools/ui/available_providers`;
+    console.log("Fetching available search providers from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Fetched available search providers:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch available search providers:", error);
+    throw error;
+  }
+};
+
 export const listMCPTools = async (accessToken: string, serverId: string, authValue?: string, serverAlias?: string) => {
   try {
     // Construct base URL

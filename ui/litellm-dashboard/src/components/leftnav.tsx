@@ -110,6 +110,7 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
       icon: <ToolOutlined style={{ fontSize: "18px" }} />,
       children: [
         { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined style={{ fontSize: "18px" }} /> },
+        { key: "28", page: "search-tools", label: "Search Tools", icon: <ApiOutlined style={{ fontSize: "18px" }} /> },
         {
           key: "21",
           page: "vector-stores",
