@@ -160,10 +160,20 @@ class PillarGuardrail(CustomGuardrail):
             f"Pillar Guardrail: Initialized with fallback_on_error: {self.fallback_on_error}"
         )
 
-        # Set timeout
-        self.timeout = timeout or float(
-            os.environ.get("PILLAR_TIMEOUT", str(self.DEFAULT_TIMEOUT))
-        )
+        # Set timeout with graceful fallback on invalid configuration
+        if timeout is not None:
+            self.timeout = timeout
+        else:
+            try:
+                self.timeout = float(
+                    os.environ.get("PILLAR_TIMEOUT", str(self.DEFAULT_TIMEOUT))
+                )
+            except (ValueError, TypeError) as e:
+                verbose_proxy_logger.warning(
+                    f"Pillar Guardrail: Invalid PILLAR_TIMEOUT value '{os.environ.get('PILLAR_TIMEOUT')}', "
+                    f"falling back to default {self.DEFAULT_TIMEOUT}s"
+                )
+                self.timeout = self.DEFAULT_TIMEOUT
 
         # Define supported event hooks
         supported_event_hooks = [
