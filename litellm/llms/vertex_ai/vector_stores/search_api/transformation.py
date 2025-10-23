@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
+from litellm import get_model_info
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
@@ -239,3 +240,14 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         self, response: httpx.Response
     ) -> VectorStoreCreateResponse:
         raise NotImplementedError
+
+    def calculate_vector_store_cost(
+        self,
+        response: VectorStoreSearchResponse,
+    ) -> Tuple[float, float]:
+        model_info = get_model_info(
+            model="vertex_ai/search_api",
+        )
+
+        input_cost_per_query = model_info.get("input_cost_per_query") or 0.0
+        return input_cost_per_query, 0.0
