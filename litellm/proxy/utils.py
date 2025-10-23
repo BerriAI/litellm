@@ -3628,8 +3628,14 @@ def join_paths(base_path: str, route: str) -> str:
     if not route:
         return base_path
 
-    # Join with single slash
-    return f"{base_path}/{route}"
+    # Check if base_path already ends with the route to avoid duplication
+    if base_path.endswith(f"/{route}"):
+        final_path = base_path
+    else:
+        # Join with single slash
+        final_path = f"{base_path}/{route}"
+
+    return final_path
 
 
 def get_custom_url(request_base_url: str, route: Optional[str] = None) -> str:
