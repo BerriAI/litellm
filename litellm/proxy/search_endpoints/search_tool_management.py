@@ -12,7 +12,7 @@ from litellm.proxy.search_endpoints.search_tool_registry import (
     IN_MEMORY_SEARCH_TOOL_HANDLER,
     SearchToolRegistry,
 )
-from litellm.types.search_tools import (
+from litellm.types.search import (
     AvailableSearchProvider,
     ListSearchToolsResponse,
     SearchTool,

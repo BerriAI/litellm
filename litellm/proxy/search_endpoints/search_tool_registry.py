@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.utils import PrismaClient
-from litellm.types.search_tools import SearchTool
+from litellm.types.search import SearchTool
 
 
 class SearchToolRegistry:
