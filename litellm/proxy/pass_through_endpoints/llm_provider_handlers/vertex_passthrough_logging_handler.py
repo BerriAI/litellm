@@ -1,7 +1,7 @@
 import json
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -226,7 +226,7 @@ class VertexPassthroughLoggingHandler:
             )
 
             standard_pass_through_response_object: StandardPassThroughResponseObject = {
-                "response": json.dumps(litellm_vs_response),
+                "response": cast(dict, litellm_vs_response),
             }
 
             kwargs["response_cost"] = response_cost

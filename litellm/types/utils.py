@@ -2189,7 +2189,7 @@ class CustomStreamingDecoder:
 
 
 class StandardPassThroughResponseObject(TypedDict):
-    response: str
+    response: Union[str, dict]
 
 
 OPENAI_RESPONSE_HEADERS = [
