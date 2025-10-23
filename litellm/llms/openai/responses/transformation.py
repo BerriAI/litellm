@@ -409,7 +409,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if include:
             params["include"] = ",".join(include)
         if limit is not None:
-            params["limit"] = str(limit)
+            params["limit"] = limit
         if order is not None:
             params["order"] = order
         return url, params
