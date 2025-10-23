@@ -381,7 +381,19 @@ const sidebars = {
         "realtime",
         "rerank",
         "response_api",
-        "search",
+        {
+          type: "category",
+          label: "/search",
+          items: [
+            "search/index",
+            "search/perplexity",
+            "search/tavily",
+            "search/exa_ai",
+            "search/parallel_ai",
+            "search/google_pse",
+            "search/dataforseo",
+          ]
+        },
         {
           type: "category",
           label: "/vector_stores",

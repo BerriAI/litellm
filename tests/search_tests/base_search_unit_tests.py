@@ -6,6 +6,7 @@ This follows the same pattern as BaseOCRTest in tests/ocr_tests/base_ocr_unit_te
 import pytest
 import litellm
 from abc import ABC, abstractmethod
+import os
 import json
 
 
@@ -37,6 +38,8 @@ class BaseSearchTest(ABC):
         """
         Test basic search functionality with a simple query.
         """
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm._turn_on_debug()
         search_provider = self.get_search_provider()
         print("Search Provider=", search_provider)
@@ -76,6 +79,18 @@ class BaseSearchTest(ABC):
             assert len(first_result.title) > 0, "Title should not be empty"
             assert len(first_result.url) > 0, "URL should not be empty"
             assert len(first_result.snippet) > 0, "Snippet should not be empty"
+            
+            # Validate cost tracking in _hidden_params
+            assert hasattr(response, "_hidden_params"), "Response should have '_hidden_params' attribute"
+            hidden_params = response._hidden_params
+            assert "response_cost" in hidden_params, "_hidden_params should contain 'response_cost'"
+            
+            response_cost = hidden_params["response_cost"]
+            assert response_cost is not None, "response_cost should not be None"
+            assert isinstance(response_cost, (int, float)), "response_cost should be a number"
+            assert response_cost >= 0, "response_cost should be non-negative"
+            
+            print(f"Cost tracking: ${response_cost:.6f}")
             
         except Exception as e:
             pytest.fail(f"Search call failed: {str(e)}")
