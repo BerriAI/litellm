@@ -314,9 +314,23 @@ class StandardBuiltInToolCostTracking:
 
         if isinstance(response_object, ModelResponse):
             # chat completions only include url_citation annotations when a web search call is made
-            return StandardBuiltInToolCostTracking.response_includes_annotation_type(
+            has_url_citations = StandardBuiltInToolCostTracking.response_includes_annotation_type(
                 response_object=response_object, annotation_type="url_citation"
             )
+            if has_url_citations:
+                return True
+            # Fallback: Check usage object for providers that use usage instead of annotations
+            # (e.g., Vertex AI Gemini uses usage.prompt_tokens_details.web_search_requests)
+            if usage is not None:
+                if (
+                    hasattr(usage, "prompt_tokens_details")
+                    and usage.prompt_tokens_details is not None
+                    and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
+                    and hasattr(usage.prompt_tokens_details, "web_search_requests")
+                    and usage.prompt_tokens_details.web_search_requests is not None
+                ):
+                    return True
+            return False
         elif isinstance(response_object, ResponsesAPIResponse):
             # response api explicitly includes web_search_call in the output
             return StandardBuiltInToolCostTracking.response_includes_output_type(
