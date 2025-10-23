@@ -2723,7 +2723,7 @@ class SpecialEnums(Enum):
     LITELLM_MANAGED_BATCH_COMPLETE_STR = "litellm_proxy;model_id:{};llm_batch_id:{}"
 
     LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR = (
-        "litellm_proxy:responses_api:response_id:{};user_id:{}"
+        "litellm_proxy:responses_api:response_id:{};user_id:{};team_id:{}"
     )
 
     LITELLM_MANAGED_GENERIC_RESPONSE_COMPLETE_STR = "litellm_proxy;model_id:{};generic_response_id:{}"  # generic implementation of 'managed batches' - used for finetuning and any future work.

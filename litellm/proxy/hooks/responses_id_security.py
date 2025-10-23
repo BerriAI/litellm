@@ -20,6 +20,7 @@ from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -73,29 +74,42 @@ class ResponsesIDSecurity(CustomLogger):
             if previous_response_id and self._is_encrypted_response_id(
                 previous_response_id
             ):
-                original_response_id, user_id = self._decrypt_response_id(
+                original_response_id, user_id, team_id = self._decrypt_response_id(
                     previous_response_id
                 )
-                self.check_user_access_to_response_id(user_id, user_api_key_dict)
+                self.check_user_access_to_response_id(
+                    user_id, team_id, user_api_key_dict
+                )
                 data["previous_response_id"] = original_response_id
         elif call_type in {"aget_responses", "adelete_responses", "acancel_responses"}:
             response_id = data.get("response_id")
+
             if response_id and self._is_encrypted_response_id(response_id):
-                original_response_id, user_id = self._decrypt_response_id(response_id)
-                self.check_user_access_to_response_id(user_id, user_api_key_dict)
+                original_response_id, user_id, team_id = self._decrypt_response_id(
+                    response_id
+                )
+
+                self.check_user_access_to_response_id(
+                    user_id, team_id, user_api_key_dict
+                )
                 data["response_id"] = original_response_id
         return data
 
     def check_user_access_to_response_id(
-        self, response_id_user_id: Optional[str], user_api_key_dict: "UserAPIKeyAuth"
+        self,
+        response_id_user_id: Optional[str],
+        response_id_team_id: Optional[str],
+        user_api_key_dict: "UserAPIKeyAuth",
     ) -> bool:
         from litellm.proxy.proxy_server import general_settings
 
         if (
-            response_id_user_id
-            and user_api_key_dict.user_id
-            and response_id_user_id != user_api_key_dict.user_id
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
+            return True
+
+        if response_id_user_id and response_id_user_id != user_api_key_dict.user_id:
             if general_settings.get("disable_responses_id_security", False):
                 verbose_proxy_logger.debug(
                     f"Responses ID Security is disabled. User {user_api_key_dict.user_id} is accessing response id {response_id_user_id} which is not associated with them."
@@ -105,13 +119,27 @@ class ResponsesIDSecurity(CustomLogger):
                 status_code=403,
                 detail="Forbidden. The response id is not associated with the user, who this key belongs to. To disable this security feature, set general_settings::disable_responses_id_security to True in the config.yaml file.",
             )
+
+        if response_id_team_id and response_id_team_id != user_api_key_dict.team_id:
+            if general_settings.get("disable_responses_id_security", False):
+                verbose_proxy_logger.debug(
+                    f"Responses ID Security is disabled. Response belongs to team {response_id_team_id} but user {user_api_key_dict.user_id} is accessing it with team id {user_api_key_dict.team_id}."
+                )
+                return True
+            raise HTTPException(
+                status_code=403,
+                detail="Forbidden. The response id is not associated with the team, who this key belongs to. To disable this security feature, set general_settings::disable_responses_id_security to True in the config.yaml file.",
+            )
+
         return True
 
     def _is_encrypted_response_id(self, response_id: str) -> bool:
+
         remaining_string = response_id.split("resp_")[1]
         decrypted_value = decrypt_value_helper(
             value=remaining_string, key="response_id", return_original_value=True
         )
+
         if decrypted_value is None:
             return False
 
@@ -119,22 +147,27 @@ class ResponsesIDSecurity(CustomLogger):
             return True
         return False
 
-    def _decrypt_response_id(self, response_id: str) -> Tuple[str, Optional[str]]:
+    def _decrypt_response_id(
+        self, response_id: str
+    ) -> Tuple[str, Optional[str], Optional[str]]:
         """
         Returns:
          - original_response_id: the original response id
          - user_id: the user id
+         - team_id: the team id
         """
         remaining_string = response_id.split("resp_")[1]
         decrypted_value = decrypt_value_helper(
             value=remaining_string, key="response_id", return_original_value=True
         )
+
         if decrypted_value is None:
-            return response_id, None
+            return response_id, None, None
 
         if decrypted_value.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
             # Expected format: "litellm_proxy:responses_api:response_id:{response_id};user_id:{user_id}"
             parts = decrypted_value.split(";")
+
             if len(parts) >= 2:
                 # Extract response_id from "litellm_proxy:responses_api:response_id:{response_id}"
                 response_id_part = parts[0]
@@ -144,11 +177,15 @@ class ResponsesIDSecurity(CustomLogger):
                 user_id_part = parts[1]
                 user_id = user_id_part.split("user_id:")[-1]
 
-                return original_response_id, user_id
+                # Extract team_id from "team_id:{team_id}"
+                team_id_part = parts[2]
+                team_id = team_id_part.split("team_id:")[-1]
+
+                return original_response_id, user_id, team_id
             else:
                 # Fallback if format is unexpected
-                return response_id, None
-        return response_id, None
+                return response_id, None, None
+        return response_id, None, None
 
     def _encrypt_response_id(
         self,
@@ -159,14 +196,18 @@ class ResponsesIDSecurity(CustomLogger):
         # encrypt the response id, and encode the user id and response id in base64
         response_id = getattr(response, "id", None)
         response_obj = getattr(response, "response", None)
+
         if (
             response_id
             and isinstance(response_id, str)
             and response_id.startswith("resp_")
         ):
             encrypted_response_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
-                response_id, user_api_key_dict.user_id
+                response_id,
+                user_api_key_dict.user_id or "",
+                user_api_key_dict.team_id or "",
             )
+
             encoded_user_id_and_response_id = encrypt_value_helper(
                 value=encrypted_response_id
             )
@@ -203,7 +244,7 @@ class ResponsesIDSecurity(CustomLogger):
 
         if general_settings.get("disable_responses_id_security", False):
             return response
-        if isinstance(response, ResponsesAPIResponse) and user_api_key_dict.user_id:
+        if isinstance(response, ResponsesAPIResponse):
             response = cast(
                 ResponsesAPIResponse,
                 self._encrypt_response_id(response, user_api_key_dict),
