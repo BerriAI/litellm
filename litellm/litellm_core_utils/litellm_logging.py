@@ -4451,8 +4451,8 @@ class StandardLoggingPayloadSetup:
         litellm_params: dict, proxy_server_request: dict
     ) -> List[str]:
         # check for 'tags' in both 'metadata' and 'litellm_metadata'
-        metadata = litellm_params.get("metadata", {})
-        litellm_metadata = litellm_params.get("litellm_metadata", {})
+        metadata = litellm_params.get("metadata") or {}
+        litellm_metadata = litellm_params.get("litellm_metadata") or {}
         if metadata.get("tags", []):
             request_tags = metadata.get("tags", [])
         elif litellm_metadata.get("tags", []):
@@ -4559,7 +4559,7 @@ def get_standard_logging_object_payload(
                 )
 
         # standardize this function to be used across, s3, dynamoDB, langfuse logging
-        litellm_params = kwargs.get("litellm_params", {})
+        litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
 
         metadata: dict = (

@@ -181,6 +181,90 @@ def test_get_request_tags():
     assert "User-Agent: litellm/0.1.0" in tags
 
 
+def test_get_request_tags_from_metadata_and_litellm_metadata():
+    """
+    Test that _get_request_tags correctly picks tags from both 'metadata' and 'litellm_metadata'.
+
+    Scenarios tested:
+    1. Tags in metadata only
+    2. Tags in litellm_metadata only
+    3. Tags in both (metadata should take priority)
+    4. No tags in either
+    5. None values for metadata/litellm_metadata
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Test case 1: Tags in metadata only
+    tags = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params={"metadata": {"tags": ["metadata-tag-1", "metadata-tag-2"]}},
+        proxy_server_request={},
+    )
+    assert "metadata-tag-1" in tags
+    assert "metadata-tag-2" in tags
+    assert len([t for t in tags if not t.startswith("User-Agent:")]) == 2
+
+    # Test case 2: Tags in litellm_metadata only
+    tags = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params={
+            "litellm_metadata": {
+                "tags": ["litellm-metadata-tag-1", "litellm-metadata-tag-2"]
+            }
+        },
+        proxy_server_request={},
+    )
+    assert "litellm-metadata-tag-1" in tags
+    assert "litellm-metadata-tag-2" in tags
+    assert len([t for t in tags if not t.startswith("User-Agent:")]) == 2
+
+    # Test case 3: Tags in both - metadata should take priority
+    tags = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params={
+            "metadata": {"tags": ["metadata-tag"]},
+            "litellm_metadata": {"tags": ["litellm-metadata-tag"]},
+        },
+        proxy_server_request={},
+    )
+    assert "metadata-tag" in tags
+    assert "litellm-metadata-tag" not in tags
+    assert len([t for t in tags if not t.startswith("User-Agent:")]) == 1
+
+    # Test case 4: No tags in either
+    tags = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params={"metadata": {}, "litellm_metadata": {}},
+        proxy_server_request={},
+    )
+    assert len([t for t in tags if not t.startswith("User-Agent:")]) == 0
+
+    # Test case 5: None values for metadata/litellm_metadata
+    tags = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params={"metadata": None, "litellm_metadata": None},
+        proxy_server_request={},
+    )
+    assert isinstance(tags, list)
+    assert len([t for t in tags if not t.startswith("User-Agent:")]) == 0
+
+    # Test case 6: Empty litellm_params
+    tags = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params={},
+        proxy_server_request={},
+    )
+    assert isinstance(tags, list)
+    assert len([t for t in tags if not t.startswith("User-Agent:")]) == 0
+
+    # Test case 7: Metadata tags combined with user-agent tags
+    tags = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params={"metadata": {"tags": ["custom-tag"]}},
+        proxy_server_request={
+            "headers": {
+                "user-agent": "litellm/1.0.0",
+            }
+        },
+    )
+    assert "custom-tag" in tags
+    assert "User-Agent: litellm" in tags
+    assert "User-Agent: litellm/1.0.0" in tags
+
+
 def test_get_extra_header_tags():
     """Test the _get_extra_header_tags method with various scenarios."""
     import litellm
