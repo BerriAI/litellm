@@ -47,6 +47,7 @@ else:
     ProxyConfig = Any
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
+import datetime
 
 
 async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional[int]:
@@ -319,7 +320,8 @@ class ProxyBaseLLMRequestProcessing:
         user_api_base: Optional[str] = None,
         model: Optional[str] = None,
     ) -> Tuple[dict, LiteLLMLoggingObj]:
-        start_time = datetime.now()  # start before calling guardrail hooks
+        
+        start_time = datetime.datetime.now()  # start before calling guardrail hooks
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
