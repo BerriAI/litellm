@@ -23757,5 +23757,11 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
+    },
+    "vertex_ai/search_api": {
+        "input_cost_per_query": 1.5e-03,
+        "input_cost_per_query_enterprise": 4e-3,
+        "litellm_provider": "vertex_ai",
+        "mode": "vector_store"
     }
 }
