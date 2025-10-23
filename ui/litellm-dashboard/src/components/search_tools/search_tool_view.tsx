@@ -5,6 +5,7 @@ import { SearchTool, AvailableSearchProvider } from "./types";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { Button as AntdButton } from "antd";
+import { SearchToolTester } from "./search_tool_tester";
 
 interface SearchToolViewProps {
   searchTool: SearchTool;
@@ -109,6 +110,16 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
           </div>
         </Card>
       )}
+
+      {/* Search Tool Tester */}
+      <div className="mt-6">
+        {accessToken && (
+          <SearchToolTester
+            searchToolName={searchTool.search_tool_name}
+            accessToken={accessToken}
+          />
+        )}
+      </div>
     </div>
   );
 };
