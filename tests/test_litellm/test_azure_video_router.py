@@ -18,33 +18,6 @@ class TestAzureVideoRouter:
         self.seconds = "5"
         self.size = "1280x720"
 
-    def test_azure_video_models_in_model_map(self):
-        """Test that Azure video models are properly configured in the model map"""
-        # Test that the Azure Sora 2 models are in the model map
-        import json
-        
-        # Load the backup model map directly
-        with open("/Users/sameerkankute/Desktop/Berriai_copy/litellm/litellm/model_prices_and_context_window_backup.json", "r") as f:
-            model_map = json.load(f)
-        
-        # Test azure/sora-2
-        assert "azure/sora-2" in model_map
-        model_info = model_map["azure/sora-2"]
-        assert model_info.get("litellm_provider") == "azure"
-        assert model_info.get("mode") == "video_generation"
-        
-        # Test azure/sora-2-pro
-        assert "azure/sora-2-pro" in model_map
-        model_info = model_map["azure/sora-2-pro"]
-        assert model_info.get("litellm_provider") == "azure"
-        assert model_info.get("mode") == "video_generation"
-        
-        # Test azure/sora-2-pro-high-res
-        assert "azure/sora-2-pro-high-res" in model_map
-        model_info = model_map["azure/sora-2-pro-high-res"]
-        assert model_info.get("litellm_provider") == "azure"
-        assert model_info.get("mode") == "video_generation"
-
     @patch("litellm.videos.main.base_llm_http_handler")
     def test_azure_video_generation_router_call_mock(self, mock_handler):
         """Test that Azure video generation calls the router method with mock response"""
