@@ -199,3 +199,196 @@ def test_in_memory_cache_heap_size_staus_bounded():
 
     # Expiration heap should only have 1 entry
     assert len(in_memory_cache.expiration_heap) == 1
+
+
+def test_in_memory_cache_cleanup_sync_close():
+    """
+    Test that objects with sync close() method are properly cleaned up when removed from cache.
+    """
+    class MockSyncClient:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    in_memory_cache = InMemoryCache()
+    mock_client = MockSyncClient()
+
+    # Add client to cache with short TTL
+    in_memory_cache.set_cache(key="sync_client", value=mock_client, ttl=1)
+
+    assert "sync_client" in in_memory_cache.cache_dict
+    assert mock_client.closed is False
+
+    # Wait for TTL to expire
+    time.sleep(1.1)
+
+    # Access cache to trigger eviction
+    result = in_memory_cache.get_cache(key="sync_client")
+
+    # Client should be removed and closed
+    assert result is None
+    assert "sync_client" not in in_memory_cache.cache_dict
+    assert mock_client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_in_memory_cache_cleanup_async_close():
+    """
+    Test that objects with async close() method are properly cleaned up when removed from cache.
+    """
+    class MockAsyncClient:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+            await asyncio.sleep(0.01)  # Simulate async cleanup
+
+    in_memory_cache = InMemoryCache()
+    mock_client = MockAsyncClient()
+
+    # Add client to cache with short TTL
+    in_memory_cache.set_cache(key="async_client", value=mock_client, ttl=1)
+
+    assert "async_client" in in_memory_cache.cache_dict
+    assert mock_client.closed is False
+
+    # Wait for TTL to expire
+    await asyncio.sleep(1.1)
+
+    # Access cache to trigger eviction
+    result = in_memory_cache.get_cache(key="async_client")
+
+    # Client should be removed
+    assert result is None
+    assert "async_client" not in in_memory_cache.cache_dict
+
+    # Give async cleanup task time to complete
+    await asyncio.sleep(0.1)
+
+    # Client should be closed
+    assert mock_client.closed is True
+
+
+def test_in_memory_cache_cleanup_no_close_method():
+    """
+    Test that objects without close() method are removed normally without errors.
+    """
+    in_memory_cache = InMemoryCache()
+
+    # Add regular object without close() method
+    in_memory_cache.set_cache(key="regular_obj", value="test_value", ttl=1)
+
+    assert "regular_obj" in in_memory_cache.cache_dict
+
+    # Wait for TTL to expire
+    time.sleep(1.1)
+
+    # Access cache to trigger eviction - should not raise any errors
+    result = in_memory_cache.get_cache(key="regular_obj")
+
+    assert result is None
+    assert "regular_obj" not in in_memory_cache.cache_dict
+
+
+def test_in_memory_cache_cleanup_close_raises_error():
+    """
+    Test that errors during close() are silently handled and don't break cache operations.
+    """
+    class MockFailingClient:
+        def close(self):
+            raise RuntimeError("Close failed!")
+
+    in_memory_cache = InMemoryCache()
+    mock_client = MockFailingClient()
+
+    # Add client to cache with short TTL
+    in_memory_cache.set_cache(key="failing_client", value=mock_client, ttl=1)
+
+    assert "failing_client" in in_memory_cache.cache_dict
+
+    # Wait for TTL to expire
+    time.sleep(1.1)
+
+    # Access cache to trigger eviction - should not raise error even if close() fails
+    result = in_memory_cache.get_cache(key="failing_client")
+
+    # Client should still be removed from cache
+    assert result is None
+    assert "failing_client" not in in_memory_cache.cache_dict
+
+
+def test_in_memory_cache_cleanup_on_eviction():
+    """
+    Test that objects are cleaned up when evicted due to max_size constraint.
+    """
+    class MockClient:
+        def __init__(self, name):
+            self.name = name
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    in_memory_cache = InMemoryCache(max_size_in_memory=2)
+
+    # Add clients to cache
+    client1 = MockClient("client1")
+    client2 = MockClient("client2")
+    client3 = MockClient("client3")
+
+    in_memory_cache.set_cache(key="client1", value=client1, ttl=100)
+    time.sleep(0.01)
+    in_memory_cache.set_cache(key="client2", value=client2, ttl=100)
+
+    assert len(in_memory_cache.cache_dict) == 2
+    assert client1.closed is False
+    assert client2.closed is False
+
+    # Add third client - should evict first client
+    in_memory_cache.set_cache(key="client3", value=client3, ttl=100)
+
+    # First client should be evicted and closed
+    assert len(in_memory_cache.cache_dict) == 2
+    assert "client1" not in in_memory_cache.cache_dict
+    assert client1.closed is True
+
+    # Other clients should remain
+    assert "client2" in in_memory_cache.cache_dict
+    assert "client3" in in_memory_cache.cache_dict
+    assert client2.closed is False
+    assert client3.closed is False
+
+
+@pytest.mark.asyncio
+async def test_in_memory_cache_cleanup_httpx_client():
+    """
+    Test that real httpx AsyncClient is properly cleaned up (integration test).
+    """
+    in_memory_cache = InMemoryCache()
+
+    # Create a real httpx client
+    client = httpx.AsyncClient()
+
+    assert client.is_closed is False
+
+    # Add to cache with short TTL
+    in_memory_cache.set_cache(key="httpx_client", value=client, ttl=1)
+
+    # Wait for TTL to expire
+    await asyncio.sleep(1.1)
+
+    # Trigger eviction
+    result = in_memory_cache.get_cache(key="httpx_client")
+
+    assert result is None
+    assert "httpx_client" not in in_memory_cache.cache_dict
+
+    # Give async cleanup time to complete
+    await asyncio.sleep(0.1)
+
+    # Client should be closed
+    assert client.is_closed is True
+
