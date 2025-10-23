@@ -439,7 +439,6 @@ class CustomStreamWrapper:
             finish_reason = None
             logprobs = None
             usage = None
-
             if str_line and str_line.choices and len(str_line.choices) > 0:
                 if (
                     str_line.choices[0].delta is not None
@@ -606,21 +605,134 @@ class CustomStreamWrapper:
             raise e
 
     def handle_sap_stream(self, chunk):
-        try:
-            print_verbose(f"chunk: {chunk} (Type: {type(chunk)})")
-            chunk_ = chunk["final_result"]["choices"][0]
-            text = chunk_["delta"]["content"]
-            finish_reason = chunk_.get("finish_reason", None)
-            is_finished = finish_reason is not None
-            return {
-                "text": text,
-                "finish_reason": finish_reason,
-                "is_finished": is_finished,
-                # "prompt_tokens": 0,
-                # "completion_tokens": 0,
+        """
+        Normalize SAP streaming into the generic dict that CustomStreamWrapper expects.
+
+        Returns:
+            {
+              "text": str,                     # delta content for this chunk (may be "")
+              "is_finished": bool,             # True only when finish_reason is not None
+              "finish_reason": Optional[str],  # e.g. "stop"
+              "usage": Optional[dict],         # if present on the chunk
+              "original_chunk": Optional[Any], # pass-through for openai-like chunks
+              # "provider_specific_fields": Optional[dict], # (optional) if you want to surface extras
             }
-        except Exception as e:
-            raise e
+        """
+        # 0) Helper to pick out text/finish from an OpenAI-like dict
+        def _extract_from_openai_like(d: dict):
+            choices = d.get("choices") or []
+            if not choices:
+                return "", False, None, None
+            ch0 = choices[0] or {}
+            delta = ch0.get("delta") or {}
+            text = delta.get("content") or ""
+            finish_reason = ch0.get("finish_reason")
+            is_finished = finish_reason is not None
+            usage = d.get("usage")  # sometimes present
+            return text, is_finished, finish_reason, usage
+
+        # 1) If chunk is already an OpenAIChatCompletionChunk or ModelResponseStream,
+        #    reuse the existing OpenAI handler to keep behavior consistent.
+        try:
+            from litellm.types.llms.openai import OpenAIChatCompletionChunk
+            from litellm.types.utils import ModelResponseStream as _MRS
+        except Exception:
+            OpenAIChatCompletionChunk = tuple()  # type: ignore
+            _MRS = tuple()  # type: ignore
+
+        if isinstance(chunk, (OpenAIChatCompletionChunk, _MRS)):
+            # Reuse OpenAI path, then reshape to SAP dict-return format.
+            resp = self.handle_openai_chat_completion_chunk(chunk)
+            # resp: {"text","is_finished","finish_reason","logprobs","original_chunk","usage"}
+            return {
+                "text": resp.get("text") or "",
+                "is_finished": bool(resp.get("is_finished")),
+                "finish_reason": resp.get("finish_reason"),
+                "usage": resp.get("usage"),
+                "original_chunk": resp.get("original_chunk", chunk),
+            }
+
+        # 2) If chunk is raw string (rare), try to strip "data:" and json-load it.
+        if isinstance(chunk, (str, bytes)):
+            if isinstance(chunk, bytes):
+                try:
+                    chunk = chunk.decode("utf-8")
+                except Exception:
+                    chunk = ""
+            s = chunk.strip()
+            if not s:
+                return {"text": "", "is_finished": False, "finish_reason": None}
+            if s.startswith("data:"):
+                s = s[len("data:") :].lstrip()
+            try:
+                chunk = json.loads(s)
+            except Exception:
+                # Not JSON -> nothing to emit
+                return {"text": "", "is_finished": False, "finish_reason": None}
+
+        # 3) Dict path (SAP events)
+        if isinstance(chunk, dict):
+            # In-stream error?
+            if "code" in chunk or "error" in chunk:
+                raise ValueError(json.dumps(chunk))
+
+            # Normalize to an OpenAI-like dict under "final_result"
+            if "final_result" in chunk:
+                fr = chunk["final_result"] or {}
+                if not isinstance(fr, dict):
+                    fr = {}
+                # ensure it looks openai-like
+                fr.setdefault("object", "chat.completion.chunk")
+                text, is_finished, finish_reason, usage = _extract_from_openai_like(fr)
+                return {
+                    "text": text or "",
+                    "is_finished": is_finished,
+                    "finish_reason": finish_reason,
+                    "usage": usage,
+                }
+
+            if "orchestration_result" in chunk:
+                orc = chunk["orchestration_result"] or {}
+                # Build a minimal openai-like dict, then extract
+                openai_like = {
+                    "id": orc.get("id") or chunk.get("request_id") or "stream-chunk",
+                    "object": orc.get("object") or "chat.completion.chunk",
+                    "created": orc.get("created") or chunk.get("created"),
+                    "model": orc.get("model") or "unknown",
+                    "choices": [],
+                }
+                for c in (orc.get("choices") or []):
+                    openai_like["choices"].append(
+                        {
+                            "index": c.get("index", 0),
+                            "delta": c.get("delta") or {},
+                            "finish_reason": c.get("finish_reason"),
+                        }
+                    )
+                text, is_finished, finish_reason, usage = _extract_from_openai_like(openai_like)
+                return {
+                    "text": text or "",
+                    "is_finished": is_finished,
+                    "finish_reason": finish_reason,
+                    "usage": usage,
+                }
+
+            # Already openai-shaped dict (choices/object present)
+            if "choices" in chunk and "object" in chunk:
+                text, is_finished, finish_reason, usage = _extract_from_openai_like(chunk)
+                return {
+                    "text": text or "",
+                    "is_finished": is_finished,
+                    "finish_reason": finish_reason,
+                    "usage": usage,
+                }
+
+            # Unknown dict -> ignore silently
+            return {"text": "", "is_finished": False, "finish_reason": None}
+
+        # 4) Fallback: ignore
+        return {"text": "", "is_finished": False, "finish_reason": None}
+
 
     def model_response_creator(
         self, chunk: Optional[dict] = None, hidden_params: Optional[dict] = None
@@ -1241,12 +1353,13 @@ class CustomStreamWrapper:
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
-            elif self.custom_llm_provider == "sap":
-                response_obj = self.handle_sap_stream(chunk)
-                completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
+            # elif self.custom_llm_provider == "sap":
+            #    response_obj = self.handle_openai_chat_completion_chunk(chunk)
+            #    # response_obj = self.handle_sap_stream(chunk)
+            #    completion_obj["content"] = response_obj["text"]
+            #    print_verbose(f"completion obj content: {completion_obj['content']}")
+            #    if response_obj["is_finished"]:
+            #        self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "text-completion-openai":
                 response_obj = self.handle_openai_text_completion_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
