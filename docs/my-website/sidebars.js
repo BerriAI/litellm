@@ -371,6 +371,7 @@ const sidebars = {
               items: [
                 "pass_through/vertex_ai",
                 "pass_through/vertex_ai_live_websocket",
+                "pass_through/vertex_ai_search_datastores",
               ]
             },
             "pass_through/vllm",
