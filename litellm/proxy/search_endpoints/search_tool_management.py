@@ -9,10 +9,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.search_endpoints.search_tool_registry import (
-    IN_MEMORY_SEARCH_TOOL_HANDLER,
-    SearchToolRegistry,
-)
+from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
 from litellm.types.search import (
     AvailableSearchProvider,
     ListSearchToolsResponse,
@@ -169,16 +166,10 @@ async def create_search_tool(request: CreateSearchToolRequest):
             search_tool=request.search_tool, prisma_client=prisma_client
         )
 
-        # Add to in-memory cache
-        try:
-            IN_MEMORY_SEARCH_TOOL_HANDLER.add_search_tool(search_tool=cast(SearchTool, result))
-            verbose_proxy_logger.info(
-                f"Successfully added search tool '{result.get('search_tool_name')}' to in-memory cache"
-            )
-        except Exception as cache_error:
-            verbose_proxy_logger.warning(
-                f"Failed to add search tool to in-memory cache: {cache_error}"
-            )
+        verbose_proxy_logger.info(
+            f"Successfully added search tool '{result.get('search_tool_name')}' to database. "
+            f"Router will be updated by the cron job."
+        )
 
         return result
     except Exception as e:
@@ -258,18 +249,10 @@ async def update_search_tool(search_tool_id: str, request: UpdateSearchToolReque
             prisma_client=prisma_client,
         )
 
-        # Update in-memory cache
-        try:
-            IN_MEMORY_SEARCH_TOOL_HANDLER.update_search_tool(
-                search_tool_id=search_tool_id, search_tool=cast(SearchTool, result)
-            )
-            verbose_proxy_logger.info(
-                f"Successfully updated search tool '{result.get('search_tool_name')}' in in-memory cache"
-            )
-        except Exception as cache_error:
-            verbose_proxy_logger.warning(
-                f"Failed to update search tool in in-memory cache: {cache_error}"
-            )
+        verbose_proxy_logger.info(
+            f"Successfully updated search tool '{result.get('search_tool_name')}' in database. "
+            f"Router will be updated by the cron job."
+        )
 
         return result
     except HTTPException as e:
@@ -323,18 +306,10 @@ async def delete_search_tool(search_tool_id: str):
             search_tool_id=search_tool_id, prisma_client=prisma_client
         )
 
-        # Delete from in-memory cache
-        try:
-            IN_MEMORY_SEARCH_TOOL_HANDLER.delete_search_tool(
-                search_tool_id=search_tool_id
-            )
-            verbose_proxy_logger.info(
-                f"Successfully removed search tool from in-memory cache"
-            )
-        except Exception as cache_error:
-            verbose_proxy_logger.warning(
-                f"Failed to remove search tool from in-memory cache: {cache_error}"
-            )
+        verbose_proxy_logger.info(
+            f"Successfully deleted search tool from database. "
+            f"Router will be updated by the cron job."
+        )
 
         return result
     except HTTPException as e:
@@ -386,12 +361,6 @@ async def get_search_tool_info(search_tool_id: str):
         result = await SEARCH_TOOL_REGISTRY.get_search_tool_by_id_from_db(
             search_tool_id=search_tool_id, prisma_client=prisma_client
         )
-
-        if result is None:
-            # Try in-memory cache
-            result = IN_MEMORY_SEARCH_TOOL_HANDLER.get_search_tool_by_id(
-                search_tool_id=search_tool_id
-            )
 
         if result is None:
             raise HTTPException(
