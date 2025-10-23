@@ -711,6 +711,16 @@ def image_edit(
         # add images / or return a single image
         images = image if isinstance(image, list) else [image]
 
+        headers_from_kwargs = kwargs.get("headers")
+        merged_extra_headers: Dict[str, Any] = {}
+        if isinstance(headers_from_kwargs, dict):
+            merged_extra_headers.update(headers_from_kwargs)
+        if isinstance(extra_headers, dict):
+            merged_extra_headers.update(extra_headers)
+
+        if merged_extra_headers:
+            extra_headers = dict(merged_extra_headers)
+
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
         model, custom_llm_provider, _, _ = get_llm_provider(

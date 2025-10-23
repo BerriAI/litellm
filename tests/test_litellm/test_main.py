@@ -1237,3 +1237,40 @@ def test_anthropic_text_disable_url_suffix_env_var():
             # Verify the api_base does not have /v1/complete appended
             assert actual_api_base == "https://api.example.com/custom/complete"
             assert not actual_api_base.endswith("/v1/complete")
+
+
+def test_image_edit_merges_headers_and_extra_headers():
+    combined_headers = {
+        "x-test-header-one": "value-1",
+        "x-test-header-two": "value-2",
+    }
+
+    mock_image_edit_config = MagicMock()
+    mock_image_edit_config.get_supported_openai_params.return_value = set()
+    mock_image_edit_config.map_openai_params.side_effect = (
+        lambda **kwargs: dict(kwargs["image_edit_optional_params"])
+    )
+
+    with patch(
+        "litellm.images.main.ProviderConfigManager.get_provider_image_edit_config",
+        return_value=mock_image_edit_config,
+    ) as mock_config, patch(
+        "litellm.images.main.base_llm_http_handler.image_edit_handler",
+        return_value="ok",
+    ) as mock_handler:
+        response = litellm.image_edit(
+            image=MagicMock(name="image"),
+            prompt="test",
+            model="azure/gpt-image-1",
+            headers={"x-test-header-one": "value-1"},
+            extra_headers={
+                "x-test-header-two": "value-2",
+            },
+        )
+
+    assert response == "ok"
+    mock_config.assert_called_once()
+
+    handler_kwargs = mock_handler.call_args.kwargs
+    assert handler_kwargs["extra_headers"] == combined_headers
+    assert "extra_headers" not in handler_kwargs["image_edit_optional_request_params"]
