@@ -17,9 +17,9 @@ class TestTavilySearch(BaseSearchTest):
     Tests for Tavily Search functionality.
     """
     
-    def get_custom_llm_provider(self) -> str:
+    def get_search_provider(self) -> str:
         """
-        Return custom_llm_provider for Tavily Search.
+        Return search_provider for Tavily Search.
         """
         return "tavily"
 

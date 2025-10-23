@@ -340,6 +340,7 @@ router_settings:
 | router_general_settings | RouterGeneralSettings | [SDK-Only] Router general settings - contains optimizations like 'async_only_mode'. [Docs](../routing.md#router-general-settings) |
 | optional_pre_call_checks | List[str] | List of pre-call checks to add to the router. Currently supported: 'router_budget_limiting', 'prompt_caching' |
 | ignore_invalid_deployments | boolean | If true, ignores invalid deployments. Default for proxy is True - to prevent invalid models from blocking other models from being loaded. |
+| search_tools | List[SearchToolTypedDict] | List of search tool configurations for Search API integration. Each tool specifies a search_tool_name and litellm_params with search_provider, api_key, api_base, etc. [Further Docs](../search.md) |
 
 
 ### environment variables - Reference
@@ -456,6 +457,7 @@ router_settings:
 | DEFAULT_CLIENT_DISCONNECT_CHECK_TIMEOUT_SECONDS | Timeout in seconds for checking client disconnection. Default is 1
 | DEFAULT_COOLDOWN_TIME_SECONDS | Duration in seconds to cooldown a model after failures. Default is 5
 | DEFAULT_CRON_JOB_LOCK_TTL_SECONDS | Time-to-live for cron job locks in seconds. Default is 60 (1 minute)
+| DEFAULT_DATAFORSEO_LOCATION_CODE | Default location code for DataForSEO search API. Default is 2250 (France)
 | DEFAULT_FAILURE_THRESHOLD_PERCENT | Threshold percentage of failures to cool down a deployment. Default is 0.5 (50%)
 | DEFAULT_FLUSH_INTERVAL_SECONDS | Default interval in seconds for flushing operations. Default is 5
 | DEFAULT_HEALTH_CHECK_INTERVAL | Default interval in seconds for health checks. Default is 300 (5 minutes)

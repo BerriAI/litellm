@@ -195,6 +195,7 @@ from litellm.types.utils import (
     ProviderField,
     ProviderSpecificModelInfo,
     RawRequestTypedDict,
+    SearchProviders,
     SelectTokenizerResponse,
     StreamingChoices,
     TextChoices,
@@ -7627,12 +7628,20 @@ class ProviderConfigManager:
 
     @staticmethod
     def get_provider_search_config(
-        provider: LlmProviders,
+        provider: "SearchProviders",
     ) -> Optional["BaseSearchConfig"]:
         """
         Get Search configuration for a given provider.
         """
-        from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
+        from litellm.llms.dataforseo.search.transformation import (
+            DataForSEOSearchConfig,
+        )
+        from litellm.llms.exa_ai.search.transformation import (
+            ExaAISearchConfig,
+        )
+        from litellm.llms.google_pse.search.transformation import (
+            GooglePSESearchConfig,
+        )
         from litellm.llms.parallel_ai.search.transformation import (
             ParallelAISearchConfig,
         )
@@ -7640,10 +7649,12 @@ class ProviderConfigManager:
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
 
         PROVIDER_TO_CONFIG_MAP = {
-            litellm.LlmProviders.PERPLEXITY: PerplexitySearchConfig,
-            litellm.LlmProviders.TAVILY: TavilySearchConfig,
-            litellm.LlmProviders.PARALLEL_AI: ParallelAISearchConfig,
-            litellm.LlmProviders.EXA_AI: ExaAISearchConfig,
+            SearchProviders.PERPLEXITY: PerplexitySearchConfig,
+            SearchProviders.TAVILY: TavilySearchConfig,
+            SearchProviders.PARALLEL_AI: ParallelAISearchConfig,
+            SearchProviders.EXA_AI: ExaAISearchConfig,
+            SearchProviders.GOOGLE_PSE: GooglePSESearchConfig,
+            SearchProviders.DATAFORSEO: DataForSEOSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
