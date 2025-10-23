@@ -2,6 +2,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import orjson
 import os
 import smtplib
 import threading
@@ -1654,7 +1655,7 @@ class PrismaClient:
             )
             if isinstance(payload_metadata, str):
                 payload_metadata_json: Union[Dict, SpendLogsMetadata] = cast(
-                    Dict, json.loads(payload_metadata)
+                    Dict, orjson.loads(payload_metadata)
                 )
             else:
                 payload_metadata_json = payload_metadata
@@ -1666,7 +1667,7 @@ class PrismaClient:
                 else "success"
             )
 
-        except (json.JSONDecodeError, AttributeError):
+        except (orjson.JSONDecodeError, AttributeError):
             # Default to success if metadata parsing fails
             return "success"
 
@@ -1682,7 +1683,7 @@ class PrismaClient:
         for k, v in db_data.items():
             if isinstance(v, dict):
                 try:
-                    db_data[k] = json.dumps(v)
+                    db_data[k] = orjson.dumps(v).decode("utf-8")
                 except Exception:
                     # This avoids Prisma retrying this 5 times, and making 5 clients
                     db_data[k] = "failed-to-serialize-json"
