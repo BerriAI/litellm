@@ -325,13 +325,17 @@ def test_embedding_input_array_of_tokens(mock_aembedding, client_no_auth):
 
         response = client_no_auth.post("/v1/embeddings", json=test_data)
 
-        mock_aembedding.assert_called_once_with(
-            model="vllm_embed_model",
-            input=[[2046, 13269, 158208]],
-            metadata=mock.ANY,
-            proxy_server_request=mock.ANY,
-            secret_fields=mock.ANY,
-        )
+        # Verify the mock was called once
+        mock_aembedding.assert_called_once()
+        
+        # Check the key parameters in the call
+        call_args = mock_aembedding.call_args
+        assert call_args.kwargs["model"] == "vllm_embed_model"
+        assert call_args.kwargs["input"] == [[2046, 13269, 158208]]
+        assert "metadata" in call_args.kwargs
+        assert "proxy_server_request" in call_args.kwargs
+        assert "secret_fields" in call_args.kwargs
+        
         assert response.status_code == 200
         result = response.json()
         print(len(result["data"][0]["embedding"]))

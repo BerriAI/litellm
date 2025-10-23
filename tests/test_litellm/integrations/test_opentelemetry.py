@@ -85,6 +85,39 @@ class TestOpenTelemetry(unittest.TestCase):
     MODEL = "arn:aws:bedrock:us-west-2:1234567890123:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0"
     HERE = os.path.dirname(__file__)
 
+    def setUp(self):
+        """Set up clean state before each test."""
+        # Clean up environment variables
+        os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", None)
+        os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", None)
+        
+        # Reset global providers to ensure clean state
+        self._reset_global_providers()
+
+    def tearDown(self):
+        """Clean up global OpenTelemetry providers after each test to prevent conflicts."""
+        # Clean up environment variables that might affect other tests
+        os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", None)
+        os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", None)
+        
+        # Reset global providers to prevent conflicts between tests
+        self._reset_global_providers()
+
+    def _reset_global_providers(self):
+        """Reset all global OpenTelemetry providers."""
+        import opentelemetry.trace
+        import opentelemetry._logs
+        import opentelemetry.metrics
+        
+        # Use proper reset methods instead of setting to None
+        try:
+            opentelemetry.trace._TRACER_PROVIDER = None
+            opentelemetry._logs._LOGGER_PROVIDER = None  
+            opentelemetry.metrics._METER_PROVIDER = None
+        except Exception:
+            # If reset fails, continue anyway - this is cleanup
+            pass
+
     def wait_for_spans(self, exporter: InMemorySpanExporter, prefix: str):
         """Poll until we see at least one span with an attribute key starting with `prefix`."""
         deadline = time.time() + self.POLL_TIMEOUT
@@ -130,7 +163,10 @@ class TestOpenTelemetry(unittest.TestCase):
             matches = [
                 log
                 for log in logs
-                # if log.attributes and any(str(k).startswith(prefix) for k in log.attributes)
+                if log.log_record.attributes and (
+                    any(str(k).startswith(name) for k in log.log_record.attributes) or
+                    any(str(v).startswith(name) for v in log.log_record.attributes.values())
+                )
             ]
             if matches:
                 return matches
@@ -544,7 +580,10 @@ class TestOpenTelemetry(unittest.TestCase):
         meter_provider = MeterProvider(metric_readers=[metric_reader])
 
         # ─── instantiate our OpenTelemetry logger with test providers ───────────
+        from litellm.integrations.opentelemetry import OpenTelemetryConfig
+        config = OpenTelemetryConfig.from_env()
         otel = OpenTelemetry(
+            config=config,
             tracer_provider=tracer_provider,
             meter_provider=meter_provider,
             logger_provider=logger_provider,

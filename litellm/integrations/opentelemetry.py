@@ -264,6 +264,9 @@ class OpenTelemetry(CustomLogger):
         )
 
     def _init_logs(self, logger_provider):
+        # Store the logger provider as an instance variable for use in tests
+        self.logger_provider = logger_provider
+        
         # nothing to do if events disabled
         if not self.config.enable_events:
             return
@@ -282,6 +285,8 @@ class OpenTelemetry(CustomLogger):
                 logger_provider.add_log_record_processor(
                     BatchLogRecordProcessor(log_exporter)  # type: ignore[arg-type]
                 )
+            # Update the stored instance variable
+            self.logger_provider = logger_provider
 
         set_logger_provider(logger_provider)
 
@@ -660,10 +665,15 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
         from opentelemetry.sdk._logs import LogRecord as SdkLogRecord
 
-        otel_logger = get_logger(LITELLM_LOGGER_NAME)
+        # Use instance logger provider if available, otherwise fall back to global
+        if hasattr(self, 'logger_provider') and self.logger_provider is not None:
+            logger_provider = self.logger_provider
+            otel_logger = logger_provider.get_logger(LITELLM_LOGGER_NAME)
+        else:
+            otel_logger = get_logger(LITELLM_LOGGER_NAME)
+            logger_provider = get_logger_provider()
 
         # Get the resource from the logger provider
-        logger_provider = get_logger_provider()
         resource = getattr(logger_provider, '_resource', None) or _get_litellm_resource()
 
         parent_ctx = span.get_span_context()
