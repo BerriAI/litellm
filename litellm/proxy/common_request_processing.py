@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import traceback
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -321,7 +322,10 @@ class ProxyBaseLLMRequestProcessing:
     ) -> Tuple[dict, LiteLLMLoggingObj]:
         # ALWAYS use proxy start time from middleware (includes auth overhead)
         # This is set by ProxyTimingMiddleware before any processing
-        start_time = request.state.proxy_start_time
+        # Fallback to datetime.now() if middleware is not present (e.g., in tests)
+        start_time = getattr(request.state, "proxy_start_time", None)
+        if start_time is None:
+            start_time = datetime.now()
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
