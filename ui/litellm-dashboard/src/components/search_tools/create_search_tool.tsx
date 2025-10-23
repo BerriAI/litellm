@@ -1,0 +1,227 @@
+import React, { useState } from "react";
+import { Modal, Tooltip, Form, Select, Input } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { Button, TextInput } from "@tremor/react";
+import { createSearchTool, fetchAvailableSearchProviders } from "../networking";
+import { SearchTool, AvailableSearchProvider } from "./types";
+import { isAdminRole } from "@/utils/roles";
+import NotificationsManager from "../molecules/notifications_manager";
+import { useQuery } from "@tanstack/react-query";
+
+const { TextArea } = Input;
+
+interface CreateSearchToolProps {
+  userRole: string;
+  accessToken: string | null;
+  onCreateSuccess: (newSearchTool: SearchTool) => void;
+  isModalVisible: boolean;
+  setModalVisible: (visible: boolean) => void;
+}
+
+const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
+  userRole,
+  accessToken,
+  onCreateSuccess,
+  isModalVisible,
+  setModalVisible,
+}) => {
+  const [form] = Form.useForm();
+  const [isLoading, setIsLoading] = useState(false);
+  const [formValues, setFormValues] = useState<Record<string, any>>({});
+
+  // Fetch available search providers
+  const {
+    data: providersResponse,
+    isLoading: isLoadingProviders,
+  } = useQuery({
+    queryKey: ["searchProviders"],
+    queryFn: () => {
+      if (!accessToken) throw new Error("Access Token required");
+      return fetchAvailableSearchProviders(accessToken);
+    },
+    enabled: !!accessToken && isModalVisible,
+  }) as { data: { providers: AvailableSearchProvider[] }; isLoading: boolean };
+
+  const availableProviders = providersResponse?.providers || [];
+
+  const handleCreate = async (formValues: Record<string, any>) => {
+    setIsLoading(true);
+    try {
+      // Prepare the payload
+      const payload = {
+        search_tool_name: formValues.search_tool_name,
+        litellm_params: {
+          search_provider: formValues.search_provider,
+          api_key: formValues.api_key,
+          api_base: formValues.api_base,
+          timeout: formValues.timeout ? parseFloat(formValues.timeout) : undefined,
+          max_retries: formValues.max_retries ? parseInt(formValues.max_retries) : undefined,
+        },
+        search_tool_info: formValues.description
+          ? {
+              description: formValues.description,
+            }
+          : undefined,
+      };
+
+      console.log(`Creating search tool with payload:`, payload);
+
+      if (accessToken != null) {
+        const response = await createSearchTool(accessToken, payload);
+
+        NotificationsManager.success("Search tool created successfully");
+        form.resetFields();
+        setFormValues({});
+        setModalVisible(false);
+        onCreateSuccess(response);
+      }
+    } catch (error) {
+      NotificationsManager.error("Error creating search tool: " + error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleCancel = () => {
+    form.resetFields();
+    setFormValues({});
+    setModalVisible(false);
+  };
+
+  // Clear formValues when modal closes to reset
+  React.useEffect(() => {
+    if (!isModalVisible) {
+      setFormValues({});
+    }
+  }, [isModalVisible]);
+
+  if (!isAdminRole(userRole)) {
+    return null;
+  }
+
+  return (
+    <Modal
+      title={
+        <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
+          <span className="text-2xl">🔍</span>
+          <h2 className="text-xl font-semibold text-gray-900">Add New Search Tool</h2>
+        </div>
+      }
+      open={isModalVisible}
+      width={800}
+      onCancel={handleCancel}
+      footer={null}
+      className="top-8"
+      styles={{
+        body: { padding: "24px" },
+        header: { padding: "24px 24px 0 24px", border: "none" },
+      }}
+    >
+      <div className="mt-6">
+        <Form
+          form={form}
+          onFinish={handleCreate}
+          onValuesChange={(_, allValues) => setFormValues(allValues)}
+          layout="vertical"
+          className="space-y-6"
+        >
+          <div className="grid grid-cols-1 gap-6">
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  Search Tool Name
+                  <Tooltip title="A unique name to identify this search tool configuration (e.g., 'perplexity-search', 'tavily-news-search').">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+              name="search_tool_name"
+              rules={[
+                { required: true, message: "Please enter a search tool name" },
+                {
+                  pattern: /^[a-zA-Z0-9_-]+$/,
+                  message: "Name can only contain letters, numbers, hyphens, and underscores",
+                },
+              ]}
+            >
+              <TextInput
+                placeholder="e.g., perplexity-search, my-tavily-tool"
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  Search Provider
+                  <Tooltip title="Select the search provider you want to use. Each provider has different capabilities and pricing.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+              name="search_provider"
+              rules={[{ required: true, message: "Please select a search provider" }]}
+            >
+              <Select
+                placeholder="Select a search provider"
+                className="rounded-lg"
+                size="large"
+                loading={isLoadingProviders}
+                showSearch
+                optionFilterProp="children"
+              >
+                {availableProviders.map((provider) => (
+                  <Select.Option key={provider.provider_name} value={provider.provider_name}>
+                    {provider.ui_friendly_name}
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  API Key
+                  <Tooltip title="The API key for authenticating with the search provider. This will be securely stored.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+              name="api_key"
+              rules={[{ required: false, message: "Please enter an API key" }]}
+            >
+              <TextInput
+                type="password"
+                placeholder="Enter your API key"
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={<span className="text-sm font-medium text-gray-700">Description (Optional)</span>}
+              name="description"
+            >
+              <TextArea
+                rows={3}
+                placeholder="Brief description of this search tool's purpose"
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
+            </Form.Item>
+          </div>
+
+          <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
+            <Button variant="secondary" onClick={handleCancel}>
+              Cancel
+            </Button>
+            <Button variant="primary" loading={isLoading} type="submit">
+              {isLoading ? "Creating..." : "Add Search Tool"}
+            </Button>
+          </div>
+        </Form>
+      </div>
+    </Modal>
+  );
+};
+
+export default CreateSearchTool;
+

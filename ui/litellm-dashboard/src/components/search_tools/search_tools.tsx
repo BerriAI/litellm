@@ -6,7 +6,6 @@ import { DataTable } from "../view_logs/table";
 import { searchToolColumns } from "./search_tool_columns";
 import {
   fetchSearchTools,
-  createSearchTool,
   updateSearchTool,
   deleteSearchTool,
   fetchAvailableSearchProviders,
@@ -14,9 +13,8 @@ import {
 import { SearchTool, AvailableSearchProvider } from "./types";
 import { isAdminRole } from "@/utils/roles";
 import NotificationsManager from "../molecules/notifications_manager";
-import SearchToolView from "./search_tool_view";
-
-const { TextArea } = Input;
+import { SearchToolView } from "./search_tool_view";
+import CreateSearchTool from "./create_search_tool";
 
 interface SearchToolsProps {
   accessToken: string | null;
@@ -135,34 +133,9 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     setToolToDelete(null);
   };
 
-  const handleCreateSubmit = async () => {
-    if (!accessToken) return;
-
-    try {
-      const values = await form.validateFields();
-      const searchToolData = {
-        search_tool_name: values.search_tool_name,
-        litellm_params: {
-          search_provider: values.search_provider,
-          api_key: values.api_key,
-          api_base: values.api_base,
-          timeout: values.timeout ? parseFloat(values.timeout) : undefined,
-          max_retries: values.max_retries ? parseInt(values.max_retries) : undefined,
-        },
-        search_tool_info: values.description ? {
-          description: values.description,
-        } : undefined,
-      };
-
-      await createSearchTool(accessToken, searchToolData);
-      NotificationsManager.success("Search tool created successfully");
-      setCreateModalVisible(false);
-      form.resetFields();
-      refetch();
-    } catch (error) {
-      console.error("Failed to create search tool:", error);
-      NotificationsManager.error("Failed to create search tool");
-    }
+  const handleCreateSuccess = (newSearchTool: SearchTool) => {
+    setCreateModalVisible(false);
+    refetch();
   };
 
   const handleEditSubmit = async () => {
@@ -196,7 +169,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     }
   };
 
-  const renderForm = () => (
+  const renderEditForm = () => (
     <Form form={form} layout="vertical">
       <Form.Item
         name="search_tool_name"
@@ -224,20 +197,8 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         <Input.Password placeholder="Enter API key" />
       </Form.Item>
 
-      <Form.Item name="api_base" label="API Base URL (Optional)">
-        <Input placeholder="Custom API base URL" />
-      </Form.Item>
-
-      <Form.Item name="timeout" label="Timeout (seconds)">
-        <Input type="number" placeholder="30" />
-      </Form.Item>
-
-      <Form.Item name="max_retries" label="Max Retries">
-        <Input type="number" placeholder="3" />
-      </Form.Item>
-
       <Form.Item name="description" label="Description">
-        <TextArea rows={3} placeholder="Description of this search tool" />
+        <Input.TextArea rows={3} placeholder="Description of this search tool" />
       </Form.Item>
     </Form>
   );
@@ -292,19 +253,13 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         cancelDelete={cancelDelete}
       />
 
-      {/* Create Modal */}
-      <Modal
-        title="Create Search Tool"
-        open={isCreateModalVisible}
-        onOk={handleCreateSubmit}
-        onCancel={() => {
-          setCreateModalVisible(false);
-          form.resetFields();
-        }}
-        width={600}
-      >
-        {renderForm()}
-      </Modal>
+      <CreateSearchTool
+        userRole={userRole}
+        accessToken={accessToken}
+        onCreateSuccess={handleCreateSuccess}
+        isModalVisible={isCreateModalVisible}
+        setModalVisible={setCreateModalVisible}
+      />
 
       {/* Edit Modal */}
       <Modal
@@ -318,7 +273,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         }}
         width={600}
       >
-        {renderForm()}
+        {renderEditForm()}
       </Modal>
 
       <Title>Search Tools</Title>

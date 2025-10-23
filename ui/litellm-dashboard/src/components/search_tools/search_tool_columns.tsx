@@ -45,34 +45,6 @@ export const searchToolColumns = (
     },
   },
   {
-    id: "api_base",
-    header: "API Base",
-    cell: ({ row }) => {
-      const apiBase = row.original.litellm_params.api_base;
-      if (!apiBase) {
-        return <span className="text-gray-400 italic">Default</span>;
-      }
-      return (
-        <Tooltip title={apiBase}>
-          <span className="font-mono text-xs max-w-[200px] truncate block">
-            {apiBase.length > 40 ? `${apiBase.slice(0, 40)}...` : apiBase}
-          </span>
-        </Tooltip>
-      );
-    },
-  },
-  {
-    id: "timeout",
-    header: "Timeout",
-    cell: ({ row }) => {
-      const timeout = row.original.litellm_params.timeout;
-      if (!timeout) {
-        return <span className="text-gray-400 italic">Default</span>;
-      }
-      return <span className="text-xs">{timeout}s</span>;
-    },
-  },
-  {
     header: "Created At",
     accessorKey: "created_at",
     sortingFn: "datetime",

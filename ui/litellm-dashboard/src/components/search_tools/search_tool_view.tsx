@@ -14,7 +14,7 @@ interface SearchToolViewProps {
   availableProviders: AvailableSearchProvider[];
 }
 
-const SearchToolView: React.FC<SearchToolViewProps> = ({
+export const SearchToolView: React.FC<SearchToolViewProps> = ({
   searchTool,
   onBack,
   isEditing,
@@ -85,29 +85,6 @@ const SearchToolView: React.FC<SearchToolViewProps> = ({
         </Card>
 
         <Card>
-          <Text>API Base</Text>
-          <div className="mt-2">
-            <Text className="break-all overflow-wrap-anywhere">
-              {searchTool.litellm_params.api_base || "Default"}
-            </Text>
-          </div>
-        </Card>
-
-        <Card>
-          <Text>Timeout</Text>
-          <div className="mt-2">
-            <Text>{searchTool.litellm_params.timeout ? `${searchTool.litellm_params.timeout}s` : "Default"}</Text>
-          </div>
-        </Card>
-
-        <Card>
-          <Text>Max Retries</Text>
-          <div className="mt-2">
-            <Text>{searchTool.litellm_params.max_retries || "Default"}</Text>
-          </div>
-        </Card>
-
-        <Card>
           <Text>API Key</Text>
           <div className="mt-2">
             <Text>{searchTool.litellm_params.api_key ? "****" : "Not set"}</Text>
@@ -136,5 +113,4 @@ const SearchToolView: React.FC<SearchToolViewProps> = ({
   );
 };
 
-export default SearchToolView;
 
