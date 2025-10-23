@@ -1,14 +1,15 @@
-from typing import List, Dict, Literal, Optional, Tuple, Callable, Optional, TYPE_CHECKING, Union
+from typing import List, Dict, Literal, Tuple, Callable, Optional, TYPE_CHECKING, Union
 import urllib
-import collections
-import json
+
 from aiohttp import ClientSession
 from functools import cached_property
+from typing import Optional
 
+from litellm.types.utils import GenericStreamingChunk
 import httpx
 
 import litellm
-from litellm.secret_managers.main import get_secret_str
+
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.types.utils import ModelResponse
@@ -16,7 +17,7 @@ from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
 
 
-from .credentials import get_token_creator
+from ..credentials import get_token_creator
 from ...base import BaseLLM
 
 
@@ -26,47 +27,11 @@ class GenAIHubOrchestrationError(Exception):
         self.message = message
         super().__init__(self.message)
 
-class StreamCleaner:
-    def __init__(self, response, is_async=False):
-        self.response = response
-        self.is_async = is_async
-        self._iterator = None
+class SAPModelResponseIterator(ModelResponseIterator):
 
-    def __iter__(self):
-        self._iterator = self.response
-        return self
-
-    def __next__(self):
-        line = next(self.response)
-        while not line:
-            line = next(self.response)
-        if line.startswith('data: '):
-            line = line[len('data: '):].strip()
-            if line == "[DONE]":
-                raise StopIteration
-            try:
-                return json.loads(line)
-            except json.JSONDecodeError:
-                raise StopIteration
-        raise StopIteration
-
-    def __aiter__(self):
-        self._iterator = self.response
-        return self
-
-    async def __anext__(self):
-        line = await anext(self.response)
-        while not line:
-            line = await anext(self.response)
-        if line.startswith('data: '):
-            line = line[len('data: '):].strip()
-            if line == "[DONE]":
-                raise StopAsyncIteration
-            try:
-                return json.loads(line)
-            except json.JSONDecodeError:
-                raise StopAsyncIteration
-        raise StopAsyncIteration
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        chunk = chunk["final_result"]
+        return super().chunk_parser(chunk)
 
 
 class GenAIHubOrchestration(BaseLLM):
@@ -150,8 +115,8 @@ class GenAIHubOrchestration(BaseLLM):
                 stream=True
             )
             response.raise_for_status()
-            completion_stream = StreamCleaner(
-                response=response.aiter_lines(), is_async=True
+            completion_stream = SAPModelResponseIterator(
+                streaming_response=response.aiter_lines(), sync_stream=False
             )
         except httpx.HTTPStatusError as err:
             raise GenAIHubOrchestrationError(
@@ -167,7 +132,7 @@ class GenAIHubOrchestration(BaseLLM):
             completion_stream=completion_stream,
             model=model,
             logging_obj=logging_obj,
-            custom_llm_provider="sap",
+            # custom_llm_provider="sap",
             stream_options={},
             make_call=None,
         )
@@ -244,8 +209,8 @@ class GenAIHubOrchestration(BaseLLM):
                 stream=True,
                 timeout=timeout)
             response.raise_for_status()
-            completion_stream = StreamCleaner(
-                response=response.iter_lines(), is_async=False
+            completion_stream = SAPModelResponseIterator(
+                streaming_response=response.iter_lines(), sync_stream=True
             )
         except httpx.HTTPStatusError as err:
             raise GenAIHubOrchestrationError(
@@ -261,7 +226,7 @@ class GenAIHubOrchestration(BaseLLM):
             completion_stream=completion_stream,
             model=model,
             logging_obj=logging_obj,
-            custom_llm_provider="sap",
+            # custom_llm_provider="sap",
             stream_options={},
             make_call=None,
         )

@@ -10,6 +10,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
+from .models import SAPMessage, SAPAssistantMessage, SAPToolChatMessage, ChatCompletionTool, ResponseFormatJSONSchema, ResponseFormat
+
+def validate_dict(data: dict, model) -> dict:
+    return model(**data).model_dump(by_alias=True)
 
 class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     frequency_penalty: Optional[int] = None
@@ -91,10 +95,24 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             k: v for k, v in optional_params.items() if k in supported_params
         }
         model_version = optional_params.pop("model_version", "latest")
-        template = messages
+        template = []
+        for message in messages:
+            if message["role"] == "assistant":
+                template.append(validate_dict(message, SAPAssistantMessage))
+            elif message["role"] == "tool":
+                template.append(validate_dict(message, SAPToolChatMessage))
+            else:
+                template.append(validate_dict(message, SAPMessage))
 
-        tools = optional_params.pop("tools", None)
-        response_format = model_params.pop("response_format", None)
+        tools_ = optional_params.pop("tools", [])
+        tools = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
+
+        response_format_ = model_params.pop("response_format", {"type": "text"})
+        if response_format_["type"] == "json_schema":
+            response_format = validate_dict(response_format_, ResponseFormatJSONSchema)
+        else:
+            response_format = validate_dict(response_format_, ResponseFormat)
+
         stream = model_params.pop("stream", False)
         stream_config = {}
         if stream or "stream_options" in model_params:
@@ -112,8 +130,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                         "prompt_templating": {
                             "prompt": {
                                 "template": template,
-                                "tools": tools if tools else [],
-                                "response_format": response_format if response_format else {"type": "text"},
+                                "tools": tools,
+                                "response_format": response_format,
                             },
                             "model": {
                                 "name": model,

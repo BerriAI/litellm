@@ -2,7 +2,9 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, List, Dict, Literal
+from pydantic import BaseModel, Field
+from functools import cached_property
 
 import httpx
 
@@ -13,42 +15,84 @@ from litellm.llms.base_llm.embedding.transformation import (
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
 
-# Type checking block for optional imports
-if TYPE_CHECKING:
-    from gen_ai_hub.proxy.gen_ai_hub_proxy import (
-        GenAIHubProxyClient,
-        temporary_headers_addition,
-    )
-
-# Try to import the optional module
-try:
-    from gen_ai_hub.proxy.gen_ai_hub_proxy import (
-        GenAIHubProxyClient,
-        temporary_headers_addition,
-    )
-
-    _gen_ai_hub_import_error = None
-except ImportError as err:
-    GenAIHubProxyClient = None  # type: ignore
-    _gen_ai_hub_import_error = err
-
-
 from ..chat.handler import GenAIHubOrchestrationError
+from ..credentials import get_token_creator
+
+class Usage(BaseModel):
+    prompt_tokens: int
+    total_tokens: int
+
+
+class EmbeddingItem(BaseModel):
+    object: Literal["embedding"]
+    embedding: List[float] = Field(
+        ..., description="Vector of floats (length varies by model)."
+    )
+    index: int
+
+
+class FinalResult(BaseModel):
+    object: Literal["list"]
+    data: List[EmbeddingItem]
+    model: str
+    usage: Usage
+
+class EmbeddingsResponse(BaseModel):
+    request_id: str
+    final_result: FinalResult
+
+
+class EmbeddingModel(BaseModel):
+    name: str
+    version: str = "latest"
+    params: dict  = Field(default_factory=dict, validation_alias="parameters")
+
+
+class EmbeddingsModules(BaseModel):
+    embeddings: EmbeddingModel
+
+class EmbeddingInput(BaseModel):
+    text: str | List[str]
+    type: Literal["text", "document", "query"] = "text"
+
+class EmbeddingRequest(BaseModel):
+    config: EmbeddingsModules
+    input: EmbeddingInput
+
+def validate_dict(data: dict, model) -> dict:
+    return model(**data).model_dump()
 
 
 class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
     def __init__(self):
         super().__init__()
-        self._client: Optional["GenAIHubProxyClient"] = None
-        self._orchestration_client = None
+        self._access_token_data = {}
+        self.token_creator, self.base_url, self.resource_group = get_token_creator()
 
-    # def _ensure_gen_ai_hub_installed(self) -> None:
-    #     """Ensure the gen-ai-hub package is available."""
-    #     if _gen_ai_hub_import_error is not None:
-    #         raise OptionalDependencyError(
-    #             "The gen-ai-hub package is required for this functionality. "
-    #             "Please install it with: pip install sap-ai-sdk-gen[all]"
-    #         ) from _gen_ai_hub_import_error
+
+    @property
+    def headers(self) -> Dict:
+        access_token = self.token_creator()
+        # headers for completions and embeddings requests
+        headers = {
+            "Authorization": access_token,
+            "AI-Resource-Group": self.resource_group,
+            "Content-Type": "application/json",
+        }
+        return headers
+
+    @cached_property
+    def deployment_url(self) -> str:
+        with httpx.Client(timeout=30) as client:
+            valid_deployments = []
+            deployments = client.get(self.base_url + '/lm/deployments', headers=self.headers).json()
+            for deployment in deployments.get('resources', []):
+                if deployment['scenarioId'] == 'orchestration':
+                    config_details = client.get(self.base_url + f'/lm/configurations/{deployment["configurationId"]}',
+                                                headers=self.headers).json()
+                    if config_details["executableId"] == 'orchestration':
+                        valid_deployments.append((deployment["deploymentUrl"], deployment["createdAt"]))
+            return sorted(valid_deployments, key=lambda x: x[1], reverse=True)[0][0]
 
     def get_error_class(self, error_message, status_code, headers):
         return GenAIHubOrchestrationError(status_code, error_message)
@@ -70,34 +114,8 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
     ) -> dict:
         return optional_params
 
-    @property
-    def proxy_client(self) -> "GenAIHubProxyClient":
-        """Initialize and get the orchestration client."""
-        # self._ensure_gen_ai_hub_installed()
-        if (
-            GenAIHubProxyClient is None
-        ):  # This should never happen due to _ensure_dependency
-            raise RuntimeError(
-                "GenAIHubProxyClient is None despite passing dependency check"
-            )
-        if not self._client:
-            self._client = GenAIHubProxyClient()
-        return self._client
-
-    def _add_api_version_to_url(self, url: str, api_version: str) -> str:
-        from gen_ai_hub.proxy.native.openai.clients import DEFAULT_API_VERSION
-
-        api_version = (
-            DEFAULT_API_VERSION
-            if not api_version or api_version is None or api_version == "None"
-            else api_version
-        )
-        return url.rstrip("/") + f"?api-version={api_version}"
-
     def validate_environment(self, headers: dict, *args, **kwargs) -> dict:
-        # self._ensure_gen_ai_hub_installed()
-        with temporary_headers_addition(headers):
-            return {**self.proxy_client.request_header}
+        return self.headers
 
     def get_complete_url(
         self,
@@ -108,12 +126,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        deployment = self.proxy_client.select_deployment(model_name=model)
-        url = deployment.url.rstrip("/") + "/embeddings"
-        ## add api version
-        url = self._add_api_version_to_url(
-            url=url, api_version=optional_params.pop("api_version", "None")
-        )
+        url = self.deployment_url.rstrip("/") + "/v2/embeddings"
         return url
 
     def transform_embedding_request(
@@ -123,7 +136,22 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        return {"input": input, "model": model}
+        model_dict = {}
+        model_dict["name"] = model
+        model_dict["version"] = optional_params.get("version", "latest")
+        model_dict["params"] = optional_params.get("parameters", {})
+        input_dict = {"text": input}
+        body = {
+            "config": {
+                "modules": {
+                    "embeddings": {
+                        "model": validate_dict(model_dict, EmbeddingModel)
+                    }
+                }
+            },
+            "input": validate_dict(input_dict, EmbeddingInput)
+        }
+        return body
 
     def transform_embedding_response(
         self,
@@ -136,4 +164,4 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> EmbeddingResponse:
-        return EmbeddingResponse.model_validate(raw_response.json())
+        return EmbeddingResponse.model_validate(raw_response.json()["final_result"])
