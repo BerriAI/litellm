@@ -44,13 +44,8 @@ from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.llms.base_llm.search.transformation import (
-    BaseSearchConfig,
-    SearchResponse,
-)
-from litellm.llms.base_llm.text_to_speech.transformation import (
-    BaseTextToSpeechConfig,
-)
+from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
+from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -1313,8 +1308,10 @@ class BaseLLMHTTPHandler:
 
         # Data is always a dict for Mistral OCR format
         if not isinstance(transformed_result.data, dict):
-            raise ValueError(f"Expected dict data for OCR request, got {type(transformed_result.data)}")
-        
+            raise ValueError(
+                f"Expected dict data for OCR request, got {type(transformed_result.data)}"
+            )
+
         data = transformed_result.data
 
         ## LOGGING
@@ -1377,8 +1374,10 @@ class BaseLLMHTTPHandler:
 
         # Data is always a dict for Mistral OCR format
         if not isinstance(transformed_result.data, dict):
-            raise ValueError(f"Expected dict data for OCR request, got {type(transformed_result.data)}")
-        
+            raise ValueError(
+                f"Expected dict data for OCR request, got {type(transformed_result.data)}"
+            )
+
         data = transformed_result.data
 
         ## LOGGING
@@ -1548,7 +1547,6 @@ class BaseLLMHTTPHandler:
             response=response,
             logging_obj=logging_obj,
         )
-
 
     def search(
         self,

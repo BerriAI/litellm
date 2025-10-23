@@ -1,3 +1,4 @@
-from .transformation import VertexVectorStoreConfig
+from .rag_api.transformation import VertexVectorStoreConfig
+from .search_api.transformation import VertexSearchAPIVectorStoreConfig
 
-__all__ = ["VertexVectorStoreConfig"] 
+__all__ = ["VertexVectorStoreConfig", "VertexSearchAPIVectorStoreConfig"]

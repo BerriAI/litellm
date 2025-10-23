@@ -145,9 +145,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
 )
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig
-from litellm.llms.base_llm.text_to_speech.transformation import (
-    BaseTextToSpeechConfig,
-)
+from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
@@ -914,6 +912,7 @@ def _get_wrapper_timeout(
 
     return timeout
 
+
 def check_coroutine(value) -> bool:
     return get_coroutine_checker().is_async_callable(value)
 
@@ -993,9 +992,7 @@ def post_call_processing(
                         ].message.content  # type: ignore
                         if model_response is not None:
                             ### POST-CALL RULES ###
-                            rules_obj.post_call_rules(
-                                input=model_response, model=model
-                            )
+                            rules_obj.post_call_rules(input=model_response, model=model)
                             ### JSON SCHEMA VALIDATION ###
                             if litellm.enable_json_schema_validation is True:
                                 try:
@@ -1011,9 +1008,9 @@ def post_call_processing(
                                                 optional_params["response_format"],
                                                 dict,
                                             )
-                                            and optional_params[
-                                                "response_format"
-                                            ].get("json_schema")
+                                            and optional_params["response_format"].get(
+                                                "json_schema"
+                                            )
                                             is not None
                                         ):
                                             json_response_format = optional_params[
@@ -1041,9 +1038,7 @@ def post_call_processing(
                             if (
                                 optional_params is not None
                                 and "response_format" in optional_params
-                                and isinstance(
-                                    optional_params["response_format"], dict
-                                )
+                                and isinstance(optional_params["response_format"], dict)
                                 and "type" in optional_params["response_format"]
                                 and optional_params["response_format"]["type"]
                                 == "json_object"
@@ -1076,7 +1071,6 @@ def post_call_processing(
 
 def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
-
 
     @wraps(original_function)
     def wrapper(*args, **kwargs):  # noqa: PLR0915
@@ -5000,7 +4994,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
                 ocr_cost_per_page=_model_info.get("ocr_cost_per_page", None),
-                annotation_cost_per_page=_model_info.get("annotation_cost_per_page", None),
+                annotation_cost_per_page=_model_info.get(
+                    "annotation_cost_per_page", None
+                ),
             )
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
@@ -7226,6 +7222,7 @@ class ProviderConfigManager:
             from litellm.llms.sagemaker.embedding.transformation import (
                 SagemakerEmbeddingConfig,
             )
+
             return SagemakerEmbeddingConfig.get_model_config(model)
         return None
 
@@ -7461,6 +7458,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_vector_stores_config(
         provider: LlmProviders,
+        api_type: Optional[str] = None,
     ) -> Optional[BaseVectorStoreConfig]:
         """
         v2 vector store config, use this for new vector store integrations
@@ -7478,11 +7476,18 @@ class ProviderConfigManager:
 
             return AzureOpenAIVectorStoreConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            from litellm.llms.vertex_ai.vector_stores.transformation import (
-                VertexVectorStoreConfig,
-            )
+            if api_type == "rag_api" or api_type is None:  # default to rag_api
+                from litellm.llms.vertex_ai.vector_stores.rag_api.transformation import (
+                    VertexVectorStoreConfig,
+                )
 
-            return VertexVectorStoreConfig()
+                return VertexVectorStoreConfig()
+            elif api_type == "search_api":
+                from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
+                    VertexSearchAPIVectorStoreConfig,
+                )
+
+                return VertexSearchAPIVectorStoreConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.vector_stores.transformation import (
                 BedrockVectorStoreConfig,
@@ -7640,12 +7645,8 @@ class ProviderConfigManager:
         from litellm.llms.parallel_ai.search.transformation import (
             ParallelAISearchConfig,
         )
-        from litellm.llms.perplexity.search.transformation import (
-            PerplexitySearchConfig,
-        )
-        from litellm.llms.tavily.search.transformation import (
-            TavilySearchConfig,
-        )
+        from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
+        from litellm.llms.tavily.search.transformation import TavilySearchConfig
 
         PROVIDER_TO_CONFIG_MAP = {
             SearchProviders.PERPLEXITY: PerplexitySearchConfig,
