@@ -52,9 +52,12 @@ class RouteChecks:
         if len(valid_token.allowed_routes) == 0:
             return True
 
-        # explicit check for allowed routes
-        if route in valid_token.allowed_routes:
-            return True
+        # explicit check for allowed routes (exact match or prefix match)
+        for allowed_route in valid_token.allowed_routes:
+            if RouteChecks._route_matches_allowed_route(
+                route=route, allowed_route=allowed_route
+            ):
+                return True
 
         ## check if 'allowed_route' is a field name in LiteLLMRoutes
         if any(
@@ -68,6 +71,19 @@ class RouteChecks:
                         allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
                     ):
                         return True
+
+                    ################################################
+                    #  For llm_api_routes, also check registered pass-through endpoints
+                    ################################################
+                    if allowed_route == "llm_api_routes":
+                        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+                            InitPassThroughEndpointHelpers,
+                        )
+
+                        if InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                            route=route
+                        ):
+                            return True
 
         # check if wildcard pattern is allowed
         for allowed_route in valid_token.allowed_routes:
@@ -100,6 +116,32 @@ class RouteChecks:
         masker = SensitiveDataMasker(visible_prefix=6, visible_suffix=2, mask_char="*")
 
         return masker._mask_value(user_id)
+
+    @staticmethod
+    def _raise_admin_only_route_exception(
+        user_obj: Optional[LiteLLM_UserTable],
+        route: str,
+    ) -> None:
+        """
+        Raise exception for routes that require proxy admin access
+
+        Args:
+            user_obj (Optional[LiteLLM_UserTable]): The user object
+            route (str): The route being accessed
+
+        Raises:
+            Exception: With user role and masked user_id information
+        """
+        user_role = "unknown"
+        user_id = "unknown"
+        if user_obj is not None:
+            user_role = user_obj.user_role or "unknown"
+            user_id = user_obj.user_id or "unknown"
+
+        masked_user_id = RouteChecks._mask_user_id(user_id)
+        raise Exception(
+            f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
+        )
 
     @staticmethod
     def non_proxy_admin_allowed_routes_check(
@@ -185,16 +227,27 @@ class RouteChecks:
             pass
         elif route.startswith("/v1/mcp/") or route.startswith("/mcp-rest/"):
             pass  # authN/authZ handled by api itself
-        else:
-            user_role = "unknown"
-            user_id = "unknown"
-            if user_obj is not None:
-                user_role = user_obj.user_role or "unknown"
-                user_id = user_obj.user_id or "unknown"
+        elif RouteChecks.check_passthrough_route_access(
+            route=route, user_api_key_dict=valid_token
+        ):
+            pass
+        elif valid_token.allowed_routes is not None:
+            # check if route is in allowed_routes (exact match or prefix match)
+            route_allowed = False
+            for allowed_route in valid_token.allowed_routes:
+                if RouteChecks._route_matches_allowed_route(
+                    route=route, allowed_route=allowed_route
+                ):
+                    route_allowed = True
+                    break
 
-            masked_user_id = RouteChecks._mask_user_id(user_id)
-            raise Exception(
-                f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
+            if not route_allowed:
+                RouteChecks._raise_admin_only_route_exception(
+                    user_obj=user_obj, route=route
+                )
+        else:
+            RouteChecks._raise_admin_only_route_exception(
+                user_obj=user_obj, route=route
             )
 
     @staticmethod
@@ -224,6 +277,9 @@ class RouteChecks:
             - True: if route is an OpenAI route
             - False: if route is not an OpenAI route
         """
+        # Ensure route is a string before performing checks
+        if not isinstance(route, str):
+            return False
 
         if route in LiteLLMRoutes.openai_routes.value:
             return True
@@ -271,6 +327,9 @@ class RouteChecks:
         eg.
         route='/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions'
         """
+        # Ensure route is a string before attempting regex matching
+        if not isinstance(route, str):
+            return False
         # Add support for deployment and engine model paths
         deployment_pattern = r"^/openai/deployments/[^/]+/[^/]+/chat/completions$"
         engine_pattern = r"^/engines/[^/]+/chat/completions$"
@@ -294,6 +353,9 @@ class RouteChecks:
         - route: "/key/regenerate/82akk800000000jjsk"
         - returns: False, pattern is "/key/{token_id}/regenerate"
         """
+        # Ensure route is a string before attempting regex matching
+        if not isinstance(route, str):
+            return False
         pattern = re.sub(r"\{[^}]+\}", r"[^/]+", pattern)
         # Anchor the pattern to match the entire string
         pattern = f"^{pattern}$"
@@ -336,6 +398,32 @@ class RouteChecks:
         else:
             # If there's no wildcard, the pattern and route should match exactly
             return route == pattern
+
+    @staticmethod
+    def _route_matches_allowed_route(route: str, allowed_route: str) -> bool:
+        """
+        Check if route matches the allowed_route pattern.
+        Supports both exact match and prefix match.
+
+        Examples:
+        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-6" -> True (exact match)
+        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-6/v1/chat/completions" -> True (prefix match)
+        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-600" -> False (not a valid prefix)
+
+        Args:
+            route: The actual route being accessed
+            allowed_route: The allowed route pattern
+
+        Returns:
+            bool: True if route matches (exact or prefix), False otherwise
+        """
+        # Exact match
+        if route == allowed_route:
+            return True
+        # Prefix match - ensure we add "/" to prevent false matches like /fake-openai-proxy-600
+        if route.startswith(allowed_route + "/"):
+            return True
+        return False
 
     @staticmethod
     def check_route_access(route: str, allowed_routes: List[str]) -> bool:
@@ -381,6 +469,44 @@ class RouteChecks:
             for allowed_route in allowed_routes
         ):
             return True
+
+        return False
+
+    @staticmethod
+    def check_passthrough_route_access(
+        route: str, user_api_key_dict: UserAPIKeyAuth
+    ) -> bool:
+        """
+        Check if route is a passthrough route.
+        Supports both exact match and prefix match.
+        """
+        metadata = user_api_key_dict.metadata
+        team_metadata = user_api_key_dict.team_metadata or {}
+        if metadata is None and team_metadata is None:
+            return False
+        if (
+            "allowed_passthrough_routes" not in metadata
+            and "allowed_passthrough_routes" not in team_metadata
+        ):
+            return False
+        if (
+            metadata.get("allowed_passthrough_routes") is None
+            and team_metadata.get("allowed_passthrough_routes") is None
+        ):
+            return False
+
+        allowed_passthrough_routes = (
+            metadata.get("allowed_passthrough_routes")
+            or team_metadata.get("allowed_passthrough_routes")
+            or []
+        )
+
+        # Check if route matches any allowed passthrough route (exact or prefix match)
+        for allowed_route in allowed_passthrough_routes:
+            if RouteChecks._route_matches_allowed_route(
+                route=route, allowed_route=allowed_route
+            ):
+                return True
 
         return False
 

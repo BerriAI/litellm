@@ -33,6 +33,7 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
+    ResponsesAPIStatus,
 )
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
@@ -620,6 +621,34 @@ class LiteLLMCompletionResponsesConfig:
         return responses_tools
 
     @staticmethod
+    def _map_chat_completion_finish_reason_to_responses_status(
+        finish_reason: Optional[str],
+    ) -> ResponsesAPIStatus:
+        """
+        Map chat completion finish_reason to responses API status.
+        
+        Chat completion finish_reason values include: "stop", "length", "tool_calls", "content_filter", "function_call"
+        Responses API status values are: "completed", "failed", "in_progress", "cancelled", "queued", "incomplete"
+        
+        Args:
+            finish_reason: The finish_reason from a chat completion response
+            
+        Returns:
+            The corresponding responses API status value (one of ResponsesAPIStatus)
+        """
+        if finish_reason is None:
+            return "completed"
+        
+        # Map finish reasons to status
+        if finish_reason in ["stop", "tool_calls", "function_call"]:
+            return "completed"
+        elif finish_reason in ["length", "content_filter"]:
+            return "incomplete"
+        else:
+            # Default to completed for unknown finish reasons
+            return "completed"
+
+    @staticmethod
     def transform_chat_completion_response_to_responses_api_response(
         request_input: Union[str, ResponseInputParam],
         responses_api_request: ResponsesAPIOptionalRequestParams,
@@ -630,6 +659,12 @@ class LiteLLMCompletionResponsesConfig:
         """
         if isinstance(chat_completion_response, dict):
             chat_completion_response = ModelResponse(**chat_completion_response)
+        # Get finish_reason from the first choice to determine overall status
+        finish_reason: Optional[str] = None
+        choices: List[Choices] = getattr(chat_completion_response, "choices", [])
+        if choices and len(choices) > 0:
+            finish_reason = choices[0].finish_reason
+        
         responses_api_response: ResponsesAPIResponse = ResponsesAPIResponse(
             id=chat_completion_response.id,
             created_at=chat_completion_response.created,
@@ -659,7 +694,9 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_response, "previous_response_id", None
             ),
             reasoning=Reasoning(),
-            status=getattr(chat_completion_response, "status", "completed"),
+            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                finish_reason
+            ),
             text={},
             truncation=getattr(chat_completion_response, "truncation", None),
             usage=LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
@@ -708,8 +745,10 @@ class LiteLLMCompletionResponsesConfig:
                     return [
                         GenericResponseOutputItem(
                             type="reasoning",
-                            id=f"{chat_completion_response.id}_reasoning",
-                            status=choice.finish_reason,
+                            id=f"rs_{hash(str(message.reasoning_content))}",
+                            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                                choice.finish_reason
+                            ),
                             role="assistant",
                             content=[
                                 OutputText(
@@ -733,7 +772,9 @@ class LiteLLMCompletionResponsesConfig:
                 GenericResponseOutputItem(
                     type="message",
                     id=chat_completion_response.id,
-                    status=choice.finish_reason,
+                    status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                        choice.finish_reason
+                    ),
                     role=choice.message.role,
                     content=[
                         LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
@@ -851,8 +892,15 @@ class LiteLLMCompletionResponsesConfig:
                 output_tokens=0,
                 total_tokens=0,
             )
-        return ResponseAPIUsage(
+        
+        response_usage = ResponseAPIUsage(
             input_tokens=usage.prompt_tokens,
             output_tokens=usage.completion_tokens,
             total_tokens=usage.total_tokens,
         )
+        
+        # Preserve cost field if it exists (for streaming usage with cost calculation)
+        if hasattr(usage, "cost") and usage.cost is not None:
+            setattr(response_usage, "cost", usage.cost)
+        
+        return response_usage

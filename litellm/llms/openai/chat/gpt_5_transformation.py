@@ -8,17 +8,23 @@ from .gpt_transformation import OpenAIGPTConfig
 
 
 class OpenAIGPT5Config(OpenAIGPTConfig):
-    """Configuration for gpt-5 models.
+    """Configuration for gpt-5 models including GPT-5-Codex variants.
 
     Handles OpenAI API quirks for the gpt-5 series like:
 
     - Mapping ``max_tokens`` -> ``max_completion_tokens``.
     - Dropping unsupported ``temperature`` values when requested.
+    - Support for GPT-5-Codex models optimized for code generation.
     """
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
         return "gpt-5" in model
+
+    @classmethod
+    def is_model_gpt_5_codex_model(cls, model: str) -> bool:
+        """Check if the model is specifically a GPT-5 Codex variant."""
+        return "gpt-5-codex" in model
 
     def get_supported_openai_params(self, model: str) -> list:
         from litellm.utils import supports_tool_choice
@@ -35,10 +41,13 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             "presence_penalty",
             "frequency_penalty",
             "top_logprobs",
+            "stop",
         ]
 
         return [
-            param for param in base_gpt_series_params if param not in non_supported_params
+            param
+            for param in base_gpt_series_params
+            if param not in non_supported_params
         ]
 
     def map_openai_params(
@@ -67,7 +76,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 else:
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
-                            "gpt-5 models don't support temperature={}. Only temperature=1 is supported. To drop unsupported params set `litellm.drop_params = True`"
+                            "gpt-5 models (including gpt-5-codex) don't support temperature={}. Only temperature=1 is supported. To drop unsupported params set `litellm.drop_params = True`"
                         ).format(temperature_value),
                         status_code=400,
                     )

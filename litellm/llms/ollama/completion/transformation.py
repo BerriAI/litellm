@@ -1,11 +1,12 @@
 import json
 import time
-import uuid
+from litellm._uuid import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 from httpx._models import Headers, Response
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -180,7 +181,10 @@ class OllamaConfig(BaseConfig):
             elif param == "stop":
                 optional_params["stop"] = value
             elif param == "reasoning_effort" and value is not None:
-                optional_params["think"] = True
+                if model.startswith("gpt-oss"):
+                    optional_params["think"] = value
+                else:
+                    optional_params["think"] = value in {"low", "medium", "high"}
             elif param == "response_format" and isinstance(value, dict):
                 if value["type"] == "json_object":
                     optional_params["format"] = "json"
@@ -229,7 +233,7 @@ class OllamaConfig(BaseConfig):
             model = model.split("/", 1)[1]
         api_base = get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
         api_key = self.get_api_key()
-        headers = { "Authorization": f"Bearer {api_key}" } if api_key else {}
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         try:
             response = litellm.module_level_client.post(
@@ -279,7 +283,7 @@ class OllamaConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
             _parse_content_for_reasoning,
         )
 
@@ -412,6 +416,7 @@ class OllamaConfig(BaseConfig):
         stream = optional_params.pop("stream", False)
         format = optional_params.pop("format", None)
         images = optional_params.pop("images", None)
+        think = optional_params.pop("think", None)
         data = {
             "model": model,
             "prompt": ollama_prompt,
@@ -425,6 +430,8 @@ class OllamaConfig(BaseConfig):
             data["images"] = [
                 _convert_image(convert_to_ollama_image(image)) for image in images
             ]
+        if think is not None:
+            data["think"] = think
 
         return data
 
@@ -571,6 +578,18 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     ]
                 )
             else:
-                raise Exception(f"Unable to parse ollama chunk - {chunk}")
+                # In this case, 'thinking' is not present in the chunk, chunk["done"] is false,
+                # and chunk["response"] is falsy (None or empty string), 
+                # but Ollama is just starting to stream, so it should be processed as a normal dict
+                return ModelResponseStream(
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(reasoning_content=""),
+                        )
+                    ]
+                )
+                # raise Exception(f"Unable to parse ollama chunk - {chunk}")
         except Exception as e:
+            verbose_proxy_logger.error(f"Unable to parse ollama chunk - {chunk}")
             raise e

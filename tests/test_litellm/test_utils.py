@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from jsonschema import validate
@@ -82,6 +82,15 @@ def test_get_optional_params_image_gen_vertex_ai_size():
         "aspectRatio" not in optional_params
     )  # aspectRatio should not be set if size is not provided
     assert optional_params["sampleCount"] == 1
+
+
+def test_get_optional_params_image_gen_filters_empty_values():
+    optional_params = get_optional_params_image_gen(
+        model="gpt-image-1",
+        custom_llm_provider="openai",
+        extra_body={},
+    )
+    assert optional_params == {}
 
 
 def test_all_model_configs():
@@ -499,10 +508,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_computer_use": {"type": "boolean"},
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
+                "cache_creation_input_token_cost_above_1hr": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
@@ -511,7 +522,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_character_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image": {"type": "number"},
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
+                "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_flex": {"type": "number"},
+                "cache_read_input_token_cost_priority": {"type": "number"},
+                "input_cost_per_token_flex": {"type": "number"},
+                "input_cost_per_token_priority": {"type": "number"},
+                "output_cost_per_token_flex": {"type": "number"},
+                "output_cost_per_token_priority": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
@@ -528,6 +546,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 },
                 "input_cost_per_video_per_second_above_128k_tokens": {"type": "number"},
                 "input_dbu_cost_per_token": {"type": "number"},
+                "annotation_cost_per_page": {"type": "number"},
+                "ocr_cost_per_page": {"type": "number"},
                 "litellm_provider": {"type": "string"},
                 "max_audio_length_hours": {"type": "number"},
                 "max_audio_per_prompt": {"type": "number"},
@@ -555,12 +575,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "moderation",
                         "rerank",
                         "responses",
+                        "ocr",
                     ],
                 },
                 "output_cost_per_audio_token": {"type": "number"},
                 "output_cost_per_character": {"type": "number"},
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
+                "output_cost_per_image_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
@@ -591,6 +613,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_web_search": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
+                "supports_service_tier": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},
                 "tpm": {"type": "number"},
                 "supported_endpoints": {
@@ -609,6 +632,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/batch",
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
+                            "/v1/ocr",
                         ],
                     },
                 },
@@ -643,6 +667,26 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     },
                 },
                 "supports_native_streaming": {"type": "boolean"},
+                "tiered_pricing": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2,
+                            },
+                            "input_cost_per_token": {"type": "number"},
+                            "output_cost_per_token": {"type": "number"},
+                            "cache_read_input_token_cost": {"type": "number"},
+                            "output_cost_per_reasoning_token": {"type": "number"},
+                        },
+                        "required": ["range"],
+                        "additionalProperties": False,
+                    },
+                },
             },
             "additionalProperties": False,
         },
@@ -814,7 +858,6 @@ for commitment in BEDROCK_COMMITMENTS:
 print("block_list", block_list)
 
 
-
 def test_supports_computer_use_utility():
     """
     Tests the litellm.utils.supports_computer_use utility function.
@@ -896,8 +939,7 @@ def test_pre_process_non_default_params(model, custom_llm_provider):
     from litellm.utils import ProviderConfigManager, pre_process_non_default_params
 
     provider_config = ProviderConfigManager.get_provider_chat_config(
-        model=model, 
-        provider=LlmProviders(custom_llm_provider)
+        model=model, provider=LlmProviders(custom_llm_provider)
     )
 
     class ResponseFormat(BaseModel):
@@ -2381,3 +2423,54 @@ def test_model_info_for_vertex_ai_deepseek_model():
     assert model_info["input_cost_per_token"] is not None
     assert model_info["output_cost_per_token"] is not None
     print("vertex deepseek model info", model_info)
+
+
+class TestGetValidModelsWithCLI:
+    """Test get_valid_models function as used in CLI token usage"""
+
+    def test_get_valid_models_with_cli_pattern(self):
+        """Test get_valid_models with litellm_proxy provider and CLI token pattern"""
+        
+        # Mock the HTTP request that get_valid_models makes to the proxy
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "data": [
+                {"id": "gpt-3.5-turbo", "object": "model"},
+                {"id": "gpt-4", "object": "model"},
+                {"id": "litellm_proxy/gemini/gemini-2.5-flash", "object": "model"},
+                {"id": "claude-3-sonnet", "object": "model"}
+            ]
+        }
+
+        with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_get:
+            # Test the exact pattern used in cli_token_usage.py
+            result = litellm.get_valid_models(
+                check_provider_endpoint=True,
+                custom_llm_provider="litellm_proxy",
+                api_key="sk-test-cli-key-123",
+                api_base="http://localhost:4000/"
+            )
+            
+            # Verify the function returns a list of model names
+            assert isinstance(result, list)
+            assert len(result) == 4
+            # All models get prefixed with "litellm_proxy/" by the get_models method
+            assert "litellm_proxy/gpt-3.5-turbo" in result
+            assert "litellm_proxy/gpt-4" in result
+            # Note: This model already had the prefix, so it gets double-prefixed
+            assert "litellm_proxy/litellm_proxy/gemini/gemini-2.5-flash" in result
+            assert "litellm_proxy/claude-3-sonnet" in result
+            
+            # Verify the HTTP request was made with correct parameters
+            mock_get.assert_called_once()
+            _, call_kwargs = mock_get.call_args
+
+            # Check that the request was made to the correct endpoint
+            assert call_kwargs["url"].startswith("http://localhost:4000/")
+            assert call_kwargs["url"].endswith("/v1/models")
+
+            # Check that the API key was included in headers
+            assert "headers" in call_kwargs
+            headers = call_kwargs["headers"]
+            assert headers.get("Authorization") == "Bearer sk-test-cli-key-123"

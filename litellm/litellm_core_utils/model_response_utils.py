@@ -84,7 +84,9 @@ def _has_meaningful_content(value: Any) -> bool:
         return False
 
     if isinstance(value, str):
-        return len(value.strip()) > 0
+        # Don't strip whitespace - preserve all content including newlines, spaces, etc.
+        # Even pure whitespace characters like '\n' or ' ' are meaningful content
+        return len(value) > 0
 
     if isinstance(value, (list, dict)):
         return len(value) > 0

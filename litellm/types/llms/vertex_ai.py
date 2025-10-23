@@ -113,7 +113,6 @@ class Schema(TypedDict, total=False):
     pattern: str
     example: Any
     anyOf: List["Schema"]
-    additionalProperties: Any
 
 
 class FunctionDeclaration(TypedDict, total=False):
@@ -179,6 +178,10 @@ class GeminiThinkingConfig(TypedDict, total=False):
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
 
+GeminiImageAspectRatio = Literal["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"]
+
+class GeminiImageConfig(TypedDict, total=False):
+    aspectRatio: GeminiImageAspectRatio
 
 class PrebuiltVoiceConfig(TypedDict):
     voiceName: str
@@ -207,7 +210,18 @@ class GenerationConfig(TypedDict, total=False):
     responseLogprobs: bool
     logprobs: int
     responseModalities: List[GeminiResponseModalities]
+    imageConfig: GeminiImageConfig
     thinkingConfig: GeminiThinkingConfig
+
+
+class VertexToolName(str, Enum):
+    """Enum for Vertex AI tool field names."""
+    GOOGLE_SEARCH = "googleSearch"
+    GOOGLE_SEARCH_RETRIEVAL = "googleSearchRetrieval"
+    ENTERPRISE_WEB_SEARCH = "enterpriseWebSearch"
+    URL_CONTEXT = "url_context"
+    CODE_EXECUTION = "code_execution"
+    GOOGLE_MAPS = "googleMaps"
 
 
 class Tools(TypedDict, total=False):
@@ -217,6 +231,7 @@ class Tools(TypedDict, total=False):
     enterpriseWebSearch: dict
     url_context: dict
     code_execution: dict
+    googleMaps: dict
     retrieval: Retrieval
 
 
@@ -554,6 +569,10 @@ class OutputConfig(TypedDict, total=False):
     gcsDestination: GcsDestination
 
 
+class OutputInfo(TypedDict, total=False):
+    gcsOutputDirectory: str
+
+
 class GcsBucketResponse(TypedDict):
     """
     TypedDict for GCS bucket upload response
@@ -612,6 +631,7 @@ class VertexBatchPredictionResponse(TypedDict, total=False):
     model: str
     inputConfig: InputConfig
     outputConfig: OutputConfig
+    outputInfo: OutputInfo
     state: str
     createTime: str
     updateTime: str

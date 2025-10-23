@@ -43,6 +43,7 @@ from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolChoiceFunctionParam,
     ChatCompletionToolChoiceObjectParam,
+    ChatCompletionToolParam,
 )
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -169,18 +170,20 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         if tool is None:
             return None
 
-        kwags: dict = {
+        # Build DatabricksFunction explicitly to avoid parameter conflicts
+        function_params: DatabricksFunction = {
             "name": tool["name"],
             "parameters": cast(dict, tool.get("input_schema") or {})
         }
-
+        
+        # Only add description if it exists
         description = tool.get("description")
         if description is not None:
-            kwags["description"] = cast(Union[dict, str], description)
+            function_params["description"] = cast(Union[dict, str], description)
 
         return DatabricksTool(
             type="function",
-            function=DatabricksFunction(name=tool["name"], **kwags),
+            function=function_params,
         )
 
     def _map_openai_to_dbrx_tool(self, model: str, tools: List) -> List[DatabricksTool]:
@@ -214,6 +217,21 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         databricks_tool = self.convert_anthropic_tool_to_databricks_tool(tool)
         return databricks_tool
+
+    def remove_cache_control_flag_from_messages_and_tools(
+        self,
+        model: str,  # allows overrides to selectively run this
+        messages: List[AllMessageValues],
+        tools: Optional[List["ChatCompletionToolParam"]] = None,
+    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
+        """
+        Override the parent class method to preserve cache_control for models on Databricks.
+        Databricks supports Anthropic-style cache control for Claude models.
+        Databricks ignores the cache_control flag with other models.
+        """
+        # TODO: Think about how to best design the request transformation so that 
+        # every request doesn't have to be transformed for to OpenAI and Anthropic request formats.
+        return messages, tools
 
     def map_openai_params(
         self,

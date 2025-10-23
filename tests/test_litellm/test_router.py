@@ -23,7 +23,7 @@ def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -1548,3 +1548,74 @@ def test_get_deployment_model_info_base_model_merge_priority():
             assert result["key"] == "gpt-4"
 
     print("✓ Base model merge priority test passed!")
+
+
+def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
+    """
+    Test that _add_deployment_model_to_endpoint_for_llm_passthrough_route correctly strips bedrock provider prefix
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "special-bedrock-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+                },
+            }
+        ],
+    )
+
+    # Test Case 1: Bedrock model with provider prefix - should strip "bedrock/" prefix
+    kwargs = {
+        "endpoint": "/model/special-bedrock-model/invoke",
+        "custom_llm_provider": "bedrock",
+    }
+    result = router._add_deployment_model_to_endpoint_for_llm_passthrough_route(
+        kwargs=kwargs,
+        model="special-bedrock-model",
+        model_name="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+    )
+    assert (
+        result["endpoint"] == "/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke"
+    ), f"Expected '/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke', got '{result['endpoint']}'"
+
+    # Test Case 2: Bedrock invoke-with-response-stream endpoint
+    kwargs = {
+        "endpoint": "/model/special-bedrock-model/invoke-with-response-stream",
+        "custom_llm_provider": "bedrock",
+    }
+    result = router._add_deployment_model_to_endpoint_for_llm_passthrough_route(
+        kwargs=kwargs,
+        model="special-bedrock-model",
+        model_name="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+    )
+    assert (
+        result["endpoint"] == "/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream"
+    ), f"Expected streaming endpoint with stripped prefix, got '{result['endpoint']}'"
+
+    # Test Case 3: Bedrock converse endpoint
+    kwargs = {
+        "endpoint": "/model/bedrock-model/converse",
+        "custom_llm_provider": "bedrock",
+    }
+    result = router._add_deployment_model_to_endpoint_for_llm_passthrough_route(
+        kwargs=kwargs,
+        model="bedrock-model",
+        model_name="bedrock/us.meta.llama3-8b-instruct-v1:0",
+    )
+    assert (
+        result["endpoint"] == "/model/us.meta.llama3-8b-instruct-v1:0/converse"
+    ), f"Expected '/model/us.meta.llama3-8b-instruct-v1:0/converse', got '{result['endpoint']}'"
+
+    # Test Case 4: Bedrock provider prefix auto-detected from model_name
+    kwargs = {
+        "endpoint": "/model/router-model/invoke",
+    }
+    result = router._add_deployment_model_to_endpoint_for_llm_passthrough_route(
+        kwargs=kwargs,
+        model="router-model",
+        model_name="bedrock/us.meta.llama3-8b-instruct-v1:0",
+    )
+    assert (
+        result["endpoint"] == "/model/us.meta.llama3-8b-instruct-v1:0/invoke"
+    ), f"Expected '/model/us.meta.llama3-8b-instruct-v1:0/invoke', got '{result['endpoint']}'"

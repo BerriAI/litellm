@@ -1,6 +1,6 @@
 # What is this?
 ## Unit tests for the /budget/* endpoints
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timedelta
 
 import aiohttp

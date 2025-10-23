@@ -77,10 +77,10 @@ class AimGuardrail(CustomGuardrail):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
-
         return await self.call_aim_guardrail(
             data, hook="pre_call", key_alias=user_api_key_dict.key_alias
         )
@@ -97,6 +97,7 @@ class AimGuardrail(CustomGuardrail):
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside AIM Moderation Hook")
@@ -246,13 +247,13 @@ class AimGuardrail(CustomGuardrail):
                 "x-aim-litellm-version": litellm_version,
             }
             # Used by Aim to track together single call input and output
-            | ({"x-aim-litellm-call-id": litellm_call_id} if litellm_call_id else {})
+            | ({"x-aim-call-id": litellm_call_id} if litellm_call_id else {})
             # Used by Aim to track guardrails violations by user.
             | ({"x-aim-user-email": user_email} if user_email else {})
             | (
                 {
                     # Used by Aim apply only the guardrails that are associated with the key alias.
-                    "x-aim-litellm-key-alias": key_alias,
+                    "x-aim-gateway-key-alias": key_alias,
                 }
                 if key_alias
                 else {}

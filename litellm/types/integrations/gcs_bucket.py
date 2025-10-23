@@ -1,4 +1,6 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+from typing_extensions import TypedDict
 
 from litellm.types.utils import StandardLoggingPayload
 

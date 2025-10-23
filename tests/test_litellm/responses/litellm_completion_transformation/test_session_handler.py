@@ -223,7 +223,7 @@ async def test_e2e_cold_storage_successful_retrieval():
         new_callable=AsyncMock,
     ) as mock_get_spend_logs, \
     patch.object(session_handler, "COLD_STORAGE_HANDLER") as mock_cold_storage, \
-    patch("litellm.configured_cold_storage_logger", return_value="s3"):
+    patch("litellm.cold_storage_custom_logger", return_value="s3"):
         
         # Setup mocks
         mock_get_spend_logs.return_value = mock_spend_logs
@@ -343,7 +343,7 @@ async def test_should_check_cold_storage_for_full_payload():
     # Test case 4: None request (should return True)
     proxy_request_none = None
     
-    with patch("litellm.configured_cold_storage_logger", return_value="s3"):
+    with patch("litellm.cold_storage_custom_logger", return_value="s3"):
         # Test case 1: Should return True for truncated content
         result1 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
         assert result1 == True, "Should return True for proxy request with truncated PDF content"
@@ -361,6 +361,56 @@ async def test_should_check_cold_storage_for_full_payload():
         assert result4 == True, "Should return True for None proxy request"
     
     # Test case 5: Should return False when cold storage is not configured
-    with patch.object(litellm, 'configured_cold_storage_logger', None):
+    with patch.object(litellm, 'cold_storage_custom_logger', None):
         result5 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
         assert result5 == False, "Should return False when cold storage is not configured, even with truncated content"
+
+
+@pytest.mark.asyncio
+async def test_get_chat_completion_message_history_empty_response_dict():
+    """
+    Test that empty response dict is handled correctly without processing.
+    This tests the fix for response validation to check for empty dict responses.
+    """
+    from unittest.mock import AsyncMock, patch
+    
+    # Mock spend logs with empty response dict
+    mock_spend_logs = [
+        {
+            "request_id": "chatcmpl-test-empty-response",
+            "call_type": "aresponses", 
+            "api_key": "test_key",
+            "spend": 0.001,
+            "total_tokens": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "startTime": "2025-01-15T10:30:00.000+00:00",
+            "endTime": "2025-01-15T10:30:01.000+00:00",
+            "model": "gpt-4",
+            "session_id": "test-session",
+            "proxy_server_request": {
+                "input": "test input",
+                "model": "gpt-4"
+            },
+            "response": {}  # Empty dict - should not be processed
+        }
+    ]
+    
+    with patch.object(ResponsesSessionHandler, "get_all_spend_logs_for_previous_response_id") as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = mock_spend_logs
+        
+        # Call the function
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "chatcmpl-test-empty-response"
+        )
+        
+        # Verify that user message was added but no assistant response
+        # Since response is empty dict, no assistant response should be processed
+        # But user input from proxy_server_request should still be included
+        messages = result["messages"]
+        assert len(messages) == 1  # Only user message, no assistant response
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"] == "test input"
+        
+        # Verify the session was still created correctly
+        assert result["litellm_session_id"] == "test-session"

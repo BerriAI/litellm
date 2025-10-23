@@ -227,8 +227,9 @@ class OpenTelemetry(CustomLogger):
                 PeriodicExportingMetricReader,
             )
 
+            normalized_endpoint = self._normalize_otel_endpoint(self.config.endpoint, 'metrics')
             _metric_exporter = OTLPMetricExporter(
-                endpoint=self.config.endpoint,
+                endpoint=normalized_endpoint,
                 headers=OpenTelemetry._get_headers_dictionary(self.config.headers),
                 preferred_temporality={Histogram: AggregationTemporality.DELTA},
             )
@@ -247,12 +248,12 @@ class OpenTelemetry(CustomLogger):
         metrics.set_meter_provider(meter_provider)
 
         self._operation_duration_histogram = meter.create_histogram(
-            name="gen_ai.client.operation.duration", # Replace with semconv constant in otel 1.38
+            name="gen_ai.client.operation.duration",  # Replace with semconv constant in otel 1.38
             description="GenAI operation duration",
             unit="s",
         )
         self._token_usage_histogram = meter.create_histogram(
-            name="gen_ai.client.token.usage", # Replace with semconv constant in otel 1.38
+            name="gen_ai.client.token.usage",  # Replace with semconv constant in otel 1.38
             description="GenAI token usage",
             unit="{token}",
         )
@@ -268,22 +269,20 @@ class OpenTelemetry(CustomLogger):
             return
 
         from opentelemetry._logs import set_logger_provider
-        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
         from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
         # set up log pipeline
         if logger_provider is None:
-            logger_provider = OTLoggerProvider()
+            litellm_resource = _get_litellm_resource()
+            logger_provider = OTLoggerProvider(resource=litellm_resource)
             # Only add OTLP exporter if we created the logger provider ourselves
-            logger_provider.add_log_record_processor(
-                BatchLogRecordProcessor(
-                    OTLPLogExporter(
-                        endpoint=self.config.endpoint,
-                        headers=self._get_headers_dictionary(self.config.headers),
-                    )
+            log_exporter = self._get_log_exporter()
+            if log_exporter:
+                logger_provider.add_log_record_processor(
+                    BatchLogRecordProcessor(log_exporter)  # type: ignore[arg-type]
                 )
-            )
+
         set_logger_provider(logger_provider)
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -480,9 +479,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params")
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params")
+        )
 
         if not standard_callback_dynamic_params:
             return None
@@ -543,7 +542,7 @@ class OpenTelemetry(CustomLogger):
         # 4. Metrics & cost recording
         self._record_metrics(kwargs, response_obj, start_time, end_time)
 
-        # 5. Semantic logs. 
+        # 5. Semantic logs.
         if self.config.enable_events:
             self._emit_semantic_logs(kwargs, response_obj, span)
 
@@ -575,9 +574,15 @@ class OpenTelemetry(CustomLogger):
         if litellm.turn_off_message_logging or not self.message_logging:
             return
 
+        litellm_params = kwargs.get("litellm_params", {})
+        metadata = litellm_params.get("metadata") or {}
+        generation_name = metadata.get("generation_name")
+
+        raw_span_name = generation_name if generation_name else RAW_REQUEST_SPAN_NAME
+
         otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
         raw_span = otel_tracer.start_span(
-            name=RAW_REQUEST_SPAN_NAME,
+            name=raw_span_name,
             start_time=self._to_ns(start_time),
             context=trace.set_span_in_context(parent_span),
         )
@@ -619,6 +624,13 @@ class OpenTelemetry(CustomLogger):
             if md.get(key) is not None:
                 common_attrs[f"metadata.{key}"] = str(md[key])
 
+        # get hidden params
+        hidden_params = getattr(std_log, "hidden_params", None) or (std_log or {}).get(
+            "hidden_params", {}
+        )
+        if hidden_params:
+            common_attrs["hidden_params"] = safe_dumps(hidden_params)
+
         if self._operation_duration_histogram:
             self._operation_duration_histogram.record(
                 duration_s, attributes=common_attrs
@@ -645,8 +657,14 @@ class OpenTelemetry(CustomLogger):
         if not self.config.enable_events:
             return
 
-        from opentelemetry._logs import get_logger, LogRecord
+        from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
+        from opentelemetry.sdk._logs import LogRecord as SdkLogRecord
+
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
+
+        # Get the resource from the logger provider
+        logger_provider = get_logger_provider()
+        resource = getattr(logger_provider, '_resource', None) or _get_litellm_resource()
 
         parent_ctx = span.get_span_context()
         provider = (kwargs.get("litellm_params") or {}).get(
@@ -662,15 +680,18 @@ class OpenTelemetry(CustomLogger):
             if self.message_logging and msg.get("content"):
                 attrs["gen_ai.prompt"] = msg["content"]
 
-            otel_logger.emit(
-                LogRecord(
-                    attributes=attrs,
-                    body=msg.copy(),
-                    trace_id=parent_ctx.trace_id,
-                    span_id=parent_ctx.span_id,
-                    trace_flags=parent_ctx.trace_flags,
-                )
+            log_record = SdkLogRecord(
+                timestamp=self._to_ns(datetime.now()),
+                trace_id=parent_ctx.trace_id,
+                span_id=parent_ctx.span_id,
+                trace_flags=parent_ctx.trace_flags,
+                severity_number=SeverityNumber.INFO,
+                severity_text="INFO",
+                body=msg.copy(),
+                resource=resource,
+                attributes=attrs,
             )
+            otel_logger.emit(log_record)
 
         # per-choice events
         for idx, choice in enumerate(response_obj.get("choices", [])):
@@ -691,16 +712,18 @@ class OpenTelemetry(CustomLogger):
             if self.message_logging and body_msg.get("content"):
                 body["message"]["content"] = body_msg["content"]
 
-            otel_logger.emit(
-                LogRecord(
-                    attributes=attrs,
-                    body=body,
-                    trace_id=parent_ctx.trace_id,
-                    span_id=parent_ctx.span_id,
-                    trace_flags=parent_ctx.trace_flags,
-                )
+            log_record = SdkLogRecord(
+                timestamp=self._to_ns(datetime.now()),
+                trace_id=parent_ctx.trace_id,
+                span_id=parent_ctx.span_id,
+                trace_flags=parent_ctx.trace_flags,
+                severity_number=SeverityNumber.INFO,
+                severity_text="INFO",
+                body=body,
+                resource=resource,
+                attributes=attrs,
             )
-
+            otel_logger.emit(log_record)
 
     def _create_guardrail_span(
         self, kwargs: Optional[dict], context: Optional[Context]
@@ -913,6 +936,14 @@ class OpenTelemetry(CustomLogger):
                     span=span, key="metadata.{}".format(key), value=value
                 )
 
+            # get hidden params
+            hidden_params = getattr(
+                standard_logging_payload, "hidden_params", None
+            ) or (standard_logging_payload or {}).get("hidden_params", {})
+            if hidden_params:
+                self.safe_set_attribute(
+                    span=span, key="hidden_params", value=safe_dumps(hidden_params)
+                )
             #############################################
             ########## LLM Request Attributes ###########
             #############################################
@@ -1115,56 +1146,68 @@ class OpenTelemetry(CustomLogger):
         span.set_attribute(key, primitive_value)
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
-        kwargs.get("optional_params", {})
-        litellm_params = kwargs.get("litellm_params", {}) or {}
-        custom_llm_provider = litellm_params.get("custom_llm_provider", "Unknown")
+        try:
+            kwargs.get("optional_params", {})
+            litellm_params = kwargs.get("litellm_params", {}) or {}
+            custom_llm_provider = litellm_params.get("custom_llm_provider", "Unknown")
 
-        _raw_response = kwargs.get("original_response")
-        _additional_args = kwargs.get("additional_args", {}) or {}
-        complete_input_dict = _additional_args.get("complete_input_dict")
-        #############################################
-        ########## LLM Request Attributes ###########
-        #############################################
+            _raw_response = kwargs.get("original_response")
+            _additional_args = kwargs.get("additional_args", {}) or {}
+            complete_input_dict = _additional_args.get("complete_input_dict")
+            #############################################
+            ########## LLM Request Attributes ###########
+            #############################################
 
-        # OTEL Attributes for the RAW Request to https://docs.anthropic.com/en/api/messages
-        if complete_input_dict and isinstance(complete_input_dict, dict):
-            for param, val in complete_input_dict.items():
-                self.safe_set_attribute(
-                    span=span, key=f"llm.{custom_llm_provider}.{param}", value=val
-                )
+            # OTEL Attributes for the RAW Request to https://docs.anthropic.com/en/api/messages
+            if complete_input_dict and isinstance(complete_input_dict, dict):
+                for param, val in complete_input_dict.items():
+                    self.safe_set_attribute(
+                        span=span, key=f"llm.{custom_llm_provider}.{param}", value=val
+                    )
 
-        #############################################
-        ########## LLM Response Attributes ##########
-        #############################################
-        if _raw_response and isinstance(_raw_response, str):
-            # cast sr -> dict
-            import json
+            #############################################
+            ########## LLM Response Attributes ##########
+            #############################################
+            if _raw_response and isinstance(_raw_response, str):
+                # cast sr -> dict
+                import json
 
-            try:
-                _raw_response = json.loads(_raw_response)
-                for param, val in _raw_response.items():
+                try:
+                    _raw_response = json.loads(_raw_response)
+                    for param, val in _raw_response.items():
+                        self.safe_set_attribute(
+                            span=span,
+                            key=f"llm.{custom_llm_provider}.{param}",
+                            value=val,
+                        )
+                except json.JSONDecodeError:
+                    verbose_logger.debug(
+                        "litellm.integrations.opentelemetry.py::set_raw_request_attributes() - raw_response not json string - {}".format(
+                            _raw_response
+                        )
+                    )
+
                     self.safe_set_attribute(
                         span=span,
-                        key=f"llm.{custom_llm_provider}.{param}",
-                        value=val,
+                        key=f"llm.{custom_llm_provider}.stringified_raw_response",
+                        value=_raw_response,
                     )
-            except json.JSONDecodeError:
-                verbose_logger.debug(
-                    "litellm.integrations.opentelemetry.py::set_raw_request_attributes() - raw_response not json string - {}".format(
-                        _raw_response
-                    )
-                )
-
-                self.safe_set_attribute(
-                    span=span,
-                    key=f"llm.{custom_llm_provider}.stringified_raw_response",
-                    value=_raw_response,
-                )
+        except Exception as e:
+            verbose_logger.exception(
+                "OpenTelemetry logging error in set_raw_request_attributes %s", str(e)
+            )
 
     def _to_ns(self, dt):
         return int(dt.timestamp() * 1e9)
 
     def _get_span_name(self, kwargs):
+        litellm_params = kwargs.get("litellm_params", {})
+        metadata = litellm_params.get("metadata") or {}
+        generation_name = metadata.get("generation_name")
+
+        if generation_name:
+            return generation_name
+
         return LITELLM_REQUEST_SPAN_NAME
 
     def get_traceparent_from_header(self, headers):
@@ -1259,9 +1302,10 @@ class OpenTelemetry(CustomLogger):
                 "OpenTelemetry: intiializing http exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
             )
+            normalized_endpoint = self._normalize_otel_endpoint(self.OTEL_ENDPOINT, 'traces')
             return BatchSpanProcessor(
                 OTLPSpanExporterHTTP(
-                    endpoint=self.OTEL_ENDPOINT, headers=_split_otel_headers
+                    endpoint=normalized_endpoint, headers=_split_otel_headers
                 ),
             )
         elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
@@ -1269,9 +1313,10 @@ class OpenTelemetry(CustomLogger):
                 "OpenTelemetry: intiializing grpc exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
             )
+            normalized_endpoint = self._normalize_otel_endpoint(self.OTEL_ENDPOINT, 'traces')
             return BatchSpanProcessor(
                 OTLPSpanExporterGRPC(
-                    endpoint=self.OTEL_ENDPOINT, headers=_split_otel_headers
+                    endpoint=normalized_endpoint, headers=_split_otel_headers
                 ),
             )
         else:
@@ -1280,6 +1325,145 @@ class OpenTelemetry(CustomLogger):
                 self.OTEL_EXPORTER,
             )
             return BatchSpanProcessor(ConsoleSpanExporter())
+
+    def _get_log_exporter(self):
+        """
+        Get the appropriate log exporter based on the configuration.
+        """
+        verbose_logger.debug(
+            "OpenTelemetry Logger, initializing log exporter \nself.OTEL_EXPORTER: %s\nself.OTEL_ENDPOINT: %s\nself.OTEL_HEADERS: %s",
+            self.OTEL_EXPORTER,
+            self.OTEL_ENDPOINT,
+            self.OTEL_HEADERS,
+        )
+
+        _split_otel_headers = OpenTelemetry._get_headers_dictionary(self.OTEL_HEADERS)
+
+        # Normalize endpoint for logs - ensure it points to /v1/logs instead of /v1/traces
+        normalized_endpoint = self._normalize_otel_endpoint(self.OTEL_ENDPOINT, 'logs')
+
+        verbose_logger.debug(
+            "OpenTelemetry: Log endpoint normalized from %s to %s",
+            self.OTEL_ENDPOINT,
+            normalized_endpoint,
+        )
+
+        if hasattr(self.OTEL_EXPORTER, "export"):
+            # Custom exporter provided
+            verbose_logger.debug(
+                "OpenTelemetry: Using custom log exporter. Value of OTEL_EXPORTER: %s",
+                self.OTEL_EXPORTER,
+            )
+            return self.OTEL_EXPORTER
+
+        if self.OTEL_EXPORTER == "console":
+            from opentelemetry.sdk._logs.export import ConsoleLogExporter
+            verbose_logger.debug(
+                "OpenTelemetry: Using console log exporter. Value of OTEL_EXPORTER: %s",
+                self.OTEL_EXPORTER,
+            )
+            return ConsoleLogExporter()
+        elif (
+            self.OTEL_EXPORTER == "otlp_http"
+            or self.OTEL_EXPORTER == "http/protobuf"
+            or self.OTEL_EXPORTER == "http/json"
+        ):
+            from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+            verbose_logger.debug(
+                "OpenTelemetry: Using HTTP log exporter. Value of OTEL_EXPORTER: %s, endpoint: %s",
+                self.OTEL_EXPORTER,
+                normalized_endpoint,
+            )
+            return OTLPLogExporter(
+                endpoint=normalized_endpoint, headers=_split_otel_headers
+            )
+        elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
+            from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+            verbose_logger.debug(
+                "OpenTelemetry: Using gRPC log exporter. Value of OTEL_EXPORTER: %s, endpoint: %s",
+                self.OTEL_EXPORTER,
+                normalized_endpoint,
+            )
+            return OTLPLogExporter(
+                endpoint=normalized_endpoint, headers=_split_otel_headers
+            )
+        else:
+            verbose_logger.warning(
+                "OpenTelemetry: Unknown log exporter '%s', defaulting to console. Supported: console, otlp_http, otlp_grpc",
+                self.OTEL_EXPORTER,
+            )
+            from opentelemetry.sdk._logs.export import ConsoleLogExporter
+            return ConsoleLogExporter()
+
+    def _normalize_otel_endpoint(
+        self,
+        endpoint: Optional[str],
+        signal_type: str
+    ) -> Optional[str]:
+        """
+        Normalize the endpoint URL for a specific OpenTelemetry signal type.
+
+        The OTLP exporters expect endpoints to use signal-specific paths:
+        - traces: /v1/traces
+        - metrics: /v1/metrics
+        - logs: /v1/logs
+
+        This method ensures the endpoint has the correct path for the given signal type.
+
+        Args:
+            endpoint: The endpoint URL to normalize
+            signal_type: The telemetry signal type ('traces', 'metrics', or 'logs')
+
+        Returns:
+            Normalized endpoint URL with the correct signal path
+
+        Examples:
+            _normalize_otel_endpoint("http://collector:4318/v1/traces", "logs")
+            -> "http://collector:4318/v1/logs"
+
+            _normalize_otel_endpoint("http://collector:4318", "traces")
+            -> "http://collector:4318/v1/traces"
+
+            _normalize_otel_endpoint("http://collector:4318/v1/logs", "metrics")
+            -> "http://collector:4318/v1/metrics"
+        """
+        if not endpoint:
+            return endpoint
+
+        # Validate signal_type
+        valid_signals = {'traces', 'metrics', 'logs'}
+        if signal_type not in valid_signals:
+            verbose_logger.warning(
+                "Invalid signal_type '%s' provided to _normalize_otel_endpoint. "
+                "Valid values: %s. Returning endpoint unchanged.",
+                signal_type,
+                valid_signals
+            )
+            return endpoint
+
+        # Remove trailing slash
+        endpoint = endpoint.rstrip('/')
+
+        # Check if endpoint already ends with the correct signal path
+        target_path = f'/v1/{signal_type}'
+        if endpoint.endswith(target_path):
+            return endpoint
+
+        # Replace existing signal path with the target signal path
+        other_signals = valid_signals - {signal_type}
+        for other_signal in other_signals:
+            other_path = f'/v1/{other_signal}'
+            if endpoint.endswith(other_path):
+                endpoint = endpoint.rsplit('/', 1)[0] + f'/{signal_type}'
+                return endpoint
+
+        # No existing signal path found, append the target path
+        if not endpoint.endswith('/v1'):
+            endpoint = endpoint + target_path
+        else:
+            endpoint = endpoint + f'/{signal_type}'
+
+        return endpoint
 
     @staticmethod
     def _get_headers_dictionary(headers: Optional[Union[str, dict]]) -> Dict[str, str]:

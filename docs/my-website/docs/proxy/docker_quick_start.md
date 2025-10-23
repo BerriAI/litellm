@@ -55,7 +55,7 @@ echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
 source .env
 
 # Start
-docker-compose up
+docker compose up
 ```
 
 </TabItem>

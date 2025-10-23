@@ -26,6 +26,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _can_object_call_vector_stores,
+    _get_team_db_check,
     get_user_object,
     vector_store_access_check,
 )
@@ -190,6 +191,64 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     assert creation_args["models"] == ["gpt-4", "claude-3-opus"]
     assert creation_args["max_budget"] == 200.0
     assert creation_args["user_role"] == "internal_user"
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock)
+async def test_get_team_db_check_calls_new_team_on_upsert(mock_new_team, monkeypatch):
+    """
+    Test that _get_team_db_check correctly calls the `new_team` function
+    when a team does not exist and upsert is enabled.
+    """
+    mock_prisma_client = MagicMock()
+    mock_db = AsyncMock()
+    mock_prisma_client.db = mock_db
+    mock_prisma_client.db.litellm_teamtable.find_unique.return_value = None
+
+    # Define what our mocked `new_team` function should return
+    team_id_to_create = "new-jwt-team"
+    mock_new_team.return_value = {"team_id": team_id_to_create, "max_budget": 123.45}
+
+    await _get_team_db_check(
+        team_id=team_id_to_create,
+        prisma_client=mock_prisma_client,
+        team_id_upsert=True,
+    )
+
+    # Verify that our mocked `new_team` function was called exactly once
+    mock_new_team.assert_called_once()
+
+    call_args = mock_new_team.call_args[1]
+    data_arg = call_args["data"]
+
+    # Verify that `new_team` was called with the correct team_id and that
+    # `max_budget` was None, as our function's job is to delegate, not to set defaults.
+    assert data_arg.team_id == team_id_to_create
+    assert data_arg.max_budget is None
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock)
+async def test_get_team_db_check_does_not_call_new_team_if_exists(mock_new_team, monkeypatch):
+    """
+    Test that _get_team_db_check does NOT call the `new_team` function
+    if the team already exists in the database.
+    """
+    mock_prisma_client = MagicMock()
+    mock_db = AsyncMock()
+    mock_prisma_client.db = mock_db
+    mock_prisma_client.db.litellm_teamtable.find_unique.return_value = MagicMock()
+
+    team_id_to_find = "existing-jwt-team"
+
+    await _get_team_db_check(
+        team_id=team_id_to_find,
+        prisma_client=mock_prisma_client,
+        team_id_upsert=True,
+    )
+
+    # Verify that `new_team` was NEVER called, because the team was found.
+    mock_new_team.assert_not_called()
 
 
 # Vector Store Auth Check Tests
@@ -508,3 +567,141 @@ def test_can_object_call_model_no_access_to_alias_or_underlying():
     assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
     assert "key not allowed to access model" in str(exc_info.value.message)
     assert "my-fake-gpt" in str(exc_info.value.message)
+
+
+# Tag Budget Enforcement Tests
+
+
+@pytest.mark.asyncio
+async def test_get_tag_objects_batch():
+    """
+    Test batch fetching of tags validates:
+    - Cached tags are fetched from cache (no DB call for them)
+    - Uncached tags are fetched in ONE batch DB query
+    - After fetching, uncached tags are cached
+    """
+    from litellm.proxy._types import LiteLLM_TagTable
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+
+    mock_prisma = MagicMock()
+    mock_cache = MagicMock()
+    mock_proxy_logging = MagicMock()
+
+    # Simulate 5 tags: 2 cached, 3 uncached
+    tag_names = ["cached-1", "uncached-1", "cached-2", "uncached-2", "uncached-3"]
+
+    # Mock cached tags
+    cached_tag_1 = {
+        "tag_name": "cached-1",
+        "spend": 10.0,
+        "models": [],
+        "litellm_budget_table": None,
+    }
+    cached_tag_2 = {
+        "tag_name": "cached-2",
+        "spend": 20.0,
+        "models": [],
+        "litellm_budget_table": None,
+    }
+
+    # Mock DB response for uncached tags
+    uncached_tag_1 = MagicMock()
+    uncached_tag_1.tag_name = "uncached-1"
+    uncached_tag_1.spend = 30.0
+    uncached_tag_1.models = []
+    uncached_tag_1.litellm_budget_table = None
+    uncached_tag_1.dict = MagicMock(
+        return_value={
+            "tag_name": "uncached-1",
+            "spend": 30.0,
+            "models": [],
+            "litellm_budget_table": None,
+        }
+    )
+
+    uncached_tag_2 = MagicMock()
+    uncached_tag_2.tag_name = "uncached-2"
+    uncached_tag_2.spend = 40.0
+    uncached_tag_2.models = []
+    uncached_tag_2.litellm_budget_table = None
+    uncached_tag_2.dict = MagicMock(
+        return_value={
+            "tag_name": "uncached-2",
+            "spend": 40.0,
+            "models": [],
+            "litellm_budget_table": None,
+        }
+    )
+
+    uncached_tag_3 = MagicMock()
+    uncached_tag_3.tag_name = "uncached-3"
+    uncached_tag_3.spend = 50.0
+    uncached_tag_3.models = []
+    uncached_tag_3.litellm_budget_table = None
+    uncached_tag_3.dict = MagicMock(
+        return_value={
+            "tag_name": "uncached-3",
+            "spend": 50.0,
+            "models": [],
+            "litellm_budget_table": None,
+        }
+    )
+
+    # Mock cache behavior - return cached tags, None for uncached
+    async def mock_get_cache(key):
+        if key == "tag:cached-1":
+            return cached_tag_1
+        elif key == "tag:cached-2":
+            return cached_tag_2
+        else:
+            return None
+
+    mock_cache.async_get_cache = AsyncMock(side_effect=mock_get_cache)
+    mock_cache.async_set_cache = AsyncMock()
+
+    # Mock DB to return all uncached tags in ONE query
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(
+        return_value=[uncached_tag_1, uncached_tag_2, uncached_tag_3]
+    )
+
+    # Call batch fetch
+    tag_objects = await get_tag_objects_batch(
+        tag_names=tag_names,
+        prisma_client=mock_prisma,
+        user_api_key_cache=mock_cache,
+        proxy_logging_obj=mock_proxy_logging,
+    )
+
+    # Verify results
+    assert len(tag_objects) == 5
+    assert "cached-1" in tag_objects
+    assert "cached-2" in tag_objects
+    assert "uncached-1" in tag_objects
+    assert "uncached-2" in tag_objects
+    assert "uncached-3" in tag_objects
+
+    # Verify cached tags have correct values
+    assert tag_objects["cached-1"].spend == 10.0
+    assert tag_objects["cached-2"].spend == 20.0
+
+    # Verify uncached tags have correct values
+    assert tag_objects["uncached-1"].spend == 30.0
+    assert tag_objects["uncached-2"].spend == 40.0
+    assert tag_objects["uncached-3"].spend == 50.0
+
+    # Verify DB was called ONCE with all 3 uncached tags
+    mock_prisma.db.litellm_tagtable.find_many.assert_called_once()
+    call_args = mock_prisma.db.litellm_tagtable.find_many.call_args
+    assert call_args.kwargs["where"]["tag_name"]["in"] == [
+        "uncached-1",
+        "uncached-2",
+        "uncached-3",
+    ]
+
+    # Verify uncached tags were cached after fetching
+    assert mock_cache.async_set_cache.call_count == 3
+    cache_calls = mock_cache.async_set_cache.call_args_list
+    cached_keys = [call.kwargs["key"] for call in cache_calls]
+    assert "tag:uncached-1" in cached_keys
+    assert "tag:uncached-2" in cached_keys
+    assert "tag:uncached-3" in cached_keys

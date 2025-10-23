@@ -252,6 +252,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://ai-gateway.vercel.sh/v1":
                         custom_llm_provider = "vercel_ai_gateway"
                         dynamic_api_key = get_secret_str("VERCEL_AI_GATEWAY_API_KEY")
+                    elif endpoint == "https://api.inference.wandb.ai/v1":
+                        custom_llm_provider = "wandb"
+                        dynamic_api_key = get_secret_str("WANDB_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -365,6 +368,8 @@ def get_llm_provider(  # noqa: PLR0915
         # bytez models
         elif model.startswith("bytez/"):
             custom_llm_provider = "bytez"
+        elif model.startswith("lemonade/"):
+            custom_llm_provider = "lemonade"
         elif model.startswith("heroku/"):
             custom_llm_provider = "heroku"
         # cometapi models
@@ -372,6 +377,14 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "cometapi"
         elif model.startswith("oci/"):
             custom_llm_provider = "oci"
+        elif model.startswith("compactifai/"):
+            custom_llm_provider = "compactifai"
+        elif model.startswith("ovhcloud/"):
+            custom_llm_provider = "ovhcloud"
+        elif model.startswith("lemonade/"):
+            custom_llm_provider = "lemonade"
+        elif model.startswith("clarifai/"):
+            custom_llm_provider = "clarifai"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa
@@ -767,6 +780,27 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.AIMLChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "wandb":
+        api_base = (
+            api_base
+            or get_secret("WANDB_API_BASE")
+            or "https://api.inference.wandb.ai/v1"
+        )  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("WANDB_API_KEY")
+    elif custom_llm_provider == "lemonade":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.LemonadeChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "clarifai":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.ClarifaiConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
 

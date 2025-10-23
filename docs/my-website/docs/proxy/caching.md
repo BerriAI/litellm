@@ -278,6 +278,8 @@ Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable cac
   REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
   REDIS_PORT = ""       # REDIS_PORT='18841'
   REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
+  REDIS_USERNAME = ""   # REDIS_USERNAME='my-redis-username' [OPTIONAL] if your redis server requires a username
+  REDIS_SSL = "True"    # REDIS_SSL='True' to enable SSL by default is False
   ```
 
 **Additional kwargs**  
@@ -958,6 +960,19 @@ curl http://localhost:4000/v1/chat/completions \
 
 </Tabs>
 
+
+## Redis max_connections
+
+You can set the `max_connections` parameter in your `cache_params` for Redis. This is passed directly to the Redis client and controls the maximum number of simultaneous connections in the pool. If you see errors like `No connection available`, try increasing this value:
+
+```yaml
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    max_connections: 100
+```
+
 ## Supported `cache_params` on proxy config.yaml
 
 ```yaml
@@ -966,6 +981,7 @@ cache_params:
   ttl: Optional[float]
   default_in_memory_ttl: Optional[float]
   default_in_redis_ttl: Optional[float]
+  max_connections: Optional[Int]
 
   # Type of cache (options: "local", "redis", "s3")
   type: s3

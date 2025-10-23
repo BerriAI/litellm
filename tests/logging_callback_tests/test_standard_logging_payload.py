@@ -132,6 +132,7 @@ def all_fields_present(standard_logging_metadata: StandardLoggingMetadata):
         ("user_api_key_team_id", "test_team_id"),
         ("user_api_key_user_id", "test_user_id"),
         ("user_api_key_team_alias", "test_team_alias"),
+        ("user_api_key_spend", 10.50),
         ("spend_logs_metadata", {"key": "value"}),
         ("requester_ip_address", "127.0.0.1"),
         ("requester_metadata", {"user_agent": "test_agent"}),
@@ -515,3 +516,143 @@ def test_standard_logging_metadata_requester_metadata(
 ):
     result = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
     assert result["requester_metadata"] == expected_requester_metadata
+
+
+def test_cost_breakdown_in_standard_logging_payload():
+    """
+    Test that cost breakdown fields are properly included in StandardLoggingPayload.
+    Tests input_cost, output_cost, tool_usage_cost, and total_cost fields.
+    """
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload, Logging
+    from litellm.types.utils import Usage
+    from datetime import datetime
+    import time
+    
+    # Create a mock logging object with cost breakdown
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-123",
+        function_id="test-function"
+    )
+    
+    # Simulate cost breakdown being stored during cost calculation
+    logging_obj.set_cost_breakdown(
+        input_cost=0.001,
+        output_cost=0.002,
+        total_cost=0.0035,
+        cost_for_built_in_tools_cost_usd_dollar=0.0005
+    )
+    
+    # Mock response object
+    mock_response = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion",
+        "model": "gpt-4o",
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30,
+        },
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello! How can I help you today?"
+                },
+                "finish_reason": "stop"
+            }
+        ]
+    }
+    
+    # Create kwargs
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "response_cost": 0.0035,
+        "custom_llm_provider": "openai",
+    }
+    
+    start_time = datetime.now()
+    end_time = datetime.now()
+    
+    # Get the standard logging payload
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=start_time,
+        end_time=end_time,
+        logging_obj=logging_obj,
+        status="success"
+    )
+    
+    # Verify the cost breakdown field is present
+    assert payload is not None
+    assert payload["cost_breakdown"] is not None
+    assert payload["cost_breakdown"]["input_cost"] == 0.001
+    assert payload["cost_breakdown"]["output_cost"] == 0.002
+    assert payload["cost_breakdown"]["tool_usage_cost"] == 0.0005
+    assert payload["cost_breakdown"]["total_cost"] == 0.0035
+    assert payload["response_cost"] == 0.0035
+    
+    print("✅ Cost breakdown test passed!")
+
+
+def test_cost_breakdown_missing_in_standard_logging_payload():
+    """
+    Test that cost breakdown field is None when not available (e.g., for embedding calls)
+    """
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload, Logging
+    from datetime import datetime
+    
+    # Create a mock logging object without cost breakdown
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="embedding",  # Non-completion call type
+        start_time=datetime.now(),
+        litellm_call_id="test-123",
+        function_id="test-function"
+    )
+    
+    # No cost breakdown stored
+    
+    # Mock response object
+    mock_response = {
+        "object": "list",
+        "data": [{"embedding": [0.1, 0.2, 0.3]}],
+        "model": "text-embedding-ada-002",
+        "usage": {"prompt_tokens": 10, "total_tokens": 10}
+    }
+    
+    kwargs = {
+        "model": "text-embedding-ada-002",
+        "input": ["Hello"],
+        "response_cost": 0.0001,
+        "custom_llm_provider": "openai",
+    }
+    
+    start_time = datetime.now()
+    end_time = datetime.now()
+    
+    # Get the standard logging payload
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=start_time,
+        end_time=end_time,
+        logging_obj=logging_obj,
+        status="success"
+    )
+    
+    # Verify the cost breakdown field is None for non-completion calls
+    assert payload is not None
+    assert payload["cost_breakdown"] is None
+    assert payload["response_cost"] == 0.0001
+    
+    print("✅ Cost breakdown missing test passed!")

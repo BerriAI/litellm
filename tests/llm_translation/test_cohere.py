@@ -107,31 +107,6 @@ def test_completion_cohere_command_r_plus_function_call():
         assert isinstance(
             response.choices[0].message.tool_calls[0].function.arguments, str
         )
-
-        messages.append(
-            response.choices[0].message.model_dump()
-        )  # Add assistant tool invokes
-        tool_result = (
-            '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
-        )
-        # Add user submitted tool results in the OpenAI format
-        messages.append(
-            {
-                "tool_call_id": response.choices[0].message.tool_calls[0].id,
-                "role": "tool",
-                "name": response.choices[0].message.tool_calls[0].function.name,
-                "content": tool_result,
-            }
-        )
-        # In the second response, Cohere should deduce answer from tool results
-        second_response = completion(
-            model="command-r-plus",
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-            force_single_step=True,
-        )
-        print(second_response)
     except litellm.Timeout:
         pass
     except Exception as e:
@@ -254,10 +229,17 @@ async def test_cohere_request_body_with_allowed_params():
         }
     }]
 
-    client = AsyncHTTPHandler()
+    # Create a mock response
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "text": "I am Command, a language model developed by Cohere.",
+        "generation_id": "mock-generation-id",
+        "finish_reason": "COMPLETE"
+    }
 
-    # Mock the post method
-    with patch.object(client, "post", new=AsyncMock()) as mock_post:
+    # Mock the AsyncHTTPHandler.post method at the module level
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post", return_value=mock_response) as mock_post:
         try:
             await litellm.acompletion(
                 model="cohere/command",
@@ -265,8 +247,7 @@ async def test_cohere_request_body_with_allowed_params():
                 allowed_openai_params=["tools", "response_format", "reasoning_effort"],
                 response_format=test_response_format,
                 reasoning_effort=test_reasoning_effort,
-                tools=test_tools,
-                client=client
+                tools=test_tools
             )
         except Exception:
             pass  # We only care about the request body validation

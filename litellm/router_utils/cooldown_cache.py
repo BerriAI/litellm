@@ -3,7 +3,9 @@ Wrapper around router cache. Meant to handle model cooldown logic
 """
 
 import time
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, TypedDict, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+
+from typing_extensions import TypedDict
 
 from litellm import verbose_logger
 from litellm.caching.caching import DualCache
@@ -123,9 +125,9 @@ class CooldownCache:
         )
         active_cooldowns: List[Tuple[str, CooldownCacheValue]] = []
 
-        if results is None:
+        if results is None or all(v is None for v in results):
             return active_cooldowns
-
+        
         # Process the results
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):

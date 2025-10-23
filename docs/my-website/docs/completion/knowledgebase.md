@@ -18,7 +18,7 @@ LiteLLM integrates with vector stores, allowing your models to access your organ
 ## Supported Vector Stores
 - [Bedrock Knowledge Bases](https://aws.amazon.com/bedrock/knowledge-bases/)
 - [OpenAI Vector Stores](https://platform.openai.com/docs/api-reference/vector-stores/search)
-- [Azure Vector Stores](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/file-search?tabs=python#vector-stores)
+- [Azure Vector Stores](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/file-search?tabs=python#vector-stores) (Cannot be directly queried. Only available for calling in Assistants messages. We will be adding Azure AI Search Vector Store API support soon.)
 - [Vertex AI RAG API](https://cloud.google.com/vertex-ai/generative-ai/docs/rag-overview)
 
 ## Quick Start
@@ -411,6 +411,219 @@ This is sent to: `https://bedrock-agent-runtime.{aws_region}.amazonaws.com/knowl
 ```
 
 This process happens automatically whenever you include the `vector_store_ids` parameter in your request.
+
+## Accessing Search Results (Citations)
+
+When using vector stores, LiteLLM automatically returns search results in `provider_specific_fields`. This allows you to show users citations for the AI's response.
+
+### Key Concept
+
+Search results are always in: `response.choices[0].message.provider_specific_fields["search_results"]`
+
+For streaming: Results appear in the **final chunk** when `finish_reason == "stop"`
+
+### Non-Streaming Example
+
+
+**Non-Streaming Response with search results:**
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "LiteLLM is a platform...",
+      "provider_specific_fields": {
+        "search_results": [{
+          "search_query": "What is litellm?",
+          "data": [{
+            "score": 0.95,
+            "content": [{"text": "...", "type": "text"}],
+            "filename": "litellm-docs.md",
+            "file_id": "doc-123"
+          }]
+        }]
+      }
+    },
+    "finish_reason": "stop"
+  }]
+}
+```
+
+<Tabs>
+<TabItem value="python-sdk" label="Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-litellm-api-key"
+)
+
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet",
+    messages=[{"role": "user", "content": "What is litellm?"}],
+    tools=[{"type": "file_search", "vector_store_ids": ["T37J8R4WTM"]}]
+)
+
+# Get AI response
+print(response.choices[0].message.content)
+
+# Get search results (citations)
+search_results = response.choices[0].message.provider_specific_fields.get("search_results", [])
+
+for result_page in search_results:
+    for idx, item in enumerate(result_page['data'], 1):
+        print(f"[{idx}] {item.get('filename', 'Unknown')} (score: {item['score']:.2f})")
+```
+
+</TabItem>
+
+<TabItem value="typescript" label="TypeScript SDK">
+
+```typescript
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+  baseURL: 'http://localhost:4000',
+  apiKey: process.env.LITELLM_API_KEY
+});
+
+const response = await client.chat.completions.create({
+  model: 'claude-3-5-sonnet',
+  messages: [{ role: 'user', content: 'What is litellm?' }],
+  tools: [{ type: 'file_search', vector_store_ids: ['T37J8R4WTM'] }]
+});
+
+// Get AI response
+console.log(response.choices[0].message.content);
+
+// Get search results (citations)
+const message = response.choices[0].message as any;
+const searchResults = message.provider_specific_fields?.search_results || [];
+
+searchResults.forEach((page: any) => {
+  page.data.forEach((item: any, idx: number) => {
+    console.log(`[${idx + 1}] ${item.filename || 'Unknown'} (${item.score.toFixed(2)})`);
+  });
+});
+```
+
+</TabItem>
+</Tabs>
+
+### Streaming Example
+
+**Streaming Response with search results (final chunk):**
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "choices": [{
+    "index": 0,
+    "delta": {
+      "provider_specific_fields": {
+        "search_results": [{
+          "search_query": "What is litellm?",
+          "data": [{
+            "score": 0.95,
+            "content": [{"text": "...", "type": "text"}],
+            "filename": "litellm-docs.md",
+            "file_id": "doc-123"
+          }]
+        }]
+      }
+    },
+    "finish_reason": "stop"
+  }]
+}
+```
+
+<Tabs>
+<TabItem value="python-sdk" label="Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-litellm-api-key"
+)
+
+stream = client.chat.completions.create(
+    model="claude-3-5-sonnet",
+    messages=[{"role": "user", "content": "What is litellm?"}],
+    tools=[{"type": "file_search", "vector_store_ids": ["T37J8R4WTM"]}],
+    stream=True
+)
+
+for chunk in stream:
+    # Stream content
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+    
+    # Get citations in final chunk
+    if chunk.choices[0].finish_reason == "stop":
+        search_results = getattr(chunk.choices[0].delta, 'provider_specific_fields', {}).get('search_results', [])
+        if search_results:
+            print("\n\nSources:")
+            for page in search_results:
+                for idx, item in enumerate(page['data'], 1):
+                    print(f"  [{idx}] {item.get('filename', 'Unknown')} ({item['score']:.2f})")
+```
+
+</TabItem>
+
+<TabItem value="typescript" label="TypeScript SDK">
+
+```typescript
+import OpenAI from 'openai';
+
+const stream = await client.chat.completions.create({
+  model: 'claude-3-5-sonnet',
+  messages: [{ role: 'user', content: 'What is litellm?' }],
+  tools: [{ type: 'file_search', vector_store_ids: ['T37J8R4WTM'] }],
+  stream: true
+});
+
+for await (const chunk of stream) {
+  // Stream content
+  if (chunk.choices[0]?.delta?.content) {
+    process.stdout.write(chunk.choices[0].delta.content);
+  }
+  
+  // Get citations in final chunk
+  if (chunk.choices[0]?.finish_reason === 'stop') {
+    const searchResults = (chunk.choices[0].delta as any).provider_specific_fields?.search_results || [];
+    if (searchResults.length > 0) {
+      console.log('\n\nSources:');
+      searchResults.forEach((page: any) => {
+        page.data.forEach((item: any, idx: number) => {
+          console.log(`  [${idx + 1}] ${item.filename || 'Unknown'} (${item.score.toFixed(2)})`);
+        });
+      });
+    }
+  }
+}
+```
+
+</TabItem>
+</Tabs>
+
+### Search Result Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `search_query` | string | The query used to search the vector store |
+| `data` | array | Array of search results |
+| `data[].score` | float | Relevance score (0-1, higher is more relevant) |
+| `data[].content` | array | Content chunks with `text` and `type` |
+| `data[].filename` | string | Name of the source file (optional) |
+| `data[].file_id` | string | Identifier for the source file (optional) |
+| `data[].attributes` | object | Provider-specific metadata (optional) |
 
 ## API Reference
 

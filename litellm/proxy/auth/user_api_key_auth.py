@@ -47,7 +47,7 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
-from litellm.proxy.auth.oauth2_check import check_oauth2_token
+from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -390,7 +390,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
         )
-        passed_in_key: Optional[str] = None
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
         api_key, passed_in_key = get_api_key(
             custom_litellm_key_header=custom_litellm_key_header,
@@ -456,17 +455,20 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         ########## End of Route Checks Before Reading DB / Cache for "token" ########
 
         if general_settings.get("enable_oauth2_auth", False) is True:
-            # return UserAPIKeyAuth object
-            # helper to check if the api_key is a valid oauth2 token
-            from litellm.proxy.proxy_server import premium_user
+            # Only apply OAuth2 M2M authentication to LLM API routes, not UI/management routes
+            # This allows UI SSO to work separately from API M2M authentication
+            if RouteChecks.is_llm_api_route(route=route):
+                # return UserAPIKeyAuth object
+                # helper to check if the api_key is a valid oauth2 token
+                from litellm.proxy.proxy_server import premium_user
 
-            if premium_user is not True:
-                raise ValueError(
-                    "Oauth2 token validation is only available for premium users"
-                    + CommonProxyErrors.not_premium_user.value
-                )
+                if premium_user is not True:
+                    raise ValueError(
+                        "Oauth2 token validation is only available for premium users"
+                        + CommonProxyErrors.not_premium_user.value
+                    )
 
-            return await check_oauth2_token(token=api_key)
+                return await Oauth2Handler.check_oauth2_token(token=api_key)
 
         if general_settings.get("enable_oauth2_proxy_auth", False) is True:
             return await handle_oauth2_proxy_request(request=request)
@@ -502,7 +504,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 end_user_object = result["end_user_object"]
                 org_id = result["org_id"]
                 token = result["token"]
-                team_membership: Optional[LiteLLM_TeamMembership] = result.get("team_membership", None)
+                team_membership: Optional[LiteLLM_TeamMembership] = result.get(
+                    "team_membership", None
+                )
 
                 global_proxy_spend = await get_global_proxy_spend(
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
@@ -537,10 +541,22 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     org_id=org_id,
                     parent_otel_span=parent_otel_span,
                     end_user_id=end_user_id,
-                    user_tpm_limit=user_object.tpm_limit if user_object is not None else None,
-                    user_rpm_limit=user_object.rpm_limit if user_object is not None else None,
-                    team_member_rpm_limit=team_membership.safe_get_team_member_rpm_limit() if team_membership is not None else None,
-                    team_member_tpm_limit=team_membership.safe_get_team_member_tpm_limit() if team_membership is not None else None,
+                    user_tpm_limit=(
+                        user_object.tpm_limit if user_object is not None else None
+                    ),
+                    user_rpm_limit=(
+                        user_object.rpm_limit if user_object is not None else None
+                    ),
+                    team_member_rpm_limit=(
+                        team_membership.safe_get_team_member_rpm_limit()
+                        if team_membership is not None
+                        else None
+                    ),
+                    team_member_tpm_limit=(
+                        team_membership.safe_get_team_member_tpm_limit()
+                        if team_membership is not None
+                        else None
+                    ),
                 )
                 # run through common checks
                 _ = await common_checks(
@@ -982,7 +998,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
 
             # Check 4. Token Spend is under budget
-            if route in LiteLLMRoutes.llm_api_routes.value:
+            if RouteChecks.is_llm_api_route(route=route):
                 await _virtual_key_max_budget_check(
                     valid_token=valid_token,
                     proxy_logging_obj=proxy_logging_obj,

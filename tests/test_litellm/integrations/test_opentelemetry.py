@@ -8,7 +8,7 @@ import time
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 sys.path.insert(0, os.path.abspath("../.."))
-from litellm.integrations.opentelemetry import OpenTelemetry
+from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 from opentelemetry.sdk.trace import TracerProvider
@@ -751,3 +751,529 @@ class TestOpenTelemetry(unittest.TestCase):
         # ─── no events when only metrics enabled ─────────────────────────────────
         logs = log_exporter.get_finished_logs()
         self.assertFalse(logs, "Did not expect any logs")
+
+    def test_get_span_name_with_generation_name(self):
+        """Test _get_span_name returns generation_name when present"""
+        otel = OpenTelemetry()
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "generation_name": "custom_span"
+                }
+            }
+        }
+        result = otel._get_span_name(kwargs)
+        self.assertEqual(result, "custom_span")
+
+    def test_get_span_name_without_generation_name(self):
+        """Test _get_span_name returns default when generation_name missing"""
+        from litellm.integrations.opentelemetry import LITELLM_REQUEST_SPAN_NAME
+
+        otel = OpenTelemetry()
+        kwargs = {"litellm_params": {"metadata": {}}}
+        result = otel._get_span_name(kwargs)
+        self.assertEqual(result, LITELLM_REQUEST_SPAN_NAME)
+
+    @patch('litellm.turn_off_message_logging', False)
+    def test_maybe_log_raw_request_creates_span(self):
+        """Test _maybe_log_raw_request creates span when logging enabled"""
+        from litellm.integrations.opentelemetry import RAW_REQUEST_SPAN_NAME
+
+        otel = OpenTelemetry()
+        otel.message_logging = True
+
+        mock_tracer = MagicMock()
+        mock_span = MagicMock()
+        mock_tracer.start_span.return_value = mock_span
+        otel.get_tracer_to_use_for_request = MagicMock(return_value=mock_tracer)
+        otel.set_raw_request_attributes = MagicMock()
+        otel._to_ns = MagicMock(return_value=1234567890)
+
+        kwargs = {"litellm_params": {"metadata": {}}}
+        otel._maybe_log_raw_request(kwargs, {}, datetime.now(), datetime.now(), MagicMock())
+
+        mock_tracer.start_span.assert_called_once()
+        self.assertEqual(mock_tracer.start_span.call_args[1]['name'], RAW_REQUEST_SPAN_NAME)
+
+    @patch('litellm.turn_off_message_logging', True)
+    def test_maybe_log_raw_request_skips_when_logging_disabled(self):
+        """Test _maybe_log_raw_request skips when logging disabled"""
+        otel = OpenTelemetry()
+        mock_tracer = MagicMock()
+        otel.get_tracer_to_use_for_request = MagicMock(return_value=mock_tracer)
+
+        kwargs = {"litellm_params": {"metadata": {}}}
+        otel._maybe_log_raw_request(kwargs, {}, datetime.now(), datetime.now(), MagicMock())
+
+        mock_tracer.start_span.assert_not_called()
+
+
+class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
+    """Test suite for the unified _normalize_otel_endpoint method"""
+
+    def test_normalize_traces_endpoint_from_logs_path(self):
+        """Test normalizing endpoint with /v1/logs to /v1/traces"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/logs", "traces")
+        self.assertEqual(result, "http://collector:4318/v1/traces")
+
+    def test_normalize_traces_endpoint_from_metrics_path(self):
+        """Test normalizing endpoint with /v1/metrics to /v1/traces"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/metrics", "traces")
+        self.assertEqual(result, "http://collector:4318/v1/traces")
+
+    def test_normalize_traces_endpoint_from_base_url(self):
+        """Test adding /v1/traces to base URL"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318", "traces")
+        self.assertEqual(result, "http://collector:4318/v1/traces")
+
+    def test_normalize_traces_endpoint_from_v1_path(self):
+        """Test adding traces to /v1 path"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1", "traces")
+        self.assertEqual(result, "http://collector:4318/v1/traces")
+
+    def test_normalize_traces_endpoint_already_correct(self):
+        """Test endpoint already ending with /v1/traces remains unchanged"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/traces", "traces")
+        self.assertEqual(result, "http://collector:4318/v1/traces")
+
+    def test_normalize_metrics_endpoint_from_traces_path(self):
+        """Test normalizing endpoint with /v1/traces to /v1/metrics"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/traces", "metrics")
+        self.assertEqual(result, "http://collector:4318/v1/metrics")
+
+    def test_normalize_metrics_endpoint_from_logs_path(self):
+        """Test normalizing endpoint with /v1/logs to /v1/metrics"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/logs", "metrics")
+        self.assertEqual(result, "http://collector:4318/v1/metrics")
+
+    def test_normalize_metrics_endpoint_from_base_url(self):
+        """Test adding /v1/metrics to base URL"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318", "metrics")
+        self.assertEqual(result, "http://collector:4318/v1/metrics")
+
+    def test_normalize_metrics_endpoint_already_correct(self):
+        """Test endpoint already ending with /v1/metrics remains unchanged"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/metrics", "metrics")
+        self.assertEqual(result, "http://collector:4318/v1/metrics")
+
+    def test_normalize_logs_endpoint_from_traces_path(self):
+        """Test normalizing endpoint with /v1/traces to /v1/logs"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/traces", "logs")
+        self.assertEqual(result, "http://collector:4318/v1/logs")
+
+    def test_normalize_logs_endpoint_from_metrics_path(self):
+        """Test normalizing endpoint with /v1/metrics to /v1/logs"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/metrics", "logs")
+        self.assertEqual(result, "http://collector:4318/v1/logs")
+
+    def test_normalize_logs_endpoint_from_base_url(self):
+        """Test adding /v1/logs to base URL"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318", "logs")
+        self.assertEqual(result, "http://collector:4318/v1/logs")
+
+    def test_normalize_logs_endpoint_already_correct(self):
+        """Test endpoint already ending with /v1/logs remains unchanged"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318/v1/logs", "logs")
+        self.assertEqual(result, "http://collector:4318/v1/logs")
+
+    def test_normalize_endpoint_with_trailing_slash(self):
+        """Test that trailing slashes are properly handled"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318/", "traces")
+        self.assertEqual(result, "http://collector:4318/v1/traces")
+
+    def test_normalize_endpoint_none(self):
+        """Test that None endpoint returns None"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint(None, "traces")
+        self.assertIsNone(result)
+
+    def test_normalize_endpoint_empty_string(self):
+        """Test that empty string returns empty string"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("", "traces")
+        self.assertEqual(result, "")
+
+    def test_normalize_endpoint_invalid_signal_type(self):
+        """Test that invalid signal type returns endpoint unchanged with warning"""
+        otel = OpenTelemetry()
+        endpoint = "http://collector:4318/v1/traces"
+
+        with patch('litellm._logging.verbose_logger.warning') as mock_warning:
+            result = otel._normalize_otel_endpoint(endpoint, "invalid")
+
+            # Should return endpoint unchanged
+            self.assertEqual(result, endpoint)
+
+            # Should log a warning
+            mock_warning.assert_called_once()
+            # Check the warning was called with the expected format string and parameters
+            call_args = mock_warning.call_args[0]
+            self.assertIn("Invalid signal_type", call_args[0])
+            self.assertEqual(call_args[1], "invalid")  # signal_type parameter
+            self.assertEqual(call_args[2], {'traces', 'metrics', 'logs'})  # valid_signals parameter
+
+    def test_normalize_endpoint_https(self):
+        """Test normalization works with https URLs"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("https://collector.example.com:4318", "logs")
+        self.assertEqual(result, "https://collector.example.com:4318/v1/logs")
+
+    def test_normalize_endpoint_with_path_prefix(self):
+        """Test normalization works with URLs that have path prefixes"""
+        otel = OpenTelemetry()
+        result = otel._normalize_otel_endpoint("http://collector:4318/otel/v1/traces", "logs")
+        # Should replace the final /traces with /logs
+        self.assertEqual(result, "http://collector:4318/otel/v1/logs")
+
+    def test_normalize_endpoint_consistency_across_signals(self):
+        """Test that normalization is consistent for all signal types from the same base"""
+        otel = OpenTelemetry()
+        base = "http://collector:4318"
+
+        traces_result = otel._normalize_otel_endpoint(base, "traces")
+        metrics_result = otel._normalize_otel_endpoint(base, "metrics")
+        logs_result = otel._normalize_otel_endpoint(base, "logs")
+
+        # All should have the same base with different signal paths
+        self.assertEqual(traces_result, "http://collector:4318/v1/traces")
+        self.assertEqual(metrics_result, "http://collector:4318/v1/metrics")
+        self.assertEqual(logs_result, "http://collector:4318/v1/logs")
+
+    def test_normalize_endpoint_signal_switching(self):
+        """Test switching between different signal types on the same endpoint"""
+        otel = OpenTelemetry()
+
+        # Start with traces
+        endpoint = "http://collector:4318/v1/traces"
+
+        # Switch to metrics
+        metrics = otel._normalize_otel_endpoint(endpoint, "metrics")
+        self.assertEqual(metrics, "http://collector:4318/v1/metrics")
+
+        # Switch to logs
+        logs = otel._normalize_otel_endpoint(metrics, "logs")
+        self.assertEqual(logs, "http://collector:4318/v1/logs")
+
+        # Switch back to traces
+        traces = otel._normalize_otel_endpoint(logs, "traces")
+        self.assertEqual(traces, "http://collector:4318/v1/traces")
+
+
+class TestOpenTelemetryProtocolSelection(unittest.TestCase):
+    """Test suite for verifying correct exporter selection based on protocol"""
+
+    def test_get_span_processor_uses_http_exporter_for_otlp_http(self):
+        """Test that otlp_http protocol uses OTLPSpanExporterHTTP"""
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter as OTLPSpanExporterHTTP,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        config = OpenTelemetryConfig(
+            exporter="otlp_http",
+            endpoint="http://collector:4318"
+        )
+        otel = OpenTelemetry(config=config)
+
+        processor = otel._get_span_processor()
+
+        # Verify it's a BatchSpanProcessor
+        self.assertIsInstance(processor, BatchSpanProcessor)
+
+        # Verify the exporter is the HTTP variant
+        self.assertIsInstance(processor.span_exporter, OTLPSpanExporterHTTP)
+
+    def test_get_span_processor_uses_grpc_exporter_for_otlp_grpc(self):
+        """Test that otlp_grpc protocol uses OTLPSpanExporterGRPC"""
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter as OTLPSpanExporterGRPC,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        config = OpenTelemetryConfig(
+            exporter="otlp_grpc",
+            endpoint="http://collector:4317"
+        )
+        otel = OpenTelemetry(config=config)
+
+        processor = otel._get_span_processor()
+
+        # Verify it's a BatchSpanProcessor
+        self.assertIsInstance(processor, BatchSpanProcessor)
+
+        # Verify the exporter is the gRPC variant
+        self.assertIsInstance(processor.span_exporter, OTLPSpanExporterGRPC)
+
+    def test_get_span_processor_uses_grpc_exporter_for_grpc_alias(self):
+        """Test that 'grpc' protocol alias uses OTLPSpanExporterGRPC"""
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter as OTLPSpanExporterGRPC,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        config = OpenTelemetryConfig(
+            exporter="grpc",
+            endpoint="http://collector:4317"
+        )
+        otel = OpenTelemetry(config=config)
+
+        processor = otel._get_span_processor()
+
+        # Verify it's a BatchSpanProcessor
+        self.assertIsInstance(processor, BatchSpanProcessor)
+
+        # Verify the exporter is the gRPC variant
+        self.assertIsInstance(processor.span_exporter, OTLPSpanExporterGRPC)
+
+    def test_get_span_processor_uses_http_exporter_for_http_protobuf(self):
+        """Test that http/protobuf protocol uses OTLPSpanExporterHTTP"""
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter as OTLPSpanExporterHTTP,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        config = OpenTelemetryConfig(
+            exporter="http/protobuf",
+            endpoint="http://collector:4318"
+        )
+        otel = OpenTelemetry(config=config)
+
+        processor = otel._get_span_processor()
+
+        # Verify it's a BatchSpanProcessor
+        self.assertIsInstance(processor, BatchSpanProcessor)
+
+        # Verify the exporter is the HTTP variant
+        self.assertIsInstance(processor.span_exporter, OTLPSpanExporterHTTP)
+
+    def test_get_span_processor_uses_console_exporter_for_console(self):
+        """Test that console protocol uses ConsoleSpanExporter"""
+        from opentelemetry.sdk.trace.export import (
+            BatchSpanProcessor,
+            ConsoleSpanExporter,
+        )
+
+        config = OpenTelemetryConfig(exporter="console")
+        otel = OpenTelemetry(config=config)
+
+        processor = otel._get_span_processor()
+
+        # Verify it's a BatchSpanProcessor
+        self.assertIsInstance(processor, BatchSpanProcessor)
+
+        # Verify the exporter is the console variant
+        self.assertIsInstance(processor.span_exporter, ConsoleSpanExporter)
+
+    def test_get_log_exporter_uses_http_exporter_for_otlp_http(self):
+        """Test that otlp_http protocol uses HTTP OTLPLogExporter"""
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+
+        config = OpenTelemetryConfig(
+            exporter="otlp_http",
+            endpoint="http://collector:4318",
+            enable_events=True
+        )
+        otel = OpenTelemetry(config=config)
+
+        exporter = otel._get_log_exporter()
+
+        # Verify the exporter is the HTTP variant
+        self.assertIsInstance(exporter, OTLPLogExporter)
+
+        # Check that it's from the http module by checking the module name
+        self.assertIn('http', exporter.__class__.__module__)
+
+    def test_get_log_exporter_uses_grpc_exporter_for_otlp_grpc(self):
+        """Test that otlp_grpc protocol uses gRPC OTLPLogExporter"""
+        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+
+        config = OpenTelemetryConfig(
+            exporter="otlp_grpc",
+            endpoint="http://collector:4317",
+            enable_events=True
+        )
+        otel = OpenTelemetry(config=config)
+
+        exporter = otel._get_log_exporter()
+
+        # Verify the exporter is the gRPC variant
+        self.assertIsInstance(exporter, OTLPLogExporter)
+
+        # Check that it's from the grpc module by checking the module name
+        self.assertIn('grpc', exporter.__class__.__module__)
+
+    def test_get_log_exporter_uses_grpc_exporter_for_grpc_alias(self):
+        """Test that 'grpc' protocol alias uses gRPC OTLPLogExporter"""
+        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+
+        config = OpenTelemetryConfig(
+            exporter="grpc",
+            endpoint="http://collector:4317",
+            enable_events=True
+        )
+        otel = OpenTelemetry(config=config)
+
+        exporter = otel._get_log_exporter()
+
+        # Verify the exporter is the gRPC variant
+        self.assertIsInstance(exporter, OTLPLogExporter)
+
+        # Check that it's from the grpc module by checking the module name
+        self.assertIn('grpc', exporter.__class__.__module__)
+
+    def test_get_log_exporter_uses_console_exporter_for_console(self):
+        """Test that console protocol uses ConsoleLogExporter"""
+        from opentelemetry.sdk._logs.export import ConsoleLogExporter
+
+        config = OpenTelemetryConfig(
+            exporter="console",
+            enable_events=True
+        )
+        otel = OpenTelemetry(config=config)
+
+        exporter = otel._get_log_exporter()
+
+        # Verify the exporter is the console variant
+        self.assertIsInstance(exporter, ConsoleLogExporter)
+
+    def test_get_log_exporter_defaults_to_console_for_unknown_protocol(self):
+        """Test that unknown protocol defaults to ConsoleLogExporter with warning"""
+        from opentelemetry.sdk._logs.export import ConsoleLogExporter
+
+        config = OpenTelemetryConfig(
+            exporter="unknown_protocol",
+            enable_events=True
+        )
+        otel = OpenTelemetry(config=config)
+
+        with patch('litellm._logging.verbose_logger.warning') as mock_warning:
+            exporter = otel._get_log_exporter()
+
+            # Verify the exporter defaults to console
+            self.assertIsInstance(exporter, ConsoleLogExporter)
+
+            # Verify a warning was logged
+            mock_warning.assert_called_once()
+            args = mock_warning.call_args[0]
+            self.assertIn("Unknown log exporter", args[0])
+            self.assertIn("unknown_protocol", args[1])
+
+    @patch.dict(os.environ, {"OTEL_EXPORTER": "otlp_http", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318"}, clear=False)
+    def test_protocol_selection_from_environment_http(self):
+        """Test that protocol selection works correctly from environment variables for HTTP"""
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter as OTLPSpanExporterHTTP,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        config = OpenTelemetryConfig.from_env()
+        otel = OpenTelemetry(config=config)
+
+        processor = otel._get_span_processor()
+
+        # Verify the HTTP exporter is used
+        self.assertIsInstance(processor, BatchSpanProcessor)
+        self.assertIsInstance(processor.span_exporter, OTLPSpanExporterHTTP)
+
+    @patch.dict(os.environ, {"OTEL_EXPORTER": "otlp_grpc", "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4317"}, clear=False)
+    def test_protocol_selection_from_environment_grpc(self):
+        """Test that protocol selection works correctly from environment variables for gRPC"""
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter as OTLPSpanExporterGRPC,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        config = OpenTelemetryConfig.from_env()
+        otel = OpenTelemetry(config=config)
+
+        processor = otel._get_span_processor()
+
+        # Verify the gRPC exporter is used
+        self.assertIsInstance(processor, BatchSpanProcessor)
+        self.assertIsInstance(processor.span_exporter, OTLPSpanExporterGRPC)
+
+    def test_http_exporter_endpoint_normalization_for_traces(self):
+        """Test that HTTP trace exporter gets properly normalized endpoint"""
+        config = OpenTelemetryConfig(
+            exporter="otlp_http",
+            endpoint="http://collector:4318"
+        )
+        otel = OpenTelemetry(config=config)
+
+        processor = otel._get_span_processor()
+
+        # Verify the endpoint was normalized to include /v1/traces
+        # Access the private _endpoint attribute if available
+        if hasattr(processor.span_exporter, '_endpoint'):
+            self.assertEqual(processor.span_exporter._endpoint, "http://collector:4318/v1/traces")  # type: ignore[attr-defined]
+
+    def test_grpc_exporter_endpoint_normalization_for_traces(self):
+        """Test that gRPC trace exporter gets properly normalized endpoint"""
+        config = OpenTelemetryConfig(
+            exporter="otlp_grpc",
+            endpoint="http://collector:4317"
+        )
+        otel = OpenTelemetry(config=config)
+
+        processor = otel._get_span_processor()
+
+        # Verify the endpoint was normalized to include /v1/traces
+        # Note: gRPC exporters strip the http:// prefix, so we check for the normalized path
+        if hasattr(processor.span_exporter, '_endpoint'):
+            # gRPC exporter strips http:// prefix
+            self.assertIn('collector:4317', processor.span_exporter._endpoint)  # type: ignore[attr-defined]
+            # The endpoint should have been normalized with /v1/traces before being passed to gRPC exporter
+            # We verify this by checking the normalization function was called correctly
+            normalized = otel._normalize_otel_endpoint("http://collector:4317", "traces")
+            self.assertEqual(normalized, "http://collector:4317/v1/traces")
+
+    def test_http_log_exporter_endpoint_normalization_for_logs(self):
+        """Test that HTTP log exporter gets properly normalized endpoint"""
+        config = OpenTelemetryConfig(
+            exporter="otlp_http",
+            endpoint="http://collector:4318/v1/traces",
+            enable_events=True
+        )
+        otel = OpenTelemetry(config=config)
+
+        exporter = otel._get_log_exporter()
+
+        # Verify the endpoint was normalized to /v1/logs (not /v1/traces)
+        # Access the private _endpoint attribute if available
+        if hasattr(exporter, '_endpoint'):
+            self.assertEqual(exporter._endpoint, "http://collector:4318/v1/logs")  # type: ignore[attr-defined]
+
+    def test_grpc_log_exporter_endpoint_normalization_for_logs(self):
+        """Test that gRPC log exporter gets properly normalized endpoint"""
+        config = OpenTelemetryConfig(
+            exporter="otlp_grpc",
+            endpoint="http://collector:4317/v1/traces",
+            enable_events=True
+        )
+        otel = OpenTelemetry(config=config)
+
+        exporter = otel._get_log_exporter()
+
+        # Verify the endpoint was normalized to /v1/logs (not /v1/traces)
+        # Note: gRPC exporters strip the http:// prefix, so we check for the normalized path
+        if hasattr(exporter, '_endpoint'):
+            # gRPC exporter strips http:// prefix
+            self.assertIn('collector:4317', exporter._endpoint)  # type: ignore[attr-defined]
+            # The endpoint should have been normalized with /v1/logs before being passed to gRPC exporter
+            # We verify this by checking the normalization function was called correctly
+            normalized = otel._normalize_otel_endpoint("http://collector:4317/v1/traces", "logs")
+            self.assertEqual(normalized, "http://collector:4317/v1/logs")

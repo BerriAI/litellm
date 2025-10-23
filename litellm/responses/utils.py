@@ -23,7 +23,7 @@ from litellm.types.llms.openai import (
     ResponseText,
 )
 from litellm.types.responses.main import DecodedResponseId
-from litellm.types.utils import SpecialEnums, Usage
+from litellm.types.utils import PromptTokensDetails, SpecialEnums, Usage
 
 
 class ResponsesAPIRequestUtils:
@@ -375,8 +375,15 @@ class ResponseAPILoggingUtils:
         )
         prompt_tokens: int = response_api_usage.input_tokens or 0
         completion_tokens: int = response_api_usage.output_tokens or 0
+        prompt_tokens_details: Optional[PromptTokensDetails] = None
+        if response_api_usage.input_tokens_details:
+            prompt_tokens_details = PromptTokensDetails(
+                cached_tokens=response_api_usage.input_tokens_details.cached_tokens,
+                audio_tokens=response_api_usage.input_tokens_details.audio_tokens,
+            )
         return Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens_details=prompt_tokens_details,
         )

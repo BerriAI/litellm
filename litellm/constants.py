@@ -15,8 +15,9 @@ DEFAULT_SQS_FLUSH_INTERVAL_SECONDS = int(
     os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
 )
 DEFAULT_NUM_WORKERS_LITELLM_PROXY = int(
-    os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", os.cpu_count() or 4)
+    os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
 )
+DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
 DEFAULT_SQS_BATCH_SIZE = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
 SQS_SEND_MESSAGE_ACTION = "SendMessage"
 SQS_API_VERSION = "2012-11-05"
@@ -60,7 +61,9 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO", 128)
 )
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE = int(
-    os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE", 512)
+    os.getenv(
+        "DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE", 512
+    )
 )
 
 # Generic fallback for unknown models
@@ -84,6 +87,43 @@ MAX_TOKEN_TRIMMING_ATTEMPTS = int(
 
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
+
+# Aiohttp connection pooling constants
+AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 0))
+AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
+AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
+
+# WebSocket constants
+# Default to None (unlimited) to match OpenAI's official agents SDK behavior
+# https://github.com/openai/openai-agents-python/blob/cf1b933660e44fd37b4350c41febab8221801409/src/agents/realtime/openai_realtime.py#L235
+_max_size_env = os.getenv("REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES")
+REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES = (
+    int(_max_size_env) if _max_size_env is not None else None
+)
+
+# SSL/TLS cipher configuration for faster handshakes
+# Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
+# This balances performance with broad compatibility
+DEFAULT_SSL_CIPHERS = os.getenv(
+    "LITELLM_SSL_CIPHERS",
+    # Priority 1: TLS 1.3 ciphers (fastest, ~50ms handshake)
+    "TLS_AES_256_GCM_SHA384:"           # Fastest observed in testing
+    "TLS_AES_128_GCM_SHA256:"           # Slightly faster than 256-bit
+    "TLS_CHACHA20_POLY1305_SHA256:"     # Fast on ARM/mobile
+    # Priority 2: TLS 1.2 ECDHE+GCM (fast, ~100ms handshake, widely supported)
+    "ECDHE-RSA-AES256-GCM-SHA384:"
+    "ECDHE-RSA-AES128-GCM-SHA256:"
+    "ECDHE-ECDSA-AES256-GCM-SHA384:"
+    "ECDHE-ECDSA-AES128-GCM-SHA256:"
+    # Priority 3: Additional modern ciphers (good balance)
+    "ECDHE-RSA-CHACHA20-POLY1305:"
+    "ECDHE-ECDSA-CHACHA20-POLY1305:"
+    # Priority 4: Widely compatible fallbacks (slower but universally supported)
+    "ECDHE-RSA-AES256-SHA384:"          # Common fallback
+    "ECDHE-RSA-AES128-SHA256:"          # Very widely supported
+    "AES256-GCM-SHA384:"                # Non-PFS fallback (compatibility)
+    "AES128-GCM-SHA256",                # Last resort (maximum compatibility)
+)
 
 ########### v2 Architecture constants for managing writing updates to the database ###########
 REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
@@ -167,6 +207,9 @@ JITTER = float(os.getenv("JITTER", 0.75))
 DEFAULT_IN_MEMORY_TTL = int(
     os.getenv("DEFAULT_IN_MEMORY_TTL", 5)
 )  # default time to live for the in-memory cache
+DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE = int(
+    os.getenv("DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE", 1000)
+)  # default max size for redis batch cache
 DEFAULT_POLLING_INTERVAL = float(
     os.getenv("DEFAULT_POLLING_INTERVAL", 0.03)
 )  # default polling interval for the scheduler
@@ -177,7 +220,7 @@ NON_LLM_CONNECTION_TIMEOUT = int(
     os.getenv("NON_LLM_CONNECTION_TIMEOUT", 15)
 )  # timeout for adjacent services (e.g. jwt auth)
 MAX_EXCEPTION_MESSAGE_LENGTH = int(os.getenv("MAX_EXCEPTION_MESSAGE_LENGTH", 2000))
-MAX_STRING_LENGTH_PROMPT_IN_DB = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 1000))
+MAX_STRING_LENGTH_PROMPT_IN_DB = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048))
 BEDROCK_MAX_POLICY_SIZE = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
 REPLICATE_POLLING_DELAY_SECONDS = float(
     os.getenv("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
@@ -230,6 +273,11 @@ ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "high": 10,
 }
 DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
+
+### DATAFORSEO CONSTANTS ###
+DEFAULT_DATAFORSEO_LOCATION_CODE = int(
+    os.getenv("DEFAULT_DATAFORSEO_LOCATION_CODE", 2250)
+)  # Default to France (2250) - lower number, commonly used location
 
 LITELLM_CHAT_PROVIDERS = [
     "openai",
@@ -311,6 +359,9 @@ LITELLM_CHAT_PROVIDERS = [
     "morph",
     "lambda_ai",
     "vercel_ai_gateway",
+    "wandb",
+    "ovhcloud",
+    "lemonade"
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -361,6 +412,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "extra_headers",
     "thinking",
     "web_search_options",
+    "service_tier",
 ]
 
 OPENAI_TRANSCRIPTION_PARAMS = [
@@ -415,6 +467,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "reasoning_effort": None,
     "thinking": None,
     "web_search_options": None,
+    "service_tier": None,
     "safety_identifier": None,
 }
 
@@ -445,6 +498,8 @@ openai_compatible_endpoints: List = [
     "https://api.lambda.ai/v1",
     "https://api.hyperbolic.xyz/v1",
     "https://ai-gateway.vercel.sh/v1",
+    "https://api.inference.wandb.ai/v1",
+    "https://api.clarifai.com/v2/ext/openai/v1",
 ]
 
 
@@ -489,6 +544,9 @@ openai_compatible_providers: List = [
     "hyperbolic",
     "vercel_ai_gateway",
     "aiml",
+    "wandb",
+    "cometapi",
+    "clarifai",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -504,6 +562,7 @@ openai_text_completion_compatible_providers: List = (
         "v0",
         "lambda_ai",
         "hyperbolic",
+        "wandb",
     ]
 )
 _openai_like_providers: List = [
@@ -531,69 +590,37 @@ replicate_models: set = set(
 
 clarifai_models: set = set(
     [
-        "clarifai/meta.Llama-3.Llama-3-8B-Instruct",
-        "clarifai/gcp.generate.gemma-1_1-7b-it",
-        "clarifai/mistralai.completion.mixtral-8x22B",
-        "clarifai/cohere.generate.command-r-plus",
-        "clarifai/databricks.drbx.dbrx-instruct",
-        "clarifai/mistralai.completion.mistral-large",
-        "clarifai/mistralai.completion.mistral-medium",
-        "clarifai/mistralai.completion.mistral-small",
-        "clarifai/mistralai.completion.mixtral-8x7B-Instruct-v0_1",
-        "clarifai/gcp.generate.gemma-2b-it",
-        "clarifai/gcp.generate.gemma-7b-it",
-        "clarifai/deci.decilm.deciLM-7B-instruct",
-        "clarifai/mistralai.completion.mistral-7B-Instruct",
-        "clarifai/gcp.generate.gemini-pro",
-        "clarifai/anthropic.completion.claude-v1",
-        "clarifai/anthropic.completion.claude-instant-1_2",
-        "clarifai/anthropic.completion.claude-instant",
-        "clarifai/anthropic.completion.claude-v2",
-        "clarifai/anthropic.completion.claude-2_1",
-        "clarifai/meta.Llama-2.codeLlama-70b-Python",
-        "clarifai/meta.Llama-2.codeLlama-70b-Instruct",
-        "clarifai/openai.completion.gpt-3_5-turbo-instruct",
-        "clarifai/meta.Llama-2.llama2-7b-chat",
-        "clarifai/meta.Llama-2.llama2-13b-chat",
-        "clarifai/meta.Llama-2.llama2-70b-chat",
-        "clarifai/openai.chat-completion.gpt-4-turbo",
-        "clarifai/microsoft.text-generation.phi-2",
-        "clarifai/meta.Llama-2.llama2-7b-chat-vllm",
-        "clarifai/upstage.solar.solar-10_7b-instruct",
-        "clarifai/openchat.openchat.openchat-3_5-1210",
-        "clarifai/togethercomputer.stripedHyena.stripedHyena-Nous-7B",
-        "clarifai/gcp.generate.text-bison",
-        "clarifai/meta.Llama-2.llamaGuard-7b",
-        "clarifai/fblgit.una-cybertron.una-cybertron-7b-v2",
-        "clarifai/openai.chat-completion.GPT-4",
-        "clarifai/openai.chat-completion.GPT-3_5-turbo",
-        "clarifai/ai21.complete.Jurassic2-Grande",
-        "clarifai/ai21.complete.Jurassic2-Grande-Instruct",
-        "clarifai/ai21.complete.Jurassic2-Jumbo-Instruct",
-        "clarifai/ai21.complete.Jurassic2-Jumbo",
-        "clarifai/ai21.complete.Jurassic2-Large",
-        "clarifai/cohere.generate.cohere-generate-command",
-        "clarifai/wizardlm.generate.wizardCoder-Python-34B",
-        "clarifai/wizardlm.generate.wizardLM-70B",
-        "clarifai/tiiuae.falcon.falcon-40b-instruct",
-        "clarifai/togethercomputer.RedPajama.RedPajama-INCITE-7B-Chat",
-        "clarifai/gcp.generate.code-gecko",
-        "clarifai/gcp.generate.code-bison",
-        "clarifai/mistralai.completion.mistral-7B-OpenOrca",
-        "clarifai/mistralai.completion.openHermes-2-mistral-7B",
-        "clarifai/wizardlm.generate.wizardLM-13B",
-        "clarifai/huggingface-research.zephyr.zephyr-7B-alpha",
-        "clarifai/wizardlm.generate.wizardCoder-15B",
-        "clarifai/microsoft.text-generation.phi-1_5",
-        "clarifai/databricks.Dolly-v2.dolly-v2-12b",
-        "clarifai/bigcode.code.StarCoder",
-        "clarifai/salesforce.xgen.xgen-7b-8k-instruct",
-        "clarifai/mosaicml.mpt.mpt-7b-instruct",
-        "clarifai/anthropic.completion.claude-3-opus",
-        "clarifai/anthropic.completion.claude-3-sonnet",
-        "clarifai/gcp.generate.gemini-1_5-pro",
-        "clarifai/gcp.generate.imagen-2",
-        "clarifai/salesforce.blip.general-english-image-caption-blip-2",
+        "clarifai/openai.chat-completion.gpt-oss-20b",
+        "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Instruct-2507",
+        "clarifai/qwen.qwen3.qwen3-next-80B-A3B-Thinking",
+        "clarifai/openai.chat-completion.gpt-oss-120b",
+        "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Thinking-2507"
+        "clarifai/openai.chat-completion.gpt-5-nano",
+        "clarifai/openai.chat-completion.gpt-4o",
+        "clarifai/gcp.generate.gemini-2_5-pro",
+        "clarifai/anthropic.completion.claude-sonnet-4",
+        "clarifai/xai.chat-completion.grok-2-vision-1212",
+        "clarifai/openbmb.miniCPM.MiniCPM-o-2_6-language",
+        "clarifai/microsoft.text-generation.Phi-4-reasoning-plus",
+        "clarifai/openbmb.miniCPM.MiniCPM3-4B",
+        "clarifai/openbmb.miniCPM.MiniCPM4-8B",
+        "clarifai/xai.chat-completion.grok-2-1212",
+        "clarifai/anthropic.completion.claude-opus-4",
+        "clarifai/xai.chat-completion.grok-code-fast-1",
+        "clarifai/qwen.qwenCoder.Qwen3-Coder-30B-A3B-Instruct",
+        "clarifai/deepseek-ai.deepseek-chat.DeepSeek-R1-0528-Qwen3-8B",
+        "clarifai/openai.chat-completion.gpt-5-mini",
+        "clarifai/microsoft.text-generation.phi-4",
+        "clarifai/openai.chat-completion.gpt-5",
+        "clarifai/meta.Llama-3.Llama-3_2-3B-Instruct",
+        "clarifai/xai.image-generation.grok-2-image-1212",
+        "clarifai/xai.chat-completion.grok-3",
+        "clarifai/openai.chat-completion.o3",
+        "clarifai/qwen.qwen-VL.Qwen2_5-VL-7B-Instruct",
+        "clarifai/qwen.qwenLM.Qwen3-14B",
+        "clarifai/qwen.qwenLM.QwQ-32B-AWQ",
+        "clarifai/anthropic.completion.claude-3_5-haiku",
+        "clarifai/anthropic.completion.claude-3_7-sonnet",    
     ]
 )
 
@@ -754,6 +781,38 @@ nebius_embedding_models: set = set(
     ]
 )
 
+WANDB_MODELS: set = set(
+    [
+        # openai models
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+
+        # zai-org models
+        "zai-org/GLM-4.5",
+
+        # Qwen models
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        "Qwen/Qwen3-235B-A22B-Thinking-2507",
+
+        # moonshotai
+        "moonshotai/Kimi-K2-Instruct",
+
+        # meta models
+        "meta-llama/Llama-3.1-8B-Instruct",
+        "meta-llama/Llama-3.3-70B-Instruct",
+        "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+
+        # deepseek-ai
+        "deepseek-ai/DeepSeek-V3.1",
+        "deepseek-ai/DeepSeek-R1-0528",
+        "deepseek-ai/DeepSeek-V3-0324",
+
+        # microsoft
+        "microsoft/Phi-4-mini-instruct",
+    ]
+)
+
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "cohere",
     "anthropic",
@@ -766,9 +825,22 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "deepseek_r1",
 ]
 
+BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
+    "cohere",
+    "amazon",
+    "twelvelabs",
+]
+
 BEDROCK_CONVERSE_MODELS = [
+    "qwen.qwen3-coder-480b-a35b-v1:0",
+    "qwen.qwen3-235b-a22b-2507-v1:0",
+    "qwen.qwen3-coder-30b-a3b-v1:0",
+    "qwen.qwen3-32b-v1:0",
+    "deepseek.v3-v1:0",
     "openai.gpt-oss-20b-1:0",
     "openai.gpt-oss-120b-1:0",
+    "anthropic.claude-haiku-4-5-20251001-v1:0",
+    "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
@@ -819,6 +891,8 @@ bedrock_embedding_models: set = set(
         "amazon.titan-embed-text-v1",
         "cohere.embed-english-v3",
         "cohere.embed-multilingual-v3",
+        "cohere.embed-v4:0",
+        "twelvelabs.marengo-embed-2-7-v1:0",
     ]
 )
 
@@ -914,6 +988,10 @@ DEFAULT_SOFT_BUDGET = float(
 # makes it clear this is a rate limit error for a litellm virtual key
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY = "LiteLLM Virtual Key user_api_key_hash"
 
+# Python garbage collection threshold configuration
+# Format: "gen0,gen1,gen2" e.g., "1000,50,50"
+PYTHON_GC_THRESHOLD = os.getenv("PYTHON_GC_THRESHOLD")
+
 # pass through route constansts
 BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
     "agents/",
@@ -937,7 +1015,12 @@ HEALTH_CHECK_TIMEOUT_SECONDS = int(
     os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60)
 )  # 60 seconds
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
+LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
+LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
 
+# Key Rotation Constants
+LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
+LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400))  # 24 hours default
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
@@ -949,7 +1032,9 @@ LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
 CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME = "cloudzero_export_usage_data"
-CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000))
+CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
+    os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000)
+)
 SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
@@ -967,6 +1052,12 @@ PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
 )  # 5 minutes
+DEFAULT_SHARED_HEALTH_CHECK_TTL = int(
+    os.getenv("DEFAULT_SHARED_HEALTH_CHECK_TTL", 300)
+)  # 5 minutes - TTL for cached health check results
+DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL = int(
+    os.getenv("DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL", 60)
+)  # 1 minute - TTL for health check lock
 PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS = int(
     os.getenv("PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS", 9)
 )
@@ -1019,6 +1110,8 @@ SENTRY_DENYLIST = [
     "FIREWORKS_API_KEY",
     "FIREWORKS_AI_API_KEY",
     "FIREWORKSAI_API_KEY",
+    "OVHCLOUD_API_KEY",
+    "CLARIFAI_API_KEY",
     # Database and Connection Strings
     "database_url",
     "redis_url",
@@ -1057,3 +1150,8 @@ SENTRY_PII_DENYLIST = [
     "SMTP_SENDER_EMAIL",
     "TEST_EMAIL_ADDRESS",
 ]
+
+# CoroutineChecker cache configuration
+COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
+    os.getenv("COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY", 1000)
+)

@@ -2,11 +2,15 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# 💸 Spend Tracking
+# Spend Tracking
 
 Track spend for keys, users, and teams across 100+ LLMs.
 
 LiteLLM automatically tracks spend for all known models. See our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
+
+:::tip Keep Pricing Data Updated
+[Sync model pricing data from GitHub](../sync_models_github.md) to ensure accurate cost tracking.
+:::
 
 ### How to Track Spend with LiteLLM
 
@@ -19,7 +23,7 @@ LiteLLM automatically tracks spend for all known models. See our [model cost map
 <Tabs>
 <TabItem value="openai" label="OpenAI Python v1.0.0+">
 
-```python
+```python title="Send Request with Spend Tracking" showLineNumbers
 import openai
 client = openai.OpenAI(
     api_key="sk-1234",
@@ -51,7 +55,7 @@ print(response)
 
 Pass `metadata` as part of the request body
 
-```shell
+```shell title="Curl Request with Spend Tracking" showLineNumbers
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --header 'Authorization: Bearer sk-1234' \
@@ -73,7 +77,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 <TabItem value="langchain" label="Langchain">
 
-```python
+```python title="Langchain with Spend Tracking" showLineNumbers
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts.chat import (
     ChatPromptTemplate,
@@ -127,7 +131,7 @@ Expect to see `x-litellm-response-cost` in the response headers with calculated 
 
 The following spend gets tracked in Table `LiteLLM_SpendLogs`
 
-```json
+```json title="Spend Log Entry Format" showLineNumbers
 {
   "api_key": "fe6b0cab4ff5a5a8df823196cc8a450*****",                            # Hash of API Key used
   "user": "default_user",                                                       # Internal User (LiteLLM_UserTable) that owns `api_key=sk-1234`.
@@ -165,7 +169,7 @@ Schedule a [meeting with us to get your Enterprise License](https://calendly.com
 
 Create Key with with `permissions={"get_spend_routes": true}`
 
-```shell
+```shell title="Generate Key with Spend Route Permissions" showLineNumbers
 curl --location 'http://0.0.0.0:4000/key/generate' \
         --header 'Authorization: Bearer sk-1234' \
         --header 'Content-Type: application/json' \
@@ -212,7 +216,7 @@ curl -X POST \
 
 Assuming you have been issuing keys for end users, and setting their `user_id` on the key, you can check their usage.
 
-```shell title="Total for a user API" showLineNumbers
+```shell title="Get User Spend - API Request" showLineNumbers
 curl -L -X GET 'http://localhost:4000/user/info?user_id=jane_smith' \
 -H 'Authorization: Bearer sk-...'
 ```
@@ -836,14 +840,14 @@ The `/spend/logs` endpoint now supports a `summarize` parameter to control data 
 
 **Get individual transaction logs:**
 
-```bash
+```bash title="Get Individual Transaction Logs" showLineNumbers
 curl -X GET "http://localhost:4000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" \
 -H "Authorization: Bearer sk-1234"
 ```
 
 **Get summarized data (default):**
 
-```bash
+```bash title="Get Summarized Spend Data" showLineNumbers
 curl -X GET "http://localhost:4000/spend/logs?start_date=2024-01-01&end_date=2024-01-02" \
 -H "Authorization: Bearer sk-1234"
 ```

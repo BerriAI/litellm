@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 |-------|-------|
 | Description | Azure OpenAI Service provides REST API access to OpenAI's powerful language models including o1, o1-mini, GPT-5, GPT-4o, GPT-4o mini, GPT-4 Turbo with Vision, GPT-4, GPT-3.5-Turbo, and Embeddings model series |
 | Provider Route on LiteLLM | `azure/`, [`azure/o_series/`](#o-series-models), [`azure/gpt5_series/`](#gpt-5-models) |
-| Supported Operations | [`/chat/completions`](#azure-openai-chat-completion-models), [`/responses`](./azure_responses), [`/completions`](#azure-instruct-models), [`/embeddings`](./azure_embedding), [`/audio/speech`](#azure-text-to-speech-tts), [`/audio/transcriptions`](../audio_transcription), `/fine_tuning`, [`/batches`](#azure-batches-api), `/files`, [`/images`](../image_generation#azure-openai-image-generation-models) |
+| Supported Operations | [`/chat/completions`](#azure-openai-chat-completion-models), [`/responses`](./azure_responses), [`/completions`](#azure-instruct-models), [`/embeddings`](./azure_embedding), [`/audio/speech`](azure_speech), [`/audio/transcriptions`](../audio_transcription), `/fine_tuning`, [`/batches`](#azure-batches-api), `/files`, [`/images`](../image_generation#azure-openai-image-generation-models) |
 | Link to Provider Doc | [Azure OpenAI ↗](https://learn.microsoft.com/en-us/azure/ai-services/openai/overview)
 
 ## API Keys, Params
@@ -538,39 +538,6 @@ response = litellm.completion(
 print(response)
 ```
 
-## Azure Text to Speech (tts)
-
-**LiteLLM PROXY**
-
-```yaml
- - model_name: azure/tts-1
-    litellm_params:
-      model: azure/tts-1
-      api_base: "os.environ/AZURE_API_BASE_TTS"
-      api_key: "os.environ/AZURE_API_KEY_TTS"
-      api_version: "os.environ/AZURE_API_VERSION" 
-```
-
-**LiteLLM SDK**
-
-```python 
-from litellm import completion
-
-## set ENV variables
-os.environ["AZURE_API_KEY"] = ""
-os.environ["AZURE_API_BASE"] = ""
-os.environ["AZURE_API_VERSION"] = ""
-
-# azure call
-speech_file_path = Path(__file__).parent / "speech.mp3"
-response = speech(
-        model="azure/<your-deployment-name",
-        voice="alloy",
-        input="the quick brown fox jumped over the lazy dogs",
-    )
-response.stream_to_file(speech_file_path)
-```
-
 ## **Authentication**
 
 
@@ -931,7 +898,7 @@ curl http://localhost:4000/v1/batches \
 ```python
 retrieved_batch = client.batches.retrieve(
     batch.id,
-    extra_body={"custom_llm_provider": "azure"}
+    extra_query={"custom_llm_provider": "azure"}
 )
 ```
 
@@ -978,7 +945,7 @@ curl http://localhost:4000/v1/batches/batch_abc123/cancel \
 <TabItem value="sdk" label="OpenAI Python SDK">
 
 ```python
-client.batches.list(extra_body={"custom_llm_provider": "azure"})
+client.batches.list(extra_query={"custom_llm_provider": "azure"})
 ```
 
 </TabItem>
