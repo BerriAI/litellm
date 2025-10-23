@@ -10,7 +10,6 @@ Has 4 methods:
 
 import ast
 import asyncio
-import json
 import orjson
 from functools import partial
 from typing import Optional
