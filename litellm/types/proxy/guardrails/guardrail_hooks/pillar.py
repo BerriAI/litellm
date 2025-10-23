@@ -33,7 +33,7 @@ class PillarGuardrailConfigModelOptionalParams(BaseModel):
     )
     fallback_on_error: Optional[str] = Field(
         default="allow",
-        description="Action to take when Pillar API is unavailable or errors: 'allow' (proceed without scanning), 'block' (reject request), or 'fail' (raise exception). Defaults to 'allow' for graceful degradation.",
+        description="Action to take when Pillar API is unavailable or errors: 'allow' (proceed without scanning) or 'block' (reject request with 503 error). Defaults to 'allow' for graceful degradation.",
     )
     timeout: Optional[float] = Field(
         default=5.0,

@@ -287,18 +287,6 @@ fallback_on_error: "allow"  # Default - recommended for production resilience
         fallback_on_error: "block"  # Fail secure
   ```
 
-- **`fail`**: Raise exception when Pillar is unavailable (legacy behavior)
-  - ❌ **Service interruption** during Pillar outages
-  - Same as old behavior before fallback support was added
-
-  ```yaml
-  guardrails:
-    - guardrail_name: "pillar-legacy"
-      litellm_params:
-        guardrail: pillar
-        fallback_on_error: "fail"  # Legacy behavior
-  ```
-
 #### Timeout Configuration
 
 Configure how long to wait for Pillar API responses:

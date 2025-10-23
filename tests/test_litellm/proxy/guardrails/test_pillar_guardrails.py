@@ -526,12 +526,12 @@ async def test_empty_messages(pillar_guardrail_instance, user_api_key_dict, dual
 async def test_api_error_handling(
     pillar_guardrail_instance, sample_request_data, user_api_key_dict, dual_cache
 ):
-    """Test handling of API connection errors with default fallback (allow)."""
+    """Test handling of API connection errors with block fallback."""
     # Note: pillar_guardrail_instance has fallback_on_error defaulting to "allow"
-    # so this test will now pass through instead of raising an error
-    pillar_guardrail_instance.fallback_on_error = "fail"  # Set to fail for this test
+    # so this test sets it to "block" to test error handling
+    pillar_guardrail_instance.fallback_on_error = "block"  # Set to block for this test
 
-    with pytest.raises(PillarGuardrailAPIError) as excinfo:
+    with pytest.raises(HTTPException) as excinfo:
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             side_effect=Exception("Connection error"),
@@ -543,8 +543,8 @@ async def test_api_error_handling(
                 call_type="completion",
             )
 
-    assert "unable to verify request safety" in str(excinfo.value)
-    assert "Connection error" in str(excinfo.value)
+    assert excinfo.value.status_code == 503
+    assert "Pillar Security Guardrail Unavailable" in str(excinfo.value.detail)
 
 
 @pytest.mark.asyncio
@@ -607,37 +607,6 @@ async def test_api_error_fallback_block(env_setup):
     # Should block with 503 Service Unavailable
     assert excinfo.value.status_code == 503
     assert "Pillar Security Guardrail Unavailable" in str(excinfo.value.detail)
-
-
-@pytest.mark.asyncio
-async def test_api_error_fallback_fail(env_setup):
-    """Test fallback_on_error='fail' raises exception when API is down."""
-    guardrail = PillarGuardrail(
-        guardrail_name="pillar-fallback-fail",
-        api_key="test-pillar-key",
-        api_base="https://api.pillar.security",
-        fallback_on_error="fail",
-    )
-
-    sample_data = {
-        "model": "gpt-4",
-        "messages": [{"role": "user", "content": "Hello"}],
-    }
-
-    with pytest.raises(PillarGuardrailAPIError) as excinfo:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            side_effect=Exception("Connection timeout"),
-        ):
-            await guardrail.async_pre_call_hook(
-                data=sample_data,
-                cache=DualCache(),
-                user_api_key_dict=UserAPIKeyAuth(),
-                call_type="completion",
-            )
-
-    assert "unable to verify request safety" in str(excinfo.value)
-    assert "Connection timeout" in str(excinfo.value)
 
 
 @pytest.mark.asyncio

@@ -60,7 +60,7 @@ class PillarGuardrail(CustomGuardrail):
 
     SUPPORTED_ON_FLAGGED_ACTIONS = ["block", "monitor"]
     DEFAULT_ON_FLAGGED_ACTION = "monitor"
-    SUPPORTED_FALLBACK_ACTIONS = ["allow", "block", "fail"]
+    SUPPORTED_FALLBACK_ACTIONS = ["allow", "block"]
     DEFAULT_FALLBACK_ACTION = "allow"
     BASE_API_URL = "https://api.pillar.security"
     DEFAULT_TIMEOUT = 5.0  # 5 seconds - fast failure detection with graceful degradation
@@ -87,7 +87,7 @@ class PillarGuardrail(CustomGuardrail):
             api_key: Pillar API key
             api_base: Pillar API base URL
             on_flagged_action: Action to take when content is flagged ('block' or 'monitor')
-            fallback_on_error: Action when API errors occur ('allow', 'block', or 'fail')
+            fallback_on_error: Action when API errors occur ('allow' or 'block')
             timeout: Timeout for API calls in seconds
             **kwargs: Additional arguments passed to parent class
         """
@@ -353,7 +353,6 @@ class PillarGuardrail(CustomGuardrail):
             Original data if safe or in monitor mode
 
         Raises:
-            PillarGuardrailAPIError: If the Pillar API call fails and fallback_on_error is 'fail'
             HTTPException: If content is flagged and action is 'block', or if API fails and fallback_on_error is 'block'
         """
         # Check if messages are present
@@ -405,14 +404,13 @@ class PillarGuardrail(CustomGuardrail):
 
         Raises:
             HTTPException: If fallback_on_error is 'block'
-            PillarGuardrailAPIError: If fallback_on_error is 'fail'
         """
         if self.fallback_on_error == "allow":
             verbose_proxy_logger.warning(
                 f"Pillar Guardrail: API unavailable, proceeding without scanning (fallback_on_error=allow)"
             )
             return data
-        elif self.fallback_on_error == "block":
+        else:  # fallback_on_error == "block"
             verbose_proxy_logger.warning(
                 f"Pillar Guardrail: API unavailable, blocking request (fallback_on_error=block)"
             )
@@ -423,13 +421,6 @@ class PillarGuardrail(CustomGuardrail):
                     "message": "Security scanning service is temporarily unavailable and fallback is set to block",
                     "original_error": str(error),
                 },
-            )
-        else:  # fallback_on_error == "fail"
-            verbose_proxy_logger.error(
-                f"Pillar Guardrail: API unavailable, raising exception (fallback_on_error=fail)"
-            )
-            raise PillarGuardrailAPIError(
-                f"Pillar Guardrail scan failed - unable to verify request safety: {str(error)}"
             )
 
     def _prepare_headers(self) -> Dict[str, str]:
