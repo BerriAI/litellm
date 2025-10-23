@@ -65,9 +65,10 @@ async def video_generation(
 
     # Read request body
     data = await _read_request_body(request=request)
-    input_reference_file = await batch_to_bytesio([input_reference])
-    if input_reference_file:
-        data["input_reference"] = input_reference_file[0]
+    if input_reference is not None:
+        input_reference_file = await batch_to_bytesio([input_reference])
+        if input_reference_file:
+            data["input_reference"] = input_reference_file[0]
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
