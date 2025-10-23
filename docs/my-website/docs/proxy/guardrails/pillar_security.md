@@ -29,7 +29,7 @@ Use Pillar Security for comprehensive LLM security including:
 
 Add Pillar Security to your `config.yaml`:
 
-**🌟 Recommended Configuration (Dual Mode):**
+**🌟 Recommended Configuration:**
 ```yaml
 model_list:
   - model_name: gpt-4.1-mini
@@ -45,6 +45,8 @@ guardrails:
       api_key: os.environ/PILLAR_API_KEY            # Your Pillar API key
       api_base: os.environ/PILLAR_API_BASE          # Pillar API endpoint
       on_flagged_action: "monitor"                  # Log threats but allow requests
+      fallback_on_error: "allow"                    # Gracefully degrade if Pillar is down (default)
+      timeout: 5.0                                  # Timeout for Pillar API calls in seconds (default)
       persist_session: true                         # Keep conversations visible in Pillar dashboard
       async_mode: false                             # Request synchronous verdicts
       include_scanners: true                        # Return scanner category breakdown
@@ -207,6 +209,8 @@ You can configure Pillar Security using environment variables:
 export PILLAR_API_KEY="your_api_key_here"
 export PILLAR_API_BASE="https://api.pillar.security"
 export PILLAR_ON_FLAGGED_ACTION="monitor"
+export PILLAR_FALLBACK_ON_ERROR="allow"
+export PILLAR_TIMEOUT="30.0"
 ```
 
 ### Session Tracking
@@ -243,6 +247,126 @@ Logs the violation but allows the request to proceed:
 
 ```yaml
 on_flagged_action: "monitor"
+```
+
+### Resilience and Error Handling
+
+#### Graceful Degradation (`fallback_on_error`)
+
+Control what happens when the Pillar API is unavailable (network errors, timeouts, service outages):
+
+```yaml
+fallback_on_error: "allow"  # Default - recommended for production resilience
+```
+
+**Available Options:**
+
+- **`allow` (Default - Recommended)**: Proceed without scanning when Pillar is unavailable
+  - ✅ **No service interruption** if Pillar is down
+  - ✅ **Best for production** where availability is critical
+  - ⚠️ Security scans are skipped during outages (logged as warnings)
+
+  ```yaml
+  guardrails:
+    - guardrail_name: "pillar-resilient"
+      litellm_params:
+        guardrail: pillar
+        fallback_on_error: "allow"  # Graceful degradation
+  ```
+
+- **`block`**: Reject all requests when Pillar is unavailable
+  - 🛡️ **Fail-secure approach** - no request proceeds without scanning
+  - ⚠️ **Service interruption** during Pillar outages
+  - Returns 503 Service Unavailable error
+
+  ```yaml
+  guardrails:
+    - guardrail_name: "pillar-fail-secure"
+      litellm_params:
+        guardrail: pillar
+        fallback_on_error: "block"  # Fail secure
+  ```
+
+- **`fail`**: Raise exception when Pillar is unavailable (legacy behavior)
+  - ❌ **Service interruption** during Pillar outages
+  - Same as old behavior before fallback support was added
+
+  ```yaml
+  guardrails:
+    - guardrail_name: "pillar-legacy"
+      litellm_params:
+        guardrail: pillar
+        fallback_on_error: "fail"  # Legacy behavior
+  ```
+
+#### Timeout Configuration
+
+Configure how long to wait for Pillar API responses:
+
+```yaml
+timeout: 5.0  # Default: 5 seconds
+```
+
+**Why 5 seconds?**
+- Most Pillar API calls complete in 1-3 seconds under normal conditions
+- 5 seconds provides buffer for network variance while failing fast on outages
+- Combined with `fallback_on_error: "allow"`, timeouts trigger graceful degradation
+- Fast failure detection = better user experience (no waiting when service is down)
+- Users experiencing timeouts can increase if needed for their network conditions
+
+**Timeout Recommendations by Use Case:**
+
+- **Production with Graceful Degradation (Default)**: 5 seconds
+  - Fast failure detection
+  - Timeouts trigger graceful degradation, not hard failures
+  - Optimal user experience
+
+- **Production with Fail-Secure**: 10-15 seconds
+  - Higher timeout to avoid false positives when blocking is enabled
+  - Use when `fallback_on_error: "block"`
+  - Ensures legitimate slow responses don't get blocked
+
+- **High-traffic / Low-latency**: 3-5 seconds
+  - Prevents request queuing
+  - Requires reliable network connectivity
+  - Only use with `fallback_on_error: "allow"`
+
+- **High-latency Networks**: 10-15 seconds
+  - For deployments with high network latency
+  - Accommodate slower connections
+
+**Example Configurations:**
+
+```yaml
+# Production: Default - Fast with graceful degradation
+guardrails:
+  - guardrail_name: "pillar-production"
+    litellm_params:
+      guardrail: pillar
+      timeout: 5.0               # Default - fast failure detection
+      fallback_on_error: "allow"  # Graceful degradation (required)
+
+# Fail-secure: Higher timeout to avoid false blocks
+guardrails:
+  - guardrail_name: "pillar-secure"
+    litellm_params:
+      guardrail: pillar
+      timeout: 15.0              # Higher timeout for reliability
+      fallback_on_error: "block"  # Block if scan fails
+
+# High-latency network: Increased tolerance
+guardrails:
+  - guardrail_name: "pillar-tolerant"
+    litellm_params:
+      guardrail: pillar
+      timeout: 10.0              # More buffer for slow networks
+      fallback_on_error: "allow"  # Still degrade gracefully
+```
+
+**Environment Variables:**
+```bash
+export PILLAR_FALLBACK_ON_ERROR="allow"
+export PILLAR_TIMEOUT="5.0"
 ```
 
 ## Advanced Configuration
