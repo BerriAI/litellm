@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from "react";
-import { Card, Button, Table, Modal, Form, Input, Select, Typography, Space, Popconfirm, message } from "antd";
-import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined } from "@ant-design/icons";
+import { useQuery } from "@tanstack/react-query";
+import { Modal, Form, Input, Select } from "antd";
+import { Button, Title, Text, Grid, Col } from "@tremor/react";
+import { DataTable } from "../view_logs/table";
+import { searchToolColumns } from "./search_tool_columns";
 import {
   fetchSearchTools,
   createSearchTool,
@@ -9,8 +12,10 @@ import {
   fetchAvailableSearchProviders,
 } from "../networking";
 import { SearchTool, AvailableSearchProvider } from "./types";
+import { isAdminRole } from "@/utils/roles";
+import NotificationsManager from "../molecules/notifications_manager";
+import SearchToolView from "./search_tool_view";
 
-const { Title, Text } = Typography;
 const { TextArea } = Input;
 
 interface SearchToolsProps {
@@ -19,86 +24,120 @@ interface SearchToolsProps {
   userID: string | null;
 }
 
-const SearchTools: React.FC<SearchToolsProps> = ({ accessToken }) => {
-  const [searchTools, setSearchTools] = useState<SearchTool[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [createModalVisible, setCreateModalVisible] = useState(false);
-  const [editModalVisible, setEditModalVisible] = useState(false);
-  const [viewModalVisible, setViewModalVisible] = useState(false);
-  const [selectedTool, setSelectedTool] = useState<SearchTool | null>(null);
-  const [availableProviders, setAvailableProviders] = useState<AvailableSearchProvider[]>([]);
+const DeleteModal: React.FC<{
+  isModalOpen: boolean;
+  title: string;
+  confirmDelete: () => void;
+  cancelDelete: () => void;
+}> = ({ isModalOpen, title, confirmDelete, cancelDelete }) => {
+  if (!isModalOpen) return null;
+  return (
+    <Modal open={isModalOpen} onOk={confirmDelete} okType="danger" onCancel={cancelDelete}>
+      <Grid numItems={1} className="gap-2 w-full">
+        <Title>{title}</Title>
+        <Col numColSpan={1}>
+          <p>Are you sure you want to delete this search tool?</p>
+        </Col>
+      </Grid>
+    </Modal>
+  );
+};
+
+const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID }) => {
+  const {
+    data: searchTools,
+    isLoading: isLoadingTools,
+    refetch,
+  } = useQuery({
+    queryKey: ["searchTools"],
+    queryFn: () => {
+      if (!accessToken) throw new Error("Access Token required");
+      return fetchSearchTools(accessToken).then((res) => res.search_tools || []);
+    },
+    enabled: !!accessToken,
+  }) as { data: SearchTool[]; isLoading: boolean; refetch: () => void };
+
+  const {
+    data: providersResponse,
+    isLoading: isLoadingProviders,
+  } = useQuery({
+    queryKey: ["searchProviders"],
+    queryFn: () => {
+      if (!accessToken) throw new Error("Access Token required");
+      return fetchAvailableSearchProviders(accessToken);
+    },
+    enabled: !!accessToken,
+  }) as { data: { providers: AvailableSearchProvider[] }; isLoading: boolean };
+
+  const availableProviders = providersResponse?.providers || [];
+
+  // State
+  const [toolIdToDelete, setToolToDelete] = useState<string | null>(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
+  const [editTool, setEditTool] = useState(false);
+  const [isCreateModalVisible, setCreateModalVisible] = useState(false);
+  const [isEditModalVisible, setEditModalVisible] = useState(false);
   const [form] = Form.useForm();
 
-  useEffect(() => {
-    loadSearchTools();
-    loadAvailableProviders();
-  }, []);
+  const columns = React.useMemo(
+    () =>
+      searchToolColumns(
+        (toolId: string) => {
+          setSelectedToolId(toolId);
+          setEditTool(false);
+        },
+        (toolId: string) => {
+          const tool = searchTools?.find((t) => t.search_tool_id === toolId);
+          if (tool) {
+            form.setFieldsValue({
+              search_tool_name: tool.search_tool_name,
+              search_provider: tool.litellm_params.search_provider,
+              api_key: tool.litellm_params.api_key,
+              api_base: tool.litellm_params.api_base,
+              timeout: tool.litellm_params.timeout,
+              max_retries: tool.litellm_params.max_retries,
+              description: tool.search_tool_info?.description,
+            });
+            setSelectedToolId(toolId);
+            setEditModalVisible(true);
+          }
+        },
+        handleDelete,
+        availableProviders,
+      ),
+    [availableProviders, searchTools],
+  );
 
-  const loadSearchTools = async () => {
-    if (!accessToken) return;
-    
-    setLoading(true);
-    try {
-      const response = await fetchSearchTools(accessToken);
-      setSearchTools(response.search_tools || []);
-    } catch (error) {
-      message.error("Failed to load search tools");
-      console.error(error);
-    } finally {
-      setLoading(false);
+  function handleDelete(toolId: string) {
+    setToolToDelete(toolId);
+    setIsDeleteModalOpen(true);
+  }
+
+  const confirmDelete = async () => {
+    if (toolIdToDelete == null || accessToken == null) {
+      return;
     }
-  };
-
-  const loadAvailableProviders = async () => {
-    if (!accessToken) return;
-    
     try {
-      const response = await fetchAvailableSearchProviders(accessToken);
-      setAvailableProviders(response.providers || []);
+      await deleteSearchTool(accessToken, toolIdToDelete);
+      NotificationsManager.success("Deleted search tool successfully");
+      refetch();
     } catch (error) {
-      console.error("Failed to load providers:", error);
+      console.error("Error deleting the search tool:", error);
+      NotificationsManager.error("Failed to delete search tool");
     }
+    setIsDeleteModalOpen(false);
+    setToolToDelete(null);
   };
 
-  const handleCreate = () => {
-    form.resetFields();
-    setCreateModalVisible(true);
-  };
-
-  const handleEdit = (tool: SearchTool) => {
-    setSelectedTool(tool);
-    form.setFieldsValue({
-      search_tool_name: tool.search_tool_name,
-      search_provider: tool.litellm_params.search_provider,
-      api_key: tool.litellm_params.api_key,
-      api_base: tool.litellm_params.api_base,
-      timeout: tool.litellm_params.timeout,
-      description: tool.search_tool_info?.description,
-    });
-    setEditModalVisible(true);
-  };
-
-  const handleView = (tool: SearchTool) => {
-    setSelectedTool(tool);
-    setViewModalVisible(true);
-  };
-
-  const handleDelete = async (searchToolId: string) => {
-    if (!accessToken) return;
-    
-    try {
-      await deleteSearchTool(accessToken, searchToolId);
-      message.success("Search tool deleted successfully");
-      loadSearchTools();
-    } catch (error) {
-      message.error("Failed to delete search tool");
-      console.error(error);
-    }
+  const cancelDelete = () => {
+    setIsDeleteModalOpen(false);
+    setToolToDelete(null);
   };
 
   const handleCreateSubmit = async () => {
     if (!accessToken) return;
-    
+
     try {
       const values = await form.validateFields();
       const searchToolData = {
@@ -107,27 +146,28 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken }) => {
           search_provider: values.search_provider,
           api_key: values.api_key,
           api_base: values.api_base,
-          timeout: values.timeout,
+          timeout: values.timeout ? parseFloat(values.timeout) : undefined,
+          max_retries: values.max_retries ? parseInt(values.max_retries) : undefined,
         },
-        search_tool_info: {
+        search_tool_info: values.description ? {
           description: values.description,
-        },
+        } : undefined,
       };
 
       await createSearchTool(accessToken, searchToolData);
-      message.success("Search tool created successfully");
+      NotificationsManager.success("Search tool created successfully");
       setCreateModalVisible(false);
       form.resetFields();
-      loadSearchTools();
+      refetch();
     } catch (error) {
-      message.error("Failed to create search tool");
-      console.error(error);
+      console.error("Failed to create search tool:", error);
+      NotificationsManager.error("Failed to create search tool");
     }
   };
 
   const handleEditSubmit = async () => {
-    if (!accessToken || !selectedTool) return;
-    
+    if (!accessToken || !selectedToolId) return;
+
     try {
       const values = await form.validateFields();
       const searchToolData = {
@@ -136,90 +176,25 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken }) => {
           search_provider: values.search_provider,
           api_key: values.api_key,
           api_base: values.api_base,
-          timeout: values.timeout,
+          timeout: values.timeout ? parseFloat(values.timeout) : undefined,
+          max_retries: values.max_retries ? parseInt(values.max_retries) : undefined,
         },
-        search_tool_info: {
+        search_tool_info: values.description ? {
           description: values.description,
-        },
+        } : undefined,
       };
 
-      await updateSearchTool(accessToken, selectedTool.search_tool_id!, searchToolData);
-      message.success("Search tool updated successfully");
+      await updateSearchTool(accessToken, selectedToolId, searchToolData);
+      NotificationsManager.success("Search tool updated successfully");
       setEditModalVisible(false);
       form.resetFields();
-      setSelectedTool(null);
-      loadSearchTools();
+      setSelectedToolId(null);
+      refetch();
     } catch (error) {
-      message.error("Failed to update search tool");
-      console.error(error);
+      console.error("Failed to update search tool:", error);
+      NotificationsManager.error("Failed to update search tool");
     }
   };
-
-  const columns = [
-    {
-      title: "Name",
-      dataIndex: "search_tool_name",
-      key: "search_tool_name",
-      render: (text: string, record: SearchTool) => (
-        <Button type="link" onClick={() => handleView(record)}>
-          {text}
-        </Button>
-      ),
-    },
-    {
-      title: "Provider",
-      dataIndex: ["litellm_params", "search_provider"],
-      key: "search_provider",
-      render: (provider: string) => {
-        const providerInfo = availableProviders.find(p => p.provider_name === provider);
-        return providerInfo?.ui_friendly_name || provider;
-      },
-    },
-    {
-      title: "API Base",
-      dataIndex: ["litellm_params", "api_base"],
-      key: "api_base",
-      render: (text: string) => text || "-",
-    },
-    {
-      title: "Created",
-      dataIndex: "created_at",
-      key: "created_at",
-      render: (text: string) => text ? new Date(text).toLocaleString() : "-",
-    },
-    {
-      title: "Actions",
-      key: "actions",
-      render: (_: any, record: SearchTool) => (
-        <Space>
-          <Button 
-            size="small" 
-            icon={<EyeOutlined />} 
-            onClick={() => handleView(record)}
-          >
-            View
-          </Button>
-          <Button 
-            size="small" 
-            icon={<EditOutlined />} 
-            onClick={() => handleEdit(record)}
-          >
-            Edit
-          </Button>
-          <Popconfirm
-            title="Are you sure you want to delete this search tool?"
-            onConfirm={() => handleDelete(record.search_tool_id!)}
-            okText="Yes"
-            cancelText="No"
-          >
-            <Button size="small" danger icon={<DeleteOutlined />}>
-              Delete
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ];
 
   const renderForm = () => (
     <Form form={form} layout="vertical">
@@ -236,7 +211,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken }) => {
         label="Search Provider"
         rules={[{ required: true, message: "Please select a search provider" }]}
       >
-        <Select placeholder="Select a search provider">
+        <Select placeholder="Select a search provider" loading={isLoadingProviders}>
           {availableProviders.map((provider) => (
             <Select.Option key={provider.provider_name} value={provider.provider_name}>
               {provider.ui_friendly_name}
@@ -245,69 +220,82 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken }) => {
         </Select>
       </Form.Item>
 
-      <Form.Item
-        name="api_key"
-        label="API Key"
-        extra="API key for the search provider"
-      >
+      <Form.Item name="api_key" label="API Key" extra="API key for the search provider">
         <Input.Password placeholder="Enter API key" />
       </Form.Item>
 
-      <Form.Item
-        name="api_base"
-        label="API Base URL (Optional)"
-      >
+      <Form.Item name="api_base" label="API Base URL (Optional)">
         <Input placeholder="Custom API base URL" />
       </Form.Item>
 
-      <Form.Item
-        name="timeout"
-        label="Timeout (seconds)"
-      >
+      <Form.Item name="timeout" label="Timeout (seconds)">
         <Input type="number" placeholder="30" />
       </Form.Item>
 
-      <Form.Item
-        name="description"
-        label="Description"
-      >
+      <Form.Item name="max_retries" label="Max Retries">
+        <Input type="number" placeholder="3" />
+      </Form.Item>
+
+      <Form.Item name="description" label="Description">
         <TextArea rows={3} placeholder="Description of this search tool" />
       </Form.Item>
     </Form>
   );
 
-  return (
-    <div style={{ padding: "24px" }}>
-      <Card>
-        <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <Title level={3} style={{ margin: 0 }}>Search Tools</Title>
-            <Text type="secondary">
-              Manage search providers for web search capabilities
-            </Text>
-          </div>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={handleCreate}
-          >
-            Add Search Tool
-          </Button>
-        </div>
+  if (!accessToken || !userRole || !userID) {
+    console.log("Missing required authentication parameters", { accessToken, userRole, userID });
+    return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
+  }
 
-        <Table
-          dataSource={searchTools}
-          columns={columns}
-          rowKey="search_tool_id"
-          loading={loading}
-          pagination={{ pageSize: 10 }}
-        />
-      </Card>
+  const ToolsTab = () =>
+    selectedToolId ? (
+      <SearchToolView
+        searchTool={
+          searchTools?.find((tool: SearchTool) => tool.search_tool_id === selectedToolId) || {
+            search_tool_id: "",
+            search_tool_name: "",
+            litellm_params: {
+              search_provider: "",
+            },
+          }
+        }
+        onBack={() => {
+          setEditTool(false);
+          setSelectedToolId(null);
+          refetch();
+        }}
+        isEditing={editTool}
+        accessToken={accessToken}
+        availableProviders={availableProviders}
+      />
+    ) : (
+      <div className="w-full h-full">
+        <div className="w-full px-6 mt-6">
+          <DataTable
+            data={searchTools || []}
+            columns={columns}
+            renderSubComponent={() => <div></div>}
+            getRowCanExpand={() => false}
+            isLoading={isLoadingTools}
+            noDataMessage="No search tools configured"
+          />
+        </div>
+      </div>
+    );
+
+  return (
+    <div className="w-full h-full p-6">
+      <DeleteModal
+        isModalOpen={isDeleteModalOpen}
+        title="Delete Search Tool"
+        confirmDelete={confirmDelete}
+        cancelDelete={cancelDelete}
+      />
 
       {/* Create Modal */}
       <Modal
         title="Create Search Tool"
-        open={createModalVisible}
+        open={isCreateModalVisible}
         onOk={handleCreateSubmit}
         onCancel={() => {
           setCreateModalVisible(false);
@@ -321,82 +309,29 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken }) => {
       {/* Edit Modal */}
       <Modal
         title="Edit Search Tool"
-        open={editModalVisible}
+        open={isEditModalVisible}
         onOk={handleEditSubmit}
         onCancel={() => {
           setEditModalVisible(false);
           form.resetFields();
-          setSelectedTool(null);
+          setSelectedToolId(null);
         }}
         width={600}
       >
         {renderForm()}
       </Modal>
 
-      {/* View Modal */}
-      <Modal
-        title="Search Tool Details"
-        open={viewModalVisible}
-        onCancel={() => {
-          setViewModalVisible(false);
-          setSelectedTool(null);
-        }}
-        footer={[
-          <Button key="close" onClick={() => setViewModalVisible(false)}>
-            Close
-          </Button>,
-          <Button 
-            key="edit" 
-            type="primary" 
-            onClick={() => {
-              setViewModalVisible(false);
-              handleEdit(selectedTool!);
-            }}
-          >
-            Edit
-          </Button>,
-        ]}
-        width={700}
-      >
-        {selectedTool && (
-          <div>
-            <div style={{ marginBottom: 16 }}>
-              <Text strong>Name:</Text> {selectedTool.search_tool_name}
-            </div>
-            <div style={{ marginBottom: 16 }}>
-              <Text strong>Provider:</Text> {selectedTool.litellm_params.search_provider}
-            </div>
-            <div style={{ marginBottom: 16 }}>
-              <Text strong>API Key:</Text> {selectedTool.litellm_params.api_key ? "****" : "Not set"}
-            </div>
-            {selectedTool.litellm_params.api_base && (
-              <div style={{ marginBottom: 16 }}>
-                <Text strong>API Base:</Text> {selectedTool.litellm_params.api_base}
-              </div>
-            )}
-            {selectedTool.litellm_params.timeout && (
-              <div style={{ marginBottom: 16 }}>
-                <Text strong>Timeout:</Text> {selectedTool.litellm_params.timeout}s
-              </div>
-            )}
-            {selectedTool.search_tool_info?.description && (
-              <div style={{ marginBottom: 16 }}>
-                <Text strong>Description:</Text>
-                <div style={{ marginTop: 8 }}>{selectedTool.search_tool_info.description}</div>
-              </div>
-            )}
-            <div style={{ marginBottom: 16 }}>
-              <Text strong>Created:</Text> {selectedTool.created_at ? new Date(selectedTool.created_at).toLocaleString() : "-"}
-            </div>
-            <div>
-              <Text strong>Updated:</Text> {selectedTool.updated_at ? new Date(selectedTool.updated_at).toLocaleString() : "-"}
-            </div>
-          </div>
-        )}
-      </Modal>
+      <Title>Search Tools</Title>
+      <Text className="text-tremor-content mt-2">Configure and manage your search providers</Text>
+      {isAdminRole(userRole) && (
+        <Button className="mt-4 mb-4" onClick={() => setCreateModalVisible(true)}>
+          + Add New Search Tool
+        </Button>
+      )}
+
+      <ToolsTab />
     </div>
   );
 };
 
 export default SearchTools;
-
