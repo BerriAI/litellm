@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select, Input } from "antd";
+import { Modal, Tooltip, Form, Select, Input, Typography } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createSearchTool, fetchAvailableSearchProviders } from "../networking";
@@ -228,26 +228,18 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
             </Form.Item>
           </div>
 
-          <div className="flex items-center justify-between pt-6 border-t border-gray-100">
-            <Tooltip title="Get help on our GitHub">
-              <a
-                href="https://github.com/BerriAI/litellm/issues"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-500 hover:text-blue-600"
-              >
+          <div className="flex justify-between items-center pt-6 border-t border-gray-100">
+            <Tooltip title="Get help on our github">
+              <Typography.Link href="https://github.com/BerriAI/litellm/issues" target="_blank">
                 Need Help?
-              </a>
+              </Typography.Link>
             </Tooltip>
-            <div className="space-x-3">
-              <Button variant="secondary" onClick={handleCancel}>
-                Cancel
-              </Button>
+            <div className="space-x-2">
               <Button onClick={handleTestConnection} loading={isTestingConnection}>
                 Test Connection
               </Button>
-              <Button variant="primary" loading={isLoading} type="submit">
-                {isLoading ? "Creating..." : "Add Search Tool"}
+              <Button loading={isLoading} type="submit">
+                Add Search Tool
               </Button>
             </div>
           </div>
