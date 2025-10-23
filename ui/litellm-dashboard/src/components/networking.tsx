@@ -5604,6 +5604,43 @@ export const fetchAvailableSearchProviders = async (accessToken: string) => {
   }
 };
 
+export const testSearchToolConnection = async (
+  accessToken: string,
+  litellmParams: Record<string, any>
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/search_tools/test_connection`
+      : `/search_tools/test_connection`;
+    console.log("Testing search tool connection:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.POST,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        litellm_params: litellmParams,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Test connection response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to test search tool connection:", error);
+    throw error;
+  }
+};
+
 export const listMCPTools = async (accessToken: string, serverId: string, authValue?: string, serverAlias?: string) => {
   try {
     // Construct base URL

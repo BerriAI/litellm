@@ -7,6 +7,7 @@ import { SearchTool, AvailableSearchProvider } from "./types";
 import { isAdminRole } from "@/utils/roles";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useQuery } from "@tanstack/react-query";
+import SearchConnectionTest from "./search_connection_test";
 
 const { TextArea } = Input;
 
@@ -28,6 +29,9 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
   const [form] = Form.useForm();
   const [isLoading, setIsLoading] = useState(false);
   const [formValues, setFormValues] = useState<Record<string, any>>({});
+  const [isTestModalVisible, setIsTestModalVisible] = useState(false);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [connectionTestId, setConnectionTestId] = useState<string>("");
 
   // Fetch available search providers
   const {
@@ -86,6 +90,21 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
     form.resetFields();
     setFormValues({});
     setModalVisible(false);
+  };
+
+  const handleTestConnection = async () => {
+    try {
+      // Validate required fields for testing
+      await form.validateFields(["search_provider", "api_key"]);
+      
+      setIsTestingConnection(true);
+      // Generate a new test ID (using timestamp for uniqueness)
+      setConnectionTestId(`test-${Date.now()}`);
+      // Show the modal with the fresh test
+      setIsTestModalVisible(true);
+    } catch (error) {
+      NotificationsManager.error("Please fill in Search Provider and API Key before testing");
+    }
   };
 
   // Clear formValues when modal closes to reset
@@ -209,16 +228,67 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
             </Form.Item>
           </div>
 
-          <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
-            <Button variant="secondary" onClick={handleCancel}>
-              Cancel
-            </Button>
-            <Button variant="primary" loading={isLoading} type="submit">
-              {isLoading ? "Creating..." : "Add Search Tool"}
-            </Button>
+          <div className="flex items-center justify-between pt-6 border-t border-gray-100">
+            <Tooltip title="Get help on our GitHub">
+              <a
+                href="https://github.com/BerriAI/litellm/issues"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-500 hover:text-blue-600"
+              >
+                Need Help?
+              </a>
+            </Tooltip>
+            <div className="space-x-3">
+              <Button variant="secondary" onClick={handleCancel}>
+                Cancel
+              </Button>
+              <Button onClick={handleTestConnection} loading={isTestingConnection}>
+                Test Connection
+              </Button>
+              <Button variant="primary" loading={isLoading} type="submit">
+                {isLoading ? "Creating..." : "Add Search Tool"}
+              </Button>
+            </div>
           </div>
         </Form>
       </div>
+
+      {/* Test Connection Results Modal */}
+      <Modal
+        title="Connection Test Results"
+        open={isTestModalVisible}
+        onCancel={() => {
+          setIsTestModalVisible(false);
+          setIsTestingConnection(false);
+        }}
+        footer={[
+          <Button
+            key="close"
+            onClick={() => {
+              setIsTestModalVisible(false);
+              setIsTestingConnection(false);
+            }}
+          >
+            Close
+          </Button>,
+        ]}
+        width={700}
+      >
+        {/* Only render the SearchConnectionTest when modal is visible and we have a test ID */}
+        {isTestModalVisible && accessToken && (
+          <SearchConnectionTest
+            key={connectionTestId}
+            litellmParams={{
+              search_provider: formValues.search_provider,
+              api_key: formValues.api_key,
+              api_base: formValues.api_base,
+            }}
+            accessToken={accessToken}
+            onTestComplete={() => setIsTestingConnection(false)}
+          />
+        )}
+      </Modal>
     </Modal>
   );
 };
