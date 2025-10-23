@@ -111,6 +111,52 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         description="User info endpoint URL for generic OAuth provider",
     )
 
+    # SAML 2.0 SSO
+    saml_entity_id: Optional[str] = Field(
+        default=None,
+        description="SAML Service Provider (SP) Entity ID - unique identifier for this application",
+    )
+    saml_idp_entity_id: Optional[str] = Field(
+        default=None,
+        description="SAML Identity Provider (IdP) Entity ID",
+    )
+    saml_idp_sso_url: Optional[str] = Field(
+        default=None,
+        description="SAML Identity Provider Single Sign-On URL",
+    )
+    saml_idp_x509_cert: Optional[str] = Field(
+        default=None,
+        description="SAML Identity Provider X.509 certificate (PEM format)",
+    )
+    saml_sp_x509_cert: Optional[str] = Field(
+        default=None,
+        description="SAML Service Provider X.509 certificate (PEM format) - optional",
+    )
+    saml_sp_private_key: Optional[str] = Field(
+        default=None,
+        description="SAML Service Provider private key (PEM format) - optional",
+    )
+    saml_name_id_format: Optional[str] = Field(
+        default="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
+        description="SAML NameID format",
+    )
+    saml_user_id_attribute: Optional[str] = Field(
+        default="email",
+        description="SAML attribute to use as user ID",
+    )
+    saml_user_email_attribute: Optional[str] = Field(
+        default="email",
+        description="SAML attribute to use as user email",
+    )
+    saml_user_first_name_attribute: Optional[str] = Field(
+        default="firstName",
+        description="SAML attribute to use as user first name",
+    )
+    saml_user_last_name_attribute: Optional[str] = Field(
+        default="lastName",
+        description="SAML attribute to use as user last name",
+    )
+
     # Common settings
     proxy_base_url: Optional[str] = Field(
         default=None,
