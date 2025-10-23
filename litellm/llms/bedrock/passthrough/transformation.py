@@ -41,9 +41,15 @@ class BedrockPassthroughConfig(
             model_id=None,
         )
 
-        api_base = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+        aws_bedrock_runtime_endpoint = optional_params.get("aws_bedrock_runtime_endpoint")
+        endpoint_url, _ = self.get_runtime_endpoint(
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+            aws_region_name=aws_region_name,
+            endpoint_type="runtime",
+        )
 
-        return self.format_url(endpoint, api_base, request_query_params or {}), api_base
+        return self.format_url(endpoint, endpoint_url, request_query_params or {}), endpoint_url
 
     def sign_request(
         self,

@@ -1,7 +1,7 @@
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 
 from dotenv import load_dotenv
 from fastapi import Request
@@ -25,7 +25,7 @@ from typing import Optional
 import pytest
 
 import litellm
-from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload, _sanitize_request_body_for_spend_logs_payload
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 
 
@@ -89,7 +89,7 @@ def test_spend_logs_payload(model_id: Optional[str]):
                     },
                     "endpoint": "http://localhost:4000/chat/completions",
                     "model_group": "gpt-3.5-turbo",
-                    "deployment": "azure/chatgpt-v-3",
+                    "deployment": "azure/gpt-4.1-nano",
                     "model_info": {
                         "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
                         "db_model": False,
@@ -396,3 +396,156 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
     payload_disabled: SpendLogsPayload = get_logging_payload(**input_args)
     assert payload_disabled["messages"] == "{}"
     assert payload_disabled["response"] == "{}"
+
+
+def test_large_request_no_truncation_threshold():
+    """
+    Test that MAX_STRING_LENGTH_PROMPT_IN_DB constant is used for request body sanitization
+    and that the new truncation logic keeps beginning (35%) and end (65%) of the string
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, LITELLM_TRUNCATED_PAYLOAD_FIELD
+    
+    # Create a large string that exceeds the threshold
+    # Use a pattern that allows us to verify beginning and end are preserved
+    start_pattern = "START" * 250  # 1250 chars
+    middle_pattern = "MIDDLE" * 200  # 1200 chars
+    end_pattern = "END" * 250  # 750 chars
+    large_content = start_pattern + middle_pattern + end_pattern
+    
+    request_body = {
+        "messages": [
+            {"role": "user", "content": large_content}
+        ],
+        "model": "gpt-4"
+    }
+    
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    
+    # Verify the content was truncated
+    truncated_content = sanitized["messages"][0]["content"]
+    
+    # Calculate expected character counts (35% start, 65% end)
+    expected_start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
+    expected_end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
+    
+    # Should keep first 35% of MAX_STRING_LENGTH_PROMPT_IN_DB chars
+    assert truncated_content.startswith(large_content[:expected_start_chars])
+    
+    # Should keep last 65% of MAX_STRING_LENGTH_PROMPT_IN_DB chars
+    assert truncated_content.endswith(large_content[-expected_end_chars:])
+    
+    # Should have truncation marker
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+
+
+def test_small_request_no_truncation():
+    """
+    Test that small strings are not truncated by MAX_STRING_LENGTH_PROMPT_IN_DB
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+    
+    # Create a small string that's under the threshold
+    small_content = "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB - 100)
+    
+    request_body = {
+        "messages": [
+            {"role": "user", "content": small_content}
+        ],
+        "model": "gpt-4"
+    }
+    
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    
+    # Verify the content was NOT truncated
+    assert sanitized["messages"][0]["content"] == small_content
+    assert len(sanitized["messages"][0]["content"]) == MAX_STRING_LENGTH_PROMPT_IN_DB - 100
+
+
+def test_configurable_string_length_env_var(monkeypatch):
+    """
+    Test that MAX_STRING_LENGTH_PROMPT_IN_DB can be configured via environment variable
+    """
+    # Set environment variable to a custom value
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "1000")
+    
+    # Import after setting env var to ensure it picks up the new value
+    import importlib
+    import litellm.constants
+    import litellm.proxy.spend_tracking.spend_tracking_utils
+    importlib.reload(litellm.constants)
+    importlib.reload(litellm.proxy.spend_tracking.spend_tracking_utils)
+    
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, LITELLM_TRUNCATED_PAYLOAD_FIELD
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _sanitize_request_body_for_spend_logs_payload
+    
+    # Verify the constant was set to the env var value
+    assert MAX_STRING_LENGTH_PROMPT_IN_DB == 1000
+    
+    # Test truncation with the custom value
+    large_content = "A" * 500 + "B" * 800 + "C" * 500  # 1800 chars total
+    
+    request_body = {
+        "messages": [
+            {"role": "user", "content": large_content}
+        ],
+        "model": "gpt-4"
+    }
+    
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    
+    # Verify truncation occurred with 35% beginning and 65% end preserved
+    truncated_content = sanitized["messages"][0]["content"]
+    expected_start = int(1000 * 0.35)  # 350 chars from beginning
+    expected_end = int(1000 * 0.65)    # 650 chars from end
+    
+    assert truncated_content.startswith(large_content[:expected_start])
+    assert truncated_content.endswith(large_content[-expected_end:])
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+    assert "800" in truncated_content  # Should mention skipped 800 chars
+
+
+def test_truncation_preserves_beginning_and_end():
+    """
+    Test that truncation preserves the beginning (35%) and end (65%) of content for better debugging
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, LITELLM_TRUNCATED_PAYLOAD_FIELD
+    
+    # Create content with distinct beginning, middle, and end
+    beginning = "BEGIN_" * 200  # 1200 chars
+    middle = "MIDDLE_" * 300  # 2100 chars
+    end = "_END" * 300  # 1200 chars
+    large_content = beginning + middle + end
+    
+    request_body = {
+        "messages": [
+            {"role": "user", "content": large_content}
+        ],
+        "model": "gpt-4"
+    }
+    
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    truncated_content = sanitized["messages"][0]["content"]
+    
+    # Calculate expected splits (35% beginning, 65% end)
+    expected_start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
+    expected_end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
+    
+    # Check that beginning is preserved
+    expected_beginning = large_content[:expected_start_chars]
+    assert truncated_content.startswith(expected_beginning)
+    
+    # Check that end is preserved
+    expected_end = large_content[-expected_end_chars:]
+    assert truncated_content.endswith(expected_end)
+    
+    # Check truncation marker is present
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+    
+    # Calculate expected skipped chars
+    total_chars = len(large_content)
+    kept_chars = expected_start_chars + expected_end_chars
+    expected_skipped = total_chars - kept_chars
+    assert str(expected_skipped) in truncated_content

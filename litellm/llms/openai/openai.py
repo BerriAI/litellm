@@ -10,12 +10,16 @@ from typing import (
     List,
     Literal,
     Optional,
+    TYPE_CHECKING,
     Union,
     cast,
 )
 from urllib.parse import urlparse
 
 import httpx
+
+if TYPE_CHECKING:
+    from aiohttp import ClientSession
 import openai
 from openai import AsyncOpenAI, OpenAI
 from openai.types.beta.assistant_deleted import AssistantDeleted
@@ -47,6 +51,7 @@ from litellm.utils import (
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
+from .chat.gpt_5_transformation import OpenAIGPT5Config
 from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,
@@ -55,6 +60,7 @@ from .common_utils import (
 )
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
+openAIGPT5Config = OpenAIGPT5Config()
 
 
 class MistralEmbeddingConfig:
@@ -183,6 +189,8 @@ class OpenAIConfig(BaseConfig):
         """
         if openaiOSeriesConfig.is_model_o_series_model(model=model):
             return openaiOSeriesConfig.get_supported_openai_params(model=model)
+        elif openAIGPT5Config.is_model_gpt_5_model(model=model):
+            return openAIGPT5Config.get_supported_openai_params(model=model)
         elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
             return litellm.openAIGPTAudioConfig.get_supported_openai_params(model=model)
         else:
@@ -212,6 +220,13 @@ class OpenAIConfig(BaseConfig):
         """ """
         if openaiOSeriesConfig.is_model_o_series_model(model=model):
             return openaiOSeriesConfig.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params,
+            )
+        elif openAIGPT5Config.is_model_gpt_5_model(model=model):
+            return openAIGPT5Config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
@@ -344,6 +359,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         max_retries: Optional[int] = DEFAULT_MAX_RETRIES,
         organization: Optional[str] = None,
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Optional[Union[OpenAI, AsyncOpenAI]]:
         client_initialization_params: Dict = locals()
         if client is None:
@@ -368,7 +384,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 _new_client: Union[OpenAI, AsyncOpenAI] = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=OpenAIChatCompletion._get_async_http_client(),
+                    http_client=OpenAIChatCompletion._get_async_http_client(
+                        shared_session=shared_session
+                    ),
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -511,8 +529,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         organization: Optional[str] = None,
         custom_llm_provider: Optional[str] = None,
         drop_params: Optional[bool] = None,
+        shared_session: Optional["ClientSession"] = None,
     ):
-        super().completion()
+        super().completion(shared_session=shared_session)
         try:
             fake_stream: bool = False
             inference_params = optional_params.copy()
@@ -595,6 +614,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                                 organization=organization,
                                 drop_params=drop_params,
                                 fake_stream=fake_stream,
+                                shared_session=shared_session,
                             )
 
                     data = provider_config.transform_request(
@@ -760,6 +780,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         drop_params: Optional[bool] = None,
         stream_options: Optional[dict] = None,
         fake_stream: bool = False,
+        shared_session: Optional["ClientSession"] = None,
     ):
         response = None
         data = await provider_config.async_transform_request(
@@ -782,6 +803,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     max_retries=max_retries,
                     organization=organization,
                     client=client,
+                    shared_session=shared_session,
                 )
 
                 ## LOGGING
@@ -1103,6 +1125,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         api_base: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
         max_retries=None,
+        shared_session: Optional["ClientSession"] = None,
     ):
         try:
             openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
@@ -1112,6 +1135,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 timeout=timeout,
                 max_retries=max_retries,
                 client=client,
+                shared_session=shared_session,
             )
             headers, response = await self.make_openai_embedding_request(
                 openai_aclient=openai_aclient,
@@ -1175,6 +1199,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client=None,
         aembedding=None,
         max_retries: Optional[int] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> EmbeddingResponse:
         super().embedding()
         try:
@@ -1201,6 +1226,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     timeout=timeout,
                     client=client,
                     max_retries=max_retries,
+                    shared_session=shared_session,
                 )
 
             openai_client: OpenAI = self._get_openai_client(  # type: ignore

@@ -35,6 +35,8 @@ class myCustomGuardrail(CustomGuardrail):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[Union[Exception, str, dict]]:
         """
@@ -71,6 +73,8 @@ class myCustomGuardrail(CustomGuardrail):
             "moderation",
             "audio_transcription",
             "responses",
+            "mcp_call",
+            "anthropic_messages",
         ],
     ):
         """

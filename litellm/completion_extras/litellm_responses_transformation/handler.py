@@ -2,7 +2,9 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from typing import TYPE_CHECKING, Any, Coroutine, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Coroutine, Union
+
+from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     from litellm import CustomStreamWrapper, LiteLLMLoggingObj, ModelResponse
@@ -75,9 +77,7 @@ class ResponsesToCompletionBridgeHandler:
             custom_llm_provider=custom_llm_provider,
         )
 
-    def completion(
-        self, *args, **kwargs
-    ) -> Union[
+    def completion(self, *args, **kwargs) -> Union[
         Coroutine[Any, Any, Union["ModelResponse", "CustomStreamWrapper"]],
         "ModelResponse",
         "CustomStreamWrapper",
@@ -106,6 +106,7 @@ class ResponsesToCompletionBridgeHandler:
             litellm_params=litellm_params,
             headers=headers,
             litellm_logging_obj=logging_obj,
+            client=kwargs.get("client"),
         )
 
         result = responses(

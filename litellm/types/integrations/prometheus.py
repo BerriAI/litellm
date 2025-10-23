@@ -1,10 +1,88 @@
+import re
+from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
 
 import litellm
+
+
+def _sanitize_prometheus_label_name(label: str) -> str:
+    """
+    Sanitize a label name to comply with Prometheus label name requirements.
+
+    Prometheus label names must match: ^[a-zA-Z_][a-zA-Z0-9_]*$
+    - First character: letter (a-z, A-Z) or underscore (_)
+    - Subsequent characters: letters, digits (0-9), or underscores (_)
+
+    Args:
+        label: The label name to sanitize
+
+    Returns:
+        A sanitized label name that complies with Prometheus requirements
+    """
+    if not label:
+        return "_"
+
+    # Replace all invalid characters with underscores
+    # Keep only letters, digits, and underscores
+    sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", label)
+
+    # Ensure first character is valid (letter or underscore)
+    if sanitized and not re.match(r"^[a-zA-Z_]", sanitized[0]):
+        sanitized = "_" + sanitized
+
+    # Handle empty string after sanitization
+    if not sanitized:
+        sanitized = "_"
+
+    return sanitized
+
+
+@dataclass
+class MetricValidationError:
+    """Error for invalid metric name"""
+
+    metric_name: str
+    valid_metrics: Tuple[str, ...]
+
+    @property
+    def message(self) -> str:
+        return f"Invalid metric name: {self.metric_name}"
+
+
+@dataclass
+class LabelValidationError:
+    """Error for invalid labels on a metric"""
+
+    metric_name: str
+    invalid_labels: List[str]
+    valid_labels: List[str]
+
+    @property
+    def message(self) -> str:
+        return f"Invalid labels for metric '{self.metric_name}': {self.invalid_labels}"
+
+
+@dataclass
+class ValidationResults:
+    """Container for all validation results"""
+
+    metric_errors: List[MetricValidationError]
+    label_errors: List[LabelValidationError]
+
+    @property
+    def has_errors(self) -> bool:
+        return bool(self.metric_errors or self.label_errors)
+
+    @property
+    def all_error_messages(self) -> List[str]:
+        messages = [error.message for error in self.metric_errors]
+        messages.extend([error.message for error in self.label_errors])
+        return messages
+
 
 REQUESTED_MODEL = "requested_model"
 EXCEPTION_STATUS = "exception_status"
@@ -76,6 +154,7 @@ class UserAPIKeyLabelNames(Enum):
 
 DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_llm_api_latency_metric",
+    "litellm_llm_api_time_to_first_token_metric",
     "litellm_request_total_latency_metric",
     "litellm_overhead_latency_metric",
     "litellm_remaining_requests_metric",
@@ -84,6 +163,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_proxy_failed_requests_metric",
     "litellm_deployment_latency_per_output_token",
     "litellm_requests_metric",
+    "litellm_spend_metric",
     "litellm_total_tokens_metric",
     "litellm_input_tokens_metric",
     "litellm_output_tokens_metric",
@@ -95,9 +175,16 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_api_key_budget_metric",
     "litellm_api_key_max_budget_metric",
     "litellm_api_key_budget_remaining_hours_metric",
+    "litellm_deployment_state",
     "litellm_deployment_failure_responses",
     "litellm_deployment_total_requests",
     "litellm_deployment_success_responses",
+    "litellm_deployment_cooled_down",
+    "litellm_pod_lock_manager_size",
+    "litellm_in_memory_daily_spend_update_queue_size",
+    "litellm_redis_daily_spend_update_queue_size",
+    "litellm_in_memory_spend_update_queue_size",
+    "litellm_redis_spend_update_queue_size",
 ]
 
 
@@ -111,6 +198,14 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_llm_api_time_to_first_token_metric = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]
 
     litellm_request_total_latency_metric = [
@@ -145,6 +240,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
         UserAPIKeyLabelNames.ROUTE.value,
@@ -199,6 +295,17 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
     ]
 
+    litellm_spend_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
+    ]
+
     litellm_input_tokens_metric = [
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
@@ -207,6 +314,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
     ]
 
@@ -218,6 +326,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
     ]
 
@@ -229,7 +338,22 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+    ]
+
+    litellm_deployment_state = [
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+    ]
+
+    litellm_deployment_cooled_down = [
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_deployment_successful_fallbacks = [
@@ -300,13 +424,39 @@ class PrometheusMetricLabels:
 
     litellm_deployment_success_responses = litellm_deployment_total_requests
 
+    # Buffer monitoring metrics - these typically don't need additional labels
+    litellm_pod_lock_manager_size: List[str] = []
+
+    litellm_in_memory_daily_spend_update_queue_size: List[str] = []
+
+    litellm_redis_daily_spend_update_queue_size: List[str] = []
+
+    litellm_in_memory_spend_update_queue_size: List[str] = []
+
+    litellm_redis_spend_update_queue_size: List[str] = []
+
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
         default_labels = getattr(PrometheusMetricLabels, label_name)
-        return default_labels + [
-            metric.replace(".", "_")
-            for metric in litellm.custom_prometheus_metadata_labels
-        ]
+        custom_labels = []
+
+        # Add custom metadata labels
+        custom_labels.extend(
+            [
+                _sanitize_prometheus_label_name(metric)
+                for metric in litellm.custom_prometheus_metadata_labels
+            ]
+        )
+
+        # Add custom tags labels
+        custom_labels.extend(
+            [
+                _sanitize_prometheus_label_name(f"tag_{tag}")
+                for tag in litellm.custom_prometheus_tags
+            ]
+        )
+
+        return default_labels + custom_labels
 
 
 from typing import List, Optional

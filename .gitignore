@@ -86,6 +86,7 @@ litellm/proxy/db/migrations/0_init/migration.sql
 litellm/proxy/db/migrations/*
 litellm/proxy/migrations/*config.yaml
 litellm/proxy/migrations/*
+litellm/proxy/to_delete_loadtest_work/*
 config.yaml
 tests/litellm/litellm_core_utils/llm_cost_calc/log.txt
 tests/test_custom_dir/*
@@ -93,3 +94,9 @@ test.py
 
 litellm_config.yaml
 .cursor
+.vscode/launch.json
+litellm/proxy/to_delete_loadtest_work/*
+update_model_cost_map.py
+tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_manager.py
+litellm/proxy/_experimental/out/guardrails/index.html
+scripts/test_vertex_ai_search.py

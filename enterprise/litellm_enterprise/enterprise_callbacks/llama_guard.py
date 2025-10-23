@@ -25,8 +25,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import Choices, ModelResponse
 
-litellm.set_verbose = True
-
 
 class _ENTERPRISE_LlamaGuard(CustomLogger):
     # Class variables or attributes
@@ -107,6 +105,8 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
             "moderation",
             "audio_transcription",
             "responses",
+            "mcp_call",
+            "anthropic_messages",
         ],
     ):
         """

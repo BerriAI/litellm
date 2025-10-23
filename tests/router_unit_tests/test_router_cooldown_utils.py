@@ -13,12 +13,12 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dotenv import load_dotenv
 from unittest.mock import AsyncMock, MagicMock, patch
-from litellm.integrations.prometheus import PrometheusLogger
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.router_utils.cooldown_handlers import (
     _should_run_cooldown_logic,
     _should_cooldown_deployment,
     cast_exception_status_to_int,
+    _is_cooldown_required,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -31,123 +31,6 @@ from litellm import Router
 from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
 
 load_dotenv()
-
-
-class CustomPrometheusLogger(PrometheusLogger):
-    def __init__(self):
-        super().__init__()
-        self.deployment_complete_outages = []
-        self.deployment_cooled_downs = []
-
-    def set_deployment_complete_outage(
-        self,
-        litellm_model_name: str,
-        model_id: str,
-        api_base: str,
-        api_provider: str,
-    ):
-        self.deployment_complete_outages.append(
-            [litellm_model_name, model_id, api_base, api_provider]
-        )
-
-    def increment_deployment_cooled_down(
-        self,
-        litellm_model_name: str,
-        model_id: str,
-        api_base: str,
-        api_provider: str,
-        exception_status: str,
-    ):
-        self.deployment_cooled_downs.append(
-            [litellm_model_name, model_id, api_base, api_provider, exception_status]
-        )
-
-
-@pytest.mark.asyncio
-async def test_router_cooldown_event_callback():
-    """
-    Test the router_cooldown_event_callback function
-
-    Ensures that the router_cooldown_event_callback function correctly logs the cooldown event to the PrometheusLogger
-    """
-    # Mock Router instance
-    mock_router = MagicMock()
-    mock_deployment = {
-        "litellm_params": {"model": "gpt-3.5-turbo"},
-        "model_name": "gpt-3.5-turbo",
-        "model_info": ModelInfo(id="test-model-id"),
-    }
-    mock_router.get_deployment.return_value = mock_deployment
-
-    # Create a real PrometheusLogger instance
-    prometheus_logger = CustomPrometheusLogger()
-    litellm.callbacks = [prometheus_logger]
-
-    await router_cooldown_event_callback(
-        litellm_router_instance=mock_router,
-        deployment_id="test-deployment",
-        exception_status="429",
-        cooldown_time=60.0,
-    )
-
-    await asyncio.sleep(0.5)
-
-    # Assert that the router's get_deployment method was called
-    mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
-
-    print(
-        "prometheus_logger.deployment_complete_outages",
-        prometheus_logger.deployment_complete_outages,
-    )
-    print(
-        "prometheus_logger.deployment_cooled_downs",
-        prometheus_logger.deployment_cooled_downs,
-    )
-
-    # Assert that PrometheusLogger methods were called
-    assert len(prometheus_logger.deployment_complete_outages) == 1
-    assert len(prometheus_logger.deployment_cooled_downs) == 1
-
-    assert prometheus_logger.deployment_complete_outages[0] == [
-        "gpt-3.5-turbo",
-        "test-model-id",
-        "https://api.openai.com",
-        "openai",
-    ]
-    assert prometheus_logger.deployment_cooled_downs[0] == [
-        "gpt-3.5-turbo",
-        "test-model-id",
-        "https://api.openai.com",
-        "openai",
-        "429",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_router_cooldown_event_callback_no_prometheus():
-    """
-    Test the router_cooldown_event_callback function
-
-    Ensures that the router_cooldown_event_callback function does not raise an error when no PrometheusLogger is found
-    """
-    # Mock Router instance
-    mock_router = MagicMock()
-    mock_deployment = {
-        "litellm_params": {"model": "gpt-3.5-turbo"},
-        "model_name": "gpt-3.5-turbo",
-        "model_info": ModelInfo(id="test-model-id"),
-    }
-    mock_router.get_deployment.return_value = mock_deployment
-
-    await router_cooldown_event_callback(
-        litellm_router_instance=mock_router,
-        deployment_id="test-deployment",
-        exception_status="429",
-        cooldown_time=60.0,
-    )
-
-    # Assert that the router's get_deployment method was called
-    mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
 
 
 @pytest.mark.asyncio
@@ -516,3 +399,18 @@ def test_mixed_success_failure(mock_failures, mock_successes, router):
     assert (
         should_cooldown is False
     ), "Should not cooldown when failure rate is below threshold"
+
+
+def test_is_cooldown_required_empty_string_exception_status(testing_litellm_router):
+    """
+    Test that _is_cooldown_required returns False when exception_status is an empty string
+    """
+    result = _is_cooldown_required(
+        litellm_router_instance=testing_litellm_router,
+        model_id="test_deployment",
+        exception_status="",
+    )
+
+    assert (
+        result is False
+    ), "Should not require cooldown when exception_status is empty string"

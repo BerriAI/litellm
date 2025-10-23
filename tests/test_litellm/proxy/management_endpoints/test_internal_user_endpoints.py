@@ -460,7 +460,6 @@ async def test_new_user_default_teams_flow(mocker):
         assert team_call_kwargs["user_id"] == "test-user-123"
         assert team_call_kwargs["team_id"] == "96fed65b-0182-4ff4-8429-2721cd7d42af"
         assert team_call_kwargs["user_email"] == "test@example.com"
-        assert team_call_kwargs["max_budget_in_team"] == 100
         assert team_call_kwargs["user_role"] == "user"
 
         # Verify response structure
@@ -612,3 +611,82 @@ def test_update_internal_new_user_params_internal_user_role():
         else:
             if hasattr(litellm, "default_internal_user_params"):
                 delattr(litellm, "default_internal_user_params")
+
+
+@pytest.mark.asyncio
+async def test_check_duplicate_user_email_case_insensitive(mocker):
+    """
+    Test that _check_duplicate_user_email performs case insensitive email matching.
+
+    This ensures that emails like 'User@Example.com' and 'user@example.com'
+    are treated as the same user, preventing duplicate accounts.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _check_duplicate_user_email,
+    )
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+
+    # Test Case 1: Duplicate found with different case
+    # Mock existing user with uppercase email
+    mock_existing_user = mocker.MagicMock()
+    mock_existing_user.user_email = "User@Example.com"
+
+    async def mock_find_first_duplicate(*args, **kwargs):
+        # Verify that the query uses case insensitive matching
+        where_clause = kwargs.get("where", {})
+        user_email_clause = where_clause.get("user_email", {})
+
+        # Check that the query structure is correct for case insensitive search
+        assert (
+            "equals" in user_email_clause
+        ), "Query should use 'equals' for case insensitive search"
+        assert (
+            user_email_clause.get("mode") == "insensitive"
+        ), "Query should use 'insensitive' mode"
+        assert (
+            user_email_clause.get("equals") == "user@example.com"
+        ), "Query should search for the provided email"
+
+        return mock_existing_user  # Return existing user to simulate duplicate
+
+    mock_prisma_client.db.litellm_usertable.find_first = mock_find_first_duplicate
+
+    # Should raise HTTPException when duplicate is found
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_duplicate_user_email("user@example.com", mock_prisma_client)
+
+    assert exc_info.value.status_code == 400
+    assert "User with email User@Example.com already exists" in str(
+        exc_info.value.detail
+    )
+
+    # Test Case 2: No duplicate found
+    async def mock_find_first_no_duplicate(*args, **kwargs):
+        # Verify the query structure again
+        where_clause = kwargs.get("where", {})
+        user_email_clause = where_clause.get("user_email", {})
+
+        assert "equals" in user_email_clause
+        assert user_email_clause.get("mode") == "insensitive"
+        assert user_email_clause.get("equals") == "newuser@example.com"
+
+        return None  # No existing user found
+
+    mock_prisma_client.db.litellm_usertable.find_first = mock_find_first_no_duplicate
+
+    # Should not raise any exception when no duplicate is found
+    try:
+        await _check_duplicate_user_email("newuser@example.com", mock_prisma_client)
+        # If we reach here, no exception was raised (which is expected)
+        assert True
+    except Exception as e:
+        pytest.fail(f"Should not raise exception when no duplicate found, but got: {e}")
+
+    # Test Case 3: None email should not cause issues
+    await _check_duplicate_user_email(
+        None, mock_prisma_client
+    )  # Should not raise exception

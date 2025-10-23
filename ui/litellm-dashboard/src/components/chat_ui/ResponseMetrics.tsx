@@ -1,12 +1,12 @@
 import React from "react";
 import { Tooltip } from "antd";
-import { 
-  ClockCircleOutlined, 
-  NumberOutlined, 
-  ImportOutlined, 
+import {
+  ClockCircleOutlined,
+  NumberOutlined,
+  ImportOutlined,
   ExportOutlined,
-  ThunderboltOutlined,
-  BulbOutlined
+  BulbOutlined,
+  ToolOutlined,
 } from "@ant-design/icons";
 
 export interface TokenUsage {
@@ -19,12 +19,10 @@ export interface TokenUsage {
 interface ResponseMetricsProps {
   timeToFirstToken?: number; // in milliseconds
   usage?: TokenUsage;
+  toolName?: string;
 }
 
-const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ 
-  timeToFirstToken, 
-  usage 
-}) => {
+const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, usage, toolName }) => {
   if (!timeToFirstToken && !usage) return null;
 
   return (
@@ -37,7 +35,7 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({
           </div>
         </Tooltip>
       )}
-      
+
       {usage?.promptTokens !== undefined && (
         <Tooltip title="Prompt tokens">
           <div className="flex items-center">
@@ -46,7 +44,7 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({
           </div>
         </Tooltip>
       )}
-      
+
       {usage?.completionTokens !== undefined && (
         <Tooltip title="Completion tokens">
           <div className="flex items-center">
@@ -55,7 +53,7 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({
           </div>
         </Tooltip>
       )}
-      
+
       {usage?.reasoningTokens !== undefined && (
         <Tooltip title="Reasoning tokens">
           <div className="flex items-center">
@@ -64,7 +62,7 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({
           </div>
         </Tooltip>
       )}
-      
+
       {usage?.totalTokens !== undefined && (
         <Tooltip title="Total tokens">
           <div className="flex items-center">
@@ -73,8 +71,17 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({
           </div>
         </Tooltip>
       )}
+
+      {toolName && (
+        <Tooltip title="Tool used">
+          <div className="flex items-center">
+            <ToolOutlined className="mr-1" />
+            <span>Tool: {toolName}</span>
+          </div>
+        </Tooltip>
+      )}
     </div>
   );
 };
 
-export default ResponseMetrics; 
+export default ResponseMetrics;

@@ -15,12 +15,11 @@ For batching specific details see CustomBatchLogger class
 
 import asyncio
 import datetime
-import json
 import os
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime as datetimeObj
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 from httpx import Response
@@ -72,6 +71,13 @@ class DataDogLogger(
                 raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
             if os.getenv("DD_SITE", None) is None:
                 raise Exception("DD_SITE is not set in .env, set 'DD_SITE=<>")
+            
+            #########################################################
+            # Handle datadog_params set as litellm.datadog_params
+            #########################################################
+            dict_datadog_params = self._get_datadog_params()
+            kwargs.update(dict_datadog_params)
+            
             self.async_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback
             )
@@ -101,6 +107,21 @@ class DataDogLogger(
                 f"Datadog: Got exception on init Datadog client {str(e)}"
             )
             raise e
+
+    def _get_datadog_params(self) -> Dict:
+        """
+        Get the datadog_params from litellm.datadog_params
+
+        These are params specific to initializing the DataDogLogger e.g. turn_off_message_logging
+        """
+        dict_datadog_params: Dict = {}
+        if litellm.datadog_params is not None:
+            if isinstance(litellm.datadog_params, DatadogInitParams):
+                dict_datadog_params = litellm.datadog_params.model_dump()
+            elif isinstance(litellm.datadog_params, Dict):
+                # only allow params that are of DatadogInitParams
+                dict_datadog_params = DatadogInitParams(**litellm.datadog_params).model_dump()
+        return dict_datadog_params
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -253,7 +274,8 @@ class DataDogLogger(
         standard_logging_object: StandardLoggingPayload,
         status: DataDogStatus,
     ) -> DatadogPayload:
-        json_payload = json.dumps(standard_logging_object, default=str)
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+        json_payload = safe_dumps(standard_logging_object)
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
         dd_payload = DatadogPayload(
             ddsource=self._get_datadog_source(),
@@ -317,9 +339,9 @@ class DataDogLogger(
         """
 
         import gzip
-        import json
 
-        compressed_data = gzip.compress(json.dumps(data, default=str).encode("utf-8"))
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+        compressed_data = gzip.compress(safe_dumps(data).encode("utf-8"))
         response = await self.async_client.post(
             url=self.intake_url,
             data=compressed_data,  # type: ignore
@@ -348,7 +370,8 @@ class DataDogLogger(
         try:
             _payload_dict = payload.model_dump()
             _payload_dict.update(event_metadata or {})
-            _dd_message_str = json.dumps(_payload_dict, default=str)
+            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+            _dd_message_str = safe_dumps(_payload_dict)
             _dd_payload = DatadogPayload(
                 ddsource=self._get_datadog_source(),
                 ddtags=self._get_datadog_tags(),
@@ -388,7 +411,8 @@ class DataDogLogger(
             _payload_dict = payload.model_dump()
             _payload_dict.update(event_metadata or {})
 
-            _dd_message_str = json.dumps(_payload_dict, default=str)
+            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+            _dd_message_str = safe_dumps(_payload_dict)
             _dd_payload = DatadogPayload(
                 ddsource=self._get_datadog_source(),
                 ddtags=self._get_datadog_tags(),
@@ -418,7 +442,6 @@ class DataDogLogger(
 
         (Not Recommended) If you want this to get logged set `litellm.datadog_use_v1 = True`
         """
-        import json
 
         litellm_params = kwargs.get("litellm_params", {})
         metadata = (
@@ -457,6 +480,7 @@ class DataDogLogger(
                 else:
                     clean_metadata[key] = value
 
+
         # Build the initial payload
         payload = {
             "id": id,
@@ -475,7 +499,8 @@ class DataDogLogger(
             "metadata": clean_metadata,
         }
 
-        json_payload = json.dumps(payload, default=str)
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+        json_payload = safe_dumps(payload)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 

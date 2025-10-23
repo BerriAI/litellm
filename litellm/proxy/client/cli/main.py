@@ -1,19 +1,23 @@
 # stdlib imports
-import sys
 from typing import Optional
 
 # third party imports
 import click
 
-# local imports
-from .commands.models import models
-from .commands.credentials import credentials
-from .commands.chat import chat
-from .commands.http import http
-from .commands.keys import keys
-from .commands.users import users
 from litellm._version import version as litellm_version
 from litellm.proxy.client.health import HealthManagementClient
+
+from .commands.auth import get_stored_api_key, login, logout, whoami
+from .commands.chat import chat
+from .commands.credentials import credentials
+from .commands.http import http
+from .commands.keys import keys
+
+# local imports
+from .commands.models import models
+from .commands.teams import teams
+from .commands.users import users
+from .interface import interactive_shell
 
 
 def print_version(base_url: str, api_key: Optional[str]):
@@ -32,7 +36,7 @@ def print_version(base_url: str, api_key: Optional[str]):
         click.echo(f"Could not retrieve server version: {e}")
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.option(
     "--version", "-v", is_flag=True, is_eager=True, expose_value=False,
     help="Show the LiteLLM Proxy CLI and server version and exit.",
@@ -61,10 +65,17 @@ def print_version(base_url: str, api_key: Optional[str]):
 def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
     """LiteLLM Proxy CLI - Manage your LiteLLM proxy server"""
     ctx.ensure_object(dict)
-    if sys.stderr.isatty():
-        click.secho(f"Accessing LiteLLM server: {base_url} ...\n", fg="yellow", err=True)
+
+    # If no API key provided via flag or environment variable, try to load from saved token
+    if api_key is None:
+        api_key = get_stored_api_key()
+
     ctx.obj["base_url"] = base_url
     ctx.obj["api_key"] = api_key
+    
+    # If no subcommand was invoked, start interactive mode
+    if ctx.invoked_subcommand is None:
+        interactive_shell(ctx)
 
 
 @cli.command()
@@ -74,6 +85,10 @@ def version(ctx: click.Context):
     print_version(ctx.obj.get("base_url"), ctx.obj.get("api_key"))
 
 
+# Add authentication commands as top-level commands
+cli.add_command(login)
+cli.add_command(logout)
+cli.add_command(whoami)
 # Add the models command group
 cli.add_command(models)
 # Add the credentials command group
@@ -84,6 +99,8 @@ cli.add_command(chat)
 cli.add_command(http)
 # Add the keys command group
 cli.add_command(keys)
+# Add the teams command group
+cli.add_command(teams)
 # Add the users command group
 cli.add_command(users)
 

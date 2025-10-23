@@ -14,11 +14,16 @@ sys.path.insert(
 
 
 import litellm
+from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
+    _safe_get_request_headers,
     _safe_get_request_parsed_body,
+    _safe_get_request_query_params,
     _safe_set_request_parsed_body,
     get_form_data,
+    get_request_body,
+    get_tags_from_request_body,
 )
 
 
@@ -151,6 +156,92 @@ async def test_circular_reference_handling():
 
 
 @pytest.mark.asyncio
+async def test_json_parsing_error_handling():
+    """
+    Test that JSON parsing errors are properly handled and raise ProxyException
+    with appropriate error messages.
+    """
+    # Test case 1: Trailing comma error
+    mock_request = MagicMock()
+    invalid_json_with_trailing_comma = b'''{
+        "model": "gpt-4o",
+        "tools": [
+            {
+                "type": "mcp",
+                "server_label": "litellm",
+                "headers": {
+                    "x-litellm-api-key": "Bearer sk-1234",
+                }
+            }
+        ],
+        "input": "Run available tools"
+    }'''
+    
+    mock_request.body = AsyncMock(return_value=invalid_json_with_trailing_comma)
+    mock_request.headers = {"content-type": "application/json"}
+    mock_request.scope = {}
+
+    # Should raise ProxyException for trailing comma
+    with pytest.raises(ProxyException) as exc_info:
+        await _read_request_body(mock_request)
+    
+    assert exc_info.value.code == "400"
+    assert "Invalid JSON payload" in exc_info.value.message
+    assert "trailing comma" in exc_info.value.message
+
+    # Test case 2: Unquoted property name error
+    mock_request2 = MagicMock()
+    invalid_json_unquoted_property = b'''{
+        "model": "gpt-4o",
+        "tools": [
+            {
+                type: "mcp",
+                "server_label": "litellm"
+            }
+        ],
+        "input": "Run available tools"
+    }'''
+    
+    mock_request2.body = AsyncMock(return_value=invalid_json_unquoted_property)
+    mock_request2.headers = {"content-type": "application/json"}
+    mock_request2.scope = {}
+
+    # Should raise ProxyException for unquoted property
+    with pytest.raises(ProxyException) as exc_info2:
+        await _read_request_body(mock_request2)
+    
+    assert exc_info2.value.code == "400"
+    assert "Invalid JSON payload" in exc_info2.value.message
+
+    # Test case 3: Valid JSON should work normally
+    mock_request3 = MagicMock()
+    valid_json = b'''{
+        "model": "gpt-4o",
+        "tools": [
+            {
+                "type": "mcp",
+                "server_label": "litellm",
+                "headers": {
+                    "x-litellm-api-key": "Bearer sk-1234"
+                }
+            }
+        ],
+        "input": "Run available tools"
+    }'''
+    
+    mock_request3.body = AsyncMock(return_value=valid_json)
+    mock_request3.headers = {"content-type": "application/json"}
+    mock_request3.scope = {}
+
+    # Should parse successfully
+    result = await _read_request_body(mock_request3)
+    assert result["model"] == "gpt-4o"
+    assert result["input"] == "Run available tools"
+    assert len(result["tools"]) == 1
+    assert result["tools"][0]["type"] == "mcp"
+
+
+@pytest.mark.asyncio
 async def test_get_form_data():
     """
     Test that get_form_data correctly handles form data with array notation.
@@ -198,3 +289,123 @@ async def test_get_form_data():
     # Note: In a real MultiDict, both values would be present
     # But in our mock dictionary the second value overwrites the first
     assert "segment" in result["timestamp_granularities"]
+
+
+def test_get_tags_from_request_body_with_metadata_tags():
+    """
+    Test that tags are correctly extracted from request body metadata.
+    """
+    request_body = {
+        "model": "gpt-4",
+        "metadata": {
+            "tags": ["tag1", "tag2", "tag3"]
+        }
+    }
+    
+    result = get_tags_from_request_body(request_body=request_body)
+    
+    assert result == ["tag1", "tag2", "tag3"]
+
+
+def test_get_tags_from_request_body_with_litellm_metadata_tags():
+    """
+    Test that tags are correctly extracted from request body when using litellm_metadata.
+    """
+    request_body = {
+        "model": "gpt-4",
+        "litellm_metadata": {
+            "tags": ["tag1", "tag2", "tag3"]
+        }
+    }
+    
+    result = get_tags_from_request_body(request_body=request_body)
+    
+    assert result == ["tag1", "tag2", "tag3"]
+
+
+def test_get_tags_from_request_body_with_root_tags():
+    """
+    Test that tags are correctly extracted from root level of request body.
+    """
+    request_body = {
+        "model": "gpt-4",
+        "tags": ["tag1", "tag2"]
+    }
+    
+    result = get_tags_from_request_body(request_body=request_body)
+    
+    assert result == ["tag1", "tag2"]
+
+
+def test_get_tags_from_request_body_with_combined_tags():
+    """
+    Test that tags from both metadata and root level are combined.
+    """
+    request_body = {
+        "model": "gpt-4",
+        "metadata": {
+            "tags": ["tag1", "tag2"]
+        },
+        "tags": ["tag3", "tag4"]
+    }
+    
+    result = get_tags_from_request_body(request_body=request_body)
+    
+    assert result == ["tag1", "tag2", "tag3", "tag4"]
+
+
+def test_get_tags_from_request_body_filters_non_strings():
+    """
+    Test that non-string values in tags list are filtered out.
+    """
+    request_body = {
+        "model": "gpt-4",
+        "metadata": {
+            "tags": ["tag1", 123, "tag2", None, "tag3", {"nested": "dict"}]
+        }
+    }
+    
+    result = get_tags_from_request_body(request_body=request_body)
+    
+    assert result == ["tag1", "tag2", "tag3"]
+
+
+def test_get_tags_from_request_body_no_tags():
+    """
+    Test that empty list is returned when no tags are present.
+    """
+    request_body = {
+        "model": "gpt-4",
+        "metadata": {}
+    }
+    
+    result = get_tags_from_request_body(request_body=request_body)
+    
+    assert result == []
+
+
+def test_get_tags_from_request_body_with_dict_tags():
+    """
+    Test that function handles dict tags gracefully without crashing.
+    When tags is a dict instead of a list, it should be ignored and return empty list.
+    """
+    request_body = {
+        "model": "aws/anthropic/bedrock-claude-3-5-sonnet-v1",
+        "messages": [
+            {
+                "role": "user",
+                "content": "aloha"
+            }
+        ],
+        "metadata": {
+            "tags": {
+                "litellm_id": "litellm_ratelimit_test",
+                "llm_id": "llmid_ratelimit_test"
+            }
+        }
+    }
+    
+    result = get_tags_from_request_body(request_body=request_body)
+    
+    assert result == []
+    assert isinstance(result, list)

@@ -1,6 +1,6 @@
 import json
 import time
-import uuid
+from litellm._uuid import uuid
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -16,9 +16,18 @@ from httpx._models import Headers, Response
 from pydantic import BaseModel
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _extract_reasoning_content,
+    convert_content_list_to_str,
+    extract_images_from_message,
+)
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.types.llms.ollama import OllamaToolCall, OllamaToolCallFunction
+from litellm.types.llms.ollama import (
+    OllamaChatCompletionMessage,
+    OllamaToolCall,
+    OllamaToolCallFunction,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantToolCall,
@@ -137,6 +146,7 @@ class OllamaChatConfig(BaseConfig):
             "tool_choice",
             "functions",
             "response_format",
+            "reasoning_effort",
         ]
 
     def map_openai_params(
@@ -174,6 +184,11 @@ class OllamaChatConfig(BaseConfig):
             ):
                 if value.get("json_schema") and value["json_schema"].get("schema"):
                     optional_params["format"] = value["json_schema"]["schema"]
+            if param == "reasoning_effort" and value is not None:
+                if model.startswith("gpt-oss"):
+                    optional_params["think"] = value
+                else:
+                    optional_params["think"] = value in {"low", "medium", "high"}
             ### FUNCTION CALLING LOGIC ###
             if param == "tools":
                 ## CHECK IF MODEL SUPPORTS TOOL CALLING ##
@@ -212,9 +227,9 @@ class OllamaChatConfig(BaseConfig):
                     litellm.add_function_to_prompt = (
                         True  # so that main.py adds the function call to the prompt
                     )
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.get("functions")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.get("functions")
+                    )
         non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
         non_default_params.pop("functions", None)  # causes ollama requests to hang
         return optional_params
@@ -229,6 +244,8 @@ class OllamaChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        if api_key is not None and "Authorization" not in headers:
+            headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     def get_complete_url(
@@ -267,6 +284,7 @@ class OllamaChatConfig(BaseConfig):
         stream = optional_params.pop("stream", False)
         format = optional_params.pop("format", None)
         keep_alive = optional_params.pop("keep_alive", None)
+        think = optional_params.pop("think", None)
         function_name = optional_params.pop("function_name", None)
         litellm_params["function_name"] = function_name
         tools = optional_params.pop("tools", None)
@@ -294,7 +312,29 @@ class OllamaChatConfig(BaseConfig):
                         )
                         new_tools.append(ollama_tool_call)
                 cast(dict, m)["tool_calls"] = new_tools
-            new_messages.append(m)
+            reasoning_content, parsed_content = _extract_reasoning_content(
+                cast(dict, m)
+            )
+            content_str = convert_content_list_to_str(cast(AllMessageValues, m))
+            images = extract_images_from_message(cast(AllMessageValues, m))
+
+            ollama_message = OllamaChatCompletionMessage(
+                role=cast(str, m.get("role")),
+            )
+            if reasoning_content is not None:
+                ollama_message["thinking"] = reasoning_content
+            if content_str is not None:
+                ollama_message["content"] = content_str
+            if images is not None:
+                ollama_message["images"] = images
+
+            new_messages.append(ollama_message)
+
+        # Load Config
+        config = self.get_config()
+        for k, v in config.items():
+            if k not in optional_params:
+                optional_params[k] = v
 
         data = {
             "model": model,
@@ -308,6 +348,8 @@ class OllamaChatConfig(BaseConfig):
             data["tools"] = tools
         if keep_alive is not None:
             data["keep_alive"] = keep_alive
+        if think is not None:
+            data["think"] = think
 
         return data
 
@@ -340,11 +382,31 @@ class OllamaChatConfig(BaseConfig):
 
         ## RESPONSE OBJECT
         model_response.choices[0].finish_reason = "stop"
+        response_json_message = response_json.get("message")
+        if response_json_message is not None:
+            if "thinking" in response_json_message:
+                # remap 'thinking' to 'reasoning_content'
+                response_json_message["reasoning_content"] = response_json_message[
+                    "thinking"
+                ]
+                del response_json_message["thinking"]
+            elif response_json_message.get("content") is not None:
+                # parse reasoning content from content
+                from litellm.litellm_core_utils.prompt_templates.common_utils import (
+                    _parse_content_for_reasoning,
+                )
+
+                reasoning_content, content = _parse_content_for_reasoning(
+                    response_json_message["content"]
+                )
+                response_json_message["reasoning_content"] = reasoning_content
+                response_json_message["content"] = content
+
         if (
             request_data.get("format", "") == "json"
             and litellm_params.get("function_name") is not None
         ):
-            function_call = json.loads(response_json["message"]["content"])
+            function_call = json.loads(response_json_message["content"])
             message = litellm.Message(
                 content=None,
                 tool_calls=[
@@ -361,11 +423,13 @@ class OllamaChatConfig(BaseConfig):
                         "type": "function",
                     }
                 ],
+                reasoning_content=response_json_message.get("reasoning_content"),
             )
             model_response.choices[0].message = message  # type: ignore
             model_response.choices[0].finish_reason = "tool_calls"
         else:
-            _message = litellm.Message(**response_json["message"])
+
+            _message = litellm.Message(**response_json_message)
             model_response.choices[0].message = _message  # type: ignore
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
@@ -406,6 +470,9 @@ class OllamaChatConfig(BaseConfig):
 
 
 class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
+    started_reasoning_content: bool = False
+    finished_reasoning_content: bool = False
+
     def _is_function_call_complete(self, function_args: Union[str, dict]) -> bool:
         if isinstance(function_args, dict):
             return True
@@ -459,8 +526,38 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                         if is_function_call_complete:
                             tool_call["id"] = str(uuid.uuid4())
 
+            # PROCESS REASONING CONTENT
+            reasoning_content: Optional[str] = None
+            content: Optional[str] = None
+            if chunk["message"].get("thinking") is not None:
+                if self.started_reasoning_content is False:
+                    reasoning_content = chunk["message"].get("thinking")
+                    self.started_reasoning_content = True
+                elif self.finished_reasoning_content is False:
+                    reasoning_content = chunk["message"].get("thinking")
+                    self.finished_reasoning_content = True
+            elif chunk["message"].get("content") is not None:
+                message_content = chunk["message"].get("content")
+                if "<think>" in message_content:
+                    message_content = message_content.replace("<think>", "")
+
+                    self.started_reasoning_content = True
+
+                if "</think>" in message_content and self.started_reasoning_content:
+                    message_content = message_content.replace("</think>", "")
+                    self.finished_reasoning_content = True
+
+                if (
+                    self.started_reasoning_content
+                    and not self.finished_reasoning_content
+                ):
+                    reasoning_content = message_content
+                else:
+                    content = message_content
+
             delta = Delta(
-                content=chunk["message"].get("content", ""),
+                content=content,
+                reasoning_content=reasoning_content,
                 tool_calls=tool_calls,
             )
 

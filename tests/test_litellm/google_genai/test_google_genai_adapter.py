@@ -5,8 +5,11 @@ Test to verify the Google GenAI generate_content adapter functionality
 import json
 import os
 import sys
+import unittest
 
 import pytest
+
+from litellm.google_genai.main import agenerate_content
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -17,6 +20,8 @@ import os
 import sys
 
 import pytest
+
+import litellm
 
 
 def test_adapter_import():
@@ -148,7 +153,7 @@ def test_tools_transformation():
                 {
                     "name": "get_weather",
                     "description": "Get current weather information",
-                    "parameters": {
+                    "parametersJsonSchema": {
                         "type": "object",
                         "properties": {
                             "location": {
@@ -162,7 +167,7 @@ def test_tools_transformation():
                 {
                     "name": "get_forecast",
                     "description": "Get weather forecast",
-                    "parameters": {
+                    "parametersJsonSchema": {
                         "type": "object",
                         "properties": {
                             "location": {"type": "string"},
@@ -598,19 +603,19 @@ def test_streaming_multiple_partial_tool_calls():
     mock_wrapper = GoogleGenAIStreamWrapper(completion_stream=None)
     
     # Test data for two tool calls being accumulated simultaneously
-    # Format: (tool_call_id, function_name, args_chunk)
+    # Format: (tool_call_id, function_name, args_chunk, index)
     test_chunks = [
-        ("call_1", "read_file", '{"file1"'),    # {"file1"
-        ("call_2", "write_file", '{"file2"'),   # {"file2"
-        ("call_1", None, ': "test1.txt"'),      # : "test1.txt"
-        ("call_2", None, ': "test2.txt"'),      # : "test2.txt"
-        ("call_1", None, '}'),                  # }
-        ("call_2", None, '}'),                  # }
+        ("call_1", "read_file", '{"file1"', 0),    # {"file1"
+        ("call_2", "write_file", '{"file2"', 1),   # {"file2"
+        ("call_1", None, ': "test1.txt"', 0),      # : "test1.txt"
+        ("call_2", None, ': "test2.txt"', 1),      # : "test2.txt"
+        ("call_1", None, '}', 0),                  # }
+        ("call_2", None, '}', 1),                  # }
     ]
     
     completed_chunks = []
     
-    for call_id, function_name, args_chunk in test_chunks:
+    for call_id, function_name, args_chunk, index in test_chunks:
         # Create mock function for tool call
         mock_function = Function(
             name=function_name,
@@ -622,7 +627,7 @@ def test_streaming_multiple_partial_tool_calls():
             id=call_id,
             type="function",
             function=mock_function,
-            index=0
+            index=index
         )
         
         # Create mock delta with tool call
@@ -869,6 +874,104 @@ def test_handler_parameter_exclusion():
     assert "temperature" in completion_kwargs
     assert completion_kwargs["temperature"] == 0.7
 
+@pytest.mark.parametrize("function_name,is_async,is_stream", [
+    ("generate_content", False, False),
+    ("agenerate_content", True, False),
+    ("generate_content_stream", False, True),
+    ("agenerate_content_stream", True, True),
+])
+def test_api_base_and_api_key_passthrough(function_name, is_async, is_stream):
+    """Test that api_base and api_key parameters are passed through to litellm.completion/acompletion when using generate_content"""
+    import asyncio
+    import unittest.mock
+    
+    litellm._turn_on_debug()
+
+    # Import the specific function being tested
+    if function_name == "generate_content":
+        from litellm.google_genai.main import generate_content as test_function
+    elif function_name == "agenerate_content":
+        from litellm.google_genai.main import agenerate_content as test_function
+    elif function_name == "generate_content_stream":
+        from litellm.google_genai.main import generate_content_stream as test_function
+    elif function_name == "agenerate_content_stream":
+        from litellm.google_genai.main import agenerate_content_stream as test_function
+
+    # Test input parameters
+    model = "gpt-3.5-turbo"
+    test_api_base = "https://test-api.example.com"
+    test_api_key = "test-api-key-123"
+    
+    # Mock the appropriate litellm function (completion vs acompletion)
+    mock_target = 'litellm.acompletion' if is_async else 'litellm.completion'
+    
+    with unittest.mock.patch(mock_target) as mock_completion:
+        # Mock return value
+        mock_return = unittest.mock.MagicMock()
+        if is_async:
+            # For async functions, return a coroutine that resolves to the mock
+            async def mock_async_return():
+                return mock_return
+            mock_completion.return_value = mock_async_return()
+        else:
+            mock_completion.return_value = mock_return
+        
+        # Define the test call
+        def make_test_call():
+            return test_function(
+                model=model,
+                contents={
+                    "role": "user",
+                    "parts": [{"text": "Hello, world!"}]
+                },
+                config={
+                    "temperature": 0.7,
+                },
+                api_base=test_api_base,
+                api_key=test_api_key
+            )
+        
+        # Call the handler with api_base and api_key
+        try:
+            if is_async:
+                # Run the async function
+                async def run_async_test():
+                    return await make_test_call()
+                
+                asyncio.run(run_async_test())
+            else:
+                make_test_call()
+        except Exception:
+            # Ignore any errors from the mock response processing
+            pass
+        
+        # Verify that the appropriate litellm function was called
+        mock_completion.assert_called_once()
+        
+        # Get the arguments passed to litellm.completion/acompletion
+        call_args, call_kwargs = mock_completion.call_args
+        
+        # Verify that api_base and api_key were passed through
+        assert "api_base" in call_kwargs, f"api_base not found in completion kwargs: {call_kwargs.keys()}"
+        assert call_kwargs["api_base"] == test_api_base, f"Expected api_base {test_api_base}, got {call_kwargs['api_base']}"
+        
+        assert "api_key" in call_kwargs, f"api_key not found in completion kwargs: {call_kwargs.keys()}"
+        assert call_kwargs["api_key"] == test_api_key, f"Expected api_key {test_api_key}, got {call_kwargs['api_key']}"
+        
+        # Verify other expected parameters
+        assert call_kwargs["model"] == model
+        assert len(call_kwargs["messages"]) == 1
+        assert call_kwargs["messages"][0]["role"] == "user"
+        assert call_kwargs["messages"][0]["content"] == "Hello, world!"
+        assert call_kwargs["temperature"] == 0.7
+        
+        # Verify stream parameter for streaming functions
+        if is_stream:
+            pass
+        else:
+            # For non-streaming, stream should be False or not present
+            assert call_kwargs.get("stream") is not True, f"Expected stream not True for {function_name}"
+
 def test_shared_schema_normalization_utilities():
     """Test the shared schema normalization utility functions work correctly"""
     from litellm.litellm_core_utils.json_validation_rule import (
@@ -948,3 +1051,152 @@ def test_shared_schema_normalization_utilities():
     assert normalize_json_schema_types("not_a_dict") == "not_a_dict"
     assert normalize_json_schema_types([{"type": "STRING"}]) == [{"type": "string"}]
     assert normalize_tool_schema("not_a_dict") == "not_a_dict"
+
+@pytest.mark.asyncio
+async def test_google_generate_content_with_openai():
+    """
+    
+    """
+    import unittest.mock
+
+    from litellm.types.llms.openai import ChatCompletionAssistantMessage
+    from litellm.types.router import GenericLiteLLMParams
+    from litellm.types.utils import Choices, ModelResponse, Usage
+
+    # Create a proper mock response object with expected attributes
+    mock_message = ChatCompletionAssistantMessage(
+        role="assistant",
+        content="Hello! How can I help you today?"
+    )
+
+    mock_choice = Choices(
+        finish_reason="stop",
+        index=0,
+        message=mock_message
+    )
+    
+    mock_usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=20, 
+        total_tokens=30
+    )
+    
+    mock_response = ModelResponse(
+        id="test-123",
+        choices=[mock_choice],
+        created=1234567890,
+        model="gpt-4o-mini",
+        object="chat.completion",
+        usage=mock_usage
+    )
+    
+    # Use AsyncMock for proper async function mocking
+    with unittest.mock.patch("litellm.acompletion", new_callable=unittest.mock.AsyncMock) as mock_completion:
+        # Set the return value directly on the MagicMock
+        mock_completion.return_value = mock_response
+        
+        response = await agenerate_content(
+            model="openai/gpt-4o-mini",
+            contents=[
+                {"role": "user", "parts": [{"text": "Hello, world!"}]}
+            ],
+                systemInstruction={"parts": [{"text": "You are a helpful assistant."}]},
+            safetySettings=[
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH",
+                    "threshold": "OFF"
+                }
+            ]
+        )
+        
+        # Print the request args sent to litellm.completion
+        call_args, call_kwargs = mock_completion.call_args
+        print("Arguments sent to litellm.completion:")
+        print(f"Args: {call_args}")
+        print(f"Kwargs: {call_kwargs}")
+        
+        # Verify the mock was called
+        mock_completion.assert_called_once()
+        
+        # Print the response for verification
+        print(f"Response: {response}")
+        ######################################################### 
+        # validate only expected fields were sent to litellm.completion
+        passed_fields = set(call_kwargs.keys())
+        # remove any GenericLiteLLMParams fields
+        passed_fields = passed_fields - set(GenericLiteLLMParams.model_fields.keys())
+        assert passed_fields == set(["model", "messages"]), f"Expected only model and messages to be passed through, got {passed_fields}"
+@pytest.mark.asyncio
+async def test_agenerate_content_x_goog_api_key_header():
+    """
+    Test that agenerate_content passes x-goog-api-key header correctly.
+    
+    This test verifies that when calling agenerate_content with a Google GenAI model,
+    the HTTP request includes the x-goog-api-key header with the correct API key value.
+    """
+    import os
+    import unittest.mock
+
+    import httpx
+    
+    test_api_key = "test-gemini-api-key-123"
+    
+    # Mock environment to ensure we use our test API key
+    with unittest.mock.patch.dict(os.environ, {"GEMINI_API_KEY": test_api_key}, clear=False):
+        # Mock the AsyncHTTPHandler's post method to capture headers
+        with unittest.mock.patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post", new_callable=unittest.mock.AsyncMock) as mock_post:
+            # Mock a successful response
+            mock_response = unittest.mock.MagicMock()
+            mock_response.json.return_value = {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [{"text": "Hello! How can I help you today?"}],
+                            "role": "model"
+                        },
+                        "finishReason": "STOP",
+                        "index": 0
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 5,
+                    "candidatesTokenCount": 10,
+                    "totalTokenCount": 15
+                }
+            }
+            mock_response.status_code = 200
+            mock_response.headers = {}
+            mock_post.return_value = mock_response
+            
+            # Call agenerate_content with Google AI Studio model
+            try:
+                response = await agenerate_content(
+                    model="gemini/gemini-1.5-flash",
+                    contents=[
+                        {"role": "user", "parts": [{"text": "Hello, world!"}]}
+                    ],
+                    api_key=test_api_key
+                )
+            except Exception:
+                # Ignore any response processing errors, we just want to check the headers
+                pass
+            
+            # Verify that AsyncHTTPHandler.post was called
+            mock_post.assert_called_once()
+            
+            # Get the arguments passed to the post call
+            call_args, call_kwargs = mock_post.call_args
+            
+            # Verify that headers contain x-goog-api-key
+            headers = call_kwargs.get("headers", {})
+            assert "x-goog-api-key" in headers, f"x-goog-api-key header not found in headers: {list(headers.keys())}"
+            
+            # Verify the API key is set (could be our test key or from api_key parameter)
+            api_key_value = headers["x-goog-api-key"]
+            assert api_key_value == test_api_key, f"Expected x-goog-api-key to be {test_api_key}, got {api_key_value}"
+            
+            # Verify other expected headers
+            assert headers.get("Content-Type") == "application/json", f"Expected Content-Type application/json, got {headers.get('Content-Type')}"
+            
+            print(f"✓ Test passed: x-goog-api-key header correctly set to {api_key_value}")
+            print(f"✓ All headers: {list(headers.keys())}")

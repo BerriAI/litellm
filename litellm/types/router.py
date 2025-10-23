@@ -4,24 +4,21 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
-import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
 
 import httpx
-from httpx import AsyncClient, Client
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm._uuid import uuid
 
-from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 from .llms.openai import OpenAIFileObject
 from .llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
-from .utils import ModelResponse, ProviderSpecificModelInfo
+from .search import SearchProvider
+from .utils import CustomPricingLiteLLMParams, ModelResponse
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
@@ -89,6 +86,7 @@ class UpdateRouterConfig(BaseModel):
     retry_after: Optional[float] = None
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
+    model_group_alias: Optional[Dict[str, Union[str, Dict]]] = {}
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -97,16 +95,18 @@ class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
-    db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
+    db_model: bool = (
+        False  # used for proxy - to separate models which are stored in the db vs. config.
+    )
     updated_at: Optional[datetime.datetime] = None
     updated_by: Optional[str] = None
 
     created_at: Optional[datetime.datetime] = None
     created_by: Optional[str] = None
 
-    base_model: Optional[
-        str
-    ] = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    base_model: Optional[str] = (
+        None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    )
     tier: Optional[Literal["free", "paid"]] = None
 
     """
@@ -163,16 +163,6 @@ class CredentialLiteLLMParams(BaseModel):
     watsonx_region_name: Optional[str] = None
 
 
-class CustomPricingLiteLLMParams(BaseModel):
-    ## CUSTOM PRICING ##
-    input_cost_per_token: Optional[float] = None
-    output_cost_per_token: Optional[float] = None
-    input_cost_per_second: Optional[float] = None
-    output_cost_per_second: Optional[float] = None
-    input_cost_per_pixel: Optional[float] = None
-    output_cost_per_pixel: Optional[float] = None
-
-
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
     LiteLLM Params without 'model' arg (used across completion / assistants api)
@@ -181,12 +171,12 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     custom_llm_provider: Optional[str] = None
     tpm: Optional[int] = None
     rpm: Optional[int] = None
-    timeout: Optional[
-        Union[float, str, httpx.Timeout]
-    ] = None  # if str, pass in as os.environ/
-    stream_timeout: Optional[
-        Union[float, str]
-    ] = None  # timeout when making stream=True calls, if str, pass in as os.environ/
+    timeout: Optional[Union[float, str, httpx.Timeout]] = (
+        None  # if str, pass in as os.environ/
+    )
+    stream_timeout: Optional[Union[float, str]] = (
+        None  # timeout when making stream=True calls, if str, pass in as os.environ/
+    )
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
@@ -206,6 +196,19 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None
     mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None
+
+    # auto-router params
+    auto_router_config_path: Optional[str] = None
+    auto_router_config: Optional[str] = None
+    auto_router_default_model: Optional[str] = None
+    auto_router_embedding_model: Optional[str] = None
+
+    # Batch/File API Params
+    s3_bucket_name: Optional[str] = None
+    gcs_bucket_name: Optional[str] = None
+
+    # Vector Store Params
+    vector_store_id: Optional[str] = None
 
     def __init__(
         self,
@@ -251,6 +254,14 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         merge_reasoning_content_in_choices: Optional[bool] = False,
         model_info: Optional[Dict] = None,
         mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None,
+        # auto-router params
+        auto_router_config_path: Optional[str] = None,
+        auto_router_config: Optional[str] = None,
+        auto_router_default_model: Optional[str] = None,
+        auto_router_embedding_model: Optional[str] = None,
+        # Batch/File API Params
+        s3_bucket_name: Optional[str] = None,
+        gcs_bucket_name: Optional[str] = None,
         **params,
     ):
         args = locals()
@@ -261,9 +272,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
         # We need to keep max_retries in args since it's a parameter of GenericLiteLLMParams
-        args[
-            "max_retries"
-        ] = max_retries  # Put max_retries back in args after popping it
+        args["max_retries"] = (
+            max_retries  # Put max_retries back in args after popping it
+        )
         super().__init__(**args, **params)
 
     def __contains__(self, key):
@@ -328,7 +339,8 @@ class LiteLLM_Params(GenericLiteLLMParams):
         args.pop("__class__", None)
         if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
-        super().__init__(max_retries=max_retries, **args, **params)
+        args["max_retries"] = max_retries
+        super().__init__(**{**args, **params})
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -460,7 +472,7 @@ class Deployment(BaseModel):
     def to_json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)  # noqa
-        except Exception as e:
+        except Exception:
             # if using pydantic v1
             return self.dict(**kwargs)
 
@@ -552,6 +564,7 @@ class ModelGroupInfo(BaseModel):
     max_output_tokens: Optional[float] = None
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
+    input_cost_per_pixel: Optional[float] = None
     mode: Optional[
         Union[
             str,
@@ -579,7 +592,7 @@ class ModelGroupInfo(BaseModel):
 
     def __init__(self, **data):
         for field_name, field_type in get_type_hints(self.__class__).items():
-            if field_type == bool and data.get(field_name) is None:
+            if field_type is bool and data.get(field_name) is None:
                 data[field_name] = False
         super().__init__(**data)
 
@@ -587,6 +600,35 @@ class ModelGroupInfo(BaseModel):
 class AssistantsTypedDict(TypedDict):
     custom_llm_provider: Literal["azure", "openai"]
     litellm_params: LiteLLMParamsTypedDict
+
+
+class SearchToolLiteLLMParams(TypedDict, total=False):
+    """
+    LiteLLM params for search tools.
+    Search tools don't require a 'model' field like regular deployments.
+    """
+    search_provider: Required[SearchProvider]
+    api_key: Optional[str]
+    api_base: Optional[str]
+    timeout: Optional[Union[float, str, httpx.Timeout]]
+    max_retries: Optional[int]
+
+
+class SearchToolTypedDict(TypedDict):
+    """
+    Configuration for a search tool in the router.
+    
+    Example:
+        {
+            "search_tool_name": "litellm-search",
+            "litellm_params": {
+                "search_provider": "perplexity",
+                "api_key": "os.environ/PERPLEXITYAI_API_KEY"
+            }
+        }
+    """
+    search_tool_name: Required[str]
+    litellm_params: Required[SearchToolLiteLLMParams]
 
 
 class FineTuningConfig(BaseModel):
@@ -719,7 +761,10 @@ class GenericBudgetWindowDetails(BaseModel):
 
 OptionalPreCallChecks = List[
     Literal[
-        "prompt_caching", "router_budget_limiting", "responses_api_deployment_check"
+        "prompt_caching",
+        "router_budget_limiting",
+        "responses_api_deployment_check",
+        "forward_client_headers_by_model_group",
     ]
 ]
 
@@ -732,21 +777,44 @@ class LiteLLM_RouterFileObject(TypedDict, total=False):
     litellm_params_sensitive_credential_hash: str
     file_object: OpenAIFileObject
 
+
 @dataclass
 class MockRouterTestingParams:
     mock_testing_fallbacks: Optional[bool] = None
     mock_testing_context_fallbacks: Optional[bool] = None
     mock_testing_content_policy_fallbacks: Optional[bool] = None
-    
+
     @classmethod
-    def from_kwargs(cls, kwargs: dict) -> 'MockRouterTestingParams':
+    def from_kwargs(cls, kwargs: dict) -> "MockRouterTestingParams":
         from litellm.secret_managers.main import str_to_bool
+
         def extract_bool_param(name: str) -> Optional[bool]:
             value = kwargs.pop(name, None)
             return str_to_bool(value) if isinstance(value, str) else value
-        
+
         return cls(
             mock_testing_fallbacks=extract_bool_param("mock_testing_fallbacks"),
-            mock_testing_context_fallbacks=extract_bool_param("mock_testing_context_fallbacks"),
-            mock_testing_content_policy_fallbacks=extract_bool_param("mock_testing_content_policy_fallbacks")
+            mock_testing_context_fallbacks=extract_bool_param(
+                "mock_testing_context_fallbacks"
+            ),
+            mock_testing_content_policy_fallbacks=extract_bool_param(
+                "mock_testing_content_policy_fallbacks"
+            ),
         )
+
+
+class ModelGroupSettings(BaseModel):
+    forward_client_headers_to_llm_api: Optional[List[str]] = None
+
+
+class PreRoutingHookResponse(BaseModel):
+    """
+    Response object from the pre-routing hook.
+
+    Allows the Pre-Routing Hook to return a modified model and messages.
+
+    Add fields that you expect to be modified by the pre-routing hook.
+    """
+
+    model: str
+    messages: Optional[List[Dict[str, str]]]

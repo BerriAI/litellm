@@ -677,3 +677,183 @@ def test_vertex_filter_format_uri():
     )
 
     assert "uri" not in json.dumps(new_parameters)
+
+def test_convert_schema_types_type_array_conversion():
+    """
+    Test _convert_schema_types function handles type arrays and case conversion.
+    
+    This test verifies the fix for the issue where type arrays like ["string", "number"] 
+    would raise an exception in Vertex AI schema validation.
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/14091
+    """
+    from litellm.llms.vertex_ai.common_utils import _convert_schema_types
+
+    # Input: OpenAI-style schema with type array (the problematic case)
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "studio": {
+                "type": ["string", "number"],
+                "description": "The studio ID or name"
+            }
+        },
+        "required": ["studio"],
+        "additionalProperties": False,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+
+    # Expected output: Vertex AI compatible schema with anyOf and uppercase types
+    expected_output = {
+        "type": "object",
+        "properties": {
+            "studio": {
+                "anyOf": [
+                    {"type": "string"}, 
+                    {"type": "number"}
+                ],
+                "description": "The studio ID or name"
+            }
+        },
+        "required": ["studio"],
+        "additionalProperties": False,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+
+    # Apply the transformation
+    _convert_schema_types(input_schema)
+
+    # Verify the transformation
+    assert input_schema == expected_output
+
+    # Verify specific transformations:
+    # 1. Root level type converted to uppercase
+    assert input_schema["type"] == "object"
+
+    # 2. Type array converted to anyOf format
+    assert "anyOf" in input_schema["properties"]["studio"]
+    assert "type" not in input_schema["properties"]["studio"]
+
+    # 3. Individual types in anyOf are uppercase
+    anyof_types = input_schema["properties"]["studio"]["anyOf"]
+    assert anyof_types[0]["type"] == "string"
+    assert anyof_types[1]["type"] == "number"
+
+    # 4. Other properties preserved
+    assert input_schema["properties"]["studio"]["description"] == "The studio ID or name"
+    assert input_schema["required"] == ["studio"]
+
+
+def test_fix_enum_empty_strings():
+    """
+    Test _fix_enum_empty_strings function replaces empty strings with None in enum arrays.
+    
+    This test verifies the fix for the issue where Gemini rejects tool definitions 
+    with empty strings in enum values, causing API failures.
+
+    Relevant issue: Gemini does not accept empty strings in enum values
+    """
+    from litellm.llms.vertex_ai.common_utils import _fix_enum_empty_strings
+
+    # Input: Schema with empty string in enum (the problematic case)
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "user_agent_type": {
+                "enum": ["", "desktop", "mobile", "tablet"],
+                "type": "string",
+                "description": "Device type for user agent"
+            }
+        },
+        "required": ["user_agent_type"]
+    }
+
+    # Expected output: Empty strings replaced with None
+    expected_output = {
+        "type": "object", 
+        "properties": {
+            "user_agent_type": {
+                "enum": [None, "desktop", "mobile", "tablet"],
+                "type": "string",
+                "description": "Device type for user agent"
+            }
+        },
+        "required": ["user_agent_type"]
+    }
+
+    # Apply the transformation
+    _fix_enum_empty_strings(input_schema)
+
+    # Verify the transformation
+    assert input_schema == expected_output
+
+    # Verify specific transformations:
+    # 1. Empty string replaced with None
+    enum_values = input_schema["properties"]["user_agent_type"]["enum"]
+    assert "" not in enum_values
+    assert None in enum_values
+
+    # 2. Other enum values preserved
+    assert "desktop" in enum_values
+    assert "mobile" in enum_values
+    assert "tablet" in enum_values
+
+    # 3. Other properties preserved
+    assert input_schema["properties"]["user_agent_type"]["type"] == "string"
+    assert input_schema["properties"]["user_agent_type"]["description"] == "Device type for user agent"
+
+
+def test_get_token_url():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexLLM,
+    )
+
+    vertex_llm = VertexLLM()
+    vertex_ai_project = "pathrise-convert-1606954137718"
+    vertex_ai_location = "us-central1"
+    vertex_credentials = ""
+
+    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
+        optional_params={"cached_content": "hi"}
+    )
+
+    _, url = vertex_llm._get_token_and_url(
+        auth_header=None,
+        vertex_project=vertex_ai_project,
+        vertex_location=vertex_ai_location,
+        vertex_credentials=vertex_credentials,
+        gemini_api_key="",
+        custom_llm_provider="vertex_ai_beta",
+        should_use_v1beta1_features=should_use_v1beta1_features,
+        api_base=None,
+        model="",
+        stream=False,
+    )
+
+    print("url=", url)
+
+
+
+    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
+        optional_params={"temperature": 0.1}
+    )
+
+    _, url = vertex_llm._get_token_and_url(
+        auth_header=None,
+        vertex_project=vertex_ai_project,
+        vertex_location=vertex_ai_location,
+        vertex_credentials=vertex_credentials,
+        gemini_api_key="",
+        custom_llm_provider="vertex_ai_beta",
+        should_use_v1beta1_features=should_use_v1beta1_features,
+        api_base=None,
+        model="",
+        stream=False,
+    )
+
+    print("url for normal request", url)
+
+    assert "v1beta1" not in url
+    assert "/v1/" in url
+
+    pass

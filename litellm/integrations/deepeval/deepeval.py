@@ -1,5 +1,5 @@
 import os
-import uuid
+from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.api import Api, Endpoints, HttpMethods
 from litellm.integrations.deepeval.types import (
@@ -100,7 +100,7 @@ class DeepEvalLogger(CustomLogger):
         except Exception as e:
             raise e
         verbose_logger.debug(
-            "DeepEvalLogger: sync_log_failure_event: Api response", response
+            "DeepEvalLogger: sync_log_failure_event: Api response %s", response
         )
 
     async def _async_event_handler(
@@ -116,7 +116,7 @@ class DeepEvalLogger(CustomLogger):
         )
 
         verbose_logger.debug(
-            "DeepEvalLogger: async_event_handler: Api response", response
+            "DeepEvalLogger: async_event_handler: Api response %s", response
         )
 
     def _create_base_api_span(

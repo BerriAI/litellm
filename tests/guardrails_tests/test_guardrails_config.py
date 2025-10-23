@@ -6,7 +6,7 @@ import os
 import sys
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 
 import pytest
@@ -93,11 +93,14 @@ def test_guardrail_list_of_event_hooks():
 
 
 def test_guardrail_info_response():
-    from litellm.types.guardrails import GuardrailInfoResponse, LitellmParams, GuardrailInfoLiteLLMParamsResponse
+    from litellm.types.guardrails import (
+        GuardrailInfoResponse,
+        LitellmParams,
+    )
 
     guardrail_info = GuardrailInfoResponse(
         guardrail_name="aporia-pre-guard",
-        litellm_params=GuardrailInfoLiteLLMParamsResponse(
+        litellm_params=LitellmParams(
             guardrail="aporia",
             mode="pre_call",
         ),

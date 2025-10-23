@@ -1,10 +1,13 @@
 """
-This file contains the calling Azure OpenAI's `/openai/realtime` endpoint.
+This file contains the calling OpenAI's `/v1/realtime` endpoint.
 
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
 from typing import Any, Optional, cast
+
+from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
@@ -12,17 +15,21 @@ from ..openai import OpenAIChatCompletion
 
 
 class OpenAIRealtime(OpenAIChatCompletion):
-    def _construct_url(self, api_base: str, model: str) -> str:
+    def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
         """
-        Example output:
-        "BACKEND_WS_URL = "wss://localhost:8080/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"";
+        Construct the backend websocket URL with all query parameters (including 'model').
         """
         from httpx import URL
 
         api_base = api_base.replace("https://", "wss://")
         api_base = api_base.replace("http://", "ws://")
-        url = URL(api_base).join("/v1/realtime")
-        return str(url.copy_add_param("model", model))
+        url = URL(api_base)
+        # Set the correct path
+        url = url.copy_with(path="/v1/realtime")
+        # Include all query parameters including 'model'
+        if query_params:
+            url = url.copy_with(params=query_params)
+        return str(url)
 
     async def async_realtime(
         self,
@@ -33,16 +40,19 @@ class OpenAIRealtime(OpenAIChatCompletion):
         api_key: Optional[str] = None,
         client: Optional[Any] = None,
         timeout: Optional[float] = None,
+        query_params: Optional[RealtimeQueryParams] = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
-
         if api_base is None:
-            raise ValueError("api_base is required for Azure OpenAI calls")
+            api_base = "https://api.openai.com/"
         if api_key is None:
-            raise ValueError("api_key is required for Azure OpenAI calls")
+            raise ValueError("api_key is required for OpenAI realtime calls")
 
-        url = self._construct_url(api_base, model)
+        # Use all query params if provided, else fallback to just model
+        if query_params is None:
+            query_params = {"model": model}
+        url = self._construct_url(api_base, query_params)
 
         try:
             async with websockets.connect(  # type: ignore
@@ -51,6 +61,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     "Authorization": f"Bearer {api_key}",  # type: ignore
                     "OpenAI-Beta": "realtime=v1",
                 },
+                max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
                     websocket, cast(ClientConnection, backend_ws), logging_obj

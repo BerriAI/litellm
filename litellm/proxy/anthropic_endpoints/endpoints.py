@@ -16,6 +16,7 @@ from litellm.proxy.common_request_processing import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.types.utils import TokenCountResponse
 
 router = APIRouter()
 
@@ -86,7 +87,18 @@ async def anthropic_response(  # noqa: PLR0915
 
         ### CALL HOOKS ### - modify incoming data before calling the model
         data = await proxy_logging_obj.pre_call_hook(  # type: ignore
-            user_api_key_dict=user_api_key_dict, data=data, call_type="text_completion"
+            user_api_key_dict=user_api_key_dict, data=data, call_type=CallTypes.anthropic_messages.value
+        )
+
+        tasks = []
+        tasks.append(
+            proxy_logging_obj.during_call_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=ProxyBaseLLMRequestProcessing._get_pre_call_type(
+                    route_type="anthropic_messages"  # type: ignore
+                ),
+            )
         )
 
         ### ROUTE THE REQUESTs ###
@@ -96,23 +108,21 @@ async def anthropic_response(  # noqa: PLR0915
         if (
             llm_router is not None and data["model"] in router_model_names
         ):  # model in router model list
-            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
+            llm_coro = llm_router.aanthropic_messages(**data)
         elif (
             llm_router is not None
             and llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):  # model set in model_group_alias
-            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
+            llm_coro = llm_router.aanthropic_messages(**data)
         elif (
             llm_router is not None and data["model"] in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
-            llm_response = asyncio.create_task(
-                llm_router.aanthropic_messages(**data, specific_deployment=True)
-            )
+            llm_coro = llm_router.aanthropic_messages(**data, specific_deployment=True)
         elif (
-            llm_router is not None and data["model"] in llm_router.get_model_ids()
+            llm_router is not None and llm_router.has_model_id(data["model"])
         ):  # model in router model list
-            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
+            llm_coro = llm_router.aanthropic_messages(**data)
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
@@ -121,9 +131,9 @@ async def anthropic_response(  # noqa: PLR0915
                 or len(llm_router.pattern_router.patterns) > 0
             )
         ):  # model in router deployments, calling a specific deployment on the router
-            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
+            llm_coro = llm_router.aanthropic_messages(**data)
         elif user_model is not None:  # `litellm --model <your-model-name>`
-            llm_response = asyncio.create_task(litellm.anthropic_messages(**data))
+            llm_coro = litellm.anthropic_messages(**data)
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -133,8 +143,16 @@ async def anthropic_response(  # noqa: PLR0915
                 },
             )
 
-        # Await the llm_response task
-        response = await llm_response
+        tasks.append(llm_coro)
+
+        # wait for call to end
+        llm_responses = asyncio.gather(
+            *tasks
+        )  # run the moderation check in parallel to the actual llm api call
+
+        responses = await llm_responses
+
+        response = responses[1]
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
@@ -182,7 +200,12 @@ async def anthropic_response(  # noqa: PLR0915
                 headers=dict(fastapi_response.headers),
             )
 
-        verbose_proxy_logger.info("\nResponse from Litellm:\n{}".format(response))
+        ### CALL HOOKS ### - modify outgoing data
+        response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response # type: ignore
+        )
+
+        verbose_proxy_logger.debug("\nResponse from Litellm:\n{}".format(response))
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -199,4 +222,89 @@ async def anthropic_response(  # noqa: PLR0915
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
+        )
+
+
+@router.post(
+    "/v1/messages/count_tokens",
+    tags=["[beta] Anthropic Messages Token Counting"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def count_tokens(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # Used for auth
+):
+    """
+    Count tokens for Anthropic Messages API format.
+    
+    This endpoint follows the Anthropic Messages API token counting specification.
+    It accepts the same parameters as the /v1/messages endpoint but returns
+    token counts instead of generating a response.
+    
+    Example usage:
+    ```
+    curl -X POST "http://localhost:4000/v1/messages/count_tokens?beta=true" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer your-key" \
+      -d '{
+        "model": "claude-3-sonnet-20240229",
+        "messages": [{"role": "user", "content": "Hello Claude!"}]
+      }'
+    ```
+    
+    Returns: {"input_tokens": <number>}
+    """
+    from litellm.proxy.proxy_server import token_counter as internal_token_counter
+    
+    try:
+        request_data = await _read_request_body(request=request)
+        data: dict = {**request_data}
+        
+        # Extract required fields
+        model_name = data.get("model")
+        messages = data.get("messages", [])
+        
+        if not model_name:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "model parameter is required"}
+            )
+        
+        if not messages:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "messages parameter is required"}
+            )
+        
+        # Create TokenCountRequest for the internal endpoint
+        from litellm.proxy._types import TokenCountRequest
+        
+        token_request = TokenCountRequest(
+            model=model_name,
+            messages=messages
+        )
+        
+        # Call the internal token counter function with direct request flag set to False
+        token_response = await internal_token_counter(
+            request=token_request,
+            call_endpoint=True,
+        )
+        _token_response_dict: dict = {}
+        if isinstance(token_response, TokenCountResponse):
+            _token_response_dict = token_response.model_dump()
+        elif isinstance(token_response, dict):
+            _token_response_dict = token_response
+    
+        # Convert the internal response to Anthropic API format
+        return {"input_tokens": _token_response_dict.get("total_tokens", 0)}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(str(e))
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Internal server error: {str(e)}"}
         )

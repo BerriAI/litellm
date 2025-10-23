@@ -3,7 +3,7 @@ Allow proxy admin to add/update/delete models in the db
 
 Currently most endpoints are in `proxy_server.py`, but those should  be moved here over time.
 
-Endpoints here: 
+Endpoints here:
 
 model/{model_id}/update - PATCH endpoint for model update.
 """
@@ -13,11 +13,11 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
-import uuid
+from litellm._uuid import uuid
 from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
@@ -44,6 +44,9 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
+from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+    UpdateUsefulLinksRequest,
+)
 from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
@@ -53,6 +56,16 @@ from litellm.types.router import (
 from litellm.utils import get_utc_datetime
 
 router = APIRouter()
+
+
+class UpdatePublicModelGroupsRequest(BaseModel):
+    """Request model for updating public model groups"""
+
+    model_groups: List[str] = Field(
+        description="List of model group names to make public"
+    )
+
+    model_config = ConfigDict(extra="forbid")
 
 
 async def get_db_model(
@@ -205,8 +218,14 @@ async def patch_model(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
-        # Create update dictionary only for provided fields
-        update_data = update_db_model(db_model=db_model, updated_patch=patch_data)
+
+        # Handle team model updates with proper alias management
+        update_data = await _update_team_model_in_db(
+            db_model=db_model,
+            patch_data=patch_data,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
 
         # Add metadata about update
         update_data["updated_by"] = (
@@ -219,9 +238,23 @@ async def patch_model(
             where={"model_id": model_id},
             data=update_data,
         )
-        
-        # Clear cache and reload models
+
+        # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
         await clear_cache()
+
+        ## CREATE AUDIT LOG ##
+        asyncio.create_task(
+            create_object_audit_log(
+                object_id=model_id,
+                action="updated",
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                before_value=db_model.model_dump_json(exclude_none=True),
+                after_value=updated_model.model_dump_json(exclude_none=True),
+                litellm_changed_by=user_api_key_dict.user_id,
+                litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+            )
+        )
 
         return updated_model
 
@@ -332,6 +365,143 @@ async def _add_team_model_to_db(
     )
 
     return model_response
+
+
+async def _update_team_model_in_db(
+    db_model: Deployment,
+    patch_data: updateDeployment,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> PrismaCompatibleUpdateDBModel:
+    """
+    Handle team model updates with proper alias management.
+    
+    If patch_data contains a team_id:
+    - Creates unique internal model_name and team alias
+    - Adds model to team object
+    - Preserves team_public_model_name for external reference
+    """
+    # Validate team_id if present in patch_data
+    from litellm.proxy.proxy_server import premium_user
+    
+    await ModelManagementAuthChecks.allow_team_model_action(
+        model_params=patch_data,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        premium_user=premium_user,
+    )
+    
+    patch_team_id = patch_data.model_info.team_id if patch_data.model_info else None
+    
+    # No team_id in patch, proceed with standard update
+    if patch_team_id is None:
+        return update_db_model(db_model=db_model, updated_patch=patch_data)
+    
+    # Determine public model name
+    public_model_name = _get_public_model_name(
+        patch_data=patch_data,
+        db_model=db_model,
+    )
+    
+    # Ensure model_info exists and set team_public_model_name
+    if patch_data.model_info is None:
+        from litellm.types.router import ModelInfo
+        patch_data.model_info = ModelInfo()
+    patch_data.model_info.team_public_model_name = public_model_name
+    
+    # Check if team assignment is new or changed
+    db_team_id = db_model.model_info.team_id if db_model.model_info else None
+    is_new_team_assignment = db_team_id != patch_team_id
+    
+    if is_new_team_assignment:
+        await _setup_new_team_model_assignment(
+            team_id=patch_team_id,
+            public_model_name=public_model_name,
+            patch_data=patch_data,
+            user_api_key_dict=user_api_key_dict,
+        )
+    else:
+        await _update_existing_team_model_assignment(
+            team_id=patch_team_id,
+            public_model_name=public_model_name,
+            db_model=db_model,
+            patch_data=patch_data,
+            user_api_key_dict=user_api_key_dict,
+        )
+    
+    return update_db_model(db_model=db_model, updated_patch=patch_data)
+
+
+def _get_public_model_name(
+    patch_data: updateDeployment,
+    db_model: Deployment,
+) -> str:
+    """Determine the public model name from patch or existing model."""
+    if patch_data.model_name:
+        return patch_data.model_name
+    
+    if db_model.model_info and db_model.model_info.team_public_model_name:
+        return db_model.model_info.team_public_model_name
+    
+    return db_model.model_name
+
+
+async def _setup_new_team_model_assignment(
+    team_id: str,
+    public_model_name: str,
+    patch_data: updateDeployment,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Set up a new team model with unique name, alias, and team membership."""
+    unique_model_name = f"model_name_{team_id}_{uuid.uuid4()}"
+    patch_data.model_name = unique_model_name
+    
+    await update_team(
+        data=UpdateTeamRequest(
+            team_id=team_id,
+            model_aliases={public_model_name: unique_model_name},
+        ),
+        user_api_key_dict=user_api_key_dict,
+        http_request=Request(scope={"type": "http"}),
+    )
+    
+    await team_model_add(
+        data=TeamModelAddRequest(
+            team_id=team_id,
+            models=[public_model_name],
+        ),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+async def _update_existing_team_model_assignment(
+    team_id: str,
+    public_model_name: str,
+    db_model: Deployment,
+    patch_data: updateDeployment,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Update an existing team model if the public name changed."""
+    old_public_name = (
+        db_model.model_info.team_public_model_name
+        if db_model.model_info
+        else None
+    )
+    
+    # Update alias only if public name changed
+    if old_public_name and public_model_name != old_public_name:
+        await update_team(
+            data=UpdateTeamRequest(
+                team_id=team_id,
+                model_aliases={public_model_name: db_model.model_name},
+            ),
+            user_api_key_dict=user_api_key_dict,
+            http_request=Request(scope={"type": "http"}),
+        )
+    
+    # Keep existing unique model_name
+    patch_data.model_name = None
 
 
 class ModelManagementAuthChecks:
@@ -931,6 +1101,162 @@ async def update_model(
         )
 
 
+@router.post(
+    "/model_group/make_public",
+    description="Update which model groups are public",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_public_model_groups(
+    request: UpdatePublicModelGroupsRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update which model groups are public.
+
+    This endpoint allows admins to specify which model groups should be publicly accessible.
+    Public model groups are visible via the /public/model_hub endpoint.
+
+    Args:
+        request: Request containing list of model group names to make public
+        user_api_key_dict: User authentication information
+
+    Returns:
+        Success message with updated public model groups
+
+    Raises:
+        ProxyException: For various error conditions including authentication errors
+    """
+    try:
+        # Update the public model groups
+        import litellm
+        from litellm.proxy.proxy_server import proxy_config, store_model_in_db
+
+        # Check if user has admin permissions
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only proxy admins can update public model groups. Your role={}".format(
+                        user_api_key_dict.user_role
+                    )
+                },
+            )
+
+        # Check if STORE_MODEL_IN_DB is enabled
+        if store_model_in_db is not True:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+                },
+            )
+
+        litellm.public_model_groups = request.model_groups
+
+        # Load existing config
+        config = await proxy_config.get_config()
+
+        # Update config with new settings
+        if "litellm_settings" not in config:
+            config["litellm_settings"] = {}
+
+        config["litellm_settings"]["public_model_groups"] = request.model_groups
+
+        # Save the updated config
+        await proxy_config.save_config(new_config=config)
+
+        verbose_proxy_logger.debug(
+            f"Updated public model groups to: {request.model_groups} by user: {user_api_key_dict.user_id}"
+        )
+
+        return {
+            "message": "Successfully updated public model groups",
+            "public_model_groups": request.model_groups,
+            "updated_by": user_api_key_dict.user_id,
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error updating public model groups: {str(e)}")
+
+        if isinstance(e, HTTPException):
+            raise e
+
+        raise ProxyException(
+            message=f"Error updating public model groups: {str(e)}",
+            type=ProxyErrorTypes.internal_server_error,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            param=None,
+        )
+
+
+@router.post(
+    "/model_hub/update_useful_links",
+    description="Update useful links",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_useful_links(
+    request: UpdateUsefulLinksRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update useful links.
+    """
+    try:
+        # Update the public model groups
+        import litellm
+        from litellm.proxy.proxy_server import proxy_config
+
+        # Check if user has admin permissions
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only proxy admins can update public model groups. Your role={}".format(
+                        user_api_key_dict.user_role
+                    )
+                },
+            )
+
+        litellm.public_model_groups_links = request.useful_links
+
+        # Load existing config
+        config = await proxy_config.get_config()
+
+        # Update config with new settings
+        if "litellm_settings" not in config:
+            config["litellm_settings"] = {}
+
+        config["litellm_settings"]["public_model_groups_links"] = request.useful_links
+
+        # Save the updated config
+        await proxy_config.save_config(new_config=config)
+
+        verbose_proxy_logger.debug(
+            f"Updated useful links to: {request.useful_links} by user: {user_api_key_dict.user_id}"
+        )
+
+        return {
+            "message": "Successfully updated useful links",
+            "useful_links": request.useful_links,
+            "updated_by": user_api_key_dict.user_id,
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error updating public model groups: {str(e)}")
+
+        if isinstance(e, HTTPException):
+            raise e
+
+        raise ProxyException(
+            message=f"Error updating public model groups: {str(e)}",
+            type=ProxyErrorTypes.internal_server_error,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            param=None,
+        )
+
+
 def _deduplicate_litellm_router_models(models: List[Dict]) -> List[Dict]:
     """
     Deduplicate models based on their model_info.id field.
@@ -951,24 +1277,57 @@ def _deduplicate_litellm_router_models(models: List[Dict]) -> List[Dict]:
             seen_ids.add(model_id)
     return unique_models
 
+
 async def clear_cache():
     """
     Clear router caches and reload models.
     """
     from litellm.proxy.proxy_server import (
-        proxy_config,
         llm_router,
         prisma_client,
+        proxy_config,
         proxy_logging_obj,
         verbose_proxy_logger,
     )
-    try:
-        llm_router.model_list.clear()
-        
-        await proxy_config.add_deployment(
-            prisma_client=prisma_client, 
-            proxy_logging_obj=proxy_logging_obj
+
+    if llm_router is None or prisma_client is None:
+        verbose_proxy_logger.debug(
+            "llm_router or prisma_client is None, skipping cache clear"
         )
+        return
+
+
+    try:
+        # Only clear DB models, preserve config models
+        verbose_proxy_logger.debug("Clearing only DB models, preserving config models")
+        
+        # Get current models and filter out DB models
+        current_models = llm_router.model_list.copy()
+        config_models = []
+        db_model_ids = []
+        
+        for model in current_models:
+            model_info = model.get("model_info", {})
+            if model_info.get("db_model", False):
+                # This is a DB model, mark for deletion
+                db_model_ids.append(model_info.get("id"))
+            else:
+                # This is a config model, preserve it
+                config_models.append(model)
+        
+        # Clear only DB models
+        for model_id in db_model_ids:
+            llm_router.delete_deployment(id=model_id)
+        
+        # Clear auto routers
+        llm_router.auto_routers.clear()
+        
+        # Reload only DB models
+        await proxy_config.add_deployment(
+            prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+        )
+        
+        verbose_proxy_logger.debug(f"Cleared {len(db_model_ids)} DB models, preserved {len(config_models)} config models")
     except Exception as e:
         verbose_proxy_logger.exception(
             f"Failed to clear cache and reload models. Due to error - {str(e)}"

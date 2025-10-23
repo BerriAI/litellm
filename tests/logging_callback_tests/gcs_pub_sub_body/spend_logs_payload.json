@@ -26,5 +26,6 @@
     "messages": "{}",
     "response": "{}",
     "proxy_server_request": "{}",
-    "status": "success"
+    "status": "success",
+    "mcp_namespaced_tool_name": null
 }

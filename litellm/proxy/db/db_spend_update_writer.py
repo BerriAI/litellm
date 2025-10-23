@@ -17,6 +17,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache, RedisCache
 from litellm.constants import DB_SPEND_UPDATE_JOB_NAME
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     BaseDailySpendTransaction,
@@ -147,6 +148,13 @@ class DBSpendUpdateWriter:
                     prisma_client=prisma_client,
                 )
             )
+            asyncio.create_task(
+                self._update_tag_db(
+                    response_cost=response_cost,
+                    request_tags=payload.get("request_tags"),
+                    prisma_client=prisma_client,
+                )
+            )
 
             if disable_spend_logs is False:
                 await self._insert_spend_log_to_db(
@@ -154,7 +162,7 @@ class DBSpendUpdateWriter:
                     prisma_client=prisma_client,
                 )
             else:
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.debug(
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
                 )
 
@@ -252,7 +260,7 @@ class DBSpendUpdateWriter:
                         )
                     )
         except Exception as e:
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 "\033[91m"
                 + f"Update User DB call failed to execute {str(e)}\n{traceback.format_exc()}"
             )
@@ -294,7 +302,7 @@ class DBSpendUpdateWriter:
             except Exception:
                 pass
         except Exception as e:
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"Update Team DB failed to execute - {str(e)}\n{traceback.format_exc()}"
             )
             raise e
@@ -320,8 +328,56 @@ class DBSpendUpdateWriter:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"Update Org DB failed to execute - {str(e)}\n{traceback.format_exc()}"
+            )
+            raise e
+
+    async def _update_tag_db(
+        self,
+        response_cost: Optional[float],
+        request_tags: Optional[str],
+        prisma_client: Optional[PrismaClient],
+    ):
+        """
+        Update spend for all tags in the request.
+        
+        Args:
+            response_cost: Cost of the request
+            request_tags: JSON string of tags list e.g. '["prod-tag", "test-tag"]'
+            prisma_client: Prisma client instance
+        """
+        try:
+            if request_tags is None or prisma_client is None:
+                return
+
+            # Parse tags from JSON string
+            tags = []
+            if isinstance(request_tags, str):
+                tags = safe_json_loads(request_tags, default=[])
+                if not tags:
+                    verbose_proxy_logger.debug(
+                        f"Failed to parse request_tags JSON: {request_tags}"
+                    )
+                    return
+            elif isinstance(request_tags, list):
+                tags = request_tags
+            else:
+                return
+
+            # Update spend for each tag
+            for tag_name in tags:
+                if tag_name and isinstance(tag_name, str):
+                    await self.spend_update_queue.add_update(
+                        update=SpendUpdateQueueItem(
+                            entity_type=Litellm_EntityType.TAG,
+                            entity_id=tag_name,
+                            response_cost=response_cost,
+                        )
+                    )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Update Tag DB failed to execute - {str(e)}\n{traceback.format_exc()}"
             )
             raise e
 
@@ -331,7 +387,7 @@ class DBSpendUpdateWriter:
         prisma_client: Optional[PrismaClient] = None,
         spend_logs_url: Optional[str] = os.getenv("SPEND_LOGS_URL"),
     ) -> Optional[PrismaClient]:
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "Writing spend log to db - request_id: {}, spend: {}".format(
                 payload.get("request_id"), payload.get("spend")
             )
@@ -775,6 +831,77 @@ class DBSpendUpdateWriter:
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
 
+        ### UPDATE TAG TABLE ###
+        tag_list_transactions = db_spend_update_transactions["tag_list_transactions"]
+        await DBSpendUpdateWriter._update_entity_spend_in_db(
+            entity_name="Tag",
+            transactions=tag_list_transactions,
+            table_accessor="litellm_tagtable",
+            where_field="tag_name",
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    @staticmethod
+    async def _update_entity_spend_in_db(
+        entity_name: str,
+        transactions: Optional[Dict[str, float]],
+        table_accessor: Any,
+        where_field: str,
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Helper function to update spend for any entity type (team, org, tag, etc).
+        
+        Args:
+            entity_name: Name of entity for logging (e.g., "Team", "Org", "Tag")
+            transactions: Dictionary of {entity_id: response_cost}
+            table_accessor: Prisma table accessor (e.g., prisma_client.db.litellm_teamtable)
+            where_field: Field name for where clause (e.g., "team_id", "organization_id", "tag_name")
+            n_retry_times: Number of retries on failure
+            prisma_client: Prisma client instance
+            proxy_logging_obj: Proxy logging object
+        """
+        from litellm.proxy.utils import _raise_failed_update_spend_exception
+
+        verbose_proxy_logger.debug(
+            f"{entity_name} Spend transactions: {transactions}"
+        )
+        if transactions is not None and len(transactions.keys()) > 0:
+            for i in range(n_retry_times + 1):
+                start_time = time.time()
+                try:
+                    async with prisma_client.db.tx(
+                        timeout=timedelta(seconds=60)
+                    ) as transaction:
+                        async with transaction.batch_() as batcher:
+                            for entity_id, response_cost in transactions.items():
+                                verbose_proxy_logger.debug(
+                                    f"Updating spend for {entity_name} {where_field}={entity_id} by {response_cost}"
+                                )
+                                getattr(batcher, table_accessor).update_many(
+                                    where={where_field: entity_id},
+                                    data={"spend": {"increment": response_cost}},
+                                )
+                    break
+                except DB_CONNECTION_ERROR_TYPES as e:
+                    if i >= n_retry_times:
+                        _raise_failed_update_spend_exception(
+                            e=e,
+                            start_time=start_time,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                    await asyncio.sleep(2**i)  # Exponential backoff
+                except Exception as e:
+                    _raise_failed_update_spend_exception(
+                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+                    )
+
+    # fmt: off
+
     @overload
     @staticmethod
     async def _update_daily_spend(
@@ -786,7 +913,7 @@ class DBSpendUpdateWriter:
         entity_id_field: str,
         table_name: str,
         unique_constraint_name: str,
-    ) -> None:
+    ) -> None: 
         ...
 
     @overload
@@ -814,8 +941,9 @@ class DBSpendUpdateWriter:
         entity_id_field: str,
         table_name: str,
         unique_constraint_name: str,
-    ) -> None:
+    ) -> None: 
         ...
+    # fmt: on
 
     @staticmethod
     async def _update_daily_spend(
@@ -869,7 +997,12 @@ class DBSpendUpdateWriter:
                                     "model": transaction["model"],
                                     "custom_llm_provider": transaction.get(
                                         "custom_llm_provider"
-                                    ),
+                                    )
+                                    or "",
+                                    "mcp_namespaced_tool_name": transaction.get(
+                                        "mcp_namespaced_tool_name"
+                                    )
+                                    or "",
                                 }
                             }
 
@@ -881,8 +1014,11 @@ class DBSpendUpdateWriter:
                                 entity_id_field: entity_id,
                                 "date": transaction["date"],
                                 "api_key": transaction["api_key"],
-                                "model": transaction["model"],
+                                "model": transaction.get("model"),
                                 "model_group": transaction.get("model_group"),
+                                "mcp_namespaced_tool_name": transaction.get(
+                                    "mcp_namespaced_tool_name"
+                                ) or "",
                                 "custom_llm_provider": transaction.get(
                                     "custom_llm_provider"
                                 ),
@@ -898,13 +1034,13 @@ class DBSpendUpdateWriter:
 
                             # Add cache-related fields if they exist
                             if "cache_read_input_tokens" in transaction:
-                                common_data[
-                                    "cache_read_input_tokens"
-                                ] = transaction.get("cache_read_input_tokens", 0)
+                                common_data["cache_read_input_tokens"] = (
+                                    transaction.get("cache_read_input_tokens", 0)
+                                )
                             if "cache_creation_input_tokens" in transaction:
-                                common_data[
-                                    "cache_creation_input_tokens"
-                                ] = transaction.get("cache_creation_input_tokens", 0)
+                                common_data["cache_creation_input_tokens"] = (
+                                    transaction.get("cache_creation_input_tokens", 0)
+                                )
 
                             # Create update data structure
                             update_data = {
@@ -948,7 +1084,7 @@ class DBSpendUpdateWriter:
                                 },
                             )
 
-                    verbose_proxy_logger.info(
+                    verbose_proxy_logger.debug(
                         f"Processed {len(transactions_to_process)} daily {entity_type} transactions in {time.time() - start_time:.2f}s"
                     )
 
@@ -993,7 +1129,7 @@ class DBSpendUpdateWriter:
             entity_type="user",
             entity_id_field="user_id",
             table_name="litellm_dailyuserspend",
-            unique_constraint_name="user_id_date_api_key_model_custom_llm_provider",
+            unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
         )
 
     @staticmethod
@@ -1014,7 +1150,7 @@ class DBSpendUpdateWriter:
             entity_type="team",
             entity_id_field="team_id",
             table_name="litellm_dailyteamspend",
-            unique_constraint_name="team_id_date_api_key_model_custom_llm_provider",
+            unique_constraint_name="team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
         )
 
     @staticmethod
@@ -1035,7 +1171,7 @@ class DBSpendUpdateWriter:
             entity_type="tag",
             entity_id_field="tag",
             table_name="litellm_dailytagspend",
-            unique_constraint_name="tag_date_api_key_model_custom_llm_provider",
+            unique_constraint_name="tag_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
         )
 
     async def _common_add_spend_log_transaction_to_daily_transaction(
@@ -1044,7 +1180,7 @@ class DBSpendUpdateWriter:
         prisma_client: PrismaClient,
         type: Literal["user", "team", "request_tags"] = "user",
     ) -> Optional[BaseDailySpendTransaction]:
-        common_expected_keys = ["startTime", "api_key", "model", "custom_llm_provider"]
+        common_expected_keys = ["startTime", "api_key"]
         if type == "user":
             expected_keys = ["user", *common_expected_keys]
         elif type == "team":
@@ -1053,15 +1189,30 @@ class DBSpendUpdateWriter:
             expected_keys = ["request_tags", *common_expected_keys]
         else:
             raise ValueError(f"Invalid type: {type}")
-
         if not all(key in payload for key in expected_keys):
             verbose_proxy_logger.debug(
                 f"Missing expected keys: {expected_keys}, in payload, skipping from daily_user_spend_transactions"
             )
             return None
 
+        any_expected_keys = ["model", "mcp_namespaced_tool_name"]
+        if not any(key in payload for key in any_expected_keys):
+            verbose_proxy_logger.debug(
+                f"Missing any expected keys: {any_expected_keys}, in payload, skipping from daily_user_spend_transactions"
+            )
+            return None
+        elif "mcp_namespaced_tool_name" in payload:
+            pass
+        elif "model" in payload and (
+            "custom_llm_provider" not in payload or "model_group" not in payload
+        ):
+            verbose_proxy_logger.debug(
+                "Missing custom_llm_provider or model_group in payload, skipping from daily_user_spend_transactions"
+            )
+            return None
+
         request_status = prisma_client.get_request_status(payload)
-        verbose_proxy_logger.info(f"Logged request status: {request_status}")
+        verbose_proxy_logger.debug(f"Logged request status: {request_status}")
         _metadata: SpendLogsMetadata = json.loads(payload["metadata"])
         usage_obj = _metadata.get("usage_object", {}) or {}
         if isinstance(payload["startTime"], datetime):
@@ -1078,9 +1229,10 @@ class DBSpendUpdateWriter:
             daily_transaction = BaseDailySpendTransaction(
                 date=date,
                 api_key=payload["api_key"],
-                model=payload["model"],
-                model_group=payload["model_group"],
-                custom_llm_provider=payload["custom_llm_provider"],
+                model=payload.get("model", None),
+                model_group=payload.get("model_group", None),
+                mcp_namespaced_tool_name=payload.get("mcp_namespaced_tool_name", None),
+                custom_llm_provider=payload.get("custom_llm_provider", None),
                 prompt_tokens=payload["prompt_tokens"],
                 completion_tokens=payload["completion_tokens"],
                 spend=payload["spend"],

@@ -4,6 +4,19 @@ import TabItem from '@theme/TabItem';
 
 # /audio/speech
 
+## Overview 
+
+| Feature | Supported | Notes | 
+|-------|-------|-------|
+| Cost Tracking | ✅ |  |
+| Logging | ✅ | works across all integrations |
+| End-user Tracking | ✅ | |
+| Fallbacks | ✅ | between supported models |
+| Loadbalancing | ✅ | between supported models |
+| Guardrails | ❌ Please make an [issue if you need this feature](https://github.com/BerriAI/litellm/issues/new) | |
+| Support llm providers | | `openai`, `azure`, `azure_ai`, `vertex_ai`, `gemini`, etc. |
+
+
 ## **LiteLLM Python SDK Usage**
 ### Quick Start 
 
@@ -88,6 +101,7 @@ litellm --config /path/to/config.yaml
 |-------------|--------------------|
 | OpenAI      |   [Usage](#quick-start)                 |
 | Azure OpenAI|   [Usage](../docs/providers/azure#azure-text-to-speech-tts)                 |
+| Azure AI Speech Service (AVA)|   [Usage](../docs/providers/azure_ai_speech)                 |
 | Vertex AI   |   [Usage](../docs/providers/vertex#text-to-speech-apis)                 |
 | Gemini      |   [Usage](#gemini-text-to-speech)                 |
 

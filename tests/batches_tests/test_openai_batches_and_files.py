@@ -15,12 +15,14 @@ sys.path.insert(
 
 import logging
 import time
+import asyncio
 
 import pytest
 from typing import Optional
 import litellm
 from litellm import create_batch, create_file
 from litellm._logging import verbose_logger
+import openai
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -146,12 +148,24 @@ async def test_create_batch(provider):
     with open(result_file_name, "wb") as file:
         file.write(result)
 
-    # Cancel Batch
-    cancel_batch_response = await litellm.acancel_batch(
-        batch_id=create_batch_response.id,
-        custom_llm_provider=provider,
-    )
-    print("cancel_batch_response=", cancel_batch_response)
+    # Cancel Batch - handle race condition where batch may already be completed
+    try:
+        cancel_batch_response = await litellm.acancel_batch(
+            batch_id=create_batch_response.id,
+            custom_llm_provider=provider,
+        )
+        print("cancel_batch_response=", cancel_batch_response)
+    except openai.ConflictError as e:
+        # Only allow to pass if it's specifically the "batch already completed" error
+        if "Cannot cancel a batch with status 'completed'" in str(e):
+            print(f"Batch already completed, cannot cancel: {e}")
+        else:
+            # Re-raise other ConflictError types
+            raise
+    except Exception as e:
+        # Re-raise any other unexpected errors
+        print(f"Unexpected error during batch cancellation: {e}")
+        raise
 
     pass
 
@@ -355,12 +369,24 @@ async def test_async_create_batch(provider):
     with open(result_file_name, "wb") as file:
         file.write(file_content.content)
 
-    # Cancel Batch
-    cancel_batch_response = await litellm.acancel_batch(
-        batch_id=create_batch_response.id,
-        custom_llm_provider=provider,
-    )
-    print("cancel_batch_response=", cancel_batch_response)
+    # Cancel Batch - handle race condition where batch may already be completed
+    try:
+        cancel_batch_response = await litellm.acancel_batch(
+            batch_id=create_batch_response.id,
+            custom_llm_provider=provider,
+        )
+        print("cancel_batch_response=", cancel_batch_response)
+    except openai.ConflictError as e:
+        # Only allow to pass if it's specifically the "batch already completed" error
+        if "Cannot cancel a batch with status 'completed'" in str(e):
+            print(f"Batch already completed, cannot cancel: {e}")
+        else:
+            # Re-raise other ConflictError types
+            raise
+    except Exception as e:
+        # Re-raise any other unexpected errors
+        print(f"Unexpected error during batch cancellation: {e}")
+        raise
 
     if random.randint(1, 3) == 1:
         print("Running random cleanup of Azure files and models...")

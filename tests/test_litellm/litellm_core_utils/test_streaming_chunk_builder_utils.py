@@ -242,3 +242,86 @@ def test_cache_read_input_tokens_retained():
 
     assert usage.cache_creation_input_tokens == 4
     assert usage.cache_read_input_tokens == 11775
+    assert usage.prompt_tokens_details.cached_tokens == 11775
+
+
+def test_stream_chunk_builder_litellm_usage_chunks():
+    """
+    Validate ChunkProcessor.calculate_usage uses provided usage fields from streaming chunks
+    and reconstructs prompt and completion tokens without making any upstream API calls.
+    """
+    # Prepare two mocked streaming chunks with usage split across them
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-mocked-usage-1",
+        created=1745513206,
+        model="gemini/gemini-2.5-flash-lite",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content="",
+                    role=None,
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=0,
+            prompt_tokens=50,
+            total_tokens=50,
+            completion_tokens_details=None,
+            prompt_tokens_details=None,
+        ),
+    )
+
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-mocked-usage-1",
+        created=1745513207,
+        model="gemini/gemini-2.5-flash-lite",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content=None,
+                    role=None,
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=27,
+            prompt_tokens=0,
+            total_tokens=27,
+            completion_tokens_details=None,
+            prompt_tokens_details=None,
+        ),
+    )
+
+    chunks = [chunk1, chunk2]
+    processor = ChunkProcessor(chunks=chunks)
+
+    usage = processor.calculate_usage(
+        chunks=chunks, model="gemini/gemini-2.5-flash-lite", completion_output=""
+    )
+
+    assert usage.prompt_tokens == 50
+    assert usage.completion_tokens == 27
+    assert usage.total_tokens == 77

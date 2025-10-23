@@ -1,9 +1,16 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
+
+from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
+    EnkryptAIGuardrailConfigs,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
+    GraySwanGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -22,7 +29,7 @@ guardrails:
 class SupportedGuardrailIntegrations(Enum):
     APORIA = "aporia"
     BEDROCK = "bedrock"
-    GURDRAILS_AI = "guardrails_ai"
+    GUARDRAILS_AI = "guardrails_ai"
     LAKERA = "lakera"
     LAKERA_V2 = "lakera_v2"
     PRESIDIO = "presidio"
@@ -30,7 +37,17 @@ class SupportedGuardrailIntegrations(Enum):
     AIM = "aim"
     PANGEA = "pangea"
     LASSO = "lasso"
+    PILLAR = "pillar"
+    GRAYSWAN = "grayswan"
     PANW_PRISMA_AIRS = "panw_prisma_airs"
+    AZURE_PROMPT_SHIELD = "azure/prompt_shield"
+    AZURE_TEXT_MODERATIONS = "azure/text_moderations"
+    MODEL_ARMOR = "model_armor"
+    OPENAI_MODERATION = "openai_moderation"
+    NOMA = "noma"
+    TOOL_PERMISSION = "tool_permission"
+    JAVELIN = "javelin"
+    ENKRYPTAI = "enkryptai"
 
 
 class Role(Enum):
@@ -245,7 +262,7 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
 class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
     """Configuration parameters for the Presidio PII masking guardrail"""
 
-    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = Field(
+    pii_entities_config: Optional[Dict[Union[PiiEntityType, str], PiiAction]] = Field(
         default=None, description="Configuration for PII entity types and actions"
     )
     presidio_ad_hoc_recognizers: Optional[str] = Field(
@@ -266,6 +283,10 @@ class BedrockGuardrailConfigModel(BaseModel):
     guardrailVersion: Optional[str] = Field(
         default=None,
         description="The version of your Bedrock guardrail (e.g., DRAFT or version number)",
+    )
+    disable_exception_on_block: Optional[bool] = Field(
+        default=False,
+        description="If True, will not raise an exception when the guardrail is blocked. Useful for OpenWebUI where exceptions can end the chat flow.",
     )
     aws_region_name: Optional[str] = Field(
         default=None, description="AWS region where your guardrail is deployed"
@@ -340,16 +361,85 @@ class LassoGuardrailConfigModel(BaseModel):
     )
 
 
-class LitellmParams(
-    PresidioConfigModel,
-    BedrockGuardrailConfigModel,
-    LakeraV2GuardrailConfigModel,
-    LassoGuardrailConfigModel,
-):
-    guardrail: str = Field(description="The type of guardrail integration to use")
-    mode: Union[str, List[str]] = Field(
-        description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
+class PillarGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Pillar Security guardrail"""
+
+    on_flagged_action: Optional[str] = Field(
+        default="monitor",
+        description="Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
     )
+    async_mode: Optional[bool] = Field(
+        default=None,
+        description="Set to True to request asynchronous analysis (sets `plr_async` header). Defaults to provider behaviour when omitted.",
+    )
+    persist_session: Optional[bool] = Field(
+        default=None,
+        description="Controls Pillar session persistence (sets `plr_persist` header). Set to False to disable persistence.",
+    )
+    include_scanners: Optional[bool] = Field(
+        default=True,
+        description="Include scanner category summaries in responses (sets `plr_scanners` header).",
+    )
+    include_evidence: Optional[bool] = Field(
+        default=True,
+        description="Include detailed evidence payloads in responses (sets `plr_evidence` header).",
+    )
+
+
+class NomaGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Noma Security guardrail"""
+
+    application_id: Optional[str] = Field(
+        default=None,
+        description="Application ID for Noma Security. Defaults to 'litellm' if not provided",
+    )
+    monitor_mode: Optional[bool] = Field(
+        default=None,
+        description="If True, logs violations without blocking. Defaults to False if not provided",
+    )
+    block_failures: Optional[bool] = Field(
+        default=None,
+        description="If True, blocks requests on API failures. Defaults to True if not provided",
+    )
+    anonymize_input: Optional[bool] = Field(
+        default=None,
+        description="If True, replaces sensitive content with anonymized version when only PII/PCI/secrets are detected. Only applies in blocking mode. Defaults to False if not provided",
+    )
+
+
+class ToolPermissionGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Tool Permission guardrail"""
+
+    rules: Optional[List[Dict]] = Field(
+        default=None, description="List of permission rules for tool usage"
+    )
+    default_action: Optional[str] = Field(
+        default="Deny",
+        description="Default action when no rule matches (Allow or Deny)",
+    )
+
+
+class JavelinGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Javelin guardrail"""
+
+    guard_name: Optional[str] = Field(
+        default=None, description="Name of the Javelin guard to use"
+    )
+    api_version: Optional[str] = Field(
+        default="v1", description="API version for Javelin service"
+    )
+    metadata: Optional[Dict] = Field(
+        default=None, description="Additional metadata to send with requests"
+    )
+    application: Optional[str] = Field(
+        default=None, description="Application name for Javelin service"
+    )
+    config: Optional[Dict] = Field(
+        default=None, description="Additional configuration for the guardrail"
+    )
+
+
+class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
         default=None, description="API key for the guardrail service"
     )
@@ -396,11 +486,83 @@ class LitellmParams(
         default=None, description="Recipe for output (LLM response)"
     )
 
+    model: Optional[str] = Field(
+        default=None,
+        description="Optional field if guardrail requires a 'model' parameter",
+    )
+
+    # Model Armor params
+    template_id: Optional[str] = Field(
+        default=None, description="The ID of your Model Armor template"
+    )
+    location: Optional[str] = Field(
+        default=None, description="Google Cloud location/region (e.g., us-central1)"
+    )
+    credentials: Optional[str] = Field(
+        default=None,
+        description="Path to Google Cloud credentials JSON file or JSON string",
+    )
+    api_endpoint: Optional[str] = Field(
+        default=None, description="Optional custom API endpoint for Model Armor"
+    )
+    fail_on_error: Optional[bool] = Field(
+        default=True,
+        description="Whether to fail the request if Model Armor encounters an error",
+    )
+
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+
+class Mode(BaseModel):
+    tags: Dict[str, str] = Field(description="Tags for the guardrail mode")
+    default: Optional[str] = Field(
+        default=None, description="Default mode when no tags match"
+    )
+
+
+class LitellmParams(
+    PresidioConfigModel,
+    BedrockGuardrailConfigModel,
+    LakeraV2GuardrailConfigModel,
+    LassoGuardrailConfigModel,
+    PillarGuardrailConfigModel,
+    GraySwanGuardrailConfigModel,
+    NomaGuardrailConfigModel,
+    ToolPermissionGuardrailConfigModel,
+    JavelinGuardrailConfigModel,
+    BaseLitellmParams,
+    EnkryptAIGuardrailConfigs,
+):
+    guardrail: str = Field(description="The type of guardrail integration to use")
+    mode: Union[str, List[str], Mode] = Field(
+        description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
+    )
+
+    def __init__(self, **kwargs):
+        default_on = kwargs.pop("default_on", None)
+        if default_on is not None:
+            kwargs["default_on"] = default_on
+        else:
+            kwargs["default_on"] = False
+        super().__init__(**kwargs)
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
 
 class Guardrail(TypedDict, total=False):
     guardrail_id: Optional[str]
-    guardrail_name: str
-    litellm_params: LitellmParams
+    guardrail_name: Required[str]
+    litellm_params: Required[LitellmParams]
     guardrail_info: Optional[Dict]
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
@@ -415,32 +577,18 @@ class GuardrailEventHooks(str, Enum):
     post_call = "post_call"
     during_call = "during_call"
     logging_only = "logging_only"
+    pre_mcp_call = "pre_mcp_call"
+    during_mcp_call = "during_mcp_call"
 
 
 class DynamicGuardrailParams(TypedDict):
     extra_body: Dict[str, Any]
 
 
-class GuardrailInfoLiteLLMParamsResponse(BaseModel):
-    """The returned LiteLLM Params object for /guardrails/list"""
-
-    guardrail: str
-    mode: Union[str, List[str]]
-    default_on: Optional[bool] = False
-    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None
-
-    def __init__(self, **kwargs):
-        default_on = kwargs.get("default_on")
-        if default_on is None:
-            default_on = False
-
-        super().__init__(**kwargs)
-
-
 class GuardrailInfoResponse(BaseModel):
     guardrail_id: Optional[str] = None
     guardrail_name: str
-    litellm_params: Optional[GuardrailInfoLiteLLMParamsResponse] = None
+    litellm_params: Optional[BaseLitellmParams] = None
     guardrail_info: Optional[Dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -481,12 +629,7 @@ class ApplyGuardrailResponse(BaseModel):
     response_text: str
 
 
-class PatchGuardrailLitellmParams(BaseModel):
-    default_on: Optional[bool] = None
-    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None
-
-
 class PatchGuardrailRequest(BaseModel):
     guardrail_name: Optional[str] = None
-    litellm_params: Optional[PatchGuardrailLitellmParams] = None
+    litellm_params: Optional[BaseLitellmParams] = None
     guardrail_info: Optional[Dict[str, Any]] = None

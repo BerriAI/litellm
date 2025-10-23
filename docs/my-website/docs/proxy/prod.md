@@ -62,13 +62,23 @@ These specifications provide:
 - Adequate memory for request processing and caching
 
 
-## 3. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
+## 3. On Kubernetes — Match Uvicorn Workers to CPU Count [Suggested CMD]
 
-Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
+Use this Docker `CMD`. It automatically matches Uvicorn workers to the pod’s CPU count, ensuring each worker uses one core efficiently for better throughput and stable latency.
 
-(Ensure that you're not setting `run_gunicorn` or `num_workers` in the CMD). 
 ```shell
-CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "$(nproc)"]
+```
+
+> **Optional:** If you observe gradual memory growth under sustained load, consider recycling workers after a fixed number of requests to mitigate leaks.
+> You can configure this either via CLI or environment variable:
+
+```shell
+# CLI
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "$(nproc)", "--max_requests_before_restart", "10000"]
+
+# or ENV (for deployment manifests / containers)
+export MAX_REQUESTS_BEFORE_RESTART=10000
 ```
 
 
@@ -90,7 +100,7 @@ Recommended to do this for prod:
 
 ```yaml
 router_settings:
-  routing_strategy: usage-based-routing-v2 
+  routing_strategy: simple-shuffle # (default) - recommended for best performance
   # redis_url: "os.environ/REDIS_URL"
   redis_host: os.environ/REDIS_HOST
   redis_port: os.environ/REDIS_PORT
@@ -104,6 +114,9 @@ litellm_settings:
     port: os.environ/REDIS_PORT
     password: os.environ/REDIS_PASSWORD
 ```
+
+> **WARNING**
+**Usage-based routing is not recommended for production due to performance impacts.** Use `simple-shuffle` (default) for optimal performance in high-traffic scenarios.
 
 ## 5. Disable 'load_dotenv'
 
@@ -199,7 +212,7 @@ USE_PRISMA_MIGRATE="True"
 <TabItem value="cli" label="CLI">
 
 ```bash
-litellm --use_prisma_migrate
+litellm
 ```
 
 </TabItem>
@@ -232,19 +245,46 @@ To fix this, just set `LITELLM_MIGRATION_DIR="/path/to/writeable/directory"` in 
 
 LiteLLM will use this directory to write migration files.
 
+## 10. Use a Separate Health Check App
+:::info
+The Separate Health Check App only runs when running via the the LiteLLM Docker Image and using Docker and setting the SEPARATE_HEALTH_APP env var to "1"
+:::
+
+Using a separate health check app ensures that your liveness and readiness probes remain responsive even when the main application is under heavy load. 
+
+**Why is this important?**
+
+- If your health endpoints share the same process as your main app, high traffic or resource exhaustion can cause health checks to hang or fail.
+- When Kubernetes liveness probes hang or time out, it may incorrectly assume your pod is unhealthy and restart it—even if the main app is just busy, not dead.
+- By running health endpoints on a separate lightweight FastAPI app (with its own port), you guarantee that health checks remain fast and reliable, preventing unnecessary pod restarts during traffic spikes or heavy workloads.
+- The way it works is, if either of the health or main proxy app dies due to whatever reason, it will kill the pod and which would be marked as unhealthy prompting the orchestrator to restart the pod
+- Since the proxy and health app are running in the same pod, if the pod dies the health check probe fails, it signifies that the pod is unhealthy and needs to restart/have action taken upon.
+
+**How to enable:**
+
+Set the following environment variable(s):
+```bash
+SEPARATE_HEALTH_APP="1" # Default "0" 
+SEPARATE_HEALTH_PORT="8001" # Default "4001", Works only if `SEPARATE_HEALTH_APP` is "1"
+```
+
+<video controls width="100%" style={{ borderRadius: '8px', marginBottom: '1em' }}>
+  <source src="https://cdn.loom.com/sessions/thumbnails/b08be303331246b88fdc053940d03281-1718990992822.mp4" type="video/mp4" />
+  Your browser does not support the video tag.
+</video>
+
+Or [watch on Loom](https://www.loom.com/share/b08be303331246b88fdc053940d03281?sid=a145ec66-d55f-41f7-aade-a9f41fbe752d).
+
+
+### High Level Architecture
+
+<Image alt="Separate Health App Architecture" img={require('../../img/separate_health_app_architecture.png')} style={{ borderRadius: '8px', marginBottom: '1em', maxWidth: '100%' }} />
+
+
 ## Extras
 ### Expected Performance in Production
 
-1 LiteLLM Uvicorn Worker on Kubernetes
-
-| Description | Value |
-|--------------|-------|
-| Avg latency | `50ms` |
-| Median latency | `51ms` |
-| `/chat/completions` Requests/second | `100` |
-| `/chat/completions` Requests/minute | `6000` |
-| `/chat/completions` Requests/hour | `360K` |
-
+See benchmarks [here](../benchmarks#performance-metrics)
 
 ### Verifying Debugging logs are off
 

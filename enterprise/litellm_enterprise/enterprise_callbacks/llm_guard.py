@@ -19,8 +19,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import get_formatted_prompt
 
-litellm.set_verbose = True
-
 
 class _ENTERPRISE_LLMGuard(CustomLogger):
     # Class variables or attributes
@@ -65,7 +63,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                         analyze_url, json=analyze_payload
                     ) as response:
                         redacted_text = await response.json()
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.debug(
                     f"LLM Guard: Received response - {redacted_text}"
                 )
                 if redacted_text is not None:
@@ -129,6 +127,8 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             "moderation",
             "audio_transcription",
             "responses",
+            "mcp_call",
+            "anthropic_messages",
         ],
     ):
         """

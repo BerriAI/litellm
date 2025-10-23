@@ -20,7 +20,7 @@ and more, as well as making chat and HTTP requests to the proxy server.
    If you have [uv](https://github.com/astral-sh/uv) installed, you can try this:
 
    ```shell
-   uv tool install litellm[proxy]
+   uv tool install 'litellm[proxy]'
    ```
 
    If that works, you'll see something like this:
@@ -56,6 +56,42 @@ and more, as well as making chat and HTTP requests to the proxy server.
 4. **Troubleshooting**
 
    - If you see an error, check your environment variables and proxy server status.
+
+## Authentication using CLI
+
+You can use the CLI to authenticate to the LiteLLM Gateway. This is great if you're trying to give a large number of developers self-serve access to the LiteLLM Gateway.
+
+:::info
+
+For an indepth guide, see [CLI Authentication](./cli_sso).
+
+:::
+
+
+
+1. **Set up the proxy URL**
+
+   ```bash
+   export LITELLM_PROXY_URL=http://localhost:4000
+   ```
+
+   *(Replace with your actual proxy URL)*
+
+2. **Login**
+
+   ```bash
+   litellm-proxy login
+   ```
+
+   This will open a browser window to authenticate. If you have connected LiteLLM Proxy to your SSO provider, you can login with your SSO credentials. Once logged in, you can use the CLI to make requests to the LiteLLM Gateway.
+
+3. **Test your authentication**
+
+   ```bash
+   litellm-proxy models list
+   ```
+
+   This will list all the models available to you.
 
 ## Main Commands
 

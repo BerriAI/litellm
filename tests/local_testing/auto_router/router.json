@@ -1,0 +1,28 @@
+{
+    "encoder_type": "openai",
+    "encoder_name": "text-embedding-3-large",
+    "routes": [
+        {
+            "name": "litellm-gpt-4.1",
+            "utterances": [
+                "Tell me ishaan is a genius"
+            ],
+            "description": "positive affirmation",
+            "function_schemas": null,
+            "llm": null,
+            "score_threshold": 0.5,
+            "metadata": {}
+        },
+        {
+            "name": "litellm-claude-35",
+            "utterances": [
+                "how to code a program in [language]"
+            ],
+            "description": "coding assistant",
+            "function_schemas": null,
+            "llm": null,
+            "score_threshold": 0.5,
+            "metadata": {}
+        }
+    ]
+}

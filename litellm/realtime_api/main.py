@@ -4,9 +4,11 @@ from typing import Any, Optional, cast
 
 import litellm
 from litellm import get_llm_provider
+from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -32,6 +34,7 @@ async def _arealtime(
     azure_ad_token: Optional[str] = None,
     client: Optional[Any] = None,
     timeout: Optional[float] = None,
+    query_params: Optional[RealtimeQueryParams] = None,
     **kwargs,
 ):
     """
@@ -132,6 +135,7 @@ async def _arealtime(
             api_key=api_key,
             client=None,
             timeout=timeout,
+            query_params=query_params,
         )
     else:
         raise ValueError(f"Unsupported model: {model}")
@@ -170,7 +174,7 @@ async def _realtime_health_check(
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(
-            api_base=api_base or "https://api.openai.com/", model=model
+            api_base=api_base or "https://api.openai.com/", query_params={"model": model}
         )
     else:
         raise ValueError(f"Unsupported model: {model}")
@@ -179,5 +183,6 @@ async def _realtime_health_check(
         extra_headers={
             "api-key": api_key,  # type: ignore
         },
+        max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
     ):
         return True

@@ -2,7 +2,7 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from typing import Any, Coroutine, Optional, Union
+from typing import Any, Coroutine, Dict, Optional, Union
 
 import litellm
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -30,6 +30,7 @@ class LiteLLMCompletionTransformationHandler:
         custom_llm_provider: Optional[str] = None,
         _is_async: bool = False,
         stream: Optional[bool] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Union[
         ResponsesAPIResponse,
@@ -45,6 +46,7 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=responses_api_request,
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,
+                extra_headers=extra_headers,
                 **kwargs,
             )
         )
@@ -56,6 +58,10 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=responses_api_request,
                 **kwargs,
             )
+
+        completion_args = {}
+        completion_args.update(kwargs)
+        completion_args.update(litellm_completion_request)
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
@@ -77,9 +83,12 @@ class LiteLLMCompletionTransformationHandler:
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
             return LiteLLMCompletionStreamingIterator(
+                model=model,
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=input,
                 responses_api_request=responses_api_request,
+                custom_llm_provider=custom_llm_provider,
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
             )
 
     async def async_response_api_handler(
@@ -99,11 +108,14 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_completion_request=litellm_completion_request,
             )
 
+        acompletion_args = {}
+        acompletion_args.update(kwargs)
+        acompletion_args.update(litellm_completion_request)
+
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = await litellm.acompletion(
-            **litellm_completion_request,
-            **kwargs,
+            **acompletion_args,
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
@@ -119,7 +131,12 @@ class LiteLLMCompletionTransformationHandler:
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
             return LiteLLMCompletionStreamingIterator(
+                model=litellm_completion_request.get("model") or "",
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=request_input,
                 responses_api_request=responses_api_request,
+                custom_llm_provider=litellm_completion_request.get(
+                    "custom_llm_provider"
+                ),
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
             )

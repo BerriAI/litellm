@@ -258,6 +258,7 @@ docker run \
 If you need help:
 
 - 💬 [Join our Discord](https://discord.gg/wuPM9dRgDw)
+- 💬 [Join our Slack](https://join.slack.com/share/enQtOTE0ODczMzk2Nzk4NC01YjUxNjY2YjBlYTFmNDRiZTM3NDFiYTM3MzVkODFiMDVjOGRjMmNmZTZkZTMzOWQzZGQyZWIwYjQ0MWExYmE3)
 - 📧 Email us: ishaan@berri.ai / krrish@berri.ai
 - 🐛 [Create an issue](https://github.com/BerriAI/litellm/issues/new)
 

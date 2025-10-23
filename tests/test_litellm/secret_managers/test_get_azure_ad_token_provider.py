@@ -140,6 +140,50 @@ class TestGetAzureAdTokenProvider:
     @patch.dict(
         os.environ,
         {
+            "AZURE_CLIENT_ID": "test-client-id",
+            "AZURE_TENANT_ID": "test-tenant-id",
+            "AZURE_CERTIFICATE_PATH": "/path/to/cert.pem",
+            "AZURE_SCOPE": "https://cognitiveservices.azure.com/.default",
+            "AZURE_CREDENTIAL": "CertificateCredential",
+            "AZURE_CERTIFICATE_PASSWORD": "pwd4cert.pem",
+        },
+    )
+    @patch("azure.identity.get_bearer_token_provider")
+    @patch("azure.identity.CertificateCredential")
+    def test_get_azure_ad_token_provider_password_protected_certificate_credential(
+        self, mock_certificate_credential, mock_get_bearer_token_provider
+    ):
+        """Test get_azure_ad_token_provider with password protected certificate in CertificateCredential."""
+        # Mock the Azure identity credential instance
+        mock_credential_instance = MagicMock()
+        mock_certificate_credential.return_value = mock_credential_instance
+
+        # Mock the bearer token provider
+        mock_token_provider = MagicMock(return_value="mock-certificate-token")
+        mock_get_bearer_token_provider.return_value = mock_token_provider
+
+        # Call the function
+        result = get_azure_ad_token_provider()
+
+        # Assertions
+        assert callable(result)
+        mock_certificate_credential.assert_called_once_with(
+            client_id="test-client-id",
+            tenant_id="test-tenant-id",
+            certificate_path="/path/to/cert.pem",
+            password="pwd4cert.pem",
+        )
+        mock_get_bearer_token_provider.assert_called_once_with(
+            mock_credential_instance, "https://cognitiveservices.azure.com/.default"
+        )
+
+        # Test that the returned callable works
+        token = result()
+        assert token == "mock-certificate-token"
+
+    @patch.dict(
+        os.environ,
+        {
             "AZURE_CREDENTIAL": "DefaultAzureCredential",
         },
     )
@@ -170,3 +214,32 @@ class TestGetAzureAdTokenProvider:
         # Test that the returned callable works
         token = result()
         assert token == "mock-certificate-token"
+
+    @patch.dict(os.environ, {}, clear=True)  # Clear all environment variables
+    @patch("azure.identity.get_bearer_token_provider")
+    @patch("azure.identity.DefaultAzureCredential")
+    def test_get_azure_ad_token_provider_defaults_to_default_azure_credential(
+        self, mock_default_azure_credential, mock_get_bearer_token_provider
+    ):
+        """Test get_azure_ad_token_provider defaults to DefaultAzureCredential when no credentials are present."""
+        # Mock the Azure identity credential instance
+        mock_credential_instance = MagicMock()
+        mock_default_azure_credential.return_value = mock_credential_instance
+
+        # Mock the bearer token provider
+        mock_token_provider = MagicMock(return_value="mock-default-token")
+        mock_get_bearer_token_provider.return_value = mock_token_provider
+
+        # Call the function
+        result = get_azure_ad_token_provider()
+
+        # Assertions
+        assert callable(result)
+        mock_default_azure_credential.assert_called_once_with()
+        mock_get_bearer_token_provider.assert_called_once_with(
+            mock_credential_instance, "https://cognitiveservices.azure.com/.default"
+        )
+
+        # Test that the returned callable works
+        token = result()
+        assert token == "mock-default-token"

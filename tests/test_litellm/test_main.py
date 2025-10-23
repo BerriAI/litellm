@@ -268,6 +268,76 @@ def test_bedrock_latency_optimized_inference():
         assert json_data["performanceConfig"]["latency"] == "optimized"
 
 
+def test_custom_provider_with_extra_headers():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    with patch.object(
+        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
+    ) as mock_post:
+        response = litellm.completion(
+            model="custom/custom",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            headers={"X-Custom-Header": "custom-value"},
+            api_base="https://example.com/api/v1",
+        )
+
+        mock_post.assert_called_once()
+        assert mock_post.call_args[1]["headers"]["X-Custom-Header"] == "custom-value"
+
+
+def test_custom_provider_with_extra_body():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    with patch.object(
+        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
+    ) as mock_post:
+        response = litellm.completion(
+            model="custom/custom",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            extra_body={
+                "X-Custom-BodyValue": "custom-value",
+                "X-Custom-BodyValue2": "custom-value2",
+            },
+            api_base="https://example.com/api/v1",
+        )
+        mock_post.assert_called_once()
+
+        assert mock_post.call_args[1]["json"]["X-Custom-BodyValue"] == "custom-value"
+        assert mock_post.call_args[1]["json"] == {
+            "model": "custom",
+            "params": {
+                "prompt": ["Hello, how are you?"],
+                "max_tokens": None,
+                "temperature": None,
+                "top_p": None,
+                "top_k": None,
+            },
+            "X-Custom-BodyValue": "custom-value",
+            "X-Custom-BodyValue2": "custom-value2",
+        }
+
+    # test that extra_body is not passed if not provided
+    with patch.object(
+        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
+    ) as mock_post:
+        response = litellm.completion(
+            model="custom/custom",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            api_base="https://example.com/api/v1",
+        )
+        mock_post.assert_called_once()
+        assert mock_post.call_args[1]["json"] == {
+            "model": "custom",
+            "params": {
+                "prompt": ["Hello, how are you?"],
+                "max_tokens": None,
+                "temperature": None,
+                "top_p": None,
+                "top_k": None,
+            },
+        }
+
+
 @pytest.fixture(autouse=True)
 def set_openrouter_api_key():
     original_api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -427,3 +497,743 @@ def test_bedrock_llama():
         request["raw_request_body"]["prompt"]
         == "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\nhi<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
     )
+
+
+def test_responses_api_bridge_check_strips_responses_prefix():
+    """Test that responses_api_bridge_check strips 'responses/' prefix and sets mode."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 4096}
+
+        model_info, model = responses_api_bridge_check(
+            model="responses/gpt-4-responses",
+            custom_llm_provider="openai",
+        )
+
+        assert model == "gpt-4-responses"
+        assert model_info["mode"] == "responses"
+
+
+def test_responses_api_bridge_check_handles_exception():
+    """Test that responses_api_bridge_check handles exceptions and still processes responses/ models."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.side_effect = Exception("Model not found")
+
+        model_info, model = responses_api_bridge_check(
+            model="responses/custom-model", custom_llm_provider="custom"
+        )
+
+        assert model == "custom-model"
+        assert model_info["mode"] == "responses"
+
+
+@pytest.mark.asyncio
+async def test_async_mock_delay():
+    """Use asyncio await for mock delay on acompletion"""
+    import time
+
+    from litellm import acompletion
+
+    start_time = time.time()
+    result = await acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        mock_delay=0.01,
+        mock_response="Hello world",
+    )
+    end_time = time.time()
+    delay = end_time - start_time
+    assert delay >= 0.01
+
+
+def test_stream_chunk_builder_thinking_blocks():
+    from litellm import stream_chunk_builder
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content="I need to summar",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": "I need to summar",
+                                "signature": None,
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": "I need to summar",
+                                    "signature": None,
+                                }
+                            ]
+                        },
+                        content="",
+                        role="assistant",
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content="ize the previous agent's thinking process into a",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": "ize the previous agent's thinking process into a",
+                                "signature": None,
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": "ize the previous agent's thinking process into a",
+                                    "signature": None,
+                                }
+                            ]
+                        },
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content=" short description. Based on the input data provide",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": " short description. Based on the input data provide",
+                                "signature": None,
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": " short description. Based on the input data provide",
+                                    "signature": None,
+                                }
+                            ]
+                        },
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content="d, it seems the agent was planning to refine their search",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": "d, it seems the agent was planning to refine their search",
+                                "signature": None,
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": "d, it seems the agent was planning to refine their search",
+                                    "signature": None,
+                                }
+                            ]
+                        },
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content=" to focus more on technical aspects of home automation and home",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": " to focus more on technical aspects of home automation and home",
+                                "signature": None,
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": " to focus more on technical aspects of home automation and home",
+                                    "signature": None,
+                                }
+                            ]
+                        },
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content=" energy system management.\n\nI'll create a brief",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": " energy system management.\n\nI'll create a brief",
+                                "signature": None,
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": " energy system management.\n\nI'll create a brief",
+                                    "signature": None,
+                                }
+                            ]
+                        },
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content=" summary of what the agent was doing.",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": " summary of what the agent was doing.",
+                                "signature": None,
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": " summary of what the agent was doing.",
+                                    "signature": None,
+                                }
+                            ]
+                        },
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content="",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": "",
+                                "signature": "ErUBCkYIBRgCIkAKBSMkB2+MBF643wiWxlERsGXVdlhbPx9lnTIbygzjFIeZ5uhTV+HNWDon9vQV4hmXvAKwQfwS8vkNFB366l05Egzt2U18IpRrZRyQn1UaDDdYvKHYP8Ps1IbWjSIw8eSYOU9gtqNcwR6D0wY7iOPx2GliDEatLI5rSs96CByoTIoADL2M5bX8KP0jEpbHKh0ccYryigdH/3J8EiFt/BmGUceVASP5l9r22dFWiBgC",
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": "",
+                                    "signature": "ErUBCkYIBRgCIkAKBSMkB2+MBF643wiWxlERsGXVdlhbPx9lnTIbygzjFIeZ5uhTV+HNWDon9vQV4hmXvAKwQfwS8vkNFB366l05Egzt2U18IpRrZRyQn1UaDDdYvKHYP8Ps1IbWjSIw8eSYOU9gtqNcwR6D0wY7iOPx2GliDEatLI5rSs96CByoTIoADL2M5bX8KP0jEpbHKh0ccYryigdH/3J8EiFt/BmGUceVASP5l9r22dFWiBgC",
+                                }
+                            ]
+                        },
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content='{"a',
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content='gent_doing"',
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content=': "Re',
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content="searching",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content=" technic",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content="al aspect",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content="s of home au",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content='tomation"}',
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content=None,
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+        ),
+    ]
+
+    response = stream_chunk_builder(chunks=chunks)
+    print(response)
+
+    assert response is not None
+    assert response.choices[0].message.content is not None
+    assert response.choices[0].message.thinking_blocks is not None
+
+
+from litellm.llms.openai.openai import OpenAIChatCompletion
+
+
+def throw_retryable_error(*_, **__):
+    raise RuntimeError("BOOM")
+
+
+@pytest.mark.asyncio
+async def test_retrying() -> None:
+    litellm.num_retries = 10
+    with (
+        patch.object(
+            OpenAIChatCompletion,
+            "make_openai_chat_completion_request",
+            side_effect=throw_retryable_error,
+        ) as mock_request,
+        pytest.raises(litellm.InternalServerError, match="LiteLLM Retried: 10 times"),
+    ):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+
+def test_anthropic_disable_url_suffix_env_var():
+    """Test that LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX prevents /v1/messages suffix."""
+    from unittest.mock import patch, MagicMock
+    import os
+    from litellm import completion
+
+    # Test with environment variable disabled (default behavior)
+    with patch.dict(os.environ, {"ANTHROPIC_API_BASE": "https://api.example.com"}):
+        actual_api_base = None
+        
+        with patch("litellm.main.anthropic_chat_completions") as mock_anthropic:
+            def capture_completion(**kwargs):
+                nonlocal actual_api_base
+                actual_api_base = kwargs.get("api_base")
+                mock_response = MagicMock()
+                mock_response.choices = [MagicMock()]
+                return mock_response
+            
+            mock_anthropic.completion = capture_completion
+            
+            # This should append /v1/messages
+            completion(
+                model="anthropic/claude-3-sonnet",
+                messages=[{"role": "user", "content": "test"}],
+                api_key="test-key"
+            )
+            
+            # Verify the api_base has /v1/messages appended
+            assert actual_api_base.endswith("/v1/messages")
+            assert actual_api_base == "https://api.example.com/v1/messages"
+
+    # Test with environment variable enabled
+    with patch.dict(os.environ, {
+        "ANTHROPIC_API_BASE": "https://api.example.com/custom/path",
+        "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true"
+    }):
+        actual_api_base = None
+        
+        with patch("litellm.main.anthropic_chat_completions") as mock_anthropic:
+            def capture_completion(**kwargs):
+                nonlocal actual_api_base
+                actual_api_base = kwargs.get("api_base")
+                mock_response = MagicMock()
+                mock_response.choices = [MagicMock()]
+                return mock_response
+            
+            mock_anthropic.completion = capture_completion
+            
+            # This should NOT append /v1/messages
+            completion(
+                model="anthropic/claude-3-sonnet",
+                messages=[{"role": "user", "content": "test"}],
+                api_key="test-key"
+            )
+            
+            # Verify the api_base does not have /v1/messages appended
+            assert actual_api_base == "https://api.example.com/custom/path"
+            assert not actual_api_base.endswith("/v1/messages")
+
+
+def test_anthropic_text_disable_url_suffix_env_var():
+    """Test that LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX prevents /v1/complete suffix for anthropic_text."""
+    from unittest.mock import patch, MagicMock
+    import os
+    from litellm import completion
+
+    # Test with environment variable disabled (default behavior)
+    with patch.dict(os.environ, {"ANTHROPIC_API_BASE": "https://api.example.com"}):
+        actual_api_base = None
+        
+        with patch("litellm.main.base_llm_http_handler") as mock_handler:
+            def capture_completion(**kwargs):
+                nonlocal actual_api_base
+                actual_api_base = kwargs.get("api_base")
+                return MagicMock()
+            
+            mock_handler.completion = capture_completion
+            
+            # This should append /v1/complete
+            completion(
+                model="anthropic_text/claude-instant-1",
+                messages=[{"role": "user", "content": "test"}],
+                api_key="test-key"
+            )
+            
+            # Verify the api_base has /v1/complete appended
+            assert actual_api_base.endswith("/v1/complete")
+            assert actual_api_base == "https://api.example.com/v1/complete"
+
+    # Test with environment variable enabled
+    with patch.dict(os.environ, {
+        "ANTHROPIC_API_BASE": "https://api.example.com/custom/complete",
+        "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true"
+    }):
+        actual_api_base = None
+        
+        with patch("litellm.main.base_llm_http_handler") as mock_handler:
+            def capture_completion(**kwargs):
+                nonlocal actual_api_base
+                actual_api_base = kwargs.get("api_base")
+                return MagicMock()
+            
+            mock_handler.completion = capture_completion
+            
+            # This should NOT append /v1/complete
+            completion(
+                model="anthropic_text/claude-instant-1",
+                messages=[{"role": "user", "content": "test"}],
+                api_key="test-key"
+            )
+            
+            # Verify the api_base does not have /v1/complete appended
+            assert actual_api_base == "https://api.example.com/custom/complete"
+            assert not actual_api_base.endswith("/v1/complete")

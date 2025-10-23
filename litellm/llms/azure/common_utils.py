@@ -162,8 +162,8 @@ def get_azure_ad_token_from_username_password(
 
 def get_azure_ad_token_from_oidc(
     azure_ad_token: str,
-    azure_client_id: Optional[str],
-    azure_tenant_id: Optional[str],
+    azure_client_id: Optional[str] = None,
+    azure_tenant_id: Optional[str] = None,
     scope: Optional[str] = None,
 ) -> str:
     """
@@ -278,6 +278,7 @@ def get_azure_ad_token(
     3. From username and password
     4. From OIDC token
     5. From a service principal with secret workflow
+    6. From DefaultAzureCredential
 
     Args:
         litellm_params: Dictionary containing authentication parameters
@@ -352,18 +353,34 @@ def get_azure_ad_token(
             azure_tenant_id=tenant_id,
             scope=scope,
         )
-    # Try to get token provider from service principal
+    # Try to get token provider from service principal or DefaultAzureCredential
     elif (
         azure_ad_token_provider is None
         and litellm.enable_azure_ad_token_refresh is True
     ):
         verbose_logger.debug(
-            "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
+            "Using Azure AD token provider based on Service Principal with Secret workflow or DefaultAzureCredential for Azure Auth"
         )
         try:
             azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
         except ValueError:
             verbose_logger.debug("Azure AD Token Provider could not be used.")
+        except Exception as e:
+            verbose_logger.error(
+                f"Error calling Azure AD token provider: {str(e)}. Follow docs - https://docs.litellm.ai/docs/providers/azure/#azure-ad-token-refresh---defaultazurecredential"
+            )
+            raise e
+
+        #########################################################
+        # If litellm.enable_azure_ad_token_refresh is True and no other token provider is available,
+        # try to get DefaultAzureCredential provider
+        #########################################################
+        if azure_ad_token_provider is None and azure_ad_token is None:
+            azure_ad_token_provider = (
+                BaseAzureLLM._try_get_default_azure_credential_provider(
+                    scope=scope,
+                )
+            )
 
     # Execute the token provider to get the token if available
     if azure_ad_token_provider and callable(azure_ad_token_provider):
@@ -387,6 +404,38 @@ def get_azure_ad_token(
 
 
 class BaseAzureLLM(BaseOpenAILLM):
+    @staticmethod
+    def _try_get_default_azure_credential_provider(
+        scope: str,
+    ) -> Optional[Callable[[], str]]:
+        """
+        Try to get DefaultAzureCredential provider
+
+        Args:
+            scope: Azure scope for the token
+
+        Returns:
+            Token provider callable if DefaultAzureCredential is enabled and available, None otherwise
+        """
+        from litellm.types.secret_managers.get_azure_ad_token_provider import (
+            AzureCredentialType,
+        )
+
+        verbose_logger.debug("Attempting to use DefaultAzureCredential for Azure Auth")
+
+        try:
+            azure_ad_token_provider = get_azure_ad_token_provider(
+                azure_scope=scope,
+                azure_credential=AzureCredentialType.DefaultAzureCredential,
+            )
+            verbose_logger.debug(
+                "Successfully obtained Azure AD token provider using DefaultAzureCredential"
+            )
+            return azure_ad_token_provider
+        except Exception as e:
+            verbose_logger.debug(f"DefaultAzureCredential failed: {str(e)}")
+            return None
+
     def get_azure_openai_client(
         self,
         api_key: Optional[str],
@@ -517,7 +566,9 @@ class BaseAzureLLM(BaseOpenAILLM):
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
             )
             try:
-                azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
+                azure_ad_token_provider = get_azure_ad_token_provider(
+                    azure_scope=scope,
+                )
             except ValueError:
                 verbose_logger.debug("Azure AD Token Provider could not be used.")
         if api_version is None:
@@ -614,12 +665,17 @@ class BaseAzureLLM(BaseOpenAILLM):
             else:
                 client = AzureOpenAI(**azure_client_params)  # type: ignore
         return client
-    
+
     @staticmethod
     def _base_validate_azure_environment(
-        headers: dict,  litellm_params: Optional[GenericLiteLLMParams]
+        headers: dict, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
+
+        # Check if api-key is already in headers; if so, use it
+        if "api-key" in headers:
+            return headers
+
         api_key = (
             litellm_params.api_key
             or litellm.api_key
@@ -639,13 +695,24 @@ class BaseAzureLLM(BaseOpenAILLM):
             headers["Authorization"] = f"Bearer {azure_ad_token}"
 
         return headers
-    
+
     @staticmethod
     def _get_base_azure_url(
         api_base: Optional[str],
         litellm_params: Optional[Union[GenericLiteLLMParams, Dict[str, Any]]],
-        route: Literal["/openai/responses", "/openai/vector_stores"]
+        route: Union[Literal["/openai/responses", "/openai/vector_stores"], str],
+        default_api_version: Optional[Union[str, Literal["latest", "preview"]]] = None,
     ) -> str:
+        """
+        Get the base Azure URL for the given route and API version.
+
+        Args:
+            api_base: The base URL of the Azure API.
+            litellm_params: The litellm parameters.
+            route: The route to the API.
+            default_api_version: The default API version to use if no api_version is provided. If 'latest', it will use `openai/v1/...` route.
+        """
+
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
         if api_base is None:
             raise ValueError(
@@ -655,7 +722,10 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         # Extract api_version or use default
         litellm_params = litellm_params or {}
-        api_version = cast(Optional[str], litellm_params.get("api_version"))
+        api_version = (
+            cast(Optional[str], litellm_params.get("api_version"))
+            or default_api_version
+        )
 
         # Create a new dictionary with existing params
         query_params = dict(original_url.params)
@@ -663,27 +733,28 @@ class BaseAzureLLM(BaseOpenAILLM):
         # Add api_version if needed
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
-        
+
         # Add the path to the base URL
         if route not in api_base:
-            new_url = _add_path_to_api_base(
-                api_base=api_base, ending_path=route
-            )
+            new_url = _add_path_to_api_base(api_base=api_base, ending_path=route)
         else:
             new_url = api_base
-        
+
         if BaseAzureLLM._is_azure_v1_api_version(api_version):
             # ensure the request go to /openai/v1 and not just /openai
             if "/openai/v1" not in new_url:
                 parsed_url = httpx.URL(new_url)
-                new_url = str(parsed_url.copy_with(path=parsed_url.path.replace("/openai", "/openai/v1")))
-
+                new_url = str(
+                    parsed_url.copy_with(
+                        path=parsed_url.path.replace("/openai", "/openai/v1")
+                    )
+                )
 
         # Use the new query_params dictionary
         final_url = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
-    
+
     @staticmethod
     def _is_azure_v1_api_version(api_version: Optional[str]) -> bool:
         if api_version is None:

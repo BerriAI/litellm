@@ -4,12 +4,12 @@
 import asyncio
 import base64
 import json
-import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import HTTPException
 
 from litellm import Router, verbose_logger
+from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
@@ -139,15 +139,19 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             litellm_parent_otel_span=litellm_parent_otel_span,
         )
 
-        await self.prisma_client.db.litellm_managedobjecttable.create(
+        await self.prisma_client.db.litellm_managedobjecttable.upsert(
+            where={"unified_object_id": unified_object_id},
             data={
-                "unified_object_id": unified_object_id,
-                "file_object": file_object.model_dump_json(),
-                "model_object_id": model_object_id,
-                "file_purpose": file_purpose,
-                "created_by": user_api_key_dict.user_id,
-                "updated_by": user_api_key_dict.user_id,
-                "status": file_object.status,
+                "create": {
+                    "unified_object_id": unified_object_id,
+                    "file_object": file_object.model_dump_json(),
+                    "model_object_id": model_object_id,
+                    "file_purpose": file_purpose,
+                    "created_by": user_api_key_dict.user_id,
+                    "updated_by": user_api_key_dict.user_id,
+                    "status": file_object.status,
+                },
+                "update": {},  # don't do anything if it already exists
             }
         )
 
@@ -286,6 +290,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "aretrieve_fine_tuning_job",
             "alist_fine_tuning_jobs",
             "acancel_fine_tuning_job",
+            "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Union[Exception, str, Dict, None]:
         """

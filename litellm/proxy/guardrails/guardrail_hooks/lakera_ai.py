@@ -135,6 +135,8 @@ class lakeraAI_Moderation(CustomGuardrail):
             "pass_through_endpoint",
             "rerank",
             "responses",
+            "mcp_call",
+            "anthropic_messages",
         ],
     ):
         if (
@@ -313,6 +315,8 @@ class lakeraAI_Moderation(CustomGuardrail):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[Union[Exception, str, Dict]]:
         from litellm.types.guardrails import GuardrailEventHooks
@@ -347,6 +351,8 @@ class lakeraAI_Moderation(CustomGuardrail):
             "moderation",
             "audio_transcription",
             "responses",
+            "mcp_call",
+            "anthropic_messages",
         ],
     ):
         if self.event_hook is None:

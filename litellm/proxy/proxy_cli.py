@@ -5,13 +5,14 @@ import os
 import random
 import subprocess
 import sys
-import urllib.parse
 import urllib.parse as urlparse
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import click
 import httpx
 from dotenv import load_dotenv
+
+from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -184,6 +185,7 @@ class ProxyInitializationHelpers:
         num_workers: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
+        max_requests_before_restart: Optional[int] = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -264,6 +266,10 @@ class ProxyInitializationHelpers:
             "access_log_format": '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s',
         }
 
+        # Optional: recycle workers after N requests to mitigate memory growth
+        if max_requests_before_restart is not None:
+            gunicorn_options["max_requests"] = max_requests_before_restart
+
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
             print(  # noqa
                 f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
@@ -309,8 +315,8 @@ class ProxyInitializationHelpers:
 @click.option("--port", default=4000, help="Port to bind the server to.", envvar="PORT")
 @click.option(
     "--num_workers",
-    default=1,
-    help="Number of uvicorn / gunicorn workers to spin up. By default, 1 uvicorn is used.",
+    default=DEFAULT_NUM_WORKERS_LITELLM_PROXY,
+    help="Number of uvicorn / gunicorn workers to spin up. By default, it equals the number of logical CPUs in the system, or 4 workers if that cannot be determined.",
     envvar="NUM_WORKERS",
 )
 @click.option("--api_base", default=None, help="API base URL.")
@@ -466,10 +472,10 @@ class ProxyInitializationHelpers:
     help="Ciphers to use for the SSL setup.",
 )
 @click.option(
-    "--use_prisma_migrate",
+    "--use_prisma_db_push",
     is_flag=True,
     default=False,
-    help="Use prisma migrate instead of prisma db push for database schema updates",
+    help="Use prisma db push instead of prisma migrate for database schema updates",
 )
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
 @click.option(
@@ -484,6 +490,13 @@ class ProxyInitializationHelpers:
     type=int,
     help="Set the uvicorn keepalive timeout in seconds (uvicorn timeout_keep_alive parameter)",
     envvar="KEEPALIVE_TIMEOUT",
+)
+@click.option(
+    "--max_requests_before_restart",
+    default=None,
+    type=int,
+    help="Restart worker after this many requests (uvicorn: limit_max_requests, gunicorn: max_requests)",
+    envvar="MAX_REQUESTS_BEFORE_RESTART",
 )
 def run_server(  # noqa: PLR0915
     host,
@@ -520,9 +533,10 @@ def run_server(  # noqa: PLR0915
     ssl_certfile_path,
     ciphers,
     log_config,
-    use_prisma_migrate,
+    use_prisma_db_push: bool,
     skip_server_startup,
     keepalive_timeout,
+    max_requests_before_restart,
 ):
     args = locals()
     if local:
@@ -686,26 +700,11 @@ def run_server(  # noqa: PLR0915
                 )
             database_url = general_settings.get("database_url", None)
             if database_url is None and os.getenv("DATABASE_URL") is None:
-                # Check if all required variables are provided
-                database_host = os.getenv("DATABASE_HOST")
-                database_username = os.getenv("DATABASE_USERNAME")
-                database_password = os.getenv("DATABASE_PASSWORD")
-                database_name = os.getenv("DATABASE_NAME")
+                # Use helper function to construct DATABASE_URL from individual variables
+                from litellm.proxy.utils import construct_database_url_from_env_vars
 
-                if (
-                    database_host
-                    and database_username
-                    and database_password
-                    and database_name
-                ):
-                    # Handle the problem of special character escaping in the database URL
-                    database_username_enc = urllib.parse.quote_plus(database_username)
-                    database_password_enc = urllib.parse.quote_plus(database_password)
-                    database_name_enc = urllib.parse.quote_plus(database_name)
-
-                    # Construct DATABASE_URL from the provided variables
-                    database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
-
+                database_url = construct_database_url_from_env_vars()
+                if database_url:
                     os.environ["DATABASE_URL"] = database_url
             db_connection_pool_limit = general_settings.get(
                 "database_connection_pool_limit",
@@ -728,6 +727,24 @@ def run_server(  # noqa: PLR0915
                 os.chdir(original_dir)
             if database_url is not None and isinstance(database_url, str):
                 os.environ["DATABASE_URL"] = database_url
+
+        # Handle database URL construction when no config file is used
+        if config is None and os.getenv("DATABASE_URL") is None:
+            # Use helper function to construct DATABASE_URL from individual variables
+            from litellm.proxy.utils import construct_database_url_from_env_vars
+
+            database_url = construct_database_url_from_env_vars()
+            if database_url:
+                os.environ["DATABASE_URL"] = database_url
+
+        # Set default values for connection pool settings when no config is used
+        if config is None:
+            db_connection_pool_limit = (
+                LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value
+            )
+            db_connection_timeout = (
+                LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
+            )
 
         if (
             os.getenv("DATABASE_URL", None) is not None
@@ -775,7 +792,7 @@ def run_server(  # noqa: PLR0915
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    PrismaManager.setup_database(use_migrate=use_prisma_migrate)
+                    PrismaManager.setup_database(use_migrate=not use_prisma_db_push)
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa
@@ -791,6 +808,11 @@ def run_server(  # noqa: PLR0915
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app  # noqa
 
+        # --- SEPARATE HEALTH APP LOGIC ---
+        # To run the health app separately, use:
+        #   uvicorn litellm.proxy.health_app_factory:build_health_app --factory --host 0.0.0.0 --port=4001
+        # This is compatible with the SEPARATE_HEALTH_APP Docker/supervisord pattern.
+        # --- END SEPARATE HEALTH APP LOGIC ---
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
             print(  # noqa
@@ -804,6 +826,9 @@ def run_server(  # noqa: PLR0915
             log_config=log_config,
             keepalive_timeout=keepalive_timeout,
         )
+        # Optional: recycle uvicorn workers after N requests
+        if max_requests_before_restart is not None:
+            uvicorn_args["limit_max_requests"] = max_requests_before_restart
         if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(  # noqa
@@ -828,6 +853,7 @@ def run_server(  # noqa: PLR0915
                 num_workers=num_workers,
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
+                max_requests_before_restart=max_requests_before_restart,
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers._init_hypercorn_server(

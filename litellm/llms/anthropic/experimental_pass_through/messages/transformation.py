@@ -2,7 +2,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj, verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -60,12 +60,17 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Tuple[dict, Optional[str]]:
+        import os
+
+        if api_key is None:
+            api_key = os.getenv("ANTHROPIC_API_KEY")
         if "x-api-key" not in headers and api_key:
             headers["x-api-key"] = api_key
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
         if "content-type" not in headers:
             headers["content-type"] = "application/json"
+
         return headers, api_base
 
     def transform_anthropic_messages_request(
@@ -89,6 +94,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 status_code=400,
             )
         ####### get required params for all anthropic messages requests ######
+        verbose_logger.info(f"🔍 TRANSFORMATION DEBUG - Messages: {messages}")
         anthropic_messages_request: AnthropicMessagesRequest = AnthropicMessagesRequest(
             messages=messages,
             max_tokens=max_tokens,

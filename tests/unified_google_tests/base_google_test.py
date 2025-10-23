@@ -2,6 +2,7 @@ import asyncio
 import json
 import sys
 import os
+import tempfile
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 import pytest
 
@@ -16,9 +17,55 @@ from litellm.google_genai import (
     generate_content_stream,
     agenerate_content_stream,
 )
-from google.genai.types import ContentDict, PartDict, GenerateContentResponse
+from google.genai.types import ContentDict, PartDict
+from litellm.types.google_genai.main import GenerateContentResponse
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
+
+
+def load_vertex_ai_credentials(model: str):
+    """Load Vertex AI credentials for tests"""
+    # Define the path to the vertex_key.json file
+    if "vertex_ai" not in model:
+        return None
+    print("loading vertex ai credentials")
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    vertex_key_path = filepath + "/vertex_key.json"
+
+    # Read the existing content of the file or create an empty dictionary
+    try:
+        with open(vertex_key_path, "r") as file:
+            # Read the file content
+            print("Read vertexai file path")
+            content = file.read()
+
+            # If the file is empty or not valid JSON, create an empty dictionary
+            if not content or not content.strip():
+                service_account_key_data = {}
+            else:
+                # Attempt to load the existing JSON content
+                file.seek(0)
+                service_account_key_data = json.load(file)
+    except FileNotFoundError:
+        # If the file doesn't exist, create an empty dictionary
+        service_account_key_data = {}
+
+    # Update the service_account_key_data with environment variables
+    private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
+    private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
+    private_key = private_key.replace("\\n", "\n")
+    service_account_key_data["private_key_id"] = private_key_id
+    service_account_key_data["private_key"] = private_key
+
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
+        # Write the updated content to the temporary files
+        json.dump(service_account_key_data, temp_file, indent=2)
+
+    # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
+    
+    return os.path.abspath(temp_file.name)
 
 
 class TestCustomLogger(CustomLogger):
@@ -42,14 +89,30 @@ class BaseGoogleGenAITest:
         """Override in subclasses to provide model-specific configuration"""
         raise NotImplementedError("Subclasses must implement model_config")
     
+    @property
+    def _temp_files_to_cleanup(self):
+        """Lazy initialization of temp files list"""
+        if not hasattr(self, '_temp_files_list'):
+            self._temp_files_list = []
+        return self._temp_files_list
+    
+    def cleanup_temp_files(self):
+        """Clean up any temporary files created during testing"""
+        for temp_file in self._temp_files_to_cleanup:
+            try:
+                os.unlink(temp_file)
+            except OSError:
+                pass  # File might already be deleted
+        self._temp_files_to_cleanup.clear()
+    
     
     def _validate_non_streaming_response(self, response: Any):
         """Validate non-streaming response structure"""
-        # Handle type checking - response should be a dict for non-streaming
+        # Handle type checking - response should be a GenerateContentResponse for non-streaming
         if isinstance(response, AsyncIterator):
             pytest.fail("Expected non-streaming response but got AsyncIterator")
         
-        assert isinstance(response, GenerateContentResponse), f"Expected dict response, got {type(response)}"
+        assert isinstance(response, GenerateContentResponse), f"Expected GenerateContentResponse, got {type(response)}"
         print(f"Response: {response.model_dump_json(indent=4)}")
         
         # Basic validation - adjust based on actual Google GenAI response structure
@@ -104,6 +167,10 @@ class BaseGoogleGenAITest:
             ],
             role="user",
         )
+        temp_file_path = load_vertex_ai_credentials(model=request_params["model"])
+        if temp_file_path:
+            self._temp_files_to_cleanup.append(temp_file_path)
+            
         litellm._turn_on_debug()
 
         print(f"Testing {'async' if is_async else 'sync'} non-streaming with model config: {request_params}")
@@ -132,6 +199,9 @@ class BaseGoogleGenAITest:
     async def test_streaming_base(self, is_async: bool):
         """Base test for streaming requests (parametrized for sync/async)"""
         request_params = self.model_config
+        temp_file_path = load_vertex_ai_credentials(model=request_params["model"])
+        if temp_file_path:
+            self._temp_files_to_cleanup.append(temp_file_path)
         contents = ContentDict(
             parts=[
                 PartDict(
@@ -179,6 +249,9 @@ class BaseGoogleGenAITest:
         litellm.callbacks = [test_custom_logger]
         
         request_params = self.model_config
+        temp_file_path = load_vertex_ai_credentials(model=request_params["model"])
+        if temp_file_path:
+            self._temp_files_to_cleanup.append(temp_file_path)
         contents = ContentDict(
             parts=[
                 PartDict(
@@ -220,6 +293,9 @@ class BaseGoogleGenAITest:
         litellm.callbacks = [test_custom_logger]
         
         request_params = self.model_config
+        temp_file_path = load_vertex_ai_credentials(model=request_params["model"])
+        if temp_file_path:
+            self._temp_files_to_cleanup.append(temp_file_path)
         contents = ContentDict(
             parts=[
                 PartDict(

@@ -9,6 +9,7 @@ Users can define
 import copy
 from typing import Dict, List, Optional, Tuple, Union, cast
 
+from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.types.integrations.anthropic_cache_control_hook import (
@@ -29,6 +30,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Apply cache control directives based on specified injection points.
@@ -79,11 +81,21 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         # Case 1: Target by specific index
         if targetted_index is not None:
+            original_index = targetted_index
+            # Handle negative indices (convert to positive)
+            if targetted_index < 0:
+                targetted_index += len(messages)
+
             if 0 <= targetted_index < len(messages):
-                messages[
-                    targetted_index
-                ] = AnthropicCacheControlHook._safe_insert_cache_control_in_message(
-                    messages[targetted_index], control
+                messages[targetted_index] = (
+                    AnthropicCacheControlHook._safe_insert_cache_control_in_message(
+                        messages[targetted_index], control
+                    )
+                )
+            else:
+                verbose_logger.warning(
+                    f"AnthropicCacheControlHook: Provided index {original_index} is out of bounds for message list of length {len(messages)}. "
+                    f"Targeted index was {targetted_index}. Skipping cache control injection for this point."
                 )
         # Case 2: Target by role
         elif targetted_role is not None:
@@ -108,17 +120,18 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             - list of objects
 
         This method handles inserting cache control in both cases.
+        Per Anthropic's API specification, when using multiple content blocks,
+        only the last content block can have cache_control.
         """
         message_content = message.get("content", None)
 
         # 1. if string, insert cache control in the message
         if isinstance(message_content, str):
             message["cache_control"] = control  # type: ignore
-        # 2. list of objects
+        # 2. list of objects - only apply to last item per Anthropic spec
         elif isinstance(message_content, list):
-            for content_item in message_content:
-                if isinstance(content_item, dict):
-                    content_item["cache_control"] = control  # type: ignore
+            if len(message_content) > 0 and isinstance(message_content[-1], dict):
+                message_content[-1]["cache_control"] = control  # type: ignore
         return message
 
     @property

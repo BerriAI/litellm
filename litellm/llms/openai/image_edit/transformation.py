@@ -27,6 +27,11 @@ else:
 
 
 class OpenAIImageEditConfig(BaseImageEditConfig):
+    """
+    Base configuration for OpenAI image edit API.
+    Used for models like gpt-image-1 that support multiple images.
+    """
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         All OpenAI Image Edits params are supported
@@ -57,6 +62,20 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         """No mapping applied since inputs are in OpenAI spec already"""
         return dict(image_edit_optional_params)
 
+    def _add_image_to_files(
+        self,
+        files_list: List[Tuple[str, Any]],
+        image: Any,
+        field_name: str,
+    ) -> None:
+        """Add an image to the files list with appropriate content type"""
+        image_content_type = ImageEditRequestUtils.get_image_content_type(image)
+
+        if isinstance(image, BufferedReader):
+            files_list.append((field_name, (image.name, image, image_content_type)))
+        else:
+            files_list.append((field_name, ("image.png", image, image_content_type)))
+
     def transform_image_edit_request(
         self,
         model: str,
@@ -67,9 +86,10 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         headers: dict,
     ) -> Tuple[Dict, RequestFiles]:
         """
-        No transform applied since inputs are in OpenAI spec already
+        Transform image edit request to OpenAI API format.
 
-        This handles buffered readers as images to be sent as multipart/form-data for OpenAI
+        Handles multipart/form-data for images. Uses "image[]" field name
+        to support multiple images (e.g., for gpt-image-1).
         """
         request = ImageEditRequestParams(
             model=model,
@@ -80,24 +100,44 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         request_dict = cast(Dict, request)
 
         #########################################################
-        # Separate images as `files` and send other parameters as `data`
+        # Separate images and masks as `files` and send other parameters as `data`
         #########################################################
-        _images = request_dict.get("image") or []
-        data_without_images = {k: v for k, v in request_dict.items() if k != "image"}
+        _image_list = request_dict.get("image")
+        _mask = request_dict.get("mask")
+        data_without_files = {
+            k: v for k, v in request_dict.items() if k not in ["image", "mask"]
+        }
         files_list: List[Tuple[str, Any]] = []
-        for _image in _images:
-            image_content_type: str = ImageEditRequestUtils.get_image_content_type(
-                _image
+
+        # Handle image parameter
+        if _image_list is not None:
+            image_list = (
+                [_image_list] if not isinstance(_image_list, list) else _image_list
             )
-            if isinstance(_image, BufferedReader):
-                files_list.append(
-                    ("image[]", (_image.name, _image, image_content_type))
+
+            for _image in image_list:
+                if _image is not None:
+                    self._add_image_to_files(
+                        files_list=files_list,
+                        image=_image,
+                        field_name="image[]",
+                    )
+        # Handle mask parameter if provided
+        if _mask is not None:
+            # Handle case where mask can be a list (extract first mask)
+            if isinstance(_mask, list):
+                _mask = _mask[0] if _mask else None
+
+            if _mask is not None:
+                mask_content_type: str = ImageEditRequestUtils.get_image_content_type(
+                    _mask
                 )
-            else:
-                files_list.append(
-                    ("image[]", ("image.png", _image, image_content_type))
-                )
-        return data_without_images, files_list
+                if isinstance(_mask, BufferedReader):
+                    files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
+                else:
+                    files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
+
+        return data_without_files, files_list
 
     def transform_image_edit_response(
         self,

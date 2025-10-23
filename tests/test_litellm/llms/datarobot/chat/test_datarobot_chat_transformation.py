@@ -18,6 +18,8 @@ class TestDataRobotConfig:
             (None, "https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/"),
             ("http://localhost:5001", "http://localhost:5001/api/v2/genai/llmgw/chat/completions/"),
             ("https://app.datarobot.com", "https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/"),
+            ("https://app.datarobot.com/api/v2/", "https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/"),
+            ("https://app.datarobot.com/api/v2", "https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/"),            
             ("https://app.datarobot.com/api/v2/genai/llmgw/chat/completions", "https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/"),
             ("https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/", "https://app.datarobot.com/api/v2/genai/llmgw/chat/completions/"),
             ("https://staging.datarobot.com", "https://staging.datarobot.com/api/v2/genai/llmgw/chat/completions/"),

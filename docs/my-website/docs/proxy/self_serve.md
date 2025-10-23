@@ -212,35 +212,7 @@ Follow this [tutorial for auto-adding sso users to teams with Microsoft Entra ID
 
 ### Debugging SSO JWT fields 
 
-If you need to inspect the JWT fields received from your SSO provider by LiteLLM, follow these instructions. This guide walks you through setting up a debug callback to view the JWT data during the SSO process.
-
-
-<Image img={require('../../img/debug_sso.png')}  style={{ width: '500px', height: 'auto' }} />
-<br />
-
-1. Add `/sso/debug/callback` as a redirect URL in your SSO provider 
-
-  In your SSO provider's settings, add the following URL as a new redirect (callback) URL:
-
-  ```bash showLineNumbers title="Redirect URL"
-  http://<proxy_base_url>/sso/debug/callback
-  ```
-
-
-2. Navigate to the debug login page on your browser 
-
-    Navigate to the following URL on your browser:
-
-    ```bash showLineNumbers title="URL to navigate to"
-    https://<proxy_base_url>/sso/debug/login
-    ```
-
-    This will initiate the standard SSO flow. You will be redirected to your SSO provider's login screen, and after successful authentication, you will be redirected back to LiteLLM's debug callback route.
-
-
-3. View the JWT fields 
-
-Once redirected, you should see a page called "SSO Debug Information". This page displays the JWT fields received from your SSO provider (as shown in the image above)
+[**Go Here**](./admin_ui_sso.md#debugging-sso-jwt-fields)
 
 
 ## Advanced
@@ -255,7 +227,7 @@ export PROXY_LOGOUT_URL="https://www.google.com"
 <Image img={require('../../img/ui_logout.png')}  style={{ width: '400px', height: 'auto' }} />
 
 
-### Set max budget for internal users 
+### Set default max budget for internal users 
 
 Automatically apply budget per internal user when they sign up. By default the table will be checked every 10 minutes, for users to reset. To modify this, [see this](./users.md#reset-budgets)
 
@@ -266,6 +238,10 @@ litellm_settings:
 ```
 
 This sets a max budget of $10 USD for internal users when they sign up. 
+
+You can also manage these settings visually in the UI:
+
+<Image img={require('../../img/default_user_settings_admin_ui.png')}  style={{ width: '700px', height: 'auto' }} />
 
 This budget only applies to personal keys created by that user - seen under `Default Team` on the UI. 
 
@@ -336,6 +312,37 @@ curl -X POST '<PROXY_BASE_URL>/team/new' \
 
 </TabItem>
 </Tabs>
+
+### Team Member Rate Limits
+
+Set a default tpm/rpm limit for an individual team member. 
+
+You can do this when creating a new team, or by updating an existing team. 
+
+
+<Tabs>
+<TabItem value="ui" label="UI">
+
+<Image img={require('../../img/create_team_member_rate_limits.png')}  style={{ width: '600px', height: 'auto' }} />
+
+</TabItem>
+<TabItem value="api" label="API">
+
+```bash
+curl -X POST '<PROXY_BASE_URL>/team/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-D '{
+    "team_alias": "team_1",
+    "team_member_rpm_limit": 100,
+    "team_member_tpm_limit": 1000
+}'
+```
+
+</TabItem>
+</Tabs>
+
+
 
 ### Set default params for new teams
 

@@ -52,7 +52,7 @@ litellm --config /path/to/config.yaml
 curl -X POST 'http://0.0.0.0:4000/v1/images/generations' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
     "model": "gpt-image-1",
     "prompt": "A cute baby sea otter",
     "n": 1,
@@ -154,7 +154,7 @@ Any non-openai params, will be treated as provider-specific params, and sent in 
 ## OpenAI Image Generation Models
 
 ### Usage
-```python
+```python showLineNumbers
 from litellm import image_generation
 import os
 os.environ['OPENAI_API_KEY'] = ""
@@ -171,7 +171,7 @@ response = image_generation(model='gpt-image-1', prompt="cute baby otter")
 
 ### API keys
 This can be set as env variables or passed as **params to litellm.image_generation()**
-```python
+```python showLineNumbers
 import os
 os.environ['AZURE_API_KEY'] = 
 os.environ['AZURE_API_BASE'] = 
@@ -179,7 +179,7 @@ os.environ['AZURE_API_VERSION'] =
 ```
 
 ### Usage
-```python
+```python showLineNumbers
 from litellm import embedding
 response = embedding(
     model="azure/<your deployment name>",
@@ -197,6 +197,34 @@ print(response)
 | dall-e-3 | `image_generation(model="azure/<your deployment name>", prompt="cute baby otter")` |
 | dall-e-2 | `image_generation(model="azure/<your deployment name>", prompt="cute baby otter")` |
 
+## Xinference Image Generation Models
+
+Use this for Stable Diffusion models hosted on Xinference
+
+#### Usage
+
+See Xinference usage with LiteLLM [here](./providers/xinference.md#image-generation)
+
+## Recraft Image Generation Models
+
+Use this for AI-powered design and image generation with Recraft
+
+#### Usage
+
+```python showLineNumbers
+from litellm import image_generation
+import os
+
+os.environ['RECRAFT_API_KEY'] = "your-api-key"
+
+response = image_generation(
+    model="recraft/recraftv3",
+    prompt="A beautiful sunset over a calm ocean",
+)
+print(response)
+```
+
+See Recraft usage with LiteLLM [here](./providers/recraft.md#image-generation)
 
 ## OpenAI Compatible Image Generation Models
 Use this for calling `/image_generation` endpoints on OpenAI Compatible Servers, example https://github.com/xorbitsai/inference
@@ -204,7 +232,7 @@ Use this for calling `/image_generation` endpoints on OpenAI Compatible Servers,
 **Note add `openai/` prefix to model so litellm knows to route to OpenAI**
 
 ### Usage
-```python
+```python showLineNumbers
 from litellm import image_generation
 response = image_generation(
   model = "openai/<your-llm-name>",     # add `openai/` prefix to model so litellm knows to route to OpenAI
@@ -218,7 +246,7 @@ Use this for stable diffusion on bedrock
 
 
 ### Usage
-```python
+```python showLineNumbers
 import os
 from litellm import image_generation
 
@@ -239,7 +267,7 @@ print(f"response: {response}")
 
 Use this for image generation models on VertexAI
 
-```python
+```python showLineNumbers
 response = litellm.image_generation(
     prompt="An olympic size swimming pool",
     model="vertex_ai/imagegeneration@006",
@@ -248,3 +276,18 @@ response = litellm.image_generation(
 )
 print(f"response: {response}")
 ```
+
+## Supported Providers
+
+#### ⚡️See all supported models and providers at [models.litellm.ai](https://models.litellm.ai/)
+
+| Provider | Documentation Link |
+|----------|-------------------|
+| OpenAI | [OpenAI Image Generation →](./providers/openai) |
+| Azure OpenAI | [Azure OpenAI Image Generation →](./providers/azure/azure) |
+| Google AI Studio | [Google AI Studio Image Generation →](./providers/google_ai_studio/image_gen) |
+| Vertex AI | [Vertex AI Image Generation →](./providers/vertex_image) |
+| AWS Bedrock | [Bedrock Image Generation →](./providers/bedrock) |
+| Recraft | [Recraft Image Generation →](./providers/recraft#image-generation) |
+| Xinference | [Xinference Image Generation →](./providers/xinference#image-generation) |
+| Nscale | [Nscale Image Generation →](./providers/nscale#image-generation) | 

@@ -228,39 +228,35 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             "us-south",
         ]
 
-    def transform_request(
-        self,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
-        litellm_params: Dict,
-        headers: Dict,
-    ) -> Dict:
-        provider = model.split("/")[0]
-        prompt = convert_watsonx_messages_to_prompt(
-            model=model,
-            messages=messages,
-            provider=provider,
-            custom_prompt_dict={},
-        )
+    def _build_request_payload(self, model: str, prompt: str, optional_params: Dict) -> Dict:
+        """Shared logic to build request payload"""
         extra_body_params = optional_params.pop("extra_body", {})
         optional_params.update(extra_body_params)
         watsonx_api_params = _get_api_params(params=optional_params)
-
-        watsonx_auth_payload = self._prepare_payload(
-            model=model,
-            api_params=watsonx_api_params,
-        )
-
-        # init the payload to the text generation call
-        payload = {
+        watsonx_auth_payload = self._prepare_payload(model=model, api_params=watsonx_api_params)
+        
+        return {
             "input": prompt,
             "moderations": optional_params.pop("moderations", {}),
             "parameters": optional_params,
             **watsonx_auth_payload,
         }
 
-        return payload
+    async def atransform_request(self, model: str, messages: List[AllMessageValues], optional_params: Dict, litellm_params: Dict, headers: Dict) -> Dict:
+        """Async version of transform_request"""
+        from litellm.llms.watsonx.common_utils import (
+            aconvert_watsonx_messages_to_prompt,
+        )
+        
+        provider = model.split("/")[0]
+        prompt = await aconvert_watsonx_messages_to_prompt(model=model, messages=messages, provider=provider, custom_prompt_dict={})
+        return self._build_request_payload(model=model, prompt=prompt, optional_params=optional_params)
+    
+    def transform_request(self, model: str, messages: List[AllMessageValues], optional_params: Dict, litellm_params: Dict, headers: Dict) -> Dict:
+        """Sync version of transform_request"""
+        provider = model.split("/")[0]
+        prompt = convert_watsonx_messages_to_prompt(model=model, messages=messages, provider=provider, custom_prompt_dict={})
+        return self._build_request_payload(model=model, prompt=prompt, optional_params=optional_params)
 
     def transform_response(
         self,
@@ -300,9 +296,14 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             json_resp["results"][0]["stop_reason"]
         )
         if json_resp.get("created_at"):
-            model_response.created = int(
-                datetime.fromisoformat(json_resp["created_at"]).timestamp()
-            )
+            try:
+                created_datetime = datetime.fromisoformat(json_resp["created_at"])
+            except ValueError:
+                # datetime.fromisoformat cannot handle 'Z' in Python 3.10
+                created_datetime = datetime.fromisoformat(
+                    f'{json_resp["created_at"].rstrip("Z")}+00:00'
+                )
+            model_response.created = int(created_datetime.timestamp())
         else:
             model_response.created = int(time.time())
         usage = Usage(

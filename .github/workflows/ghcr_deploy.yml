@@ -73,7 +73,14 @@ jobs:
           push: true
           file: ./litellm-js/spend-logs/Dockerfile
           tags: litellm/litellm-spend_logs:${{ github.event.inputs.tag || 'latest' }}
-      
+      -
+        name: Build and push litellm-non_root image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          file: ./docker/Dockerfile.non_root
+          tags: litellm/litellm-non_root:${{ github.event.inputs.tag || 'latest' }}
   build-and-push-image:
     runs-on: ubuntu-latest
     # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.

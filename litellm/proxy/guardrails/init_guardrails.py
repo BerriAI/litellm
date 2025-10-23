@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -9,7 +9,32 @@ from litellm.types.guardrails import Guardrail, GuardrailItem, GuardrailItemSpec
 
 all_guardrails: List[GuardrailItem] = []
 
+"""
+Map guardrail_name: <pre_call>, <post_call>, during_call
 
+"""
+
+
+def init_guardrails_v2(
+    all_guardrails: List[Dict],
+    config_file_path: Optional[str] = None,
+):
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    guardrail_list: List[Guardrail] = []
+
+    for guardrail in all_guardrails:
+        initialized_guardrail = IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+            guardrail=cast(Guardrail, guardrail),
+            config_file_path=config_file_path,
+        )
+        if initialized_guardrail:
+            guardrail_list.append(initialized_guardrail)
+
+    verbose_proxy_logger.debug(f"\nGuardrail List:{guardrail_list}\n")
+
+
+### LEGACY IMPLEMENTATION ###
 def initialize_guardrails(
     guardrails_config: List[Dict[str, GuardrailItemSpec]],
     premium_user: bool,
@@ -65,28 +90,3 @@ def initialize_guardrails(
             "error initializing guardrails {}".format(str(e))
         )
         raise e
-
-
-"""
-Map guardrail_name: <pre_call>, <post_call>, during_call
-
-"""
-
-
-def init_guardrails_v2(
-    all_guardrails: List[Dict],
-    config_file_path: Optional[str] = None,
-):
-    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
-
-    guardrail_list: List[Guardrail] = []
-
-    for guardrail in all_guardrails:
-        initialized_guardrail = IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
-            guardrail=guardrail,
-            config_file_path=config_file_path,
-        )
-        if initialized_guardrail:
-            guardrail_list.append(initialized_guardrail)
-
-    verbose_proxy_logger.info(f"\nGuardrail List:{guardrail_list}\n")

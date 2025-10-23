@@ -18,6 +18,8 @@ from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
+    ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicMessageValues,
     AllAnthropicToolsValues,
     AnthropicCodeExecutionTool,
@@ -45,9 +47,15 @@ from litellm.types.llms.openai import (
     OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
 )
-from litellm.types.utils import CompletionTokensDetailsWrapper
+from litellm.types.utils import (
+    CacheCreationTokenDetails,
+    CompletionTokensDetailsWrapper,
+)
 from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
+from litellm.types.utils import (
+    PromptTokensDetailsWrapper,
+    ServerToolUse,
+)
 from litellm.utils import (
     ModelResponse,
     Usage,
@@ -65,9 +73,6 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
-
-
-ANTHROPIC_HOSTED_TOOLS = ["web_search", "bash", "text_editor", "code_execution"]
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
@@ -127,7 +132,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "parallel_tool_calls",
             "response_format",
             "user",
-            "reasoning_effort",
             "web_search_options",
         ]
 
@@ -136,6 +140,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             custom_llm_provider=self.custom_llm_provider,
         ):
             params.append("thinking")
+            params.append("reasoning_effort")
 
         return params
 
@@ -198,10 +203,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "properties": {},
                 },
             )
-            input_schema: AnthropicInputSchema = AnthropicInputSchema(**_input_schema)
+
+            _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
+            input_schema_filtered = {
+                k: v for k, v in _input_schema.items() if k in _allowed_properties
+            }
+            input_anthropic_schema: AnthropicInputSchema = AnthropicInputSchema(
+                **input_schema_filtered
+            )
+
             _tool = AnthropicMessagesTool(
                 name=tool["function"]["name"],
-                input_schema=input_schema,
+                input_schema=input_anthropic_schema,
             )
 
             _description = tool["function"].get("description")
@@ -628,6 +641,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
             )
         return tools
+    
+    def update_headers_with_optional_anthropic_beta(self, headers: dict, optional_params: dict) -> dict:
+        """Update headers with optional anthropic beta."""
+        _tools = optional_params.get("tools", [])
+        for tool in _tools:
+            if tool.get("type", None) and tool.get("type").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_FETCH.value):
+                headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value
+        return headers
 
     def transform_request(
         self,
@@ -663,6 +684,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     model="",
                     llm_provider="anthropic",
                 )
+
+        headers = self.update_headers_with_optional_anthropic_beta(headers=headers, optional_params=optional_params)
 
         # Separate system prompt from rest of message
         anthropic_system_message_list = self.translate_system_message(messages=messages)
@@ -709,7 +732,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and isinstance(_litellm_metadata, dict)
             and "user_id" in _litellm_metadata
             and _litellm_metadata["user_id"] is not None
-            and not _valid_user_id(_litellm_metadata["user_id"])
+            and _valid_user_id(_litellm_metadata["user_id"])
         ):
             optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
 
@@ -793,7 +816,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if content.get("citations") is not None:
                 if citations is None:
                     citations = []
-                citations.append(content["citations"])
+                citations.append(
+                    [
+                        {
+                            **citation,
+                            "supported_text": content.get("text", ""),
+                        }
+                        for citation in content["citations"]
+                    ]
+                )
         if thinking_blocks is not None:
             reasoning_content = ""
             for block in thinking_blocks:
@@ -812,12 +843,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _usage = usage_object
         cache_creation_input_tokens: int = 0
         cache_read_input_tokens: int = 0
+        cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
         web_search_requests: Optional[int] = None
         if (
             "cache_creation_input_tokens" in _usage
             and _usage["cache_creation_input_tokens"] is not None
         ):
             cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
+            prompt_tokens += cache_creation_input_tokens
         if (
             "cache_read_input_tokens" in _usage
             and _usage["cache_read_input_tokens"] is not None
@@ -833,8 +866,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     int, _usage["server_tool_use"]["web_search_requests"]
                 )
 
+        if "cache_creation" in _usage and _usage["cache_creation"] is not None:
+            cache_creation_token_details = CacheCreationTokenDetails(
+                ephemeral_5m_input_tokens=_usage["cache_creation"].get(
+                    "ephemeral_5m_input_tokens"
+                ),
+                ephemeral_1h_input_tokens=_usage["cache_creation"].get(
+                    "ephemeral_1h_input_tokens"
+                ),
+            )
+
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
+            cache_creation_tokens=cache_creation_input_tokens,
+            cache_creation_token_details=cache_creation_token_details,
         )
         completion_token_details = (
             CompletionTokensDetailsWrapper(
