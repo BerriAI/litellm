@@ -620,7 +620,7 @@ async def shared_health_check_status_endpoint(
     
     Returns information about Redis connectivity, lock status, and cache status.
     """
-    from litellm.proxy.proxy_server import use_shared_health_check, redis_usage_cache
+    from litellm.proxy.proxy_server import redis_usage_cache, use_shared_health_check
     
     if not use_shared_health_check:
         return {
@@ -636,7 +636,9 @@ async def shared_health_check_status_endpoint(
         }
     
     try:
-        from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
+        from litellm.proxy.health_check_utils.shared_health_check_manager import (
+            SharedHealthCheckManager,
+        )
         
         shared_health_manager = SharedHealthCheckManager(
             redis_cache=redis_usage_cache,
@@ -910,6 +912,7 @@ async def test_model_connection(
             "batch",
             "rerank",
             "realtime",
+            "ocr",
         ]
     ] = fastapi.Body("chat", description="The mode to test the model with"),
     litellm_params: Dict = fastapi.Body(

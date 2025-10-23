@@ -29,6 +29,7 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.azure.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
 )
+from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.bedrock.cost_calculation import (
     cost_per_token as bedrock_cost_per_token,
 )
@@ -314,6 +315,16 @@ def cost_per_token(  # noqa: PLR0915
             model=model,
             custom_llm_provider=custom_llm_provider,
             duration=audio_transcription_file_duration,
+        )
+    elif call_type == "search" or call_type == "asearch":
+        # Search providers use per-query pricing
+        from litellm.search import search_provider_cost_per_query
+        
+        return search_provider_cost_per_query(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            number_of_queries=number_of_queries or 1,
+            optional_params=response._hidden_params if response and hasattr(response, "_hidden_params") else None
         )
     elif custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
@@ -1094,6 +1105,7 @@ def response_cost_calculator(
         LiteLLMRealtimeStreamLoggingObject,
         OpenAIModerationResponse,
         Response,
+        SearchResponse,
     ],
     model: str,
     custom_llm_provider: Optional[str],
@@ -1114,6 +1126,8 @@ def response_cost_calculator(
         "speech",
         "rerank",
         "arerank",
+        "search",
+        "asearch",
     ],
     optional_params: dict,
     cache_hit: Optional[bool] = None,

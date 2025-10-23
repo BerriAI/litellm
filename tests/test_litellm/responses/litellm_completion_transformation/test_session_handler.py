@@ -223,7 +223,7 @@ async def test_e2e_cold_storage_successful_retrieval():
         new_callable=AsyncMock,
     ) as mock_get_spend_logs, \
     patch.object(session_handler, "COLD_STORAGE_HANDLER") as mock_cold_storage, \
-    patch("litellm.configured_cold_storage_logger", return_value="s3"):
+    patch("litellm.cold_storage_custom_logger", return_value="s3"):
         
         # Setup mocks
         mock_get_spend_logs.return_value = mock_spend_logs
@@ -343,7 +343,7 @@ async def test_should_check_cold_storage_for_full_payload():
     # Test case 4: None request (should return True)
     proxy_request_none = None
     
-    with patch("litellm.configured_cold_storage_logger", return_value="s3"):
+    with patch("litellm.cold_storage_custom_logger", return_value="s3"):
         # Test case 1: Should return True for truncated content
         result1 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
         assert result1 == True, "Should return True for proxy request with truncated PDF content"
@@ -361,7 +361,7 @@ async def test_should_check_cold_storage_for_full_payload():
         assert result4 == True, "Should return True for None proxy request"
     
     # Test case 5: Should return False when cold storage is not configured
-    with patch.object(litellm, 'configured_cold_storage_logger', None):
+    with patch.object(litellm, 'cold_storage_custom_logger', None):
         result5 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
         assert result5 == False, "Should return False when cold storage is not configured, even with truncated content"
 

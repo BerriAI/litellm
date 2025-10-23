@@ -323,6 +323,14 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/vector_stores",
         "/vector_stores/{vector_store_id}/search",
         "/v1/vector_stores/{vector_store_id}/search",
+
+        # search
+        "/search",
+        "/v1/search",
+
+        # OCR
+        "/ocr",
+        "/v1/ocr",
     ]
 
     mapped_pass_through_routes = [
@@ -1619,6 +1627,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
     cost_per_request: float = Field(
         default=0.0,
         description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
+    )
+    auth: bool = Field(
+        default=False,
+        description="Whether authentication is required for the pass-through endpoint. If True, requests to the endpoint will require a valid LiteLLM API key.",
     )
 
 

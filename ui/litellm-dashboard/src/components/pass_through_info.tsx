@@ -18,12 +18,14 @@ import { updatePassThroughEndpoint, deletePassThroughEndpointsCall } from "./net
 import { Eye, EyeOff } from "lucide-react";
 import RoutePreview from "./route_preview";
 import NotificationsManager from "./molecules/notifications_manager";
+import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
 
 export interface PassThroughInfoProps {
   endpointData: PassThroughEndpoint;
   onClose: () => void;
   accessToken: string | null;
   isAdmin: boolean;
+  premiumUser?: boolean;
   onEndpointUpdated?: () => void;
 }
 
@@ -34,6 +36,7 @@ interface PassThroughEndpoint {
   headers: Record<string, any>;
   include_subpath?: boolean;
   cost_per_request?: number;
+  auth?: boolean;
 }
 
 // Password field component for headers
@@ -58,11 +61,13 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
   onClose,
   accessToken,
   isAdmin,
+  premiumUser = false,
   onEndpointUpdated,
 }) => {
   const [endpointData, setEndpointData] = useState<PassThroughEndpoint | null>(initialEndpointData);
   const [loading, setLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [authEnabled, setAuthEnabled] = useState(initialEndpointData?.auth || false);
   const [form] = Form.useForm();
 
   const handleEndpointUpdate = async (values: any) => {
@@ -86,6 +91,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
         headers: headers,
         include_subpath: values.include_subpath,
         cost_per_request: values.cost_per_request,
+        auth: premiumUser ? values.auth : undefined,
       };
 
       await updatePassThroughEndpoint(accessToken, endpointData.id, updateData);
@@ -174,6 +180,11 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                       {endpointData.include_subpath ? "Include Subpath" : "Exact Path"}
                     </Badge>
                   </div>
+                  <div>
+                    <Badge color={endpointData.auth ? "blue" : "gray"}>
+                      {endpointData.auth ? "Auth Required" : "No Auth"}
+                    </Badge>
+                  </div>
                   {endpointData.cost_per_request !== undefined && (
                     <div>
                       <Text>Cost per request: ${endpointData.cost_per_request}</Text>
@@ -232,6 +243,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                       headers: endpointData.headers ? JSON.stringify(endpointData.headers, null, 2) : "",
                       include_subpath: endpointData.include_subpath || false,
                       cost_per_request: endpointData.cost_per_request,
+                      auth: endpointData.auth || false,
                     }}
                     layout="vertical"
                   >
@@ -257,6 +269,15 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                     <Form.Item label="Cost per Request" name="cost_per_request">
                       <InputNumber min={0} step={0.01} precision={2} placeholder="0.00" addonBefore="$" />
                     </Form.Item>
+
+                    <PassThroughSecuritySection
+                      premiumUser={premiumUser}
+                      authEnabled={authEnabled}
+                      onAuthChange={(checked) => {
+                        setAuthEnabled(checked);
+                        form.setFieldsValue({ auth: checked });
+                      }}
+                    />
 
                     <div className="flex justify-end gap-2 mt-6">
                       <Button onClick={() => setIsEditing(false)}>Cancel</Button>
@@ -285,6 +306,12 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                         <div>${endpointData.cost_per_request}</div>
                       </div>
                     )}
+                    <div>
+                      <Text className="font-medium">Authentication Required</Text>
+                      <Badge color={endpointData.auth ? "green" : "gray"}>
+                        {endpointData.auth ? "Yes" : "No"}
+                      </Badge>
+                    </div>
                     <div>
                       <Text className="font-medium">Headers</Text>
                       {endpointData.headers && Object.keys(endpointData.headers).length > 0 ? (

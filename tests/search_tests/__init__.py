@@ -1,0 +1,4 @@
+"""
+Search API tests.
+"""
+

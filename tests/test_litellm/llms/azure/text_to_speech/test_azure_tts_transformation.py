@@ -19,30 +19,32 @@ def test_map_openai_params_voice_mapping(azure_tts_config: AzureAVATextToSpeechC
     """
     Test mapping OpenAI voice to Azure AVA voice
     """
-    optional_params = {"voice": "alloy"}
+    optional_params = {}
     
-    mapped = azure_tts_config.map_openai_params(
+    mapped_voice, mapped_params = azure_tts_config.map_openai_params(
         model="azure-tts",
         optional_params=optional_params,
+        voice="alloy",
         drop_params=False
     )
     
-    assert mapped["voice"] == "en-US-JennyNeural"
+    assert mapped_voice == "en-US-JennyNeural"
 
 
 def test_map_openai_params_custom_azure_voice(azure_tts_config: AzureAVATextToSpeechConfig):
     """
     Test using custom Azure voice directly
     """
-    optional_params = {"voice": "en-GB-RyanNeural"}
+    optional_params = {}
     
-    mapped = azure_tts_config.map_openai_params(
+    mapped_voice, mapped_params = azure_tts_config.map_openai_params(
         model="azure-tts",
         optional_params=optional_params,
+        voice="en-GB-RyanNeural",
         drop_params=False
     )
     
-    assert mapped["voice"] == "en-GB-RyanNeural"
+    assert mapped_voice == "en-GB-RyanNeural"
 
 
 def test_map_openai_params_response_format(azure_tts_config: AzureAVATextToSpeechConfig):
@@ -51,13 +53,13 @@ def test_map_openai_params_response_format(azure_tts_config: AzureAVATextToSpeec
     """
     optional_params = {"response_format": "mp3"}
     
-    mapped = azure_tts_config.map_openai_params(
+    mapped_voice, mapped_params = azure_tts_config.map_openai_params(
         model="azure-tts",
         optional_params=optional_params,
         drop_params=False
     )
     
-    assert mapped["output_format"] == "audio-24khz-48kbitrate-mono-mp3"
+    assert mapped_params["output_format"] == "audio-24khz-48kbitrate-mono-mp3"
 
 
 def test_map_openai_params_default_format(azure_tts_config: AzureAVATextToSpeechConfig):
@@ -66,13 +68,13 @@ def test_map_openai_params_default_format(azure_tts_config: AzureAVATextToSpeech
     """
     optional_params = {}
     
-    mapped = azure_tts_config.map_openai_params(
+    mapped_voice, mapped_params = azure_tts_config.map_openai_params(
         model="azure-tts",
         optional_params=optional_params,
         drop_params=False
     )
     
-    assert mapped["output_format"] == "audio-24khz-48kbitrate-mono-mp3"
+    assert mapped_params["output_format"] == "audio-24khz-48kbitrate-mono-mp3"
 
 
 def test_map_openai_params_speed(azure_tts_config: AzureAVATextToSpeechConfig):
@@ -81,14 +83,14 @@ def test_map_openai_params_speed(azure_tts_config: AzureAVATextToSpeechConfig):
     """
     optional_params = {"speed": 1.5}
     
-    mapped = azure_tts_config.map_openai_params(
+    mapped_voice, mapped_params = azure_tts_config.map_openai_params(
         model="azure-tts",
         optional_params=optional_params,
         drop_params=False
     )
     
     # Speed 1.5 should map to +50%
-    assert mapped["rate"] == "+50%"
+    assert mapped_params["rate"] == "+50%"
 
 
 def test_map_openai_params_slow_speed(azure_tts_config: AzureAVATextToSpeechConfig):
@@ -97,14 +99,14 @@ def test_map_openai_params_slow_speed(azure_tts_config: AzureAVATextToSpeechConf
     """
     optional_params = {"speed": 0.5}
     
-    mapped = azure_tts_config.map_openai_params(
+    mapped_voice, mapped_params = azure_tts_config.map_openai_params(
         model="azure-tts",
         optional_params=optional_params,
         drop_params=False
     )
     
     # Speed 0.5 should map to -50%
-    assert mapped["rate"] == "-50%"
+    assert mapped_params["rate"] == "-50%"
 
 
 # Tests for get_complete_url
@@ -281,4 +283,271 @@ def test_transform_text_to_speech_response(azure_tts_config: AzureAVATextToSpeec
     # Should return HttpxBinaryResponseContent wrapper
     from litellm.types.llms.openai import HttpxBinaryResponseContent
     assert isinstance(result, HttpxBinaryResponseContent)
+
+
+# Tests for helper methods
+def test_build_express_as_element_with_style(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test _build_express_as_element helper with style only
+    """
+    result = azure_tts_config._build_express_as_element(
+        content="<prosody rate='+0%'>Test</prosody>",
+        style="cheerful"
+    )
+    
+    assert result == "<mstts:express-as style='cheerful'><prosody rate='+0%'>Test</prosody></mstts:express-as>"
+
+
+def test_build_express_as_element_with_all_attrs(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test _build_express_as_element helper with all attributes
+    """
+    result = azure_tts_config._build_express_as_element(
+        content="<prosody rate='+0%'>Test</prosody>",
+        style="cheerful",
+        styledegree="2",
+        role="SeniorFemale"
+    )
+    
+    assert "<mstts:express-as" in result
+    assert "style='cheerful'" in result
+    assert "styledegree='2'" in result
+    assert "role='SeniorFemale'" in result
+    assert "<prosody rate='+0%'>Test</prosody>" in result
+    assert "</mstts:express-as>" in result
+
+
+def test_build_express_as_element_no_attrs(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test _build_express_as_element helper returns content unchanged when no attrs
+    """
+    content = "<prosody rate='+0%'>Test</prosody>"
+    result = azure_tts_config._build_express_as_element(content=content)
+    
+    assert result == content
+    assert "<mstts:express-as" not in result
+
+
+def test_get_voice_language_with_explicit_lang(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test _get_voice_language returns explicit language when provided
+    """
+    result = azure_tts_config._get_voice_language(
+        voice_name="en-US-AvaMultilingualNeural",
+        explicit_lang="es-ES"
+    )
+    
+    assert result == "es-ES"
+
+
+def test_get_voice_language_without_explicit_lang(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test _get_voice_language returns None when no explicit language provided
+    """
+    result = azure_tts_config._get_voice_language(
+        voice_name="en-US-AriaNeural",
+        explicit_lang=None
+    )
+    
+    assert result is None
+
+
+def test_get_voice_language_explicit_takes_precedence(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test that explicit language takes precedence over voice name
+    """
+    result = azure_tts_config._get_voice_language(
+        voice_name="en-US-AvaMultilingualNeural",
+        explicit_lang="fr-FR"
+    )
+    
+    assert result == "fr-FR"
+
+
+# Tests for Azure-specific SSML features
+def test_map_openai_params_style(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test passing through Azure style parameter
+    """
+    optional_params = {"style": "cheerful"}
+    
+    mapped_voice, mapped_params = azure_tts_config.map_openai_params(
+        model="azure-tts",
+        optional_params=optional_params,
+        drop_params=False
+    )
+    
+    assert mapped_params["style"] == "cheerful"
+
+
+def test_map_openai_params_style_and_role(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test passing through Azure style, styledegree, and role parameters
+    """
+    optional_params = {
+        "style": "cheerful",
+        "styledegree": "2",
+        "role": "SeniorFemale"
+    }
+    
+    mapped_voice, mapped_params = azure_tts_config.map_openai_params(
+        model="azure-tts",
+        optional_params=optional_params,
+        drop_params=False
+    )
+    
+    assert mapped_params["style"] == "cheerful"
+    assert mapped_params["styledegree"] == "2"
+    assert mapped_params["role"] == "SeniorFemale"
+
+
+def test_map_openai_params_lang(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test passing through Azure lang parameter for multilingual voices
+    """
+    optional_params = {"lang": "es-ES"}
+    
+    mapped_voice, mapped_params = azure_tts_config.map_openai_params(
+        model="azure-tts",
+        optional_params=optional_params,
+        drop_params=False
+    )
+    
+    assert mapped_params["lang"] == "es-ES"
+
+
+def test_transform_text_to_speech_request_with_style(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test SSML generation with style parameter includes mstts:express-as element
+    """
+    result = azure_tts_config.transform_text_to_speech_request(
+        model="azure-tts",
+        input="Hello world",
+        voice="en-US-AriaNeural",
+        optional_params={
+            "voice": "en-US-AriaNeural",
+            "style": "cheerful"
+        },
+        litellm_params={},
+        headers={}
+    )
+    
+    ssml = result["ssml_body"]
+    
+    # Should include mstts namespace
+    assert "xmlns:mstts='https://www.w3.org/2001/mstts'" in ssml
+    
+    # Should include mstts:express-as with style
+    assert "<mstts:express-as style='cheerful'>" in ssml
+    assert "</mstts:express-as>" in ssml
+    
+    # Should still include the content
+    assert "Hello world" in ssml
+    assert "en-US-AriaNeural" in ssml
+
+
+def test_transform_text_to_speech_request_with_style_degree_role(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test SSML generation with style, styledegree, and role parameters
+    """
+    result = azure_tts_config.transform_text_to_speech_request(
+        model="azure-tts",
+        input="Test message",
+        voice="en-US-AriaNeural",
+        optional_params={
+            "voice": "en-US-AriaNeural",
+            "style": "cheerful",
+            "styledegree": "2",
+            "role": "SeniorFemale"
+        },
+        litellm_params={},
+        headers={}
+    )
+    
+    ssml = result["ssml_body"]
+    
+    # Should include mstts namespace
+    assert "xmlns:mstts='https://www.w3.org/2001/mstts'" in ssml
+    
+    # Should include mstts:express-as with all attributes
+    assert "<mstts:express-as" in ssml
+    assert "style='cheerful'" in ssml
+    assert "styledegree='2'" in ssml
+    assert "role='SeniorFemale'" in ssml
+    assert "</mstts:express-as>" in ssml
+
+
+def test_transform_text_to_speech_request_without_style(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test that SSML without style does not include mstts namespace or express-as
+    """
+    result = azure_tts_config.transform_text_to_speech_request(
+        model="azure-tts",
+        input="Hello world",
+        voice="en-US-AriaNeural",
+        optional_params={"voice": "en-US-AriaNeural"},
+        litellm_params={},
+        headers={}
+    )
+    
+    ssml = result["ssml_body"]
+    
+    # Should NOT include mstts namespace
+    assert "xmlns:mstts" not in ssml
+    
+    # Should NOT include mstts:express-as
+    assert "<mstts:express-as" not in ssml
+    
+    # Should still include basic SSML structure
+    assert "<speak" in ssml
+    assert "<voice" in ssml
+    assert "en-US-AriaNeural" in ssml
+    assert "Hello world" in ssml
+
+
+def test_transform_text_to_speech_request_with_lang(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test SSML generation with lang parameter for multilingual voices
+    """
+    result = azure_tts_config.transform_text_to_speech_request(
+        model="azure-tts",
+        input="Hola mundo",
+        voice="en-US-AvaMultilingualNeural",
+        optional_params={
+            "voice": "en-US-AvaMultilingualNeural",
+            "lang": "es-ES"
+        },
+        litellm_params={},
+        headers={}
+    )
+    
+    ssml = result["ssml_body"]
+    
+    # Should include xml:lang on voice element
+    assert "xml:lang='es-ES'" in ssml
+    
+    # Should still include the content and voice
+    assert "Hola mundo" in ssml
+    assert "en-US-AvaMultilingualNeural" in ssml
+
+
+def test_transform_text_to_speech_request_without_lang(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test that SSML without lang parameter does not include xml:lang on voice element
+    """
+    result = azure_tts_config.transform_text_to_speech_request(
+        model="azure-tts",
+        input="Hello world",
+        voice="en-US-AriaNeural",
+        optional_params={"voice": "en-US-AriaNeural"},
+        litellm_params={},
+        headers={}
+    )
+    
+    ssml = result["ssml_body"]
+    
+    # Voice element should not have xml:lang attribute (only the speak element should)
+    # Check that voice element doesn't have xml:lang by ensuring the pattern doesn't exist
+    assert "<voice name='en-US-AriaNeural' xml:lang=" not in ssml
+    assert "<voice name='en-US-AriaNeural'>" in ssml
 
