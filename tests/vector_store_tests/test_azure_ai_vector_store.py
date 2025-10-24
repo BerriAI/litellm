@@ -19,8 +19,8 @@ async def test_basic_search_vector_store(sync_mode):
         "azure_search_service_name": "azure-kb-search",
         "litellm_embedding_model": "azure/text-embedding-3-large",
         "litellm_embedding_config": {
-            "api_base": os.getenv("AZURE_API_BASE"),
-            "api_key": os.getenv("AZURE_API_KEY"),
+            "api_base": os.getenv("AZURE_AI_SEARCH_EMBEDDING_API_BASE"),
+            "api_key": os.getenv("AZURE_AI_SEARCH_EMBEDDING_API_KEY"),
         },
         "api_key": os.getenv("AZURE_SEARCH_API_KEY"),
     }
