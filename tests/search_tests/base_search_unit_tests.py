@@ -6,6 +6,7 @@ This follows the same pattern as BaseOCRTest in tests/ocr_tests/base_ocr_unit_te
 import pytest
 import litellm
 from abc import ABC, abstractmethod
+import os
 import json
 
 
@@ -14,12 +15,12 @@ class BaseSearchTest(ABC):
     Abstract base test class that enforces common Search tests across all providers.
     
     Each provider-specific test class should inherit from this and implement
-    get_custom_llm_provider() to return provider name.
+    get_search_provider() to return provider name.
     """
 
     @abstractmethod
-    def get_custom_llm_provider(self) -> str:
-        """Must return the custom_llm_provider for the specific provider"""
+    def get_search_provider(self) -> str:
+        """Must return the search_provider for the specific provider"""
         pass
 
     @pytest.fixture(autouse=True)
@@ -37,14 +38,16 @@ class BaseSearchTest(ABC):
         """
         Test basic search functionality with a simple query.
         """
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm._turn_on_debug()
-        custom_llm_provider = self.get_custom_llm_provider()
-        print("Custom LLM Provider=", custom_llm_provider)
+        search_provider = self.get_search_provider()
+        print("Search Provider=", search_provider)
 
         try:
             response = await litellm.asearch(
                 query="latest developments in AI",
-                custom_llm_provider=custom_llm_provider,
+                search_provider=search_provider,
             )
             print("Search response=", response.model_dump_json(indent=4))
 
@@ -77,6 +80,18 @@ class BaseSearchTest(ABC):
             assert len(first_result.url) > 0, "URL should not be empty"
             assert len(first_result.snippet) > 0, "Snippet should not be empty"
             
+            # Validate cost tracking in _hidden_params
+            assert hasattr(response, "_hidden_params"), "Response should have '_hidden_params' attribute"
+            hidden_params = response._hidden_params
+            assert "response_cost" in hidden_params, "_hidden_params should contain 'response_cost'"
+            
+            response_cost = hidden_params["response_cost"]
+            assert response_cost is not None, "response_cost should not be None"
+            assert isinstance(response_cost, (int, float)), "response_cost should be a number"
+            assert response_cost >= 0, "response_cost should be non-negative"
+            
+            print(f"Cost tracking: ${response_cost:.6f}")
+            
         except Exception as e:
             pytest.fail(f"Search call failed: {str(e)}")
 
@@ -85,11 +100,11 @@ class BaseSearchTest(ABC):
         Test that the Search response has the correct structure.
         """
         litellm.set_verbose = True
-        custom_llm_provider = self.get_custom_llm_provider()
+        search_provider = self.get_search_provider()
 
         response = litellm.search(
             query="artificial intelligence recent news",
-            custom_llm_provider=custom_llm_provider,
+            search_provider=search_provider,
         )
 
         # Validate response structure
@@ -119,11 +134,11 @@ class BaseSearchTest(ABC):
         Test search with optional parameters.
         """
         litellm.set_verbose = True
-        custom_llm_provider = self.get_custom_llm_provider()
+        search_provider = self.get_search_provider()
 
         response = litellm.search(
             query="machine learning",
-            custom_llm_provider=custom_llm_provider,
+            search_provider=search_provider,
             max_results=5,
         )
 

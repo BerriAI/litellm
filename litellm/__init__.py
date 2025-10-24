@@ -89,7 +89,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     LiteLLM_UpperboundKeyGenerateParams,
 )
-from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
+from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders, SearchProviders
 from litellm.types.utils import PriorityReservationSettings
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
@@ -156,7 +156,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "cloudzero",
     "posthog",
 ]
-configured_cold_storage_logger: Optional[
+cold_storage_custom_logger: Optional[
     _custom_logger_compatible_callbacks_literal
 ] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
