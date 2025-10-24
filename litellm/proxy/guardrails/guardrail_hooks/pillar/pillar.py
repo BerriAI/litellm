@@ -158,7 +158,7 @@ class PillarGuardrail(CustomGuardrail):
         else:
             try:
                 self.timeout = float(os.environ.get("PILLAR_TIMEOUT", str(self.DEFAULT_TIMEOUT)))
-            except (ValueError, TypeError) as e:
+            except (ValueError, TypeError):
                 verbose_proxy_logger.warning(
                     f"Pillar Guardrail: Invalid PILLAR_TIMEOUT value '{os.environ.get('PILLAR_TIMEOUT')}', "
                     f"falling back to default {self.DEFAULT_TIMEOUT}s"
@@ -387,12 +387,12 @@ class PillarGuardrail(CustomGuardrail):
         """
         if self.fallback_on_error == "allow":
             verbose_proxy_logger.warning(
-                f"Pillar Guardrail: API unavailable, proceeding without scanning (fallback_on_error=allow)"
+                "Pillar Guardrail: API unavailable, proceeding without scanning (fallback_on_error=allow)"
             )
             return data
         else:  # fallback_on_error == "block"
             verbose_proxy_logger.warning(
-                f"Pillar Guardrail: API unavailable, blocking request (fallback_on_error=block)"
+                "Pillar Guardrail: API unavailable, blocking request (fallback_on_error=block)"
             )
             raise HTTPException(
                 status_code=503,
