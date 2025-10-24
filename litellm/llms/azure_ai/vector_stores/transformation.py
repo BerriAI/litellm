@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import httpx
 
 import litellm
+from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
@@ -22,7 +23,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class AzureAIVectorStoreConfig(BaseVectorStoreConfig):
+class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
     """
     Configuration for Azure AI Search Vector Store
 
@@ -36,33 +37,10 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig):
     def validate_environment(
         self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
-        """
-        Validate and set up authentication for Azure AI Search API
 
-        Expects azure_search_api_key in litellm_params or AZURE_SEARCH_API_KEY env var
-        """
-        litellm_params = litellm_params or GenericLiteLLMParams()
-        litellm_params_dict = dict(litellm_params)
-
-        # Get Azure AI Search API key
-        api_key = litellm_params_dict.get(
-            "azure_search_api_key"
-        ) or litellm.utils.get_secret("AZURE_SEARCH_API_KEY")
-
-        if not api_key:
-            raise ValueError(
-                "Azure AI Search API key is required. "
-                "Provide it via litellm_params['azure_search_api_key'] or AZURE_SEARCH_API_KEY environment variable"
-            )
-
-        headers.update(
-            {
-                "api-key": api_key,
-                "Content-Type": "application/json",
-            }
-        )
-
-        return headers
+        basic_headers = self._base_validate_azure_environment(headers, litellm_params)
+        basic_headers.update({"Content-Type": "application/json"})
+        return basic_headers
 
     def get_complete_url(
         self,
@@ -108,14 +86,14 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig):
             query = " ".join(query)
 
         # Get embedding model from litellm_params (required)
-        embedding_model = litellm_params.get("embedding_model")
+        embedding_model = litellm_params.get("litellm_embedding_model")
         if not embedding_model:
             raise ValueError(
                 "embedding_model is required in litellm_params for Azure AI Search. "
                 "Example: litellm_params['embedding_model'] = 'azure/text-embedding-3-large'"
             )
 
-        embedding_config = litellm_params.get("embedding_config", {})
+        embedding_config = litellm_params.get("litellm_embedding_config", {})
         if not embedding_config:
             raise ValueError(
                 "embedding_config is required in litellm_params for Azure AI Search. "
