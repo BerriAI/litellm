@@ -13,19 +13,20 @@ import httpx
 
 AUTH_ENDPOINT_SUFFIX = "/oauth/token"
 
-CONFIG_FILE_ENV_VAR = f"AICORE_CONFIG"
-HOME_PATH_ENV_VAR   = f"AICORE_HOME"
-PROFILE_ENV_VAR     = f"AICORE_PROFILE"
+CONFIG_FILE_ENV_VAR = "AICORE_CONFIG"
+HOME_PATH_ENV_VAR = "AICORE_HOME"
+PROFILE_ENV_VAR = "AICORE_PROFILE"
 
-VCAP_SERVICES_ENV_VAR     = "VCAP_SERVICES"
-VCAP_AICORE_SERVICE_NAME  = "aicore"
-SERVICE_KEY_ENV_VAR       = f"AICORE_SERVICE_KEY"
+VCAP_SERVICES_ENV_VAR = "VCAP_SERVICES"
+VCAP_AICORE_SERVICE_NAME = "aicore"
+SERVICE_KEY_ENV_VAR = "AICORE_SERVICE_KEY"
 
 DEFAULT_HOME_PATH = os.path.join(os.path.expanduser("~"), ".aicore")
 
 
 def _get_home() -> str:
     return os.getenv(HOME_PATH_ENV_VAR, DEFAULT_HOME_PATH)
+
 
 def _get_nested(d: Dict[str, Any], path: Sequence[str]) -> Any:
     cur: Any = d
@@ -34,6 +35,7 @@ def _get_nested(d: Dict[str, Any], path: Sequence[str]) -> Any:
             raise KeyError(".".join(path))
         cur = cur[k]
     return cur
+
 
 def _load_json_env(var_name: str) -> Optional[Dict[str, Any]]:
     raw = os.environ.get(var_name)
@@ -44,8 +46,10 @@ def _load_json_env(var_name: str) -> Optional[Dict[str, Any]]:
     except json.JSONDecodeError:
         return None
 
+
 def _load_vcap() -> Dict[str, Any]:
     return _load_json_env(VCAP_SERVICES_ENV_VAR) or {}
+
 
 def _get_vcap_service(label: str) -> Optional[Dict[str, Any]]:
     for services in _load_vcap().values():
@@ -64,30 +68,37 @@ class CredentialsValue:
 
 
 CREDENTIAL_VALUES: Final[List[CredentialsValue]] = [
-    CredentialsValue("client_id",     ("clientid", )),
-    CredentialsValue("client_secret", ("clientsecret", )),
+    CredentialsValue("client_id", ("clientid",)),
+    CredentialsValue("client_secret", ("clientsecret",)),
     CredentialsValue(
         "auth_url",
-        ("url", ),
-        transform_fn=lambda url: url.rstrip("/") + ("" if url.endswith(AUTH_ENDPOINT_SUFFIX) else AUTH_ENDPOINT_SUFFIX),
+        ("url",),
+        transform_fn=lambda url: url.rstrip("/")
+        + ("" if url.endswith(AUTH_ENDPOINT_SUFFIX) else AUTH_ENDPOINT_SUFFIX),
     ),
     CredentialsValue(
         "base_url",
         ("serviceurls", "AI_API_URL"),
-        transform_fn=lambda url: url.rstrip("/") + ("" if url.endswith("/v2") else "/v2"),
+        transform_fn=lambda url: url.rstrip("/")
+        + ("" if url.endswith("/v2") else "/v2"),
     ),
     CredentialsValue("resource_group", default="default"),
     CredentialsValue(
         "cert_url",
-        ("certurl", ),
-        transform_fn=lambda url: url.rstrip("/") + ("" if url.endswith(AUTH_ENDPOINT_SUFFIX) else AUTH_ENDPOINT_SUFFIX),
+        ("certurl",),
+        transform_fn=lambda url: url.rstrip("/")
+        + ("" if url.endswith(AUTH_ENDPOINT_SUFFIX) else AUTH_ENDPOINT_SUFFIX),
     ),
     # file paths (kept for config compatibility)
     CredentialsValue("cert_file_path"),
     CredentialsValue("key_file_path"),
     # inline PEMs from VCAP
-    CredentialsValue("cert_str", ("certificate", ), transform_fn=lambda s: s.replace("\\n", "\n")),
-    CredentialsValue("key_str",  ("key", ),         transform_fn=lambda s: s.replace("\\n", "\n")),
+    CredentialsValue(
+        "cert_str", ("certificate",), transform_fn=lambda s: s.replace("\\n", "\n")
+    ),
+    CredentialsValue(
+        "key_str", ("key",), transform_fn=lambda s: s.replace("\\n", "\n")
+    ),
 ]
 
 
@@ -101,12 +112,20 @@ def init_conf(profile: Optional[str] = None) -> Dict[str, Any]:
     home = Path(_get_home())
     profile = profile or os.environ.get(PROFILE_ENV_VAR)
     cfg_env = os.getenv(CONFIG_FILE_ENV_VAR)
-    cfg_path = Path(cfg_env) if cfg_env else (
-        home / ("config.json" if profile in (None, "", "default") else f"config_{profile}.json")
+    cfg_path = (
+        Path(cfg_env)
+        if cfg_env
+        else (
+            home
+            / (
+                "config.json"
+                if profile in (None, "", "default")
+                else f"config_{profile}.json"
+            )
+        )
     )
 
     if cfg_path and cfg_path.exists():
-
         try:
             with cfg_path.open(encoding="utf-8") as f:
                 return json.load(f)
@@ -115,42 +134,44 @@ def init_conf(profile: Optional[str] = None) -> Dict[str, Any]:
 
     # If an explicit non-default profile was requested but not found, raise.
     if cfg_env or (profile not in (None, "", "default")):
-        raise FileNotFoundError(f"Unable to locate profile config file at '{cfg_path}' in AICORE_HOME '{home}'")
+        raise FileNotFoundError(
+            f"Unable to locate profile config file at '{cfg_path}' in AICORE_HOME '{home}'"
+        )
 
     return {}
+
 
 def _env_name(name: str) -> str:
     return f"AICORE_{name.upper()}"
 
-def _resolve_value(cred: CredentialsValue,
-                   *,
-                   kwargs: Dict[str, Any],
-                   env: Dict[str, str],
-                   config: Dict[str, Any],
-                   service_like: Optional[Dict[str, Any]]) -> Optional[str]:
+
+def _resolve_value(
+    cred: CredentialsValue,
+    *,
+    kwargs: Dict[str, Any],
+    env: Dict[str, str],
+    config: Dict[str, Any],
+    service_like: Optional[Dict[str, Any]],
+) -> Optional[str]:
     # 1) explicit kwargs
     if cred.name in kwargs and kwargs[cred.name] is not None:
-
         return kwargs[cred.name]
 
     # 2) environment variables (primary name)
     env_key = _env_name(cred.name)
     if env_key in env and env[env_key] is not None:
-
         return env[env_key]
 
     # 3) config file (accept both prefixed and plain keys)
     for key in (env_key, cred.name):
         if key in config and config[key] is not None:
-
             return config[key]
 
     # 4) service-like source (AICORE_SERVICE_KEY first, else VCAP)
     if service_like and cred.vcap_key:
         try:
-            val = _get_nested(service_like, ('credentials', )+ cred.vcap_key)
+            val = _get_nested(service_like, ("credentials",) + cred.vcap_key)
             if val is not None:
-
                 return val
         except KeyError:
             pass
@@ -173,18 +194,20 @@ def fetch_credentials(profile: Optional[str] = None, **kwargs) -> Dict[str, str]
     env = os.environ  # snapshot for testability
 
     # Prefer AICORE_SERVICE_KEY if present; otherwise fall back to the VCAP service.
-    service_like = _load_json_env(SERVICE_KEY_ENV_VAR) or _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
+    service_like = _load_json_env(SERVICE_KEY_ENV_VAR) or _get_vcap_service(
+        VCAP_AICORE_SERVICE_NAME
+    )
 
     out: Dict[str, str] = {}
     for cred in CREDENTIAL_VALUES:
-        value = _resolve_value(cred, kwargs=kwargs, env=env, config=config, service_like=service_like)
+        value = _resolve_value(cred, kwargs=kwargs, env=env, config=config, service_like=service_like)  # type: ignore
         if value is None:
             continue
         if cred.transform_fn:
             value = cred.transform_fn(value)
         out[cred.name] = value
-    if 'cert_url' in out.keys():
-        out['auth_url'] = out.pop('cert_url')
+    if "cert_url" in out.keys():
+        out["auth_url"] = out.pop("cert_url")
     return out
 
 
@@ -227,7 +250,9 @@ def get_token_creator(
 
     # Sanity check
     if not auth_url or not client_id:
-        raise ValueError("fetch_credentials did not return valid 'auth_url' or 'client_id'")
+        raise ValueError(
+            "fetch_credentials did not return valid 'auth_url' or 'client_id'"
+        )
 
     modes = [
         client_secret is not None,
@@ -273,8 +298,10 @@ def get_token_creator(
             with tempfile.TemporaryDirectory() as tmp:
                 cert_path = os.path.join(tmp, "cert.pem")
                 key_path = os.path.join(tmp, "key.pem")
-                with open(cert_path, "w") as f: f.write(cert_str_fixed)
-                with open(key_path, "w") as f: f.write(key_str_fixed)
+                with open(cert_path, "w") as f:
+                    f.write(cert_str_fixed)
+                with open(key_path, "w") as f:
+                    f.write(key_str_fixed)
                 return _request_token(cert_pair=(cert_path, key_path))
         # Case 3: file-based cert/key
         return _request_token(cert_pair=(cert_file_path, key_file_path))

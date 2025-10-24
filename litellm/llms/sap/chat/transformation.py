@@ -1,19 +1,28 @@
 """
-Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`/completion`
+Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
 from typing import List, Optional, Union, Dict
 
 from litellm.types.utils import ModelResponse
-from litellm.utils import CustomStreamWrapper
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
-from .models import SAPMessage, SAPAssistantMessage, SAPToolChatMessage, ChatCompletionTool, ResponseFormatJSONSchema, ResponseFormat
+from .models import (
+    SAPMessage,
+    SAPAssistantMessage,
+    SAPToolChatMessage,
+    ChatCompletionTool,
+    ResponseFormatJSONSchema,
+    ResponseFormat,
+    SAPUserMessage,
+)
+
 
 def validate_dict(data: dict, model) -> dict:
     return model(**data).model_dump(by_alias=True)
+
 
 class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     frequency_penalty: Optional[int] = None
@@ -80,7 +89,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "extra_headers",
             "parallel_tool_calls",
             "response_format",
-            "timeout"
+            "timeout",
         ]
 
     def _transform_request(
@@ -97,7 +106,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         model_version = optional_params.pop("model_version", "latest")
         template = []
         for message in messages:
-            if message["role"] == "assistant":
+            if message["role"] == "user":
+                template.append(validate_dict(message, SAPUserMessage))
+            elif message["role"] == "assistant":
                 template.append(validate_dict(message, SAPAssistantMessage))
             elif message["role"] == "tool":
                 template.append(validate_dict(message, SAPToolChatMessage))
@@ -124,27 +135,24 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         else:
             stream_config["enabled"] = False
         config = {
-            'config':
-                {
-                    "modules": {
-                        "prompt_templating": {
-                            "prompt": {
-                                "template": template,
-                                "tools": tools,
-                                "response_format": response_format,
-                            },
-                            "model": {
-                                "name": model,
-                                "params": model_params,
-                                "version": model_version,
-                            },
-
+            "config": {
+                "modules": {
+                    "prompt_templating": {
+                        "prompt": {
+                            "template": template,
+                            "tools": tools,
+                            "response_format": response_format,
+                        },
+                        "model": {
+                            "name": model,
+                            "params": model_params,
+                            "version": model_version,
                         },
                     },
-                    "stream": stream_config,
-                }
+                },
+                "stream": stream_config,
+            }
         }
-
 
         return config
 
@@ -153,10 +161,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         model: str,
         response,
         model_response: ModelResponse,
-        # config: OrchestrationConfig,
         logging_obj: Optional[LiteLLMLoggingObject],
         optional_params: dict,
         print_verbose,
         encoding,
-    ) -> Union[ModelResponse, CustomStreamWrapper]:
+    ) -> ModelResponse:
         return ModelResponse.model_validate(response.json()["final_result"])

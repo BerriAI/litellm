@@ -2,7 +2,7 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
-from typing import Optional, TYPE_CHECKING, List, Dict, Literal
+from typing import Optional, List, Dict, Literal
 from pydantic import BaseModel, Field
 from functools import cached_property
 
@@ -17,6 +17,7 @@ from litellm.types.utils import EmbeddingResponse
 
 from ..chat.handler import GenAIHubOrchestrationError
 from ..credentials import get_token_creator
+
 
 class Usage(BaseModel):
     prompt_tokens: int
@@ -37,6 +38,7 @@ class FinalResult(BaseModel):
     model: str
     usage: Usage
 
+
 class EmbeddingsResponse(BaseModel):
     request_id: str
     final_result: FinalResult
@@ -45,19 +47,22 @@ class EmbeddingsResponse(BaseModel):
 class EmbeddingModel(BaseModel):
     name: str
     version: str = "latest"
-    params: dict  = Field(default_factory=dict, validation_alias="parameters")
+    params: dict = Field(default_factory=dict, validation_alias="parameters")
 
 
 class EmbeddingsModules(BaseModel):
     embeddings: EmbeddingModel
 
+
 class EmbeddingInput(BaseModel):
     text: str | List[str]
     type: Literal["text", "document", "query"] = "text"
 
+
 class EmbeddingRequest(BaseModel):
     config: EmbeddingsModules
     input: EmbeddingInput
+
 
 def validate_dict(data: dict, model) -> dict:
     return model(**data).model_dump()
@@ -68,7 +73,6 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         super().__init__()
         self._access_token_data = {}
         self.token_creator, self.base_url, self.resource_group = get_token_creator()
-
 
     @property
     def headers(self) -> Dict:
@@ -85,13 +89,20 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
     def deployment_url(self) -> str:
         with httpx.Client(timeout=30) as client:
             valid_deployments = []
-            deployments = client.get(self.base_url + '/lm/deployments', headers=self.headers).json()
-            for deployment in deployments.get('resources', []):
-                if deployment['scenarioId'] == 'orchestration':
-                    config_details = client.get(self.base_url + f'/lm/configurations/{deployment["configurationId"]}',
-                                                headers=self.headers).json()
-                    if config_details["executableId"] == 'orchestration':
-                        valid_deployments.append((deployment["deploymentUrl"], deployment["createdAt"]))
+            deployments = client.get(
+                self.base_url + "/lm/deployments", headers=self.headers
+            ).json()
+            for deployment in deployments.get("resources", []):
+                if deployment["scenarioId"] == "orchestration":
+                    config_details = client.get(
+                        self.base_url
+                        + f'/lm/configurations/{deployment["configurationId"]}',
+                        headers=self.headers,
+                    ).json()
+                    if config_details["executableId"] == "orchestration":
+                        valid_deployments.append(
+                            (deployment["deploymentUrl"], deployment["createdAt"])
+                        )
             return sorted(valid_deployments, key=lambda x: x[1], reverse=True)[0][0]
 
     def get_error_class(self, error_message, status_code, headers):
@@ -144,12 +155,10 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         body = {
             "config": {
                 "modules": {
-                    "embeddings": {
-                        "model": validate_dict(model_dict, EmbeddingModel)
-                    }
+                    "embeddings": {"model": validate_dict(model_dict, EmbeddingModel)}
                 }
             },
-            "input": validate_dict(input_dict, EmbeddingInput)
+            "input": validate_dict(input_dict, EmbeddingInput),
         }
         return body
 

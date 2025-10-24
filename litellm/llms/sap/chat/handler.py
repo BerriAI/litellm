@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from functools import cached_property
-from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Tuple, Union, Callable
+from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, Union, Callable
 
 import httpx
 from aiohttp import ClientSession
@@ -33,6 +33,7 @@ class GenAIHubOrchestrationError(Exception):
 # Stream parsing helpers
 # -------------------------------
 
+
 def _now_ts() -> int:
     return int(time.time())
 
@@ -40,7 +41,7 @@ def _now_ts() -> int:
 def _is_terminal_chunk(chunk: OpenAIChatCompletionChunk) -> bool:
     """OpenAI-shaped chunk is terminal if any choice has a non-None finish_reason."""
     try:
-        for ch in (chunk.choices or []):
+        for ch in chunk.choices or []:
             if ch.finish_reason is not None:
                 return True
     except Exception:
@@ -120,7 +121,13 @@ class SAPStreamIterator:
     Sync iterator over an httpx streaming response that yields OpenAIChatCompletionChunk.
     Accepts both SSE `data: ...` and raw JSON lines. Closes on terminal chunk or [DONE].
     """
-    def __init__(self, response: httpx.Response, event_prefix: str = "data: ", final_msg: str = "[DONE]"):
+
+    def __init__(
+        self,
+        response: httpx.Response,
+        event_prefix: str = "data: ",
+        final_msg: str = "[DONE]",
+    ):
         self._resp = response
         self._iter = response.iter_lines()
         self._prefix = event_prefix
@@ -139,7 +146,9 @@ class SAPStreamIterator:
             if not line:
                 continue
 
-            payload = line[len(self._prefix):] if line.startswith(self._prefix) else line
+            payload = (
+                line[len(self._prefix) :] if line.startswith(self._prefix) else line
+            )
             if payload == self._final:
                 self._safe_close()
                 raise StopIteration
@@ -179,7 +188,12 @@ class SAPStreamIterator:
 class AsyncSAPStreamIterator:
     sync_stream = False
 
-    def __init__(self, response: httpx.Response, event_prefix: str = "data: ", final_msg: str = "[DONE]"):
+    def __init__(
+        self,
+        response: httpx.Response,
+        event_prefix: str = "data: ",
+        final_msg: str = "[DONE]",
+    ):
         self._resp = response
         self._prefix = event_prefix
         self._final = final_msg
@@ -207,8 +221,10 @@ class AsyncSAPStreamIterator:
             if not line:
                 continue
 
-            now = lambda: int(time.time() * 1000)
-            payload = line[len(self._prefix):] if line.startswith(self._prefix) else line
+            # now = lambda: int(time.time() * 1000)
+            payload = (
+                line[len(self._prefix) :] if line.startswith(self._prefix) else line
+            )
             if payload == self._final:
                 await self._aclose()
                 raise StopAsyncIteration
@@ -247,8 +263,10 @@ class AsyncSAPStreamIterator:
 class GenAIHubOrchestration(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
-        self._access_token_data = {}
-        self.token_creator, self.base_url, self.resource_group = get_token_creator()
+        self._access_token_data: dict = {}
+        self.token_creator = None
+        self.base_url = ""
+        self.resource_group = ""
 
     @property
     def headers(self) -> Dict[str, str]:
@@ -263,7 +281,9 @@ class GenAIHubOrchestration(BaseLLM):
     def deployment_url(self) -> str:
         # Keep a short, tight client lifecycle here to avoid fd leaks
         with httpx.Client(timeout=30) as client:
-            deployments = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
+            deployments = client.get(
+                f"{self.base_url}/lm/deployments", headers=self.headers
+            ).json()
             valid: List[Tuple[str, str]] = []
             for dep in deployments.get("resources", []):
                 if dep.get("scenarioId") == "orchestration":
@@ -276,8 +296,18 @@ class GenAIHubOrchestration(BaseLLM):
             # newest first
             return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
 
-    def validate_environment(self, endpoint_type: Literal["chat_completions", "embeddings"]) -> Tuple[str, Dict[str, str]]:
-        api_base = f"{self.deployment_url}/v2/completion" if endpoint_type == "chat_completions" else f"{self.deployment_url}/v2/embeddings"
+    def validate_environment(
+        self, endpoint_type: Literal["chat_completions", "embeddings"]
+    ) -> Tuple[str, Dict[str, str]]:
+        try:
+            self.token_creator, self.base_url, self.resource_group = get_token_creator()
+        except ValueError as err:
+            raise GenAIHubOrchestrationError(status_code=400, message=err.args[0])
+        api_base = (
+            f"{self.deployment_url}/v2/completion"
+            if endpoint_type == "chat_completions"
+            else f"{self.deployment_url}/v2/embeddings"
+        )
         return api_base, self.headers
 
     # ---------- Async paths ----------
@@ -305,13 +335,17 @@ class GenAIHubOrchestration(BaseLLM):
             hdrs.setdefault("Connection", "keep-alive")
             hdrs.setdefault("Accept-Encoding", "identity")
 
-            async with httpx.AsyncClient(timeout=timeout, http2=False) as ac:  # ⬅️ http2 off
-                resp = await ac.post(url=api_base, headers=hdrs, json=config)
-                resp.raise_for_status()
-                completion_stream = AsyncSAPStreamIterator(resp)
+            client = litellm.AsyncHTTPHandler(shared_session=shared_session)
+            resp = await client.post(
+                url=api_base, headers=hdrs, json=config, timeout=timeout
+            )
+            resp.raise_for_status()
+            completion_stream = AsyncSAPStreamIterator(resp)
 
         except httpx.HTTPStatusError as err:
-            raise GenAIHubOrchestrationError(err.response.status_code, err.response.text)
+            raise GenAIHubOrchestrationError(
+                err.response.status_code, err.response.text
+            )
         except httpx.TimeoutException:
             raise GenAIHubOrchestrationError(408, "Timeout error occurred.")
         except ValueError as in_stream_err:
@@ -344,10 +378,14 @@ class GenAIHubOrchestration(BaseLLM):
         try:
             if client is None or not isinstance(client, AsyncHTTPHandler):
                 client = litellm.AsyncHTTPHandler(shared_session=shared_session)
-            resp = await client.post(url=api_base, headers=headers, json=config, timeout=timeout)
+            resp = await client.post(
+                url=api_base, headers=headers, json=config, timeout=timeout
+            )
             resp.raise_for_status()
         except httpx.HTTPStatusError as err:
-            raise GenAIHubOrchestrationError(err.response.status_code, err.response.text)
+            raise GenAIHubOrchestrationError(
+                err.response.status_code, err.response.text
+            )
         except httpx.TimeoutException:
             raise GenAIHubOrchestrationError(408, "Timeout error occurred.")
 
@@ -393,7 +431,9 @@ class GenAIHubOrchestration(BaseLLM):
             completion_stream = SAPStreamIterator(resp)
 
         except httpx.HTTPStatusError as err:
-            raise GenAIHubOrchestrationError(err.response.status_code, err.response.text)
+            raise GenAIHubOrchestrationError(
+                err.response.status_code, err.response.text
+            )
         except httpx.TimeoutException:
             raise GenAIHubOrchestrationError(408, "Timeout error occurred.")
         except ValueError as in_stream_err:
@@ -425,10 +465,14 @@ class GenAIHubOrchestration(BaseLLM):
         try:
             if client is None or not isinstance(client, HTTPHandler):
                 client = litellm.module_level_client
-            resp = client.post(url=api_base, headers=headers, json=config, timeout=timeout)
+            resp = client.post(
+                url=api_base, headers=headers, json=config, timeout=timeout
+            )
             resp.raise_for_status()
         except httpx.HTTPStatusError as err:
-            raise GenAIHubOrchestrationError(err.response.status_code, err.response.text)
+            raise GenAIHubOrchestrationError(
+                err.response.status_code, err.response.text
+            )
         except httpx.TimeoutException:
             raise GenAIHubOrchestrationError(408, "Timeout error occurred.")
 
@@ -476,7 +520,11 @@ class GenAIHubOrchestration(BaseLLM):
         logging_obj.pre_call(
             input=messages,
             api_key="",
-            additional_args={"complete_input_dict": config, "api_base": api_base, "headers": hdrs},
+            additional_args={
+                "complete_input_dict": config,
+                "api_base": api_base,
+                "headers": hdrs,
+            },
         )
 
         if acompletion:
