@@ -165,7 +165,7 @@ async def create_search_tool(request: CreateSearchToolRequest):
             search_tool=request.search_tool, prisma_client=prisma_client
         )
 
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             f"Successfully added search tool '{result.get('search_tool_name')}' to database. "
             f"Router will be updated by the cron job."
         )
@@ -248,7 +248,7 @@ async def update_search_tool(search_tool_id: str, request: UpdateSearchToolReque
             prisma_client=prisma_client,
         )
 
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             f"Successfully updated search tool '{result.get('search_tool_name')}' in database. "
             f"Router will be updated by the cron job."
         )
@@ -305,7 +305,7 @@ async def delete_search_tool(search_tool_id: str):
             search_tool_id=search_tool_id, prisma_client=prisma_client
         )
 
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "Successfully deleted search tool from database. "
             "Router will be updated by the cron job."
         )
@@ -467,7 +467,7 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
             timeout=10.0,  # 10 second timeout for test
         )
         
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             f"Successfully tested connection to {search_provider} search provider"
         )
         
