@@ -9,7 +9,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.videos.main import (
     VideoCreateOptionalRequestParams,
     VideoObject,
-    VideoResponse,
 )
 from litellm.videos.utils import VideoGenerationRequestUtils
 from litellm.constants import DEFAULT_VIDEO_ENDPOINT_MODEL, request_timeout as DEFAULT_REQUEST_TIMEOUT
