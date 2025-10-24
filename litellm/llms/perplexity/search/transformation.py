@@ -33,6 +33,10 @@ class PerplexitySearchRequest(_PerplexitySearchRequestRequired, total=False):
 class PerplexitySearchConfig(BaseSearchConfig):
     PERPLEXITY_API_BASE = "https://api.perplexity.ai"
     
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "Perplexity"
+    
     def validate_environment(
         self,
         headers: Dict,

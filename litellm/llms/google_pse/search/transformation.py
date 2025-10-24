@@ -55,6 +55,10 @@ class GooglePSESearchRequest(_GooglePSESearchRequestRequired, total=False):
 class GooglePSESearchConfig(BaseSearchConfig):
     GOOGLE_PSE_API_BASE = "https://www.googleapis.com/customsearch/v1"
     
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "Google PSE"
+    
     def get_http_method(self) -> Literal["GET", "POST"]:
         """
         Google PSE uses GET requests with query parameters.

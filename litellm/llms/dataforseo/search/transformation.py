@@ -27,6 +27,10 @@ class DataForSEOSearchConfig(BaseSearchConfig):
     
     DATAFORSEO_API_BASE = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
     
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "DataForSEO"
+    
     def get_http_method(self) -> Literal["GET", "POST"]:
         """
         DataForSEO uses POST requests with JSON body.

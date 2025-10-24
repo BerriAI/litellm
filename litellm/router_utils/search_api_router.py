@@ -21,6 +21,47 @@ class SearchAPIRouter:
     """
 
     @staticmethod
+    async def update_router_search_tools(router_instance: Any, search_tools: list):
+        """
+        Update the router with search tools from the database.
+        
+        This method is called by a cron job to sync search tools from DB to router.
+        
+        Args:
+            router_instance: The Router instance to update
+            search_tools: List of search tool configurations from the database
+        """
+        try:
+            from litellm.types.router import SearchToolTypedDict
+            
+            verbose_router_logger.debug(f"Adding {len(search_tools)} search tools to router")
+            
+            # Convert search tools to the format expected by the router
+            router_search_tools: list = []
+            for tool in search_tools:
+                # Create dict that matches SearchToolTypedDict structure
+                router_search_tool: SearchToolTypedDict = {  # type: ignore
+                    "search_tool_id": tool.get("search_tool_id"),
+                    "search_tool_name": tool.get("search_tool_name"),
+                    "litellm_params": tool.get("litellm_params", {}),
+                    "search_tool_info": tool.get("search_tool_info"),
+                }
+                router_search_tools.append(router_search_tool)
+            
+            # Update the router's search_tools list
+            router_instance.search_tools = router_search_tools
+            
+            verbose_router_logger.info(
+                f"Successfully updated router with {len(router_search_tools)} search tool(s)"
+            )
+            
+        except Exception as e:
+            verbose_router_logger.exception(
+                f"Error updating router with search tools: {str(e)}"
+            )
+            raise e
+
+    @staticmethod
     def get_matching_search_tools(
         router_instance: Any,
         search_tool_name: str,
