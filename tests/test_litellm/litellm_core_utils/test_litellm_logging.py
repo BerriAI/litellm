@@ -36,6 +36,78 @@ def test_get_masked_api_base(logging_obj):
     assert type(masked_api_base) == str
 
 
+def test_get_masked_api_base_gemini_standard_key(logging_obj):
+    """Test masking of standard-length Gemini API key"""
+    api_base = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+    masked_api_base = logging_obj._get_masked_api_base(api_base)
+    expected = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=AI**************************************90"
+    assert masked_api_base == expected
+    assert type(masked_api_base) == str
+
+
+def test_get_masked_api_base_gemini_with_additional_params(logging_obj):
+    """Test masking of Gemini API key when there are additional query parameters"""
+    api_base = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?key=AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890&alt=sse"
+    masked_api_base = logging_obj._get_masked_api_base(api_base)
+    expected = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?key=AI**************************************90&alt=sse"
+    assert masked_api_base == expected
+    assert type(masked_api_base) == str
+
+
+def test_get_masked_api_base_short_key(logging_obj):
+    """Test masking of short API key (8 characters or less)"""
+    api_base = "https://example.com/api?key=ABC123"
+    masked_api_base = logging_obj._get_masked_api_base(api_base)
+    expected = "https://example.com/api?key=A*****"
+    assert masked_api_base == expected
+    assert type(masked_api_base) == str
+
+
+def test_get_masked_api_base_very_short_key(logging_obj):
+    """Test masking of very short API key (1 character)"""
+    api_base = "https://example.com/api?key=A"
+    masked_api_base = logging_obj._get_masked_api_base(api_base)
+    expected = "https://example.com/api?key=*"
+    assert masked_api_base == expected
+    assert type(masked_api_base) == str
+
+
+def test_get_masked_api_base_medium_length_key(logging_obj):
+    """Test masking of medium-length API key (exactly 8 characters)"""
+    api_base = "https://example.com/api?key=ABCD1234"
+    masked_api_base = logging_obj._get_masked_api_base(api_base)
+    expected = "https://example.com/api?key=A*******"
+    assert masked_api_base == expected
+    assert type(masked_api_base) == str
+
+
+def test_get_masked_api_base_long_key_multiple_params(logging_obj):
+    """Test masking with multiple query parameters including a long key"""
+    api_base = "https://api.google.com/v1/models?format=json&key=AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890&timeout=30"
+    masked_api_base = logging_obj._get_masked_api_base(api_base)
+    expected = "https://api.google.com/v1/models?format=json&key=AI**************************************90&timeout=30"
+    assert masked_api_base == expected
+    assert type(masked_api_base) == str
+
+
+def test_get_masked_api_base_key_at_beginning(logging_obj):
+    """Test masking when key parameter is the first query parameter"""
+    api_base = "https://example.com/api?key=AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890&other=value"
+    masked_api_base = logging_obj._get_masked_api_base(api_base)
+    expected = "https://example.com/api?key=AI**************************************90&other=value"
+    assert masked_api_base == expected
+    assert type(masked_api_base) == str
+
+
+def test_get_masked_api_base_embedding_endpoint(logging_obj):
+    """Test masking for Gemini embedding endpoints"""
+    api_base = "https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key=AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+    masked_api_base = logging_obj._get_masked_api_base(api_base)
+    expected = "https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key=AI**************************************90"
+    assert masked_api_base == expected
+    assert type(masked_api_base) == str
+
+
 def test_sentry_sample_rate():
     existing_sample_rate = os.getenv("SENTRY_API_SAMPLE_RATE")
     try:
