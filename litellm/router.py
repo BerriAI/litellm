@@ -890,6 +890,32 @@ class Router:
         self.asearch = self.factory_function(asearch, call_type="asearch")
         self.search = self.factory_function(search, call_type="search")
 
+        # Video routes
+        #########################################################
+        from litellm.videos import (
+            avideo_generation,
+            video_generation,
+            avideo_list,
+            video_list,
+            avideo_status,
+            video_status,
+            avideo_content,
+            video_content,
+            avideo_remix,
+            video_remix,
+        )
+
+        self.avideo_generation = self.factory_function(avideo_generation, call_type="avideo_generation")
+        self.video_generation = self.factory_function(video_generation, call_type="video_generation")
+        self.avideo_list = self.factory_function(avideo_list, call_type="avideo_list")
+        self.video_list = self.factory_function(video_list, call_type="video_list")
+        self.avideo_status = self.factory_function(avideo_status, call_type="avideo_status")
+        self.video_status = self.factory_function(video_status, call_type="video_status")
+        self.avideo_content = self.factory_function(avideo_content, call_type="avideo_content")
+        self.video_content = self.factory_function(video_content, call_type="video_content")
+        self.avideo_remix = self.factory_function(avideo_remix, call_type="avideo_remix")
+        self.video_remix = self.factory_function(video_remix, call_type="video_remix")
+
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
         Validate the fallbacks parameter.
@@ -3624,7 +3650,17 @@ class Router:
             "ocr",
             "asearch",
             "search",
-            "aadapter_generate_content"
+            "aadapter_generate_content",
+            "avideo_generation",
+            "video_generation",
+            "avideo_list",
+            "video_list",
+            "avideo_status",
+            "video_status",
+            "avideo_content",
+            "video_content",
+            "avideo_remix",
+            "video_remix"
         ] = "assistants",
     ):
         """
@@ -3643,6 +3679,11 @@ class Router:
             "vector_store_create",
             "ocr",
             "search",
+            "video_generation",
+            "video_list",
+            "video_status",
+            "video_content",
+            "video_remix",
         ):
 
             def sync_wrapper(
@@ -3692,6 +3733,11 @@ class Router:
                 "agenerate_content_stream",
                 "aocr",
                 "ocr",
+                "avideo_generation",
+                "avideo_list",
+                "avideo_status",
+                "avideo_content",
+                "avideo_remix",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

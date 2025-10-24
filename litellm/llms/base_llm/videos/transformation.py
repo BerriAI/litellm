@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union, List
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import httpx
 from httpx._types import RequestFiles
