@@ -35,6 +35,7 @@ import traceback
 from dataclasses import dataclass, field
 from functools import lru_cache, wraps
 from importlib import resources
+from importlib.metadata import entry_points
 from inspect import iscoroutine
 from io import StringIO
 from os.path import abspath, dirname, join
@@ -379,10 +380,23 @@ def print_verbose(
 
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
+def load_custom_provider_entrypoints():
+    group_name = "litellm.providers"
+
+    found_entry_points = tuple(entry_points().select(group=group_name))  # type: ignore
+    for entry_point in found_entry_points:
+        # types are ignored because of circular dependency issues importing CustomLLM and CustomLLMItem
+        handler = entry_point.load()
+        provider = {"provider": entry_point.name, "custom_handler": handler}
+        litellm.custom_provider_map.append(provider)  # type: ignore
+
+
 def custom_llm_setup():
     """
     Add custom_llm provider to provider list
     """
+    load_custom_provider_entrypoints()
+
     for custom_llm in litellm.custom_provider_map:
         if custom_llm["provider"] not in litellm.provider_list:
             litellm.provider_list.append(custom_llm["provider"])
