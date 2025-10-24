@@ -22283,6 +22283,50 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159
     },
+    "vertex_ai/mistralai/codestral-2@001": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/codestral-2": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/codestral-2@001": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistralai/codestral-2": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
     "vertex_ai/codestral-2501": {
         "input_cost_per_token": 2e-07,
         "litellm_provider": "vertex_ai-mistral_models",
@@ -22610,6 +22654,50 @@
         "mode": "chat",
         "output_cost_per_token": 0.0,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistral-medium-3": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistral-medium-3@001": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistralai/mistral-medium-3": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistralai/mistral-medium-3@001": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "supports_function_calling": true,
         "supports_tool_choice": true
     },
     "vertex_ai/mistral-large-2411": {
