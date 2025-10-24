@@ -28,6 +28,7 @@ from litellm.types.utils import (
     all_litellm_params,
     all_litellm_params as _litellm_completion_params,
     CredentialItem,
+    PriorityReservationDict,
 )  # maintain backwards compatibility for root param
 from litellm._logging import (
     set_verbose,
@@ -369,7 +370,7 @@ disable_copilot_system_to_assistant: bool = False  # If false (default), convert
 public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
 #### REQUEST PRIORITIZATION #######
-priority_reservation: Optional[Dict[str, float]] = None
+priority_reservation: Optional[Dict[str, Union[float, PriorityReservationDict]]] = None
 priority_reservation_settings: "PriorityReservationSettings" = (
     PriorityReservationSettings()
 )
