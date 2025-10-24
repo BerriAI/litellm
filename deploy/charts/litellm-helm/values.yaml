@@ -80,6 +80,8 @@ ingress:
       paths:
         - path: /
           pathType: ImplementationSpecific
+          # servicePort: 8080 #custom-port (numeric value will populate service.port.number, string value will populate service.port.name. k8s >= 1.18)
+          # serviceName: custom-service
   tls: []
   #  - secretName: chart-example-tls
   #    hosts:
