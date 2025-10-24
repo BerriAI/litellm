@@ -3523,15 +3523,35 @@ class ProxyConfig:
             )
     
     async def _init_search_tools_in_db(self, prisma_client: PrismaClient):
-        from litellm.proxy.search_endpoints.search_tool_registry import (
-            IN_MEMORY_SEARCH_TOOL_HANDLER,
-            SearchToolRegistry,
-        )
-        from litellm.types.search import SearchTool
+        """
+        Initialize search tools from database into the router on startup.
+        """
+        global llm_router
+        
+        from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+        from litellm.router_utils.search_api_router import SearchAPIRouter
+        
         try:
             search_tools = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
-            for search_tool in search_tools:
-                IN_MEMORY_SEARCH_TOOL_HANDLER.add_search_tool(search_tool=cast(SearchTool, search_tool))
+            
+            verbose_proxy_logger.info(
+                f"Loading {len(search_tools)} search tool(s) from database into router"
+            )
+            
+            if llm_router is not None:
+                # Add search tools to the router
+                await SearchAPIRouter.update_router_search_tools(
+                    router_instance=llm_router,
+                    search_tools=search_tools
+                )
+                verbose_proxy_logger.info(
+                    f"Successfully loaded {len(search_tools)} search tool(s) into router"
+                )
+            else:
+                verbose_proxy_logger.debug(
+                    "Router not initialized yet, search tools will be added when router is created"
+                )
+                
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_search_tools_in_db - {}".format(

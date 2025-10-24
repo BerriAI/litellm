@@ -2,17 +2,14 @@
 CRUD ENDPOINTS FOR SEARCH TOOLS
 """
 from datetime import datetime
-from typing import List, Union, cast
+from typing import Any, Dict, List, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.search_endpoints.search_tool_registry import (
-    IN_MEMORY_SEARCH_TOOL_HANDLER,
-    SearchToolRegistry,
-)
+from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
 from litellm.types.search import (
     AvailableSearchProvider,
     ListSearchToolsResponse,
@@ -169,16 +166,10 @@ async def create_search_tool(request: CreateSearchToolRequest):
             search_tool=request.search_tool, prisma_client=prisma_client
         )
 
-        # Add to in-memory cache
-        try:
-            IN_MEMORY_SEARCH_TOOL_HANDLER.add_search_tool(search_tool=cast(SearchTool, result))
-            verbose_proxy_logger.info(
-                f"Successfully added search tool '{result.get('search_tool_name')}' to in-memory cache"
-            )
-        except Exception as cache_error:
-            verbose_proxy_logger.warning(
-                f"Failed to add search tool to in-memory cache: {cache_error}"
-            )
+        verbose_proxy_logger.info(
+            f"Successfully added search tool '{result.get('search_tool_name')}' to database. "
+            f"Router will be updated by the cron job."
+        )
 
         return result
     except Exception as e:
@@ -258,18 +249,10 @@ async def update_search_tool(search_tool_id: str, request: UpdateSearchToolReque
             prisma_client=prisma_client,
         )
 
-        # Update in-memory cache
-        try:
-            IN_MEMORY_SEARCH_TOOL_HANDLER.update_search_tool(
-                search_tool_id=search_tool_id, search_tool=cast(SearchTool, result)
-            )
-            verbose_proxy_logger.info(
-                f"Successfully updated search tool '{result.get('search_tool_name')}' in in-memory cache"
-            )
-        except Exception as cache_error:
-            verbose_proxy_logger.warning(
-                f"Failed to update search tool in in-memory cache: {cache_error}"
-            )
+        verbose_proxy_logger.info(
+            f"Successfully updated search tool '{result.get('search_tool_name')}' in database. "
+            f"Router will be updated by the cron job."
+        )
 
         return result
     except HTTPException as e:
@@ -323,18 +306,10 @@ async def delete_search_tool(search_tool_id: str):
             search_tool_id=search_tool_id, prisma_client=prisma_client
         )
 
-        # Delete from in-memory cache
-        try:
-            IN_MEMORY_SEARCH_TOOL_HANDLER.delete_search_tool(
-                search_tool_id=search_tool_id
-            )
-            verbose_proxy_logger.info(
-                f"Successfully removed search tool from in-memory cache"
-            )
-        except Exception as cache_error:
-            verbose_proxy_logger.warning(
-                f"Failed to remove search tool from in-memory cache: {cache_error}"
-            )
+        verbose_proxy_logger.info(
+            f"Successfully deleted search tool from database. "
+            f"Router will be updated by the cron job."
+        )
 
         return result
     except HTTPException as e:
@@ -388,12 +363,6 @@ async def get_search_tool_info(search_tool_id: str):
         )
 
         if result is None:
-            # Try in-memory cache
-            result = IN_MEMORY_SEARCH_TOOL_HANDLER.get_search_tool_by_id(
-                search_tool_id=search_tool_id
-            )
-
-        if result is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"Search tool with ID {search_tool_id} not found",
@@ -422,6 +391,110 @@ async def get_search_tool_info(search_tool_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class TestSearchToolConnectionRequest(BaseModel):
+    litellm_params: Dict[str, Any]
+
+
+@router.post(
+    "/search_tools/test_connection",
+    tags=["Search Tools"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
+    """
+    Test connection to a search provider with the given configuration.
+    
+    Makes a simple test search query to verify the API key and configuration are valid.
+
+    Example Request:
+    ```bash
+    curl -X POST "http://localhost:4000/search_tools/test_connection" \\
+        -H "Authorization: Bearer <your_api_key>" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "litellm_params": {
+                "search_provider": "perplexity",
+                "api_key": "sk-..."
+            }
+        }'
+    ```
+
+    Example Response (Success):
+    ```json
+    {
+        "status": "success",
+        "message": "Successfully connected to perplexity search provider",
+        "test_query": "test",
+        "results_count": 5
+    }
+    ```
+
+    Example Response (Failure):
+    ```json
+    {
+        "status": "error",
+        "message": "Authentication failed: Invalid API key",
+        "error_type": "AuthenticationError"
+    }
+    ```
+    """
+    try:
+        from litellm.search import asearch
+
+        # Extract params from request
+        litellm_params = request.litellm_params
+        search_provider = litellm_params.get("search_provider")
+        api_key = litellm_params.get("api_key")
+        api_base = litellm_params.get("api_base")
+        
+        if not search_provider:
+            raise HTTPException(
+                status_code=400,
+                detail="search_provider is required in litellm_params"
+            )
+        
+        verbose_proxy_logger.debug(
+            f"Testing connection to search provider: {search_provider}"
+        )
+        
+        # Make a simple test search query with max_results=1 to minimize cost
+        test_query = "test"
+        response = await asearch(
+            query=test_query,
+            search_provider=search_provider,
+            api_key=api_key,
+            api_base=api_base,
+            max_results=1,  # Minimize results to reduce cost
+            timeout=10.0,  # 10 second timeout for test
+        )
+        
+        verbose_proxy_logger.info(
+            f"Successfully tested connection to {search_provider} search provider"
+        )
+        
+        return {
+            "status": "success",
+            "message": f"Successfully connected to {search_provider} search provider",
+            "test_query": test_query,
+            "results_count": len(response.results) if response and response.results else 0,
+        }
+        
+    except Exception as e:
+        error_message = str(e)
+        error_type = type(e).__name__
+        
+        verbose_proxy_logger.exception(
+            f"Failed to connect to search provider: {error_message}"
+        )
+        
+        # Return error details in a structured format
+        return {
+            "status": "error",
+            "message": error_message,
+            "error_type": error_type,
+        }
+
+
 @router.get(
     "/search_tools/ui/available_providers",
     tags=["Search Tools"],
@@ -431,7 +504,7 @@ async def get_available_search_providers():
     """
     Get the list of available search providers with their configuration fields.
     
-    This auto-discovers search providers from the SearchProviders enum.
+    Auto-discovers search providers and their UI-friendly names from transformation configs.
 
     Example Request:
     ```bash
@@ -441,80 +514,46 @@ async def get_available_search_providers():
 
     Example Response:
     ```json
-    [
-        {
-            "provider": "perplexity",
-            "display_name": "Perplexity",
-            "fields": [
-                {
-                    "name": "api_key",
-                    "type": "string",
-                    "required": false,
-                    "description": "API key for Perplexity"
-                },
-                {
-                    "name": "api_base",
-                    "type": "string",
-                    "required": false,
-                    "description": "API base URL"
-                }
-            ]
-        }
-    ]
+    {
+        "providers": [
+            {
+                "provider_name": "perplexity",
+                "ui_friendly_name": "Perplexity"
+            },
+            {
+                "provider_name": "tavily",
+                "ui_friendly_name": "Tavily"
+            }
+        ]
+    }
     ```
     """
     try:
-        available_providers: List[AvailableSearchProvider] = []
+        from litellm.utils import ProviderConfigManager
         
-        # Common fields for all search providers
-        common_fields = [
-            {
-                "name": "api_key",
-                "type": "string",
-                "required": False,
-                "description": "API key for the search provider",
-            },
-            {
-                "name": "api_base",
-                "type": "string",
-                "required": False,
-                "description": "Custom API base URL (optional)",
-            },
-            {
-                "name": "timeout",
-                "type": "number",
-                "required": False,
-                "description": "Request timeout in seconds",
-            },
-            {
-                "name": "max_retries",
-                "type": "number",
-                "required": False,
-                "description": "Maximum number of retry attempts",
-            },
-        ]
-
-        # Provider display name mapping
-        provider_display_names = {
-            SearchProviders.PERPLEXITY: "Perplexity",
-            SearchProviders.TAVILY: "Tavily",
-            SearchProviders.PARALLEL_AI: "Parallel AI",
-            SearchProviders.EXA_AI: "Exa AI",
-            SearchProviders.GOOGLE_PSE: "Google PSE",
-            SearchProviders.DATAFORSEO: "DataForSEO",
-        }
-
+        available_providers = []
+        
         # Auto-discover providers from SearchProviders enum
         for provider in SearchProviders:
-            available_providers.append(
-                AvailableSearchProvider(
-                    provider=provider.value,
-                    display_name=provider_display_names.get(provider, provider.value.title()),
-                    fields=common_fields,
+            try:
+                # Get the config class for this provider
+                config = ProviderConfigManager.get_provider_search_config(provider=provider)
+                
+                if config is not None:
+                    # Get the UI-friendly name from the config class
+                    ui_name = config.ui_friendly_name()
+                    
+                    available_providers.append({
+                        "provider_name": provider.value,
+                        "ui_friendly_name": ui_name,
+                    })
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Could not get config for search provider {provider.value}: {e}"
                 )
-            )
-
-        return available_providers
+                continue
+        
+        return {"providers": available_providers}
     except Exception as e:
         verbose_proxy_logger.exception(f"Error getting available search providers: {e}")
         raise HTTPException(status_code=500, detail=str(e))

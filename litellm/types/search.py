@@ -69,8 +69,7 @@ class ListSearchToolsResponse(TypedDict):
 
 class AvailableSearchProvider(TypedDict):
     """Information about an available search provider."""
-    provider: str
-    display_name: str
-    fields: List[dict]
+    provider_name: str
+    ui_friendly_name: str
 
 
