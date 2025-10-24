@@ -17,12 +17,12 @@ from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
     ModelResponse,
-    Usage,
     get_secret,
 )
 
 from ..common_utils import AWSEventStreamDecoder, SagemakerError
 from .transformation import SagemakerConfig
+from ..embedding.transformation import SagemakerEmbeddingConfig
 
 sagemaker_config = SagemakerConfig()
 
@@ -578,7 +578,7 @@ class SagemakerLLM(BaseAWSLLM):
         logger_fn=None,
     ):
         """
-        Supports Huggingface Jumpstart embeddings like GPT-6B
+        Supports both Huggingface Jumpstart embeddings and Voyage models
         """
         ### BOTO3 INIT
         import boto3
@@ -625,8 +625,11 @@ class SagemakerLLM(BaseAWSLLM):
             ):  # completion(top_k=3) > sagemaker_config(top_k=3) <- allows for dynamic variables to be passed in
                 inference_params[k] = v
 
-        #### HF EMBEDDING LOGIC
-        data = json.dumps({"inputs": input}).encode("utf-8")
+        #### EMBEDDING LOGIC
+        # Transform request based on model type
+        provider_config = SagemakerEmbeddingConfig.get_model_config(model)
+        request_data = provider_config.transform_embedding_request(model, input, optional_params, {})
+        data = json.dumps(request_data).encode("utf-8")
 
         ## LOGGING
         request_str = f"""
@@ -670,40 +673,27 @@ class SagemakerLLM(BaseAWSLLM):
         )
 
         print_verbose(f"raw model_response: {response}")
-        if "embedding" not in response:
-            raise SagemakerError(
-                status_code=500, message="embedding not found in response"
-            )
-        embeddings = response["embedding"]
-
-        if not isinstance(embeddings, list):
-            raise SagemakerError(
-                status_code=422,
-                message=f"Response not in expected format - {embeddings}",
-            )
-
-        output_data = []
-        for idx, embedding in enumerate(embeddings):
-            output_data.append(
-                {"object": "embedding", "index": idx, "embedding": embedding}
-            )
-
-        model_response.object = "list"
-        model_response.data = output_data
-        model_response.model = model
-
-        input_tokens = 0
-        for text in input:
-            input_tokens += len(encoding.encode(text))
-
-        setattr(
-            model_response,
-            "usage",
-            Usage(
-                prompt_tokens=input_tokens,
-                completion_tokens=0,
-                total_tokens=input_tokens,
-            ),
+        
+        # Transform response based on model type
+        from httpx import Response as HttpxResponse
+        
+        # Create a mock httpx Response object for the transformation
+        mock_response = HttpxResponse(
+            status_code=200,
+            content=json.dumps(response).encode('utf-8'),
+            headers={"content-type": "application/json"}
         )
-
-        return model_response
+        
+        model_response = EmbeddingResponse()
+        
+        # Use the request_data that was already transformed above
+        return provider_config.transform_embedding_response(
+            model=model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            api_key=None,
+            request_data=request_data,
+            optional_params=optional_params,
+            litellm_params=litellm_params or {}
+        )

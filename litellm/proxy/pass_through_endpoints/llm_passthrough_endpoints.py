@@ -8,7 +8,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 
 import json
 import os
-from typing import Optional, cast
+from typing import Any, Optional, Union, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -482,6 +482,151 @@ async def anthropic_proxy_route(
     return received_value
 
 
+# Bedrock endpoint actions - consolidated list used for model extraction and streaming detection
+BEDROCK_ENDPOINT_ACTIONS = {
+    "invoke",
+    "invoke-with-response-stream",
+    "converse",
+    "converse-stream",
+    "count_tokens",
+    "count-tokens",
+}
+
+BEDROCK_STREAMING_ACTIONS = {"invoke-with-response-stream", "converse-stream"}
+
+
+def _extract_model_from_bedrock_endpoint(endpoint: str) -> str:
+    """
+    Extract model name from Bedrock endpoint path.
+    
+    Handles model names with slashes (e.g., aws/anthropic/bedrock-claude-3-5-sonnet-v1)
+    by finding the action in the endpoint and extracting everything between "model" and the action.
+    
+    Args:
+        endpoint: The endpoint path (e.g., "/model/aws/anthropic/model-name/invoke")
+        
+    Returns:
+        The extracted model name (e.g., "aws/anthropic/model-name")
+        
+    Raises:
+        ValueError: If model cannot be extracted from endpoint
+    """
+    try:
+        endpoint_parts = endpoint.split("/")
+        
+        if "application-inference-profile" in endpoint:
+            # Format: model/application-inference-profile/{profile-id}/{action}
+            return "/".join(endpoint_parts[1:3])
+        
+        # Format: model/{modelId}/{action}
+        # Find the index of the action in the endpoint parts
+        action_index = None
+        for idx, part in enumerate(endpoint_parts):
+            if part in BEDROCK_ENDPOINT_ACTIONS:
+                action_index = idx
+                break
+        
+        if action_index is not None and action_index > 1:
+            # Join all parts between "model" and the action
+            return "/".join(endpoint_parts[1:action_index])
+        
+        # Fallback to taking everything after "model" if no action found
+        return "/".join(endpoint_parts[1:])
+        
+    except Exception as e:
+        raise ValueError(
+            f"Model missing from endpoint. Expected format: /model/{{modelId}}/{{action}}. Got: {endpoint}"
+        ) from e
+
+
+async def handle_bedrock_passthrough_router_model(
+    model: str,
+    endpoint: str,
+    request: Request,
+    request_body: dict,
+    llm_router: litellm.Router,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj,
+    general_settings: dict,
+    proxy_config,
+    select_data_generator,
+    user_model: Optional[str],
+    user_temperature: Optional[float],
+    user_request_timeout: Optional[float],
+    user_max_tokens: Optional[int],
+    user_api_base: Optional[str],
+    version: Optional[str],
+) -> Union[Response, StreamingResponse]:
+    """
+    Handle Bedrock passthrough for router models (models defined in config.yaml).
+    
+    Uses the same common processing path as non-router models to ensure
+    metadata and hooks are properly initialized.
+    
+    Args:
+        model: The router model name (e.g., "aws/anthropic/bedrock-claude-3-5-sonnet-v1")
+        endpoint: The Bedrock endpoint path (e.g., "/model/{modelId}/invoke")
+        request: The FastAPI request object
+        request_body: The parsed request body
+        llm_router: The LiteLLM router instance
+        user_api_key_dict: The user API key authentication dictionary
+        (additional args for common processing)
+        
+    Returns:
+        Response or StreamingResponse depending on endpoint type
+    """
+    from fastapi import Response as FastAPIResponse
+
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    # Detect streaming based on endpoint
+    is_streaming = any(action in endpoint for action in BEDROCK_STREAMING_ACTIONS)
+    
+    verbose_proxy_logger.debug(
+        f"Bedrock router passthrough: model='{model}', endpoint='{endpoint}', streaming={is_streaming}"
+    )
+    
+    # Use the common processing path (same as non-router models)
+    # This ensures all metadata, hooks, and logging are properly initialized
+    data: Dict[str, Any] = {}
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+    
+    data["model"] = model
+    data["method"] = request.method
+    data["endpoint"] = endpoint
+    data["data"] = request_body
+    data["custom_llm_provider"] = "bedrock"
+    
+    # Use the common passthrough processing to handle metadata and hooks
+    # This also handles all response formatting (streaming/non-streaming) and exceptions
+    try:
+        result = await base_llm_response_processor.base_passthrough_process_llm_request(
+            request=request,
+            fastapi_response=FastAPIResponse(),
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+        return result
+    except Exception as e:
+        # Use common exception handling
+        raise await base_llm_response_processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+
 async def handle_bedrock_count_tokens(
     endpoint: str,
     request: Request,
@@ -560,6 +705,15 @@ async def bedrock_llm_proxy_route(
 ):
     """
     Handles Bedrock LLM API calls.
+    
+    Supports both direct Bedrock models and router models from config.yaml.
+    
+    Endpoints:
+    - /model/{modelId}/invoke
+    - /model/{modelId}/invoke-with-response-stream
+    - /model/{modelId}/converse
+    - /model/{modelId}/converse-stream
+    - /model/application-inference-profile/{profileId}/{action}
     """
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
     from litellm.proxy.proxy_server import (
@@ -588,24 +742,50 @@ async def bedrock_llm_proxy_route(
             request_body=request_body,
         )
 
-    data: Dict[str, Any] = {}
-    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+    # Extract model from endpoint path using helper
     try:
-        endpoint_parts = endpoint.split("/")
-        if "application-inference-profile" in endpoint:
-            # For application-inference-profile, include the profile ID part as well
-            model = "/".join(endpoint_parts[1:3])
-        else:
-            model = endpoint_parts[1]
-    except Exception:
+        model = _extract_model_from_bedrock_endpoint(endpoint=endpoint)
+    except ValueError as e:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "Model missing from endpoint. Expected format: /model/<Model>/<endpoint>. Got: "
-                + endpoint,
-            },
+            detail={"error": str(e)},
         )
 
+    # Check if this is a router model (from config.yaml)
+    is_router_model = is_passthrough_request_using_router_model(
+        request_body={"model": model}, llm_router=llm_router
+    )
+
+    # If router model, use dedicated router passthrough handler
+    # This uses the same common processing path as non-router models
+    if is_router_model and llm_router:
+        return await handle_bedrock_passthrough_router_model(
+            model=model,
+            endpoint=endpoint,
+            request=request,
+            request_body=request_body,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+
+    # Fall back to existing implementation for direct Bedrock models
+    verbose_proxy_logger.debug(
+        f"Bedrock passthrough: Using direct Bedrock model '{model}' for endpoint '{endpoint}'"
+    )
+    
+    data: Dict[str, Any] = {}
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+    
     data["method"] = request.method
     data["endpoint"] = endpoint
     data["data"] = request_body

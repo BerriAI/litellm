@@ -36,6 +36,8 @@ const sidebars = {
           "proxy/guardrails/aporia_api",
           "proxy/guardrails/azure_content_guardrail",
           "proxy/guardrails/bedrock",
+          "proxy/guardrails/enkryptai",
+          "proxy/guardrails/grayswan",
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
@@ -93,10 +95,10 @@ const sidebars = {
 
     {
       type: "category",
-      label: "LiteLLM Proxy Server",
+      label: "LiteLLM AI Gateway",
       link: {
         type: "generated-index",
-        title: "LiteLLM Proxy Server (LLM Gateway)",
+        title: "LiteLLM AI Gateway (LLM Proxy)",
         description: `OpenAI Proxy Server (LLM Gateway) to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
         slug: "/simple_proxy",
       },
@@ -186,14 +188,24 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "Spend Tracking",
+          items: [
+            "proxy/cost_tracking",
+            "proxy/custom_pricing",
+            "proxy/billing",
+          ],
+        },
+        {
+          type: "category",
           label: "Budgets + Rate Limits",
           items: [
+            "proxy/users",
+            "proxy/team_budgets",
+            "proxy/tag_budgets",
             "proxy/customers",
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
-            "proxy/team_budgets",
             "proxy/temporary_budget_increase",
-            "proxy/users"
           ],
         },
         "proxy/caching",
@@ -249,15 +261,6 @@ const sidebars = {
             "oidc"
           ]
         },
-        {
-          type: "category",
-          label: "Spend Tracking",
-          items: [
-            "proxy/billing",
-            "proxy/cost_tracking",
-            "proxy/custom_pricing"
-          ],
-        },
       ]
     },
     {
@@ -305,6 +308,7 @@ const sidebars = {
           ],
         },
         "text_completion",
+        "bedrock_converse",
         "embedding/supported_embedding",
         {
           type: "category",
@@ -324,6 +328,7 @@ const sidebars = {
         },
           "generateContent",
           "apply_guardrail",
+          "bedrock_invoke",
         {
           type: "category",
           label: "/images",
@@ -344,7 +349,9 @@ const sidebars = {
             "mcp_guardrail",
           ]
         },
+        "anthropic_unified",
         "moderation",
+        "ocr",
         {
           type: "category",
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
@@ -359,7 +366,14 @@ const sidebars = {
             "pass_through/langfuse",
             "pass_through/mistral",
             "pass_through/openai_passthrough",
-            "pass_through/vertex_ai",
+            {
+              type: "category",
+              label: "Vertex AI",
+              items: [
+                "pass_through/vertex_ai",
+                "pass_through/vertex_ai_live_websocket",
+              ]
+            },
             "pass_through/vllm",
             "proxy/pass_through"
           ]
@@ -367,7 +381,19 @@ const sidebars = {
         "realtime",
         "rerank",
         "response_api",
-        "anthropic_unified",
+        {
+          type: "category",
+          label: "/search",
+          items: [
+            "search/index",
+            "search/perplexity",
+            "search/tavily",
+            "search/exa_ai",
+            "search/parallel_ai",
+            "search/google_pse",
+            "search/dataforseo",
+          ]
+        },
         {
           type: "category",
           label: "/vector_stores",
@@ -389,6 +415,11 @@ const sidebars = {
       },
       items: [
         {
+          type: "doc",
+          id: "provider_registration/index",
+          label: "Integrate as a Model Provider",
+        },
+        {
           type: "category",
           label: "OpenAI",
           items: [
@@ -406,6 +437,7 @@ const sidebars = {
             "providers/azure/azure",
             "providers/azure/azure_responses",
             "providers/azure/azure_embedding",
+            "providers/azure/azure_speech",
           ]
         },
         {
@@ -413,6 +445,8 @@ const sidebars = {
           label: "Azure AI",
           items: [
             "providers/azure_ai",
+            "providers/azure_ocr",
+            "providers/azure_ai_speech",
             "providers/azure_ai_img",
           ]
         },
@@ -422,6 +456,7 @@ const sidebars = {
           items: [
             "providers/vertex",
             "providers/vertex_partner",
+            "providers/vertex_self_deployed",
             "providers/vertex_image",
             "providers/vertex_batch",
           ]
@@ -532,22 +567,18 @@ const sidebars = {
         "providers/oci",
         "providers/datarobot",
         "providers/ovhcloud",  
+        "providers/wandb_inference",
+        "providers/cometapi",
       ],
     },
     {
       type: "category",
       label: "Guides",
       items: [
-        {
-          type: "category",
-          label: "Tools",
-          items: [
-            "completion/computer_use",
-            "completion/web_search",
-            "completion/web_fetch",
-            "completion/function_call",
-          ]
-        },
+        "completion/computer_use",
+        "completion/web_search",
+        "completion/web_fetch",
+        "completion/function_call",
         "completion/audio",
         "completion/document_understanding",
         "completion/drop_params",
@@ -570,7 +601,8 @@ const sidebars = {
         "guides/finetuned_models",
         "guides/security_settings",
         "proxy/veo_video_generation",
-        "reasoning_content"
+        "reasoning_content",
+        "extras/creating_adapters",
       ]
     },
 
@@ -727,11 +759,6 @@ const sidebars = {
         "proxy/customer_routing",
         "proxy_server",
       ],
-    },
-    {
-      type: "doc",
-      id: "provider_registration/index",
-      label: "Integrate as a Model Provider",
     },
     "troubleshoot",
   ],

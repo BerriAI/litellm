@@ -27,6 +27,7 @@ from litellm.proxy._types import (
     CommonProxyErrors,
     DeleteTeamRequest,
     LiteLLM_AuditLogs,
+    LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_ModelTable,
     LiteLLM_OrganizationTable,
@@ -56,9 +57,6 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.management_helpers.object_permission_utils import (
-    _set_object_permission,
-)
 from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
     can_org_access_model,
@@ -76,6 +74,7 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
+    _set_object_permission,
     handle_update_object_permission_common,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
@@ -301,6 +300,8 @@ async def new_team(  # noqa: PLR0915
     - members_with_roles: List[{"role": "admin" or "user", "user_id": "<user-id>"}] - A list of users and their roles in the team. Get user_id when making a new user via `/user/new`.
     - team_member_permissions: Optional[List[str]] - A list of routes that non-admin team members can access. example: ["/key/generate", "/key/update", "/key/delete"]
     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"extra_info": "some info"}
+    - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit for this team - applied across all keys for this team. 
+    - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit for this team - applied across all keys for this team.
     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
@@ -320,7 +321,9 @@ async def new_team(  # noqa: PLR0915
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     - prompts: Optional[List[str]] - List of allowed prompts for the team. If specified, the team will only be able to use these specific prompts.
+    - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
     
+
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
 
@@ -478,7 +481,7 @@ async def new_team(  # noqa: PLR0915
 
         ## Create Team Member Budget Table
         data_json = data.json()
-        
+
         ## Handle Object Permission - MCP, Vector Stores etc.
         data_json = await _set_object_permission(
             data_json=data_json,
@@ -507,6 +510,14 @@ async def new_team(  # noqa: PLR0915
 
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+            if getattr(data, field, None) is not None:
+                _set_object_metadata_field(
+                    object_data=complete_team_data,
+                    field_name=field,
+                    value=getattr(data, field),
+                )
+
+        for field in LiteLLM_ManagementEndpoint_MetadataFields:
             if getattr(data, field, None) is not None:
                 _set_object_metadata_field(
                     object_data=complete_team_data,
@@ -618,6 +629,53 @@ async def _update_model_table(
 
     return _model_id
 
+
+async def fetch_and_validate_organization(
+    organization_id: str,
+    existing_team_row: Any,
+    llm_router: Optional[Router],
+    prisma_client: Any,
+) -> Any:
+    """
+    Fetch and validate an organization for team update operations.
+
+    Args:
+        organization_id: The organization ID to fetch
+        existing_team_row: The existing team row being updated
+        llm_router: The LLM router instance
+        prisma_client: The Prisma database client
+
+    Returns:
+        The organization row from the database
+
+    Raises:
+        HTTPException: If llm_router is None, organization not found, or validation fails
+    """
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
+        )
+
+    organization_row = await prisma_client.db.litellm_organizationtable.find_unique(
+        where={"organization_id": organization_id},
+        include={"litellm_budget_table": True, "users": True},
+    )
+
+    if organization_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"Organization not found, passed organization_id={organization_id}"
+            },
+        )
+
+    validate_team_org_change(
+        team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
+        organization=LiteLLM_OrganizationTable(**organization_row.model_dump()),
+        llm_router=llm_router,
+    )
+
+    return organization_row
 
 
 def validate_team_org_change(
@@ -754,6 +812,9 @@ async def update_team(
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
+    - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+    - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
+    - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
     Example - update team TPM Limit
 
     ```
@@ -810,25 +871,11 @@ async def update_team(
     if (
         data.organization_id is not None and len(data.organization_id) > 0
     ):  # allow unsetting the organization_id
-        if llm_router is None:
-            raise HTTPException(
-                status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
-            )
-        organization_row = await prisma_client.db.litellm_organizationtable.find_unique(
-            where={"organization_id": data.organization_id},
-            include={"litellm_budget_table": True, "users": True},
-        )
-        if organization_row is None:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": f"Organization not found, passed organization_id={data.organization_id}"
-                },
-            )
-        validate_team_org_change(
-            team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
-            organization=LiteLLM_OrganizationTable(**organization_row.model_dump()),
+        await fetch_and_validate_organization(
+            organization_id=data.organization_id,
+            existing_team_row=existing_team_row,
             llm_router=llm_router,
+            prisma_client=prisma_client,
         )
     elif data.organization_id is not None and len(data.organization_id) == 0:
         # unsetting the organization_id
@@ -871,6 +918,13 @@ async def update_team(
     # update team metadata fields
     _team_metadata_fields = LiteLLM_ManagementEndpoint_MetadataFields_Premium
     for field in _team_metadata_fields:
+        if field in updated_kv and updated_kv[field] is not None:
+            _update_team_metadata_field(
+                updated_kv=updated_kv,
+                field_name=field,
+            )
+
+    for field in LiteLLM_ManagementEndpoint_MetadataFields:
         if field in updated_kv and updated_kv[field] is not None:
             _update_team_metadata_field(
                 updated_kv=updated_kv,

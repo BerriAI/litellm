@@ -185,6 +185,7 @@ class Litellm_EntityType(enum.Enum):
     TEAM = "team"
     TEAM_MEMBER = "team_member"
     ORGANIZATION = "organization"
+    TAG = "tag"
 
     # global proxy level entity
     PROXY = "proxy"
@@ -322,6 +323,14 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/vector_stores",
         "/vector_stores/{vector_store_id}/search",
         "/v1/vector_stores/{vector_store_id}/search",
+
+        # search
+        "/search",
+        "/v1/search",
+
+        # OCR
+        "/ocr",
+        "/v1/ocr",
     ]
 
     mapped_pass_through_routes = [
@@ -376,6 +385,7 @@ class LiteLLMRoutes(enum.Enum):
     llm_api_routes = (
         openai_routes
         + anthropic_routes
+        + google_routes
         + mapped_pass_through_routes
         + passthrough_routes_wildcard
         + apply_guardrail_routes
@@ -775,11 +785,12 @@ class KeyRequestBase(GenerateRequestBase):
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
+    allowed_passthrough_routes: Optional[list] = None
     rpm_limit_type: Optional[
-        Literal["guaranteed_throughput", "best_effort_throughput"]
+        Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
     tpm_limit_type: Optional[
-        Literal["guaranteed_throughput", "best_effort_throughput"]
+        Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
 
 
@@ -1280,6 +1291,9 @@ class NewTeamRequest(TeamBase):
     guardrails: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    allowed_passthrough_routes: Optional[list] = None
+    model_rpm_limit: Optional[Dict[str, int]] = None
+    model_tpm_limit: Optional[Dict[str, int]] = None
     team_member_budget: Optional[float] = (
         None  # allow user to set a budget for all team members
     )
@@ -1335,6 +1349,9 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_member_rpm_limit: Optional[int] = None
     team_member_tpm_limit: Optional[int] = None
     team_member_key_duration: Optional[str] = None
+    allowed_passthrough_routes: Optional[list] = None
+    model_rpm_limit: Optional[Dict[str, int]] = None
+    model_tpm_limit: Optional[Dict[str, int]] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -1442,7 +1459,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
         "1234567890": ["tool_name_1", "tool_name_2"]
     }
     """
-    
+
     vector_stores: Optional[List[str]] = []
 
 
@@ -1610,6 +1627,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
     cost_per_request: float = Field(
         default=0.0,
         description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
+    )
+    auth: bool = Field(
+        default=False,
+        description="Whether authentication is required for the pass-through endpoint. If True, requests to the endpoint will require a valid LiteLLM API key.",
     )
 
 
@@ -2138,6 +2159,30 @@ class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     def set_model_info(cls, values):
         if values.get("spend") is None:
             values.update({"spend": 0.0})
+        return values
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_TagTable(LiteLLMPydanticObjectBase):
+    tag_name: str
+    description: Optional[str] = None
+    models: List[str] = []
+    model_info: Optional[dict] = None
+    spend: float = 0.0
+    budget_id: Optional[str] = None
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def set_model_info(cls, values):
+        if values.get("spend") is None:
+            values.update({"spend": 0.0})
+        if values.get("models") is None:
+            values.update({"models": []})
         return values
 
     model_config = ConfigDict(protected_namespaces=())
@@ -3113,6 +3158,7 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "team_member_key_duration",
     "prompts",
     "logging",
+    "allowed_passthrough_routes",
 ]
 
 
@@ -3419,6 +3465,7 @@ class DBSpendUpdateTransactions(TypedDict):
     team_list_transactions: Optional[Dict[str, float]]
     team_member_list_transactions: Optional[Dict[str, float]]
     org_list_transactions: Optional[Dict[str, float]]
+    tag_list_transactions: Optional[Dict[str, float]]
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):

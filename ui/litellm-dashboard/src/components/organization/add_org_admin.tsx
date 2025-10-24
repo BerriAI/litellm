@@ -2,7 +2,7 @@
  * This component is used to add an admin to an organization.
  */
 import React, { FC } from "react";
-import { Button, Select, Col, Text } from "@tremor/react";
+import { Button, Col, Text } from "@tremor/react";
 import { Button as Button2, Select as Select2, Modal, Form, Input } from "antd";
 import { Organization } from "@/components/organization/types";
 interface AddOrgAdminProps {

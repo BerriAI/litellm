@@ -437,6 +437,7 @@ def test_select_azure_base_url_called(setup_mocks):
             "agenerate_content",
             "allm_passthrough_route",
             "llm_passthrough_route",
+            "asearch",
         ]
     ],
 )
@@ -509,6 +510,18 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
             "custom_llm_provider": "azure",
             "file_id": "123",
         },
+        "avideo_content": {
+            "custom_llm_provider": "azure",
+            "video_id": "123",
+        },
+        "avideo_list": {
+            "custom_llm_provider": "azure",
+        },
+        "avideo_remix": {
+            "custom_llm_provider": "azure",
+            "video_id": "123",
+            "prompt": "A new video based on this one",
+        },
     }
 
     # Get appropriate input for this call type
@@ -542,6 +555,13 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
         patch_target = (
             "litellm.files.main.azure_files_instance.initialize_azure_sdk_client"
         )
+    elif (
+        call_type == CallTypes.avideo_content
+        or call_type == CallTypes.avideo_list
+        or call_type == CallTypes.avideo_remix
+    ):
+        # Skip video call types as they don't use Azure SDK client initialization
+        pytest.skip(f"Skipping {call_type.value} because Azure video calls don't use initialize_azure_sdk_client")
 
     # Mock the initialize_azure_sdk_client function
     with patch(patch_target) as mock_init_azure:

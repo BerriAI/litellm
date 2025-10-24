@@ -47,9 +47,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
+    _set_object_permission,
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
-    _set_object_permission,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -563,6 +563,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
 
     data_json = handle_key_type(data, data_json)
+
     # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
     if "max_budget" in data_json:
         data_json["key_max_budget"] = data_json.pop("max_budget", None)
@@ -666,7 +667,8 @@ def check_team_key_model_specific_limits(
     if data.model_rpm_limit is not None:
         for model, rpm_limit in data.model_rpm_limit.items():
             if (
-                model_specific_rpm_limit.get(model, 0) + rpm_limit
+                team_table.rpm_limit is not None
+                and model_specific_rpm_limit.get(model, 0) + rpm_limit
                 > team_table.rpm_limit
             ):
                 raise HTTPException(
@@ -686,7 +688,7 @@ def check_team_key_model_specific_limits(
                 ):
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than team RPM limit={team_model_specific_rpm_limit.get(model, 0)}",
+                        detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than team RPM limit={team_model_specific_rpm_limit}",
                     )
     if data.model_tpm_limit is not None:
         for model, tpm_limit in data.model_tpm_limit.items():
@@ -826,8 +828,8 @@ async def generate_key_fn(
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
-    - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm). Defaults to "best_effort_throughput".
-    - rpm_limit_type: Optional[str] - Type of rpm limit. Options: "best_effort_throughput" (no error if we're overallocating rpm), "guaranteed_throughput" (raise an error if we're overallocating rpm). Defaults to "best_effort_throughput".
+    - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
+    - rpm_limit_type: Optional[str] - Type of rpm limit. Options: "best_effort_throughput" (no error if we're overallocating rpm), "guaranteed_throughput" (raise an error if we're overallocating rpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
     - blocked: Optional[bool] - Whether the key is blocked.
     - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
@@ -838,6 +840,7 @@ async def generate_key_fn(
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
+    - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
@@ -978,8 +981,8 @@ async def generate_service_account_key_fn(
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
-    - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput" or "guaranteed_throughput"
-    - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput" or "guaranteed_throughput"
+    - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
+    - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
     - blocked: Optional[bool] - Whether the key is blocked.
     - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
@@ -1112,8 +1115,6 @@ def prepare_metadata_fields(
 
     non_default_values["metadata"] = casted_metadata
     return non_default_values
-
-
 
 
 async def prepare_key_update_data(
@@ -1263,8 +1264,8 @@ async def update_key_fn(
     - rpm_limit: Optional[int] - Requests per minute limit
     - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
     - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
-    - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput" or "guaranteed_throughput"
-    - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput" or "guaranteed_throughput"
+    - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
+    - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values
     - duration: Optional[str] - Key validity duration ("30d", "1h", etc.)
     - permissions: Optional[dict] - Key-specific permissions
@@ -1277,6 +1278,7 @@ async def update_key_fn(
     - temp_budget_increase: Optional[float] - Temporary budget increase for the key (Enterprise only).
     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
+    - allowed_passthrough_routes: Optional[list] - List of allowed pass through routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through routes the key can access, without specifying the routes. If allowed_routes is specified, allowed_passthrough_routes is ignored.
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
@@ -2818,6 +2820,7 @@ async def list_keys(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
 
 @router.get(
     "/key/aliases",

@@ -1182,10 +1182,8 @@ def test_async_http_handler(mock_async_client):
         assert call_args["transport"] == mock_transport
         assert call_args["event_hooks"] == event_hooks
         assert call_args["headers"] == headers
-        assert isinstance(call_args["limits"], httpx.Limits)
-        assert call_args["limits"].max_connections == concurrent_limit
-        assert call_args["limits"].max_keepalive_connections == concurrent_limit
         assert call_args["timeout"] == timeout
+        assert call_args["follow_redirects"] is True
 
 
 @mock.patch("httpx.AsyncClient")
@@ -1224,12 +1222,10 @@ def test_async_http_handler_force_ipv4(mock_async_client):
         # Assert other parameters match
         assert call_args["event_hooks"] == event_hooks
         assert call_args["headers"] == headers
-        assert isinstance(call_args["limits"], httpx.Limits)
-        assert call_args["limits"].max_connections == concurrent_limit
-        assert call_args["limits"].max_keepalive_connections == concurrent_limit
         assert call_args["timeout"] == timeout
         assert isinstance(call_args["verify"], ssl.SSLContext)
         assert call_args["cert"] is None
+        assert call_args["follow_redirects"] is True
 
     finally:
         # Reset force_ipv4 to default
@@ -1374,6 +1370,9 @@ def test_models_by_provider():
             v["litellm_provider"] == "sagemaker"
             or v["litellm_provider"] == "bedrock_converse"
         ):
+            continue
+        elif v.get("mode") == "search":
+            # Skip search providers as they don't have traditional models
             continue
         else:
             providers.add(v["litellm_provider"])
@@ -2355,7 +2354,7 @@ def test_get_whitelisted_models():
     """
     whitelisted_models = []
     for model, info in litellm.model_cost.items():
-        if info["litellm_provider"] == "bedrock" and info["mode"] == "chat":
+        if info.get("litellm_provider") == "bedrock" and info.get("mode") == "chat":
             whitelisted_models.append(model)
 
         # Write to a local file

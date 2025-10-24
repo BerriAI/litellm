@@ -173,6 +173,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
+    ocr_cost_per_page: Optional[float]  # for OCR models
+    annotation_cost_per_page: Optional[float]  # for OCR models
     search_context_cost_per_query: Optional[
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
@@ -218,7 +220,7 @@ class GenericStreamingChunk(TypedDict, total=False):
 from enum import Enum
 
 
-class CallTypes(Enum):
+class CallTypes(str, Enum):
     embedding = "embedding"
     aembedding = "aembedding"
     completion = "completion"
@@ -237,6 +239,8 @@ class CallTypes(Enum):
     speech = "speech"
     rerank = "rerank"
     arerank = "arerank"
+    search = "search"
+    asearch = "asearch"
     arealtime = "_arealtime"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
@@ -274,6 +278,24 @@ class CallTypes(Enum):
     file_content = "file_content"
     create_fine_tuning_job = "create_fine_tuning_job"
     acreate_fine_tuning_job = "acreate_fine_tuning_job"
+    
+    #########################################################
+    # Video Generation Call Types
+    #########################################################
+    create_video = "create_video"
+    acreate_video = "acreate_video"
+    avideo_retrieve = "avideo_retrieve"
+    video_retrieve = "video_retrieve"
+    avideo_content = "avideo_content"
+    video_content = "video_content"
+    video_remix = "video_remix"
+    avideo_remix = "avideo_remix"
+    video_list = "video_list"
+    avideo_list = "avideo_list"
+    video_retrieve_job = "video_retrieve_job"
+    avideo_retrieve_job = "avideo_retrieve_job"
+    video_delete = "video_delete"
+    avideo_delete = "avideo_delete"
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
     alist_fine_tuning_jobs = "alist_fine_tuning_jobs"
@@ -319,6 +341,8 @@ CallTypesLiteral = Literal[
     "speech",
     "rerank",
     "arerank",
+    "search",
+    "asearch",
     "_arealtime",
     "create_batch",
     "acreate_batch",
@@ -330,6 +354,8 @@ CallTypesLiteral = Literal[
     "agenerate_content",
     "generate_content_stream",
     "agenerate_content_stream",
+    "ocr",
+    "aocr",
 ]
 
 
@@ -1149,7 +1175,6 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         super().__init__(**kwargs)
 
 
-from openai.types.chat import ChatCompletionChunk
 
 
 class ModelResponseBase(OpenAIObject):
@@ -2094,17 +2119,18 @@ class CachingDetails(TypedDict):
     """
 
 
-class CostBreakdown(TypedDict):
+class CostBreakdown(TypedDict, total=False):
     """
     Detailed cost breakdown for a request
     """
 
     input_cost: float  # Cost of input/prompt tokens
-    output_cost: (
-        float  # Cost of output/completion tokens (includes reasoning if applicable)
-    )
+    output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
+    original_cost: float  # Cost before discount (optional)
+    discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
+    discount_amount: float  # Discount amount in USD (optional)
 
 
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):
@@ -2222,10 +2248,67 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     arize_space_key: Optional[str]
     arize_space_id: Optional[str]
 
+    # PostHog dynamic params
+    posthog_api_key: Optional[str]
+    posthog_api_url: Optional[str]
+
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
 
+class CustomPricingLiteLLMParams(BaseModel):
+    ## CUSTOM PRICING ##
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    input_cost_per_second: Optional[float] = None
+    output_cost_per_second: Optional[float] = None
+    input_cost_per_pixel: Optional[float] = None
+    output_cost_per_pixel: Optional[float] = None
+    
+    # Include all ModelInfoBase fields as optional
+    # This allows any model_info parameter to be set in litellm_params
+    input_cost_per_token_flex: Optional[float] = None
+    input_cost_per_token_priority: Optional[float] = None
+    cache_creation_input_token_cost: Optional[float] = None
+    cache_creation_input_token_cost_above_1hr: Optional[float] = None
+    cache_creation_input_token_cost_above_200k_tokens: Optional[float] = None
+    cache_creation_input_audio_token_cost: Optional[float] = None
+    cache_read_input_token_cost: Optional[float] = None
+    cache_read_input_token_cost_flex: Optional[float] = None
+    cache_read_input_token_cost_priority: Optional[float] = None
+    cache_read_input_token_cost_above_200k_tokens: Optional[float] = None
+    cache_read_input_audio_token_cost: Optional[float] = None
+    input_cost_per_character: Optional[float] = None
+    input_cost_per_character_above_128k_tokens: Optional[float] = None
+    input_cost_per_audio_token: Optional[float] = None
+    input_cost_per_token_cache_hit: Optional[float] = None
+    input_cost_per_token_above_128k_tokens: Optional[float] = None
+    input_cost_per_token_above_200k_tokens: Optional[float] = None
+    input_cost_per_query: Optional[float] = None
+    input_cost_per_image: Optional[float] = None
+    input_cost_per_image_above_128k_tokens: Optional[float] = None
+    input_cost_per_audio_per_second: Optional[float] = None
+    input_cost_per_audio_per_second_above_128k_tokens: Optional[float] = None
+    input_cost_per_video_per_second: Optional[float] = None
+    input_cost_per_video_per_second_above_128k_tokens: Optional[float] = None
+    input_cost_per_video_per_second_above_15s_interval: Optional[float] = None
+    input_cost_per_video_per_second_above_8s_interval: Optional[float] = None
+    input_cost_per_token_batches: Optional[float] = None
+    output_cost_per_token_batches: Optional[float] = None
+    output_cost_per_token_flex: Optional[float] = None
+    output_cost_per_token_priority: Optional[float] = None
+    output_cost_per_character: Optional[float] = None
+    output_cost_per_audio_token: Optional[float] = None
+    output_cost_per_token_above_128k_tokens: Optional[float] = None
+    output_cost_per_token_above_200k_tokens: Optional[float] = None
+    output_cost_per_character_above_128k_tokens: Optional[float] = None
+    output_cost_per_image: Optional[float] = None
+    output_cost_per_reasoning_token: Optional[float] = None
+    output_cost_per_video_per_second: Optional[float] = None
+    output_cost_per_audio_per_second: Optional[float] = None
+    search_context_cost_per_query: Optional[Dict[str, Any]] = None
+    citation_cost_per_token: Optional[float] = None
+    tiered_pricing: Optional[List[Dict[str, Any]]] = None
 
 all_litellm_params = [
     "metadata",
@@ -2325,7 +2408,8 @@ all_litellm_params = [
     "litellm_session_id",
     "use_litellm_proxy",
     "prompt_label",
-] + list(StandardCallbackDynamicParams.__annotations__.keys())
+    "shared_session",
+] + list(StandardCallbackDynamicParams.__annotations__.keys()) + list(CustomPricingLiteLLMParams.model_fields.keys())
 
 
 class KeyGenerationConfig(TypedDict, total=False):
@@ -2473,6 +2557,23 @@ class LlmProviders(str, Enum):
 
 # Create a set of all provider values for quick lookup
 LlmProvidersSet = {provider.value for provider in LlmProviders}
+
+
+class SearchProviders(str, Enum):
+    """
+    Enum for search provider types.
+    Separate from LlmProviders for semantic clarity.
+    """
+    PERPLEXITY = "perplexity"
+    TAVILY = "tavily"
+    PARALLEL_AI = "parallel_ai"
+    EXA_AI = "exa_ai"
+    GOOGLE_PSE = "google_pse"
+    DATAFORSEO = "dataforseo"
+
+
+# Create a set of all search provider values for quick lookup
+SearchProvidersSet = {provider.value for provider in SearchProviders}
 
 
 class LiteLLMLoggingBaseClass:
@@ -2698,6 +2799,25 @@ CostResponseTypes = Union[
     ImageResponse,
     TranscriptionResponse,
 ]
+
+
+class PriorityReservationDict(TypedDict, total=False):
+    """
+    Dictionary format for priority reservation values.
+    
+    Used in litellm.priority_reservation to specify how much capacity to reserve
+    for each priority level. Supports three formats:
+    1. Percentage-based: {"type": "percent", "value": 0.9} -> 90% of capacity
+    2. RPM-based: {"type": "rpm", "value": 900} -> 900 requests per minute
+    3. TPM-based: {"type": "tpm", "value": 900000} -> 900,000 tokens per minute
+    
+    Attributes:
+        type: The type of value - "percent", "rpm", or "tpm". Defaults to "percent".
+        value: The numeric value. For percent (0.0-1.0), for rpm/tpm (absolute value).
+    """
+
+    type: Literal["percent", "rpm", "tpm"]
+    value: float
 
 
 class PriorityReservationSettings(BaseModel):
