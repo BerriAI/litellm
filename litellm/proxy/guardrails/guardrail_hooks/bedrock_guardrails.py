@@ -23,7 +23,6 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.types.llms.openai import ChatCompletionUserMessage
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -32,7 +31,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, PiiEntityType
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
     BedrockGuardrailOutput,
@@ -1103,7 +1102,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: Applying guardrail"
             )
-            mock_messages = [ChatCompletionUserMessage(role="user", content=text)]
+            mock_messages: List[AllMessageValues] = [ChatCompletionUserMessage(role="user", content=text)]
             bedrock_response = await self.make_bedrock_api_request(
                 source="INPUT",
                 messages=mock_messages,
@@ -1115,18 +1114,23 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             
             # Apply any masking that was applied by the guardrail
             masked_text = text
-            if bedrock_response.get("output") and bedrock_response["output"]:
+            output_list = bedrock_response.get("output")
+            if output_list:
                 # If the guardrail returned modified content, use that
-                for output_item in bedrock_response["output"]:
-                    if output_item.get("text"):
-                        masked_text = str(output_item["text"])
+                for output_item in output_list:
+                    text_content = output_item.get("text")
+                    if text_content:
+                        masked_text = str(text_content)
                         break
-            elif bedrock_response.get("content") and bedrock_response["content"]:
-                # Fallback to content field if output is not available
-                for content_item in bedrock_response["content"]:
-                    if content_item.get("text") and content_item["text"].get("text"):
-                        masked_text = str(content_item["text"]["text"])
-                        break
+            else:
+                outputs_list = bedrock_response.get("outputs")
+                if outputs_list:
+                    # Fallback to outputs field if output is not available
+                    for output_item in outputs_list:
+                        text_content = output_item.get("text")
+                        if text_content:
+                            masked_text = str(text_content)
+                            break
             
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: Successfully applied guardrail"
