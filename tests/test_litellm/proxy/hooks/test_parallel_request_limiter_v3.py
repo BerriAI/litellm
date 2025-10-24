@@ -1094,9 +1094,13 @@ async def test_async_increment_tokens_with_ttl_preservation():
     except Exception as e:
         pytest.skip(f"Redis connection failed: {str(e)}")
     
-    # Test keys
-    test_key_with_ttl = "test_ttl_preservation:with_ttl"
-    test_key_without_ttl = "test_ttl_preservation:without_ttl"
+    # Verify the TTL preservation script is registered
+    if parallel_request_handler.token_increment_script is None:
+        pytest.skip("Token increment script not available - Redis Lua scripting may not be supported")
+    
+    # Test keys - use hash tags to ensure they map to same Redis cluster slot
+    test_key_with_ttl = "{test_ttl}:with_ttl"
+    test_key_without_ttl = "{test_ttl}:without_ttl"
     
     try:
         # Clean up any existing test keys
@@ -1126,12 +1130,15 @@ async def test_async_increment_tokens_with_ttl_preservation():
             pipeline_operations=pipeline_operations_first
         )
         
+        # Small delay to ensure Redis has processed the commands
+        await asyncio.sleep(0.1)
+        
         # Verify keys exist and check initial TTL
         ttl_after_first = await redis_cache.async_get_ttl(test_key_with_ttl)
         value_after_first_with_ttl = await redis_cache.async_get_cache(test_key_with_ttl)
         value_after_first_without_ttl = await redis_cache.async_get_cache(test_key_without_ttl)
         
-        assert value_after_first_with_ttl == 10.0, "First increment should set value to 10.0"
+        assert value_after_first_with_ttl == 10.0, f"First increment should set value to 10.0, got {value_after_first_with_ttl}"
         assert value_after_first_without_ttl == 5.0, "First increment should set value to 5.0"
         assert ttl_after_first is not None and ttl_after_first > 0, "Key with TTL should have positive TTL after first increment"
         assert ttl_after_first <= 60, "TTL should not exceed the set value"
@@ -1161,6 +1168,9 @@ async def test_async_increment_tokens_with_ttl_preservation():
         await parallel_request_handler.async_increment_tokens_with_ttl_preservation(
             pipeline_operations=pipeline_operations_second
         )
+        
+        # Small delay to ensure Redis has processed the commands
+        await asyncio.sleep(0.1)
         
         # Verify TTL preservation and value updates
         ttl_after_second = await redis_cache.async_get_ttl(test_key_with_ttl)

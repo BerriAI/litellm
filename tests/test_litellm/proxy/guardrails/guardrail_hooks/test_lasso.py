@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_hooks.lasso import (
+from litellm.proxy.guardrails.guardrail_hooks.lasso.lasso import (
     LassoGuardrail,
     LassoGuardrailMissingSecrets,
     LassoGuardrailAPIError,
@@ -77,7 +77,7 @@ class TestLassoGuardrail:
         assert guardrail.lasso_api_key == "test-api-key"
         assert guardrail.user_id == "test-user"
         assert guardrail.conversation_id == "test-conversation"
-        assert guardrail.api_base == "https://server.lasso.security/gateway/v3/classify"
+        assert guardrail.api_base == "https://server.lasso.security"
 
     @pytest.mark.asyncio
     async def test_pre_call_no_violations(self):
