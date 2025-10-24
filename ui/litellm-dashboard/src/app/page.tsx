@@ -41,6 +41,7 @@ import { cx } from "@/lib/cva.config";
 import useFeatureFlags from "@/hooks/useFeatureFlags";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldTeams from "@/components/OldTeams";
+import { SearchTools } from "@/components/search_tools";
 
 function getCookie(name: string) {
   // Safer cookie read + decoding; handles '=' inside values
@@ -450,6 +451,7 @@ export default function CreateKeyPage() {
                     userRole={userRole}
                     accessToken={accessToken}
                     modelData={modelData}
+                    premiumUser={premiumUser}
                   />
                 ) : page == "logs" ? (
                   <SpendLogsTable
@@ -462,6 +464,8 @@ export default function CreateKeyPage() {
                   />
                 ) : page == "mcp-servers" ? (
                   <MCPServers accessToken={accessToken} userRole={userRole} userID={userID} />
+                ) : page == "search-tools" ? (
+                  <SearchTools accessToken={accessToken} userRole={userRole} userID={userID} />
                 ) : page == "tag-management" ? (
                   <TagManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                 ) : page == "vector-stores" ? (

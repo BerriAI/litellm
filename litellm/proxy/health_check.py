@@ -138,6 +138,7 @@ def _update_litellm_params_for_health_check(
     - gets a short `messages` param for health check
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
+    - updates the `model` param with the Bedrock base model name if it is a Bedrock model
     """
     litellm_params["messages"] = _get_random_llm_message()
     _health_check_model = model_info.get("health_check_model", None)
@@ -145,6 +146,9 @@ def _update_litellm_params_for_health_check(
         litellm_params["model"] = _health_check_model
     if model_info.get("mode", None) == "audio_speech":
         litellm_params["voice"] = model_info.get("health_check_voice", "alloy")
+    if "bedrock" in litellm_params["model"]:
+        from litellm.llms.bedrock.common_utils import BedrockModelInfo
+        litellm_params["model"] = BedrockModelInfo.get_base_model(litellm_params["model"])
     return litellm_params
 
 

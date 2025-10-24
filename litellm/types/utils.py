@@ -239,6 +239,8 @@ class CallTypes(str, Enum):
     speech = "speech"
     rerank = "rerank"
     arerank = "arerank"
+    search = "search"
+    asearch = "asearch"
     arealtime = "_arealtime"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
@@ -321,6 +323,8 @@ CallTypesLiteral = Literal[
     "speech",
     "rerank",
     "arerank",
+    "search",
+    "asearch",
     "_arealtime",
     "create_batch",
     "acreate_batch",
@@ -2538,6 +2542,23 @@ class LlmProviders(str, Enum):
 LlmProvidersSet = {provider.value for provider in LlmProviders}
 
 
+class SearchProviders(str, Enum):
+    """
+    Enum for search provider types.
+    Separate from LlmProviders for semantic clarity.
+    """
+    PERPLEXITY = "perplexity"
+    TAVILY = "tavily"
+    PARALLEL_AI = "parallel_ai"
+    EXA_AI = "exa_ai"
+    GOOGLE_PSE = "google_pse"
+    DATAFORSEO = "dataforseo"
+
+
+# Create a set of all search provider values for quick lookup
+SearchProvidersSet = {provider.value for provider in SearchProviders}
+
+
 class LiteLLMLoggingBaseClass:
     """
     Base class for logging pre and post call
@@ -2761,6 +2782,25 @@ CostResponseTypes = Union[
     ImageResponse,
     TranscriptionResponse,
 ]
+
+
+class PriorityReservationDict(TypedDict, total=False):
+    """
+    Dictionary format for priority reservation values.
+    
+    Used in litellm.priority_reservation to specify how much capacity to reserve
+    for each priority level. Supports three formats:
+    1. Percentage-based: {"type": "percent", "value": 0.9} -> 90% of capacity
+    2. RPM-based: {"type": "rpm", "value": 900} -> 900 requests per minute
+    3. TPM-based: {"type": "tpm", "value": 900000} -> 900,000 tokens per minute
+    
+    Attributes:
+        type: The type of value - "percent", "rpm", or "tpm". Defaults to "percent".
+        value: The numeric value. For percent (0.0-1.0), for rpm/tpm (absolute value).
+    """
+
+    type: Literal["percent", "rpm", "tpm"]
+    value: float
 
 
 class PriorityReservationSettings(BaseModel):

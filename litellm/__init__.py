@@ -28,6 +28,7 @@ from litellm.types.utils import (
     all_litellm_params,
     all_litellm_params as _litellm_completion_params,
     CredentialItem,
+    PriorityReservationDict,
 )  # maintain backwards compatibility for root param
 from litellm._logging import (
     set_verbose,
@@ -89,7 +90,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     LiteLLM_UpperboundKeyGenerateParams,
 )
-from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
+from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders, SearchProviders
 from litellm.types.utils import PriorityReservationSettings
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
@@ -156,7 +157,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "cloudzero",
     "posthog",
 ]
-configured_cold_storage_logger: Optional[
+cold_storage_custom_logger: Optional[
     _custom_logger_compatible_callbacks_literal
 ] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -369,7 +370,7 @@ disable_copilot_system_to_assistant: bool = False  # If false (default), convert
 public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
 #### REQUEST PRIORITIZATION #######
-priority_reservation: Optional[Dict[str, float]] = None
+priority_reservation: Optional[Dict[str, Union[float, PriorityReservationDict]]] = None
 priority_reservation_settings: "PriorityReservationSettings" = (
     PriorityReservationSettings()
 )
@@ -1334,6 +1335,7 @@ from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
 from .ocr.main import *
+from .search.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *
