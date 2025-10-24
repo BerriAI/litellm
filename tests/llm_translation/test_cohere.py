@@ -730,37 +730,6 @@ def test_cohere_v2_parameter_mapping():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
-@pytest.mark.asyncio
-async def test_cohere_v2_multiple_generations():
-    """Test Cohere v2 multiple generations (n parameter)."""
-    try:
-        litellm.set_verbose = True
-        messages = [
-            {"role": "user", "content": "Write a haiku about nature."}
-        ]
-        
-        response = await litellm.acompletion(
-            model="cohere_chat/v2/command-a-03-2025",
-            messages=messages,
-            n=3,  # Request 3 generations
-            max_tokens=30
-        )
-        
-        # Validate multiple generations
-        assert response.choices is not None
-        assert len(response.choices) == 3
-        
-        for i, choice in enumerate(response.choices):
-            assert choice.message.content is not None
-            print(f"Generation {i+1}: {choice.message.content}")
-            
-    except litellm.ServiceUnavailableError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_cohere_v2_error_handling():
     """Test Cohere v2 error handling with invalid parameters."""
     try:

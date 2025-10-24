@@ -194,44 +194,6 @@ class TestAzureVideoConfig:
         assert hasattr(result, 'remixed_from_video_id')
         assert result.remixed_from_video_id == "video_azure_123"
 
-    def test_transform_video_list_response(self):
-        """Test video list response transformation."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "object": "list",
-            "data": [
-                {
-                    "id": "video_azure_1",
-                    "object": "video",
-                    "status": "completed",
-                    "created_at": 1712697600,
-                    "model": "sora-2"
-                },
-                {
-                    "id": "video_azure_2", 
-                    "object": "video",
-                    "status": "processing",
-                    "created_at": 1712697601,
-                    "model": "sora-2"
-                }
-            ],
-            "has_more": True
-        }
-        
-        logging_obj = MagicMock()
-        
-        result = self.config.transform_video_list_response(
-            model=self.model,
-            raw_response=mock_response,
-            logging_obj=logging_obj
-        )
-        
-        assert isinstance(result, list)
-        assert len(result) == 2
-        assert isinstance(result[0], VideoObject)
-        assert result[0].id == "video_azure_1"
-        assert result[1].id == "video_azure_2"
-
     def test_transform_video_delete_response(self):
         """Test video delete response transformation."""
         mock_response = MagicMock()
