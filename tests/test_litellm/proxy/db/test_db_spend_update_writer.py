@@ -8,7 +8,7 @@ sys.path.insert(
 
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import pytest
 
@@ -137,6 +137,90 @@ async def test_update_daily_spend_with_null_entity_id():
     assert create_data["failed_requests"] == 0
 
 
+@pytest.mark.asyncio
+async def test_update_daily_spend_sorting():
+    """
+    Test that table.upsert is called with events sorted
+
+    Ensures that writes are sorted between transactions to minimize deadlocks
+    """
+    # Setup
+    mock_prisma_client = MagicMock()
+    mock_batcher = MagicMock()
+    mock_table = MagicMock()
+    mock_prisma_client.db.batch_.return_value.__aenter__.return_value = mock_batcher
+    mock_batcher.litellm_dailyuserspend = mock_table
+
+    # Create a 50 transactions with out-of-order entity_ids
+    # In reality we sort using multiple fields, but entity_id is sufficient to test sorting
+    daily_spend_transactions = {}
+    upsert_calls = []
+    for i in range(50):
+        daily_spend_transactions[f"test_key_{i}"] = {
+            "user_id": f"user{60-i}", # user60 ... user11, reverse order
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        }
+        upsert_calls.append(call(
+            where={
+                "user_id_date_api_key_model_custom_llm_provider": {
+                    "user_id": f"user{i+11}", # user11 ... user60, sorted order
+                    "date": "2024-01-01",
+                    "api_key": "test-api-key",
+                    "model": "gpt-4",
+                    "custom_llm_provider": "openai",
+                    "mcp_namespaced_tool_name": "",
+                }
+            },
+            data={
+                "create": {
+                    "user_id": f"user{i+11}",
+                    "date": "2024-01-01",
+                    "api_key": "test-api-key",
+                    "model": "gpt-4",
+                    "model_group": None,
+                    "mcp_namespaced_tool_name": "",
+                    "custom_llm_provider": "openai",
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "spend": 0.1,
+                    "api_requests": 1,
+                    "successful_requests": 1,
+                    "failed_requests": 0,
+                },
+                "update": {
+                    "prompt_tokens": {"increment": 10},
+                    "completion_tokens": {"increment": 20},
+                    "spend": {"increment": 0.1},
+                    "api_requests": {"increment": 1},
+                    "successful_requests": {"increment": 1},
+                    "failed_requests": {"increment": 0},
+                },
+            },
+        ))
+
+    # Call the method
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=1,
+        prisma_client=mock_prisma_client,
+        proxy_logging_obj=MagicMock(),
+        daily_spend_transactions=daily_spend_transactions,
+        entity_type="user",
+        entity_id_field="user_id",
+        table_name="litellm_dailyuserspend",
+        unique_constraint_name="user_id_date_api_key_model_custom_llm_provider",
+    )
+
+    # Verify that table.upsert was called
+    mock_table.upsert.assert_has_calls(upsert_calls)
 # Tag Spend Tracking Tests
 
 
