@@ -2,7 +2,7 @@
 CRUD ENDPOINTS FOR SEARCH TOOLS
 """
 from datetime import datetime
-from typing import Any, Dict, List, Union, cast
+from typing import Any, Dict, List, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -11,7 +11,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
 from litellm.types.search import (
-    AvailableSearchProvider,
     ListSearchToolsResponse,
     SearchTool,
     SearchToolInfoResponse,
@@ -307,8 +306,8 @@ async def delete_search_tool(search_tool_id: str):
         )
 
         verbose_proxy_logger.info(
-            f"Successfully deleted search tool from database. "
-            f"Router will be updated by the cron job."
+            "Successfully deleted search tool from database. "
+            "Router will be updated by the cron job."
         )
 
         return result
