@@ -10,6 +10,7 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_au
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.types.llms.openai import ChatCompletionUserMessage
 
 router = APIRouter()
 
@@ -69,6 +70,27 @@ async def video_generation(
         input_reference_file = await batch_to_bytesio([input_reference])
         if input_reference_file:
             data["input_reference"] = input_reference_file[0]
+
+    ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+    prompt_value = data.get("prompt")
+    if prompt_value is not None:
+        # Reformat the video prompt as a chat message so guardrails can process it.
+        user_message: ChatCompletionUserMessage = {
+            "role": "user",
+            "content": prompt_value,
+        }
+        data["messages"] = [user_message]
+    
+    data = await proxy_logging_obj.pre_call_hook(
+        user_api_key_dict=user_api_key_dict, data=data, call_type="video_generation"
+    )
+
+    # Convert back to original format
+    messages = data.get("messages")
+    if isinstance(messages, list) and messages:
+        from litellm.litellm_core_utils.prompt_templates.common_utils import get_str_from_messages
+        data["prompt"] = get_str_from_messages(messages)
+    data.pop("messages", None)
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -394,6 +416,27 @@ async def video_remix(
     body = await request.body()
     data = orjson.loads(body)
     data["video_id"] = video_id
+
+    ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+    prompt_value = data.get("prompt")
+    if prompt_value is not None:
+        # Reformat the video remix prompt as a chat message so guardrails can process it.
+        user_message: ChatCompletionUserMessage = {
+            "role": "user",
+            "content": prompt_value,
+        }
+        data["messages"] = [user_message]
+    
+    data = await proxy_logging_obj.pre_call_hook(
+        user_api_key_dict=user_api_key_dict, data=data, call_type="video_remix"
+    )
+
+    # Convert back to original format
+    messages = data.get("messages")
+    if isinstance(messages, list) and messages:
+        from litellm.litellm_core_utils.prompt_templates.common_utils import get_str_from_messages
+        data["prompt"] = get_str_from_messages(messages)
+    data.pop("messages", None)
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
