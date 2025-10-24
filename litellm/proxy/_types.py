@@ -323,11 +323,9 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/vector_stores",
         "/vector_stores/{vector_store_id}/search",
         "/v1/vector_stores/{vector_store_id}/search",
-
         # search
         "/search",
         "/v1/search",
-
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -3496,3 +3494,19 @@ class EnterpriseLicenseData(TypedDict, total=False):
     allowed_features: List[str]
     max_users: int
     max_teams: int
+
+
+class LiteLLM_ManagedVectorStoresTable(LiteLLMPydanticObjectBase):
+    vector_store_id: str
+    custom_llm_provider: str
+    vector_store_name: Optional[str]
+    vector_store_description: Optional[str]
+    vector_store_metadata: Optional[Dict[str, Any]]
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
+    litellm_credential_name: Optional[str]
+    litellm_params: Optional[Dict[str, Any]]
+
+
+class ResponseLiteLLM_ManagedVectorStore(TypedDict, total=False):
+    vector_store: LiteLLM_ManagedVectorStoresTable
