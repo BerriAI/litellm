@@ -68,6 +68,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
+from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1616,6 +1617,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
             or isinstance(logging_result, OpenAIModerationResponse)
             or isinstance(logging_result, VideoObject) 
+            or isinstance(logging_result, SearchResponse)
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
             return True
