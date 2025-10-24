@@ -1,5 +1,5 @@
 import json
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Tuple
 
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -281,7 +281,7 @@ class CohereV2ModelResponseIterator:
             return {"citations": [citation_data]}
         return None
 
-    def _parse_message_end(self, chunk: dict) -> tuple[bool, str, Optional[ChatCompletionUsageBlock]]:
+    def _parse_message_end(self, chunk: dict) -> Tuple[bool, str, Optional[ChatCompletionUsageBlock]]:
         """Parse message-end events to extract finish info and usage."""
         data = chunk.get("data", {})
         delta = data.get("delta", {})
