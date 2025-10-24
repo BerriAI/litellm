@@ -521,4 +521,6 @@ def test_amazon_titan_image_gen():
         aws_region_name="us-east-1",
     )
 
-    print(f"response: {response}")
+    print(f"response cost: {response._hidden_params['response_cost']}")
+
+    assert response._hidden_params["response_cost"] > 0
