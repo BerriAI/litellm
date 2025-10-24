@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.videos.main import (
     VideoCreateOptionalRequestParams,
     VideoObject,
+    VideoResponse,
 )
 from litellm.videos.utils import VideoGenerationRequestUtils
 from litellm.constants import DEFAULT_VIDEO_ENDPOINT_MODEL, request_timeout as DEFAULT_REQUEST_TIMEOUT
@@ -888,6 +889,240 @@ def video_list(  # noqa: PLR0915
             logging_obj=litellm_logging_obj,
             extra_headers=extra_headers,
             extra_query=extra_query,
+            timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+        )
+
+    except Exception as e:
+        raise litellm.exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+##### Video Status/Retrieve #######################
+@client
+async def avideo_status(
+    video_id: str,
+    model: Optional[str] = None,
+    timeout=600,  # default to 10 minutes
+    custom_llm_provider=None,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    **kwargs,
+) -> VideoObject:
+    """
+    Asynchronously retrieve video status from OpenAI's video API.
+
+    Parameters:
+    - `video_id` (str): The identifier of the video whose status to retrieve
+    - `model` (Optional[str]): The model to use. If not provided, will be auto-detected
+    - `timeout` (int): Request timeout in seconds
+    - `custom_llm_provider` (Optional[str]): The LLM provider to use
+    - `extra_headers` (Optional[Dict[str, Any]]): Additional headers
+    - `extra_query` (Optional[Dict[str, Any]]): Additional query parameters
+    - `extra_body` (Optional[Dict[str, Any]]): Additional body parameters
+    - `kwargs` (dict): Additional keyword arguments
+
+    Returns:
+    - `response` (VideoObject): The response returned by the `video_status` function.
+"""
+    local_vars = locals()
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["async_call"] = True
+
+        # get custom llm provider so we can use this for mapping exceptions
+        if custom_llm_provider is None:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                model=model or DEFAULT_VIDEO_ENDPOINT_MODEL, api_base=local_vars.get("api_base", None)
+            )
+
+        func = partial(
+            video_status,
+            video_id=video_id,
+            model=model,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+# fmt: off
+
+# Overload for when avideo_status=True (returns Coroutine)
+@overload
+def video_status(
+    video_id: str,
+    model: Optional[str] = None,
+    timeout=600,  # default to 10 minutes
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    custom_llm_provider=None,
+    *,
+    avideo_status: Literal[True],
+    **kwargs,
+) -> Coroutine[Any, Any, VideoObject]:
+    ...
+
+# Overload for when avideo_status=False (returns VideoObject)
+@overload
+def video_status(
+    video_id: str,
+    model: Optional[str] = None,
+    timeout=600,  # default to 10 minutes
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    custom_llm_provider=None,
+    *,
+    avideo_status: Literal[False] = False,
+    **kwargs,
+) -> VideoObject:
+    ...
+
+# fmt: on
+
+
+@client
+def video_status(  # noqa: PLR0915
+    video_id: str,
+    model: Optional[str] = None,
+    timeout=600,  # default to 10 minutes
+    custom_llm_provider=None,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    **kwargs,
+) -> Union[
+    VideoObject,
+    Coroutine[Any, Any, VideoObject],
+]:
+    """
+    Retrieve video status from OpenAI's video API.
+
+    Args:
+        video_id (str): The identifier of the video whose status to retrieve.
+        model (Optional[str]): The model to use. If not provided, will be auto-detected.
+        timeout (int): The timeout for the request in seconds.
+        custom_llm_provider (Optional[str]): The LLM provider to use. If not provided, will be auto-detected.
+        extra_headers (Optional[Dict[str, Any]]): Additional headers to include in the request.
+        extra_query (Optional[Dict[str, Any]]): Additional query parameters.
+        extra_body (Optional[Dict[str, Any]]): Additional body parameters.
+
+    Returns:
+        VideoObject: The video status information.
+
+    Example:
+        ```python
+        import litellm
+
+        # Get video status
+        video_status = litellm.video_status(
+            video_id="video_123",
+            custom_llm_provider="openai"
+        )
+
+        print(f"Video status: {video_status.status}")
+        print(f"Progress: {video_status.progress}%")
+        ```
+    """
+    local_vars = locals()
+    try:
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        _is_async = kwargs.pop("async_call", False) is True
+
+        # Check for mock response first
+        mock_response = kwargs.get("mock_response", None)
+        if mock_response is not None:
+            if isinstance(mock_response, str):
+                mock_response = json.loads(mock_response)
+
+            response = VideoObject(**mock_response)
+            return response
+
+        # get llm provider logic
+        litellm_params = GenericLiteLLMParams(**kwargs)
+        model, custom_llm_provider, _, _ = get_llm_provider(
+            model=model or DEFAULT_VIDEO_ENDPOINT_MODEL,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        # get provider config
+        video_status_provider_config: Optional[BaseVideoConfig] = (
+            ProviderConfigManager.get_provider_video_config(
+                model=model,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        )
+
+        if video_status_provider_config is None:
+            raise ValueError(f"video status is not supported for {custom_llm_provider}")
+
+        local_vars.update(kwargs)
+        # For video status, we need the video_id
+        video_status_request_params: Dict = {
+            "video_id": video_id,
+        }
+
+        # Pre Call logging
+        litellm_logging_obj.update_environment_variables(
+            model=model,
+            user=kwargs.get("user"),
+            optional_params=dict(video_status_request_params),
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+                **video_status_request_params,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        # Set the correct call type for video status
+        litellm_logging_obj.call_type = CallTypes.video_retrieve.value
+
+        # Call the handler with _is_async flag instead of directly calling the async handler
+        return base_llm_http_handler.video_status_handler(
+            video_id=video_id,
+            model=model,
+            video_status_provider_config=video_status_provider_config,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
             client=kwargs.get("client"),

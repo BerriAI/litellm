@@ -1,6 +1,9 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, IO
 from io import BufferedReader
-
+from os import PathLike
+from pathlib import Path
+import mimetypes
+from typing import cast
 import httpx
 from httpx._types import RequestFiles
 
@@ -11,7 +14,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.videos.main import VideoObject
 import litellm
-
+from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
@@ -114,36 +117,26 @@ class OpenAIVideoConfig(BaseVideoConfig):
             prompt=prompt,
             **video_create_optional_request_params
         )
-        
-        # Handle file uploads
-        files_list: List[Tuple[str, Tuple[str, Union[IO[bytes], bytes, str], str]]] = []
-        
+        request_dict = cast(Dict, video_create_request)
+
         # Handle input_reference parameter if provided
         _input_reference = video_create_optional_request_params.get("input_reference")
+        data_without_files = {
+            k: v for k, v in request_dict.items() if k not in ["input_reference"]
+        }
+        files_list: List[Tuple[str, Any]] = []
+
+        # Handle input_reference parameter
         if _input_reference is not None:
-            if isinstance(_input_reference, BufferedReader):
-                files_list.append(
-                    ("input_reference", (_input_reference.name, _input_reference, "image/png"))
-                )
-            elif isinstance(_input_reference, str):
-                # Handle file path - open the file
-                try:
-                    with open(_input_reference, "rb") as f:
-                        files_list.append(
-                            ("input_reference", (f.name, f.read(), "image/png"))
-                        )
-                except Exception as e:
-                    raise ValueError(f"Could not open input_reference file {_input_reference}: {e}")
-            else:
-                # Handle file-like object
-                files_list.append(
-                    ("input_reference", ("input_reference.png", _input_reference, "image/png"))
-                )
-        
+            self._add_image_to_files(
+                files_list=files_list,
+                image=_input_reference,
+                field_name="input_reference",
+            )
         # Convert to dict for JSON serialization
-        data = dict(video_create_request)
-        
-        return data, files_list
+        print(f"OpenAI video request data: {data_without_files}")
+        print(f"OpenAI video request files: {files_list}")
+        return data_without_files, files_list
 
     def transform_video_create_response(
         self,
@@ -174,6 +167,56 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
         
         return video_obj
+
+    def transform_video_content_request(
+        self,
+        video_id: str,
+        model: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the video content request for OpenAI API.
+        
+        OpenAI API expects the following request:
+        - GET /v1/videos/{video_id}/content
+        """
+        # Construct the URL for video content download
+        url = f"{api_base.rstrip('/')}/{video_id}/content"
+        
+        # Add video_id as query parameter
+        params = {"video_id": video_id}
+        
+        return url, params
+
+    def transform_video_remix_request(
+        self,
+        video_id: str,
+        prompt: str,
+        model: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the video remix request for OpenAI API.
+        
+        OpenAI API expects the following request:
+        - POST /v1/videos/{video_id}/remix
+        """
+        # Construct the URL for video remix
+        url = f"{api_base.rstrip('/')}/{video_id}/remix"
+        
+        # Prepare the request data
+        data = {"prompt": prompt}
+        
+        # Add any extra body parameters
+        if extra_body:
+            data.update(extra_body)
+        
+        return url, data
     
     def transform_video_content_response(
         self,
@@ -216,19 +259,71 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
         return video_obj
 
+    def transform_video_list_request(
+        self,
+        model: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        after: Optional[str] = None,
+        limit: Optional[int] = None,
+        order: Optional[str] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the video list request for OpenAI API.
+        
+        OpenAI API expects the following request:
+        - GET /v1/videos
+        """
+        # Use the api_base directly for video list
+        url = api_base
+        
+        # Prepare query parameters
+        params = {}
+        if after is not None:
+            params["after"] = after
+        if limit is not None:
+            params["limit"] = str(limit)
+        if order is not None:
+            params["order"] = order
+        
+        # Add any extra query parameters
+        if extra_query:
+            params.update(extra_query)
+        
+        return url, params
+
     def transform_video_list_response(
         self,
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> List[VideoObject]:
+    ) -> Dict[str,str]:
+        print(f"OpenAI video list response: {raw_response.json()}")
+        return raw_response.json()
+
+    def transform_video_delete_request(
+        self,
+        video_id: str,
+        model: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
         """
-        Transform the OpenAI video list response.
+        Transform the video delete request for OpenAI API.
+        
+        OpenAI API expects the following request:
+        - DELETE /v1/videos/{video_id}
         """
-        response_data = raw_response.json()
-        video_response = VideoResponse(**response_data)
-        # Convert VideoResponse object to dictionary to match base class return type
-        return [VideoObject(**video) if isinstance(video, dict) else video for video in video_response.data]  # type: ignore[arg-type]
+        # Construct the URL for video delete
+        url = f"{api_base.rstrip('/')}/{video_id}"
+        
+        # No data needed for DELETE request
+        data: Dict[str, Any] = {}
+        
+        return url, data
 
     def transform_video_delete_response(
         self,
@@ -246,6 +341,41 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
         return video_obj
 
+    def transform_video_status_retrieve_request(
+        self,
+        video_id: str,
+        model: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the OpenAI video retrieve request.
+        """
+        # For video retrieve, we just need to construct the URL
+        url = f"{api_base.rstrip('/')}/{video_id}"
+        
+        # No additional data needed for GET request
+        data: Dict[str, Any] = {}
+        
+        return url, data
+
+    def transform_video_status_retrieve_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> VideoObject:
+        """
+        Transform the OpenAI video retrieve response.
+        """
+        response_data = raw_response.json()
+        print(f"OpenAI video status retrieve response: {response_data}")
+        # Transform the response data
+        video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
+
+        return video_obj
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
@@ -256,3 +386,17 @@ class OpenAIVideoConfig(BaseVideoConfig):
             message=error_message,
             headers=headers,
         )
+
+    def _add_image_to_files(
+        self,
+        files_list: List[Tuple[str, Any]],
+        image: Any,
+        field_name: str,
+    ) -> None:
+        """Add an image to the files list with appropriate content type"""
+        image_content_type = ImageEditRequestUtils.get_image_content_type(image)
+
+        if isinstance(image, BufferedReader):
+            files_list.append((field_name, (image.name, image, image_content_type)))
+        else:
+            files_list.append((field_name, ("input_reference.png", image, image_content_type)))
