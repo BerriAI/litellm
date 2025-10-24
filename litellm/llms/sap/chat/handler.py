@@ -389,15 +389,7 @@ class GenAIHubOrchestration(BaseLLM):
         except httpx.TimeoutException:
             raise GenAIHubOrchestrationError(408, "Timeout error occurred.")
 
-        return litellm.GenAIHubOrchestrationConfig()._transform_response(
-            model=model,
-            response=resp,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            print_verbose=print_verbose,
-            optional_params=optional_params,
-            encoding=encoding,
-        )
+        return litellm.GenAIHubOrchestrationConfig()._transform_response(response=resp)
 
     # ---------- Sync paths ----------
     def _streaming(
@@ -476,15 +468,7 @@ class GenAIHubOrchestration(BaseLLM):
         except httpx.TimeoutException:
             raise GenAIHubOrchestrationError(408, "Timeout error occurred.")
 
-        return litellm.GenAIHubOrchestrationConfig()._transform_response(
-            model=model,
-            response=resp,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            print_verbose=print_verbose,
-            optional_params=optional_params,
-            encoding=encoding,
-        )
+        return litellm.GenAIHubOrchestrationConfig()._transform_response(response=resp)
 
     # ---------- entrypoint ----------
     def completion(
@@ -513,7 +497,6 @@ class GenAIHubOrchestration(BaseLLM):
             model=model,
             messages=messages,
             optional_params=optional_params,
-            litellm_params=litellm_params,
         )
 
         # logging

@@ -97,7 +97,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         model: str,
         messages: List[Dict[str, str]],
         optional_params: dict,
-        litellm_params: Optional[dict] = None,
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
         model_params = {
@@ -156,14 +155,5 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
         return config
 
-    def _transform_response(
-        self,
-        model: str,
-        response,
-        model_response: ModelResponse,
-        logging_obj: Optional[LiteLLMLoggingObject],
-        optional_params: dict,
-        print_verbose,
-        encoding,
-    ) -> ModelResponse:
+    def _transform_response(self, response) -> ModelResponse:
         return ModelResponse.model_validate(response.json()["final_result"])
