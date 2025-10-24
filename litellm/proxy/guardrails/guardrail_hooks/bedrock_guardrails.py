@@ -1104,7 +1104,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
             
             mock_messages = [{"role": "user", "content": text}]
-            bedrock_request = self._create_bedrock_input_content_request(mock_messages)
             bedrock_response = await self.make_bedrock_api_request(
                 source="INPUT",
                 messages=mock_messages,
