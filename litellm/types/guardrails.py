@@ -356,6 +356,9 @@ class LassoGuardrailConfigModel(BaseModel):
     lasso_conversation_id: Optional[str] = Field(
         default=None, description="Conversation ID for the Lasso guardrail"
     )
+    mask: Optional[bool] = Field(
+        default=False, description="Enable content masking using Lasso classifix API"
+    )
 
 
 class PillarGuardrailConfigModel(BaseModel):
