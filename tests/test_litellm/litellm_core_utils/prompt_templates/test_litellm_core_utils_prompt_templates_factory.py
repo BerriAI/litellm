@@ -1,5 +1,5 @@
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -565,6 +565,257 @@ def test_bedrock_tools_unpack_defs():
     ]
 
     _bedrock_tools_pt(tools=tools)
+
+
+def test_bedrock_image_processor_content_type_fallback_url_extension():
+    """
+    Test that _post_call_image_processing falls back to URL extension 
+    when content-type is binary/octet-stream or application/octet-stream
+    """
+    import base64
+    
+    # Create mock response with binary/octet-stream content-type
+    mock_response = MagicMock()
+    mock_response.headers.get.return_value = "binary/octet-stream"
+    
+    # Create a simple PNG header (magic bytes)
+    png_header = b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a"
+    png_content = png_header + b"\x00" * 100  # Add some padding
+    mock_response.content = png_content
+    
+    # Test with .png URL
+    image_url = "https://example.com/test-image.png"
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
+        mock_response, image_url
+    )
+    
+    assert content_type == "image/png"
+    assert base64_bytes == base64.b64encode(png_content).decode("utf-8")
+
+
+def test_bedrock_image_processor_content_type_fallback_binary_detection():
+    """
+    Test that _post_call_image_processing falls back to binary content detection
+    when content-type is missing and URL extension is not recognized
+    """
+    import base64
+    
+    # Create mock response with no content-type
+    mock_response = MagicMock()
+    mock_response.headers.get.return_value = None
+    
+    # Create a JPEG header (magic bytes)
+    jpeg_header = b"\xff\xd8\xff"
+    jpeg_content = jpeg_header + b"\x00" * 100  # Add some padding
+    mock_response.content = jpeg_content
+    
+    # Test with URL without extension
+    image_url = "https://example.com/test-image-without-extension"
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
+        mock_response, image_url
+    )
+    
+    assert content_type == "image/jpeg"
+    assert base64_bytes == base64.b64encode(jpeg_content).decode("utf-8")
+
+
+def test_bedrock_image_processor_content_type_fallback_application_octet_stream():
+    """
+    Test that _post_call_image_processing handles application/octet-stream correctly
+    """
+    import base64
+    
+    # Create mock response with application/octet-stream content-type
+    mock_response = MagicMock()
+    mock_response.headers.get.return_value = "application/octet-stream"
+    
+    # Create a GIF header (magic bytes)
+    gif_header = b"GIF8" + b"\x00" + b"a"
+    gif_content = gif_header + b"\x00" * 100  # Add some padding
+    mock_response.content = gif_content
+    
+    # Test with .gif URL
+    image_url = "https://s3.amazonaws.com/bucket/image.gif"
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
+        mock_response, image_url
+    )
+    
+    assert content_type == "image/gif"
+    assert base64_bytes == base64.b64encode(gif_content).decode("utf-8")
+
+
+def test_bedrock_image_processor_content_type_with_query_params():
+    """
+    Test that _post_call_image_processing correctly extracts extension from URL with query parameters
+    """
+    import base64
+    
+    # Create mock response with binary/octet-stream content-type
+    mock_response = MagicMock()
+    mock_response.headers.get.return_value = "binary/octet-stream"
+    
+    # Create a WebP header (magic bytes)
+    webp_header = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP"
+    webp_content = webp_header + b"\x00" * 100  # Add some padding
+    mock_response.content = webp_content
+    
+    # Test with URL containing query parameters (common in S3 signed URLs)
+    image_url = "https://s3.amazonaws.com/bucket/image.webp?AWSAccessKeyId=123&Expires=456&Signature=789"
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
+        mock_response, image_url
+    )
+    
+    assert content_type == "image/webp"
+    assert base64_bytes == base64.b64encode(webp_content).decode("utf-8")
+
+
+def test_bedrock_image_processor_content_type_normal_header():
+    """
+    Test that _post_call_image_processing works normally when content-type is correctly set
+    """
+    import base64
+    
+    # Create mock response with correct content-type
+    mock_response = MagicMock()
+    mock_response.headers.get.return_value = "image/png"
+    
+    # Create a PNG header
+    png_header = b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a"
+    png_content = png_header + b"\x00" * 100
+    mock_response.content = png_content
+    
+    image_url = "https://example.com/test-image.png"
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
+        mock_response, image_url
+    )
+    
+    assert content_type == "image/png"
+    assert base64_bytes == base64.b64encode(png_content).decode("utf-8")
+
+
+def test_bedrock_image_processor_content_type_fallback_failure():
+    """
+    Test that _post_call_image_processing raises ValueError when all fallback methods fail
+    """
+    # Create mock response with binary/octet-stream content-type
+    mock_response = MagicMock()
+    mock_response.headers.get.return_value = "binary/octet-stream"
+    
+    # Create content with unrecognizable image format
+    mock_response.content = b"\x00" * 100
+    
+    # Test with URL without recognizable extension
+    image_url = "https://example.com/unknown-file"
+    
+    with pytest.raises(ValueError) as excinfo:
+        BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
+    
+    assert "Unable to determine content type" in str(excinfo.value)
+
+
+def test_bedrock_image_processor_content_type_jpeg_variants():
+    """
+    Test that _post_call_image_processing handles both .jpg and .jpeg extensions correctly
+    """
+    # Create mock response with binary/octet-stream
+    mock_response = MagicMock()
+    mock_response.headers.get.return_value = "binary/octet-stream"
+    
+    jpeg_header = b"\xff\xd8\xff"
+    jpeg_content = jpeg_header + b"\x00" * 100
+    mock_response.content = jpeg_content
+    
+    # Test with .jpg extension
+    image_url_jpg = "https://example.com/photo.jpg"
+    _, content_type_jpg = BedrockImageProcessor._post_call_image_processing(
+        mock_response, image_url_jpg
+    )
+    assert content_type_jpg == "image/jpeg"
+    
+    # Test with .jpeg extension
+    image_url_jpeg = "https://example.com/photo.jpeg"
+    _, content_type_jpeg = BedrockImageProcessor._post_call_image_processing(
+        mock_response, image_url_jpeg
+    )
+    assert content_type_jpeg == "image/jpeg"
+
+
+def test_bedrock_image_processor_content_type_pdf_document():
+    """
+    Test that _post_call_image_processing handles PDF documents correctly
+    when content-type is binary/octet-stream
+    """
+    import base64
+    
+    # Create mock response with binary/octet-stream content-type
+    mock_response = MagicMock()
+    mock_response.headers.get.return_value = "binary/octet-stream"
+    
+    # Create a PDF header (magic bytes: %PDF)
+    pdf_header = b"%PDF-1.4"
+    pdf_content = pdf_header + b"\x00" * 100
+    mock_response.content = pdf_content
+    
+    # Test with .pdf URL
+    pdf_url = "https://s3.amazonaws.com/bucket/document.pdf"
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
+        mock_response, pdf_url
+    )
+    
+    assert content_type == "application/pdf"
+    assert base64_bytes == base64.b64encode(pdf_content).decode("utf-8")
+
+
+def test_bedrock_image_processor_content_type_document_formats():
+    """
+    Test that _post_call_image_processing handles various document formats
+    """
+    import base64
+    
+    # Create mock response
+    mock_response = MagicMock()
+    mock_response.headers.get.return_value = "application/octet-stream"
+    mock_response.content = b"\x00" * 100
+    
+    # Test various document formats
+    test_cases = [
+        ("https://example.com/doc.pdf", "application/pdf"),
+        ("https://example.com/sheet.csv", "text/csv"),
+        ("https://example.com/doc.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        ("https://example.com/sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        ("https://example.com/page.html", "text/html"),
+        ("https://example.com/readme.txt", "text/plain"),
+    ]
+    
+    for url, expected_mime in test_cases:
+        _, content_type = BedrockImageProcessor._post_call_image_processing(
+            mock_response, url
+        )
+        assert content_type == expected_mime, f"Expected {expected_mime} for {url}, got {content_type}"
+
+
+def test_bedrock_image_processor_content_type_s3_pdf_with_query():
+    """
+    Test that _post_call_image_processing handles S3 PDF with query parameters
+    """
+    import base64
+    
+    # Create mock response
+    mock_response = MagicMock()
+    mock_response.headers.get.return_value = "binary/octet-stream"
+    
+    pdf_content = b"%PDF-1.4" + b"\x00" * 100
+    mock_response.content = pdf_content
+    
+    # S3 signed URL with query parameters
+    s3_url = "https://my-bucket.s3.us-east-1.amazonaws.com/documents/report.pdf?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Expires=1234567890&Signature=abcdef123456"
+    
+    base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
+        mock_response, s3_url
+    )
+    
+    assert content_type == "application/pdf"
+    assert base64_bytes == base64.b64encode(pdf_content).decode("utf-8")
 
 
 def test_bedrock_tools_pt_empty_description():
