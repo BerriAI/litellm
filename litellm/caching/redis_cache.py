@@ -24,6 +24,8 @@ from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.services import ServiceTypes
 
 from .base_cache import BaseCache
+from .json_utils import TimedeltaJSONEncoder
+
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -215,7 +217,9 @@ class RedisCache(BaseCache):
         key = self.check_and_fix_namespace(key=key)
         try:
             start_time = time.time()
-            self.redis_client.set(name=key, value=str(value), ex=ttl)
+            # Always use JSON serialization for consistency with async method
+            serialized_value = json.dumps(value, cls=TimedeltaJSONEncoder)
+            self.redis_client.set(name=key, value=serialized_value, ex=ttl)
             end_time = time.time()
             _duration = end_time - start_time
             self.service_logger_obj.service_success_hook(
@@ -401,7 +405,7 @@ class RedisCache(BaseCache):
                 raise Exception("Redis client cannot set cache. Attribute not found.")
             result = await _redis_client.set(
                 name=key,
-                value=json.dumps(value),
+                value=json.dumps(value, cls=TimedeltaJSONEncoder),
                 nx=nx,
                 ex=ttl,
             )
@@ -459,7 +463,7 @@ class RedisCache(BaseCache):
             print_verbose(
                 f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}"
             )
-            json_cache_value = json.dumps(cache_value)
+            json_cache_value = json.dumps(cache_value, cls=TimedeltaJSONEncoder)
             # Set the value with a TTL if it's provided.
             _td: Optional[timedelta] = None
             if ttl is not None:
