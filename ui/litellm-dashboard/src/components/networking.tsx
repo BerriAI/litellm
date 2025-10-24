@@ -5673,8 +5673,8 @@ export const listMCPTools = async (accessToken: string, serverId: string, authVa
 
     if (!response.ok) {
       // If the server returned an error response, use it
-      if (data.error && data.message) {
-        throw new Error(data.message);
+      if (data.detail.error && data.detail.message) {
+        throw new Error(data.detail.message);
       }
       // Otherwise use a generic error
       throw new Error("Failed to fetch MCP tools");
