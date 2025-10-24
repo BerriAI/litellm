@@ -168,7 +168,7 @@ class GuardrailsAI(CustomGuardrail):
         )
 
         # Only process completion-related call types
-        if call_type not in ["completion", "acompletion", "image_generation"]:
+        if call_type not in ["completion", "acompletion"]:
             return data
 
         if "messages" not in data:  # invalid request
