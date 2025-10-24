@@ -53,6 +53,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         model_id: str = "",
+        policy_ids: List[str] = [],
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
@@ -74,6 +75,9 @@ class DynamoAIGuardrails(CustomGuardrail):
         # Model ID for tracking/logging purposes
         self.model_id = model_id or os.getenv("DYNAMOAI_MODEL_ID", "")
         
+        # Policy IDs - get from parameter, env var, or use empty list
+        env_policy_ids = os.getenv("DYNAMOAI_POLICY_IDS", "")
+        self.policy_ids = policy_ids or (env_policy_ids.split(",") if env_policy_ids else [])
         self.guardrail_name = guardrail_name
         self.guardrail_provider = "dynamoai"
         
@@ -119,7 +123,9 @@ class DynamoAIGuardrails(CustomGuardrail):
             "messages": messages,
         }
         
-        # Add modelId if provided
+        # Add optional fields if provided
+        if self.policy_ids:
+            payload["policyIds"] = self.policy_ids
         if self.model_id:
             payload["modelId"] = self.model_id
         

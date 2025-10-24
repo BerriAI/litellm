@@ -99,6 +99,10 @@ class DynamoAIGuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="Base URL for DynamoAI API. If not provided, the `DYNAMOAI_API_BASE` environment variable is checked, defaults to https://api.dynamo.ai",
     )
+    policy_ids: Optional[List[str]] = Field(
+        default=None,
+        description="List of DynamoAI policy IDs to apply. If not provided, the `DYNAMOAI_POLICY_IDS` environment variable is checked (comma-separated).",
+    )
     model_id: Optional[str] = Field(
         default=None,
         description="Model ID for tracking/logging purposes. If not provided, the `DYNAMOAI_MODEL_ID` environment variable is checked.",
