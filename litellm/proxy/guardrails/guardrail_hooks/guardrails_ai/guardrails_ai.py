@@ -168,7 +168,7 @@ class GuardrailsAI(CustomGuardrail):
         )
 
         # Only process completion-related call types
-        if call_type not in ["completion", "acompletion", "image_generation", "video_generation", "video_remix"]:
+        if call_type not in ["completion", "acompletion", "image_generation"]:
             return data
 
         if "messages" not in data:  # invalid request
@@ -177,7 +177,6 @@ class GuardrailsAI(CustomGuardrail):
         text = get_last_user_message(data["messages"])
         if text is None:
             return data
-        
         if self.guardrails_ai_api_input_format == "inputs":
             updated_text = await self.make_guardrails_ai_api_request_pre_call_request(
                 text_input=text, request_data=data
@@ -189,7 +188,6 @@ class GuardrailsAI(CustomGuardrail):
             updated_text = (
                 _result.get("validatedOutput") or _result.get("rawLlmOutput") or text
             )
-        
         data["messages"] = set_last_user_message(data["messages"], updated_text)
 
         return data
@@ -205,8 +203,6 @@ class GuardrailsAI(CustomGuardrail):
             "text_completion",
             "embeddings",
             "image_generation",
-            "video_generation",
-            "video_remix",
             "moderation",
             "audio_transcription",
             "pass_through_endpoint",
