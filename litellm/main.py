@@ -84,6 +84,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -2420,7 +2421,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 return response
             response = model_response
-        elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere":
+        elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere": 
             cohere_key = (
                 api_key
                 or litellm.cohere_key
@@ -2429,12 +2430,26 @@ def completion(  # type: ignore # noqa: PLR0915
                 or litellm.api_key
             )
 
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("COHERE_API_BASE")
-                or "https://api.cohere.ai/v1/chat"
-            )
+            cohere_route = CohereModelInfo.get_cohere_route(model)
+            verbose_logger.debug(f"Cohere route: {cohere_route}")
+            # Set API base based on route
+            if cohere_route == "v2":
+                api_base = (
+                    api_base
+                    or litellm.api_base
+                    or get_secret_str("COHERE_API_BASE")
+                    or "https://api.cohere.com/v2/chat"
+                )
+                # Remove v2/ prefix from model name for the actual API call
+                if "v2/" in model:
+                    model = model.replace("v2/", "")
+            else:
+                api_base = (
+                    api_base
+                    or litellm.api_base
+                    or get_secret_str("COHERE_API_BASE")
+                    or "https://api.cohere.ai/v1/chat"
+                )
 
             headers = headers or litellm.headers or {}
             if headers is None:
@@ -2443,6 +2458,8 @@ def completion(  # type: ignore # noqa: PLR0915
             if extra_headers is not None:
                 headers.update(extra_headers)
 
+            verbose_logger.debug(f"Model: {model}, API Base: {api_base}")
+            verbose_logger.debug(f"Provider Config: {provider_config}")
             response = base_llm_http_handler.completion(
                 model=model,
                 stream=stream,
@@ -2458,6 +2475,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 headers=headers,
                 encoding=encoding,
                 api_key=cohere_key,
+                provider_config=provider_config,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
         elif custom_llm_provider == "maritalk":
@@ -6265,6 +6283,18 @@ def stream_chunk_builder(  # noqa: PLR0915
             response["choices"][0]["message"]["reasoning_content"] = (
                 processor.get_combined_reasoning_content(reasoning_chunks)
             )
+
+        annotation_chunks = [
+            chunk
+            for chunk in chunks
+            if len(chunk["choices"]) > 0
+            and "annotations" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["annotations"] is not None
+        ]
+
+        if len(annotation_chunks) > 0:
+            annotations = annotation_chunks[0]["choices"][0]["delta"]["annotations"]
+            response["choices"][0]["message"]["annotations"] = annotations
 
         audio_chunks = [
             chunk

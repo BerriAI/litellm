@@ -23832,5 +23832,69 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
+    },
+    "openai/sora-2": {
+        "litellm_provider": "openai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.10,
+        "source": "https://platform.openai.com/docs/api-reference/videos",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "720x1280",
+            "1280x720"
+        ]
+    },
+    "azure/sora-2": {
+        "litellm_provider": "azure",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.10,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/video-generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "720x1280",
+            "1280x720"
+        ]
+    },
+    "azure/sora-2-pro": {
+        "litellm_provider": "azure",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.30,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/video-generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "720x1280",
+            "1280x720"
+        ]
+    },
+    "azure/sora-2-pro-high-res": {
+        "litellm_provider": "azure",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.50,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/video-generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "1024x1792",
+            "1792x1024"
+        ]
     }
 }
