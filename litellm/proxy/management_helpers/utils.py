@@ -1,14 +1,16 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
+import inspect
 from datetime import datetime
 from functools import wraps
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
     BudgetNewRequest,
     DeleteCustomerRequest,
@@ -306,6 +308,7 @@ async def send_management_endpoint_alert(
     request_kwargs: dict,
     user_api_key_dict: UserAPIKeyAuth,
     function_name: str,
+    result: Optional[Any] = None,
 ):
     """
     Sends a slack alert when:
@@ -330,29 +333,48 @@ async def send_management_endpoint_alert(
         "delete_user": AlertType.internal_user_deleted,
     }
 
-    # Check if alerting is enabled
+    if function_name not in management_function_to_event_name:
+        return
+
+    alert_type: AlertType = management_function_to_event_name[function_name]
+    alert_type_value = getattr(alert_type, "value", str(alert_type))
+    key_event = VirtualKeyEvent(
+        created_by_user_id=user_api_key_dict.user_id or "Unknown",
+        created_by_user_role=user_api_key_dict.user_role or "Unknown",
+        created_by_key_alias=user_api_key_dict.key_alias,
+        request_kwargs=request_kwargs,
+    )
+
+    alert_title = alert_type_value.replace("_", " ").title()
+
     if (
         proxy_logging_obj is not None
         and proxy_logging_obj.slack_alerting_instance is not None
     ):
-        # Virtual Key Events
-        if function_name in management_function_to_event_name:
-            _event_name: AlertType = management_function_to_event_name[function_name]
+        await proxy_logging_obj.slack_alerting_instance.send_virtual_key_event_slack(
+            key_event=key_event,
+            event_name=alert_title,
+            alert_type=alert_type,
+        )
 
-            key_event = VirtualKeyEvent(
-                created_by_user_id=user_api_key_dict.user_id or "Unknown",
-                created_by_user_role=user_api_key_dict.user_role or "Unknown",
-                created_by_key_alias=user_api_key_dict.key_alias,
-                request_kwargs=request_kwargs,
-            )
+    serialized_kwargs = _serialize_for_management_callbacks(request_kwargs)
+    serialized_result = (
+        _serialize_for_management_callbacks(result) if result is not None else None
+    )
 
-            # replace all "_" with " " and capitalize
-            event_name = _event_name.replace("_", " ").title()
-            await proxy_logging_obj.slack_alerting_instance.send_virtual_key_event_slack(
-                key_event=key_event,
-                event_name=event_name,
-                alert_type=_event_name,
-            )
+    event_payload = {
+        "alert_type": alert_type_value,
+        "function_name": function_name,
+        "request": serialized_kwargs,
+        "result": serialized_result,
+        "triggered_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+    await _dispatch_management_callbacks(
+        alert_title=alert_title,
+        event_payload=event_payload,
+        user_api_key_dict=user_api_key_dict,
+    )
 
 
 def management_endpoint_wrapper(func):
@@ -381,6 +403,7 @@ def management_endpoint_wrapper(func):
                     request_kwargs=kwargs,
                     user_api_key_dict=user_api_key_dict,
                     function_name=func.__name__,
+                    result=result,
                 )
                 _http_request = kwargs.get("http_request", None)
                 parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
@@ -455,3 +478,84 @@ def management_endpoint_wrapper(func):
             raise e
 
     return wrapper
+
+
+async def _dispatch_management_callbacks(
+    alert_title: str,
+    event_payload: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    try:
+        custom_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
+            CustomLogger
+        )
+    except Exception:
+        verbose_logger.exception(
+            "send_management_endpoint_alert: failed to load custom loggers"
+        )
+        return
+
+    if not custom_loggers:
+        return
+
+    serialized_payload = _serialize_for_management_callbacks(event_payload)
+
+    for logger in custom_loggers:
+        try:
+            # Check if the logger subclass provides its own async implementation.
+            # We use type(logger) to detect if the method was overridden vs. inherited from CustomLogger,
+            # avoiding calling the empty default hook and preventing mismatched async/sync usage.
+            async_override = getattr(type(logger), "async_log_management_event", None)
+            if (
+                async_override is not None
+                and async_override is not CustomLogger.async_log_management_event
+            ):
+                result = logger.async_log_management_event(  # type: ignore[attr-defined]
+                    event_name=alert_title,
+                    event_payload=serialized_payload,
+                    user_api_key_dict=user_api_key_dict,
+                )
+                if inspect.isawaitable(result):
+                    await result
+                continue
+
+            sync_override = getattr(type(logger), "log_management_event", None)
+            if (
+                sync_override is not None
+                and sync_override is not CustomLogger.log_management_event
+            ):
+                logger.log_management_event(  # type: ignore[attr-defined]
+                    event_name=alert_title,
+                    event_payload=serialized_payload,
+                    user_api_key_dict=user_api_key_dict,
+                )
+        except Exception:
+            verbose_logger.exception(
+                "send_management_endpoint_alert: custom logger '%s' failed",
+                type(logger).__name__,
+            )
+
+
+def _serialize_for_management_callbacks(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if hasattr(value, "model_dump"):
+        try:
+            value = value.model_dump()
+        except Exception:
+            try:
+                value = value.dict()
+            except Exception:
+                return str(value)
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, val in value.items():
+            if key in {"http_request", "prisma_client"}:
+                continue
+            cleaned[key] = _serialize_for_management_callbacks(val)
+        return cleaned
+    if isinstance(value, (list, tuple, set)):
+        return [_serialize_for_management_callbacks(item) for item in value]
+    return str(value)
