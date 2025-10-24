@@ -3175,8 +3175,9 @@ def completion(  # type: ignore # noqa: PLR0915
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
                 model = model.replace("converse/", "")
+                base_model = BedrockModelInfo.get_base_model(model)
                 response = bedrock_converse_chat_completion.completion(
-                    model=model,
+                    model=base_model,
                     messages=messages,
                     custom_prompt_dict=custom_prompt_dict,
                     model_response=model_response,
@@ -3194,8 +3195,9 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
             elif bedrock_route == "converse_like":
                 model = model.replace("converse_like/", "")
+                base_model = BedrockModelInfo.get_base_model(model)
                 response = base_llm_http_handler.completion(
-                    model=model,
+                    model=base_model,
                     stream=stream,
                     messages=messages,
                     acompletion=acompletion,
@@ -3212,8 +3214,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     client=client,
                 )
             else:
+                base_model = BedrockModelInfo.get_base_model(model)
                 response = base_llm_http_handler.completion(
-                    model=model,
+                    model=base_model,
                     stream=stream,
                     messages=messages,
                     acompletion=acompletion,
@@ -4292,8 +4295,9 @@ def embedding(  # noqa: PLR0915
                 transformed_input = [input]
             else:
                 transformed_input = input
+            base_model = BedrockModelInfo.get_base_model(model)
             response = bedrock_embedding.embeddings(
-                model=model,
+                model=base_model,
                 input=transformed_input,
                 encoding=encoding,
                 logging_obj=logging,
