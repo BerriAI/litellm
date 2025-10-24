@@ -880,11 +880,17 @@ def completion_cost(  # noqa: PLR0915
                 elif (
                     call_type == CallTypes.create_video.value
                     or call_type == CallTypes.acreate_video.value
+                    or call_type == CallTypes.video_remix.value
+                    or call_type == CallTypes.avideo_remix.value
                 ):
                     ### VIDEO GENERATION COST CALCULATION ###
                     if completion_response is not None and hasattr(completion_response, 'usage'):
                         usage_obj = completion_response.usage
-                        duration_seconds = usage_obj.get('duration_seconds')
+                        # Handle both dict and Pydantic Usage object
+                        if isinstance(usage_obj, dict):
+                            duration_seconds = usage_obj.get('duration_seconds', None)
+                        else:
+                            duration_seconds = getattr(usage_obj, 'duration_seconds', None)
 
                         if duration_seconds is not None:
                             # Calculate cost based on video duration using video-specific cost calculation
