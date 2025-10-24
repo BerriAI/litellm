@@ -23,6 +23,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.types.llms.openai import ChatCompletionUserMessage
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -1102,8 +1103,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: Applying guardrail"
             )
-            
-            mock_messages = [{"role": "user", "content": text}]
+            mock_messages = [ChatCompletionUserMessage(role="user", content=text)]
             bedrock_response = await self.make_bedrock_api_request(
                 source="INPUT",
                 messages=mock_messages,
@@ -1119,13 +1119,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 # If the guardrail returned modified content, use that
                 for output_item in bedrock_response["output"]:
                     if output_item.get("text"):
-                        masked_text = output_item["text"]
+                        masked_text = str(output_item["text"])
                         break
             elif bedrock_response.get("content") and bedrock_response["content"]:
                 # Fallback to content field if output is not available
                 for content_item in bedrock_response["content"]:
                     if content_item.get("text") and content_item["text"].get("text"):
-                        masked_text = content_item["text"]["text"]
+                        masked_text = str(content_item["text"]["text"])
                         break
             
             verbose_proxy_logger.debug(
