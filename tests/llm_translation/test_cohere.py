@@ -544,7 +544,7 @@ async def test_cohere_v2_streaming(stream):
         ]
         
         response = await litellm.acompletion(
-            model="cohere_chat/v2/command-r-plus",
+            model="cohere_chat/v2/command-a-03-2025",
             messages=messages,
             max_tokens=100,
             stream=stream
@@ -605,7 +605,7 @@ def test_cohere_v2_tool_calling():
         ]
         
         response = completion(
-            model="cohere_chat/v2/command-r-plus",
+            model="cohere_chat/v2/command-a-03-2025",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -658,7 +658,7 @@ async def test_cohere_v2_citations(stream):
         ]
         
         response = await litellm.acompletion(
-            model="cohere_chat/v2/command-r-plus",
+            model="cohere_chat/v2/command-a-03-2025",
             messages=messages,
             documents=documents,
             max_tokens=100,
@@ -703,7 +703,7 @@ def test_cohere_v2_parameter_mapping():
         
         # Test various parameters that should be mapped correctly
         response = completion(
-            model="cohere_chat/v2/command-r-plus",
+            model="cohere_chat/v2/command-a-03-2025",
             messages=messages,
             temperature=0.7,
             max_tokens=50,
@@ -737,7 +737,7 @@ async def test_cohere_v2_multiple_generations():
         ]
         
         response = await litellm.acompletion(
-            model="cohere_chat/v2/command-r-plus",
+            model="cohere_chat/v2/command-a-03-2025",
             messages=messages,
             n=3,  # Request 3 generations
             max_tokens=30
@@ -776,7 +776,7 @@ def test_cohere_v2_error_handling():
         # Test with empty messages
         try:
             response = completion(
-                model="cohere_chat/v2/command-r-plus",
+                model="cohere_chat/v2/command-a-03-2025",
                 messages=[],  # Empty messages
                 max_tokens=10
             )
@@ -853,7 +853,7 @@ async def test_cohere_v2_conversation_history():
         ]
         
         response = await litellm.acompletion(
-            model="cohere_chat/v2/command-r-plus",
+            model="cohere_chat/v2/command-a-03-2025",
             messages=messages,
             max_tokens=50
         )
