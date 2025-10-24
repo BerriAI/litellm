@@ -14,8 +14,10 @@ from datetime import datetime
 from typing import (
     Any,
     AsyncGenerator,
+    Coroutine,
     Dict,
     List,
+    Literal,
     Optional,
     Tuple,
     Union,
@@ -404,8 +406,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)
             messages = data["messages"]
-            tasks = []
-            targets = []  # track where to write back each presidio result
+            tasks: list[Coroutine[Any, Any, str]] = []
+            targets: list[
+                tuple[Literal["str"], int] | tuple[Literal["block"], int, int, str]
+            ] = []  # track where to write back each presidio result
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
