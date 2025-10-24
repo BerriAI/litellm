@@ -115,6 +115,7 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Usage,
 )
+from litellm.types.videos.main import VideoObject
 from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
@@ -1614,6 +1615,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OpenAIFileObject)
             or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
             or isinstance(logging_result, OpenAIModerationResponse)
+            or isinstance(logging_result, VideoObject) 
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
             return True

@@ -4,14 +4,14 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, 
 import httpx
 
 import litellm
-from litellm.litellm_core_utils.prompt_templates.factory import cohere_messages_pt_v2
-from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.cohere import CohereV2ChatResponse
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.utils import ModelResponse, Usage
 
 from ..common_utils import CohereError
-from ..common_utils import ModelResponseIterator as CohereModelResponseIterator
+from ..common_utils import CohereV2ModelResponseIterator
 from ..common_utils import validate_environment as cohere_validate_environment
 
 if TYPE_CHECKING:
@@ -22,7 +22,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class CohereV2ChatConfig(BaseConfig):
+class CohereV2ChatConfig(OpenAIGPTConfig):
     """
     Configuration class for Cohere's API interface.
 
@@ -164,32 +164,12 @@ class CohereV2ChatConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        ## Load Config
-        for k, v in litellm.CohereChatConfig.get_config().items():
-            if (
-                k not in optional_params
-            ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
-                optional_params[k] = v
-
-        most_recent_message, chat_history = cohere_messages_pt_v2(
-            messages=messages, model=model, llm_provider="cohere_chat"
-        )
-
-        ## Handle Tool Calling
-        if "tools" in optional_params:
-            _is_function_call = True
-            cohere_tools = self._construct_cohere_tool(tools=optional_params["tools"])
-            optional_params["tools"] = cohere_tools
-        if isinstance(most_recent_message, dict):
-            optional_params["tool_results"] = [most_recent_message]
-        elif isinstance(most_recent_message, str):
-            optional_params["message"] = most_recent_message
-
-        ## check if chat history message is 'user' and 'tool_results' is given -> force_single_step=True, else cohere api fails
-        if len(chat_history) > 0 and chat_history[-1]["role"] == "USER":
-            optional_params["force_single_step"] = True
-
-        return optional_params
+        """
+        Cohere v2 chat api is in openai format, so we can use the openai transform request function to transform the request.
+        """
+        data = super().transform_request(model, messages, optional_params, litellm_params, headers)
+        
+        return data
 
     def transform_response(
         self,
@@ -263,92 +243,34 @@ class CohereV2ChatConfig(BaseConfig):
         setattr(model_response, "usage", usage)
         return model_response
 
-    def _construct_cohere_tool(
-        self,
-        tools: Optional[list] = None,
-    ):
-        if tools is None:
-            tools = []
-        cohere_tools = []
-        for tool in tools:
-            cohere_tool = self._translate_openai_tool_to_cohere(tool)
-            cohere_tools.append(cohere_tool)
-        return cohere_tools
-
-    def _translate_openai_tool_to_cohere(
-        self,
-        openai_tool: dict,
-    ):
-        # cohere tools look like this
-        """
-        {
-        "name": "query_daily_sales_report",
-        "description": "Connects to a database to retrieve overall sales volumes and sales information for a given day.",
-        "parameter_definitions": {
-            "day": {
-                "description": "Retrieves sales data for this day, formatted as YYYY-MM-DD.",
-                "type": "str",
-                "required": True
-            }
-        }
-        }
-        """
-
-        # OpenAI tools look like this
-        """
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-        """
-        cohere_tool = {
-            "name": openai_tool["function"]["name"],
-            "description": openai_tool["function"]["description"],
-            "parameter_definitions": {},
-        }
-
-        for param_name, param_def in openai_tool["function"]["parameters"][
-            "properties"
-        ].items():
-            required_params = (
-                openai_tool.get("function", {})
-                .get("parameters", {})
-                .get("required", [])
-            )
-            cohere_param_def = {
-                "description": param_def.get("description", ""),
-                "type": param_def.get("type", ""),
-                "required": param_name in required_params,
-            }
-            cohere_tool["parameter_definitions"][param_name] = cohere_param_def
-
-        return cohere_tool
-
     def get_model_response_iterator(
         self,
         streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
         sync_stream: bool,
         json_mode: Optional[bool] = False,
     ):
-        return CohereModelResponseIterator(
+        return CohereV2ModelResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
             json_mode=json_mode,
         )
+
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        """
+        Get the complete URL for Cohere v2 chat completion.
+        The api_base should already include the full path.
+        """
+        if api_base is None:
+            raise ValueError("api_base is required")
+        return api_base
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

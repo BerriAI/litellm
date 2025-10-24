@@ -162,7 +162,7 @@ Check the status of your batch job. The batch will progress through states: `val
 ```python showLineNumbers title="retrieve_batch.py"
 retrieved_batch = oai_client.batches.retrieve(
     batch_id=create_batch_response.id, # Created batch id, e.g. 7814463557919047680
-    extra_body={"custom_llm_provider": "vertex_ai"}
+    extra_query={"custom_llm_provider": "vertex_ai"}
 )
 
 print(f"Batch status: {retrieved_batch.status}")

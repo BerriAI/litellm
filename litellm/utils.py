@@ -147,6 +147,7 @@ from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.router_utils.get_retry_from_policy import (
@@ -265,6 +266,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
@@ -4974,6 +4976,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "output_cost_per_token_above_200k_tokens", None
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
+                output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get(
@@ -6978,7 +6981,12 @@ class ProviderConfigManager:
             litellm.LlmProviders.COHERE_CHAT == provider
             or litellm.LlmProviders.COHERE == provider
         ):
-            return litellm.CohereChatConfig()
+            route = CohereModelInfo.get_cohere_route(model)
+            if route == "v2":
+                return litellm.CohereV2ChatConfig()
+            else:
+
+                return litellm.CohereChatConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
             return litellm.SnowflakeConfig()
         elif litellm.LlmProviders.CLARIFAI == provider:
@@ -7179,6 +7187,8 @@ class ProviderConfigManager:
                 return litellm.AmazonDeepSeekR1Config()
             elif bedrock_invoke_provider == "nova":
                 return litellm.AmazonInvokeNovaConfig()
+            elif bedrock_invoke_provider == "qwen3":
+                return litellm.AmazonQwen3Config()
             else:
                 return litellm.AmazonInvokeConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
@@ -7588,6 +7598,26 @@ class ProviderConfigManager:
 
             return LiteLLMProxyImageGenerationConfig()
         return None
+
+    @staticmethod
+    def get_provider_video_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseVideoConfig]:
+        if LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.videos.transformation import (
+                OpenAIVideoConfig,
+            )
+
+            return OpenAIVideoConfig()
+        elif LlmProviders.AZURE == provider:
+            from litellm.llms.azure.videos.transformation import (
+                AzureVideoConfig,
+            )
+
+            return AzureVideoConfig()
+        return None
+
 
     @staticmethod
     def get_provider_realtime_config(
