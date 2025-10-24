@@ -193,4 +193,7 @@ To:
 }
 ```
 
+### 5. (Optional) you can override a `prompt_id` being required
+Just set Environment Variable `CUSTOM_PROMPT_PROMPT_ID_CHECK` to `false` in your Dockerfile or .env file.
+
 
