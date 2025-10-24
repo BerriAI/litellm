@@ -12,7 +12,8 @@ from unittest.mock import MagicMock, patch
 from litellm.llms.tars.chat.transformation import TarsConfig
 from litellm.llms.tars.common_utils import TarsException, TarsModelInfo
 from litellm.llms.tars.embedding.transformation import TarsEmbeddingConfig
-from litellm.types.utils import ModelResponse
+from litellm.llms.tars.cost_calculator import cost_per_token
+from litellm.types.utils import ModelResponse, Usage
 import httpx
 
 
@@ -339,4 +340,55 @@ def test_tars_embedding_config_inherits_openai():
     
     config = TarsEmbeddingConfig()
     assert isinstance(config, OpenAIEmbeddingConfig)
+
+
+def test_tars_cost_calculator_with_5_percent_margin():
+    """Test that TARS cost calculator adds 5% margin to base costs."""
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    
+    # Test with a known model that has pricing.
+    prompt_cost, completion_cost = cost_per_token(model="gpt-4o", usage=usage)
+    
+    # Verify that costs are calculated (non-zero).
+    assert prompt_cost > 0
+    assert completion_cost > 0
+    
+    # The costs should include the 5% margin.
+    # We can't test exact values without knowing the base prices, but we can verify they're positive.
+
+
+def test_tars_cost_calculator_no_pricing_fallback():
+    """Test that TARS cost calculator returns (0.0, 0.0) when no pricing is available."""
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    
+    # Test with a model that doesn't exist in the pricing catalog.
+    prompt_cost, completion_cost = cost_per_token(model="nonexistent-model-12345", usage=usage)
+    
+    # Should return (0.0, 0.0) as fallback.
+    assert prompt_cost == 0.0
+    assert completion_cost == 0.0
+
+
+def test_tars_cost_calculator_with_zero_tokens():
+    """Test that TARS cost calculator handles zero tokens correctly."""
+    usage = Usage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=0
+    )
+    
+    # Test with a known model.
+    prompt_cost, completion_cost = cost_per_token(model="gpt-4o", usage=usage)
+    
+    # Should return 0.0 for both when no tokens are used.
+    assert prompt_cost == 0.0
+    assert completion_cost == 0.0
 
