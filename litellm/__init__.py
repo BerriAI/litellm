@@ -68,6 +68,7 @@ from litellm.constants import (
     open_ai_embedding_models,
     cohere_embedding_models,
     bedrock_embedding_models,
+    isaacus_embedding_models,
     known_tokenizer_config,
     BEDROCK_INVOKE_PROVIDERS_LITERAL,
     BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
@@ -234,6 +235,7 @@ openrouter_key: Optional[str] = None
 datarobot_key: Optional[str] = None
 predibase_key: Optional[str] = None
 huggingface_key: Optional[str] = None
+isaacus_key: Optional[str] = None
 vertex_project: Optional[str] = None
 vertex_location: Optional[str] = None
 predibase_tenant_id: Optional[str] = None
@@ -1192,6 +1194,7 @@ from .llms.voyage.embedding.transformation_contextual import (
     VoyageContextualEmbeddingConfig,
 )
 from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
+from .llms.isaacus.embedding.transformation import IsaacusEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.chat.transformation import MistralConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
