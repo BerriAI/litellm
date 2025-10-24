@@ -25,7 +25,7 @@ os.environ["TARS_API_KEY"] = "your-tars-api-key"
 
 # Chat Completions.
 response = litellm.completion(
-    model="tars/claude-sonnet-4-20250514",
+    model="tars/claude-haiku-4-5",
     messages=[{"role": "user", "content": "Hello, how are you?"}]
 )
 print(response.choices[0].message.content)
@@ -83,7 +83,16 @@ export TARS_API_BASE="https://api.router.tetrate.ai/v1"
 
 TARS provides access to models from multiple providers including:
 
+### Recommended Models
+
+**Claude Haiku 4.5** (`tars/claude-haiku-4-5`) - Fast, cost-effective model with vision support. Great for most use cases.
+
+**Claude Sonnet 4.5** (`tars/claude-sonnet-4-5`) - Balanced performance and cost for complex tasks.
+
+**GPT-4o** (`tars/gpt-4o`) - OpenAI's flagship multimodal model with strong vision capabilities.
+
 ### Vision Models
+
 - OpenAI (GPT-4o, GPT-4o-mini, GPT-4.1, GPT-5, etc.)
 - Anthropic (Claude 4.5, Claude 4.5 Haiku, Claude 4, Claude 3.7 Sonnet, etc.)
 - xAI (Grok 4, Grok 3, etc.)
@@ -91,6 +100,7 @@ TARS provides access to models from multiple providers including:
 - DeepSeek, Qwen, and many more
 
 ### Chat Models
+
 - OpenAI (GPT-4o, GPT-4o-mini, GPT-4.1, GPT-5, O1, O3, etc.)
 - Anthropic (Claude 4.5, Claude 4.5 Haiku, Claude 4, Claude 3.7 Sonnet, Claude 3.5 Haiku, etc.)
 - xAI (Grok 4, Grok 3, etc.)
@@ -98,6 +108,7 @@ TARS provides access to models from multiple providers including:
 - DeepSeek, Qwen, and many more
 
 ### Embedding Models
+
 - OpenAI (text-embedding-3-small, text-embedding-3-large, text-embedding-ada-002)
 - Custom embedding models from various providers
 
@@ -114,7 +125,7 @@ import os
 os.environ["TARS_API_KEY"] = "your-tars-api-key"
 
 response = litellm.completion(
-    model="tars/claude-sonnet-4-20250514",
+    model="tars/claude-haiku-4-5",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Explain quantum computing"}
@@ -155,7 +166,7 @@ os.environ["TARS_API_KEY"] = "your-tars-api-key"
 
 async def test_async():
     response = await litellm.acompletion(
-        model="tars/claude-sonnet-4-20250514",
+        model="tars/claude-haiku-4-5",
         messages=[{"role": "user", "content": "Hello!"}]
     )
     print(response.choices[0].message.content)
@@ -241,7 +252,7 @@ os.environ["TARS_API_KEY"] = "your-tars-api-key"
 
 # Vision with base64 encoded image
 response = litellm.completion(
-    model="tars/claude-sonnet-4-20250514",
+    model="tars/claude-haiku-4-5",
     messages=[
         {
             "role": "user",
@@ -363,7 +374,7 @@ os.environ["TARS_API_KEY"] = "your-tars-api-key"
 
 async def test_vision():
     response = await litellm.acompletion(
-        model="tars/claude-sonnet-4-20250514",
+        model="tars/claude-haiku-4-5",
         messages=[
             {
                 "role": "user",
@@ -440,9 +451,14 @@ export TARS_API_KEY="your-tars-api-key"
 
 ```yaml
 model_list:
-  - model_name: claude-4
+  - model_name: claude-haiku
     litellm_params:
-      model: tars/claude-sonnet-4-20250514
+      model: tars/claude-haiku-4-5
+      api_key: os.environ/TARS_API_KEY
+
+  - model_name: claude-sonnet
+    litellm_params:
+      model: tars/claude-sonnet-4-5
       api_key: os.environ/TARS_API_KEY
 
   - model_name: gpt-4o
@@ -464,7 +480,7 @@ litellm --config /path/to/config.yaml
 <TabItem value="cli" label="CLI">
 
 ```bash
-$ litellm --model tars/gpt-4o
+$ litellm --model tars/claude-haiku-4-5
 
 # Server running on http://0.0.0.0:4000
 ```
@@ -601,7 +617,7 @@ os.environ["TARS_API_KEY"] = "your-tars-api-key"
 
 # If the specified model is down, TARS routes to alternatives.
 response = litellm.completion(
-    model="tars/claude-sonnet-4-20250514",
+    model="tars/claude-haiku-4-5",
     messages=[{"role": "user", "content": "Hello"}],
     # TARS handles fallback automatically.
 )
