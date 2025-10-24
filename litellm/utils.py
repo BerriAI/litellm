@@ -384,7 +384,8 @@ def load_custom_provider_entrypoints():
     found_entry_points = tuple(entry_points().select(group="litellm"))  # type: ignore
     for entry_point in found_entry_points:
         # types are ignored because of circular dependency issues importing CustomLLM and CustomLLMItem
-        handler = entry_point.load()
+        HandlerClass = entry_point.load()
+        handler = HandlerClass()
         provider = {"provider": entry_point.name, "custom_handler": handler}
         litellm.custom_provider_map.append(provider)  # type: ignore
 

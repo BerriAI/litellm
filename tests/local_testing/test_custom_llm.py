@@ -551,12 +551,9 @@ def test_custom_llm_provider_entrypoint(mocker: MockerFixture):
     class AnotherCustomLLM(CustomLLM):
         pass
 
-    my_custom_llm = MyCustomLLM()
-    another_custom_llm = AnotherCustomLLM()
-
     providers = {
-        "custom_llm": my_custom_llm,
-        "another-custom-llm": another_custom_llm
+        "custom_llm": MyCustomLLM,
+        "another-custom-llm": AnotherCustomLLM
     }
 
     def load(self):
