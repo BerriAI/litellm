@@ -405,7 +405,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             presidio_config = self.get_presidio_settings_from_request_data(data)
             messages = data["messages"]
             tasks = []
-            for m in messages:
+            targets = []  # track where to write back each presidio result
+
+            for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
                 if content is None:
                     continue
@@ -418,15 +420,36 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             request_data=data,
                         )
                     )
+
+                    # string content -> write back to messages[msg_idx]['content']
+                    targets.append(("str", msg_idx))
+                elif isinstance(content, list):
+                    # handle only dict blocks with a string 'text' field
+                    for b_idx, block in enumerate(content):
+                        if isinstance(block, dict) and isinstance(block.get("text"), str):
+                            tasks.append(
+                                self.check_pii(
+                                    text=block["text"],
+                                    output_parse_pii=self.output_parse_pii,
+                                    presidio_config=presidio_config,
+                                    request_data=data,
+                                )
+                            )
+
+                            # block content -> write back to messages[msg_idx]['content'][b_idx]['text']
+                            targets.append(("block", msg_idx, b_idx, "text"))
+
             responses = await asyncio.gather(*tasks)
-            for index, r in enumerate(responses):
-                content = messages[index].get("content", None)
-                if content is None:
-                    continue
-                if isinstance(content, str):
-                    messages[index][
-                        "content"
-                    ] = r  # replace content with redacted string
+
+            # write results back to the exact targets collected above
+            for redacted, tgt in zip(responses, targets):
+                if tgt[0] == "str":
+                    _, mi = tgt
+                    messages[mi]["content"] = redacted
+                else:
+                    _, mi, bi, key = tgt
+                    messages[mi]["content"][bi][key] = redacted
+
             verbose_proxy_logger.debug(
                 f"Presidio PII Masking: Redacted pii message: {data['messages']}"
             )
