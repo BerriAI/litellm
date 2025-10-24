@@ -1026,6 +1026,14 @@ PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
 # MEMORY LEAK FIX: Increased from 10s to 30s minimum to prevent memory issues with APScheduler
 # Very frequent intervals (<30s) can cause memory leaks in APScheduler's internal functions
 PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 30))  # in seconds, increased from 10
+
+# APScheduler Configuration - MEMORY LEAK FIX
+# These settings prevent memory leaks in APScheduler's normalize() and _apply_jitter() functions
+APSCHEDULER_COALESCE = True  # collapse many missed runs into one
+APSCHEDULER_MISFIRE_GRACE_TIME = 3600  # ignore runs older than 1 hour (was 120)
+APSCHEDULER_MAX_INSTANCES = 1  # prevent concurrent job instances
+APSCHEDULER_REPLACE_EXISTING = True  # always replace existing jobs
+
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
 )  # 5 minutes

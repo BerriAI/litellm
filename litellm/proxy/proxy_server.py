@@ -131,6 +131,10 @@ from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
+    APSCHEDULER_COALESCE,
+    APSCHEDULER_MAX_INSTANCES,
+    APSCHEDULER_MISFIRE_GRACE_TIME,
+    APSCHEDULER_REPLACE_EXISTING,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
@@ -3710,10 +3714,10 @@ class ProxyStartupEvent:
 
         scheduler = AsyncIOScheduler(
             job_defaults={
-                "coalesce": True,              # collapse many missed runs into one
-                "misfire_grace_time": 3600,    # ignore runs older than 1 hour (was 120)
-                "max_instances": 1,            # prevent concurrent job instances
-                "replace_existing": True,      # always replace existing jobs
+                "coalesce": APSCHEDULER_COALESCE,
+                "misfire_grace_time": APSCHEDULER_MISFIRE_GRACE_TIME,
+                "max_instances": APSCHEDULER_MAX_INSTANCES,
+                "replace_existing": APSCHEDULER_REPLACE_EXISTING,
             },
             # Limit job store size to prevent memory growth
             jobstores={
@@ -3749,7 +3753,7 @@ class ProxyStartupEvent:
                 # REMOVED jitter parameter - major cause of memory leak
                 id="reset_budget_job",
                 replace_existing=True,
-                misfire_grace_time=3600,  # job-specific grace time
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
 
         ### UPDATE SPEND ###
@@ -3761,7 +3765,7 @@ class ProxyStartupEvent:
             args=[prisma_client, db_writer_client, proxy_logging_obj],
             id="update_spend_job",
             replace_existing=True,
-            misfire_grace_time=3600,  # job-specific grace time
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
         ### ADD NEW MODELS ###
@@ -3780,7 +3784,7 @@ class ProxyStartupEvent:
                 args=[prisma_client, proxy_logging_obj],
                 id="add_deployment_job",
                 replace_existing=True,
-                misfire_grace_time=3600,  # job-specific grace time
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
 
             # this will load all existing models on proxy startup
@@ -3797,7 +3801,7 @@ class ProxyStartupEvent:
                 args=[prisma_client],
                 id="get_credentials_job",
                 replace_existing=True,
-                misfire_grace_time=3600,  # job-specific grace time
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
         if (
@@ -3830,7 +3834,7 @@ class ProxyStartupEvent:
                 args=[spend_report_frequency],
                 id="weekly_spend_report_job",
                 replace_existing=True,
-                misfire_grace_time=3600,  # job-specific grace time
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
 
             scheduler.add_job(
@@ -3875,7 +3879,7 @@ class ProxyStartupEvent:
                     args=[prisma_client],
                     id="spend_log_cleanup_job",
                     replace_existing=True,
-                    misfire_grace_time=3600,  # job-specific grace time
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                 )
             except ValueError:
                 verbose_proxy_logger.error(
@@ -3900,7 +3904,7 @@ class ProxyStartupEvent:
                     # REMOVED jitter parameter - major cause of memory leak
                     id="check_batch_cost_job",
                     replace_existing=True,
-                    misfire_grace_time=3600,  # job-specific grace time
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                 )
 
             except Exception:
@@ -3916,8 +3920,8 @@ class ProxyStartupEvent:
         # Start the scheduler immediately without processing backlogs
         scheduler.start(paused=False)
         verbose_proxy_logger.info(
-            "APScheduler started with memory leak prevention settings: "
-            "removed jitter, increased intervals, misfire_grace_time=3600"
+            f"APScheduler started with memory leak prevention settings: "
+            f"removed jitter, increased intervals, misfire_grace_time={APSCHEDULER_MISFIRE_GRACE_TIME}"
         )
 
     @classmethod
