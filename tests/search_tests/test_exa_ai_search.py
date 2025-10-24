@@ -36,13 +36,14 @@ class TestCustomLogger(CustomLogger):
 async def test_exa_ai_search_with_custom_logger():
     litellm._turn_on_debug()
     litellm.set_verbose = True
-    litellm.instant_log_for_testing = False
-    # litellm.logging_callback_manager._reset_all_callbacks()
+    litellm.instant_log_for_testing = True
     test_custom_logger = TestCustomLogger()
     litellm.logging_callback_manager.add_litellm_callback(test_custom_logger)
     
+
+    USER_QUERY = "latest AI developments"
     response = await litellm.asearch(
-        query="latest AI developments",
+        query=USER_QUERY,
         search_provider="exa_ai",
         max_results=1,
     )
@@ -53,3 +54,12 @@ async def test_exa_ai_search_with_custom_logger():
     await asyncio.sleep(3)
     print("standard logging object", json.dumps(test_custom_logger.standard_logging_object, indent=4, default=str))
     assert test_custom_logger.standard_logging_object is not None
+
+    # cost 
+    assert test_custom_logger.standard_logging_object["response_cost"] is not None
+
+    # user query is logged
+    assert test_custom_logger.standard_logging_object["messages"][0]["content"] == USER_QUERY
+
+    # response is logged
+    assert test_custom_logger.standard_logging_object["response"] is not None
