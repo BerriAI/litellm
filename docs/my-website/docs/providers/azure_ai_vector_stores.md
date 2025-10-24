@@ -142,6 +142,16 @@ curl -X POST 'http://0.0.0.0:4000/v1/vector_stores/my-vector-index/search' \
 | `litellm_embedding_config` | dict | Config for the embedding model (api_base, api_key, api_version) |
 | `api_key` | string | Your Azure AI Search API key |
 
+## Supported Features
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Logging | ✅ Supported | Full logging support available |
+| Guardrails | ❌ Not Yet Supported | Guardrails are not currently supported for vector stores |
+| Cost Tracking | ✅ Supported | Cost is $0 according to Azure |
+| Unified API | ✅ Supported | Call via OpenAI compatible `/v1/vector_stores/search` endpoint |
+| Passthrough | ❌ Not yet supported |  |
+
 ## Response Format
 
 The response follows the standard LiteLLM vector store format:
