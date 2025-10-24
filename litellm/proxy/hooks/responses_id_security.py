@@ -217,7 +217,9 @@ class ResponsesIDSecurity(CustomLogger):
 
         elif response_obj and isinstance(response_obj, ResponsesAPIResponse):
             encrypted_response_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
-                response_obj.id, user_api_key_dict.user_id
+                response_obj.id,
+                user_api_key_dict.user_id or "",
+                user_api_key_dict.team_id or "",
             )
             encoded_user_id_and_response_id = encrypt_value_helper(
                 value=encrypted_response_id
