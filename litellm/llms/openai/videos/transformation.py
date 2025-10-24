@@ -1,15 +1,11 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, IO
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from io import BufferedReader
-from os import PathLike
-from pathlib import Path
-import mimetypes
 from typing import cast
 import httpx
 from httpx._types import RequestFiles
 
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
 from litellm.types.llms.openai import CreateVideoRequest
-from litellm.types.videos.main import VideoResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.videos.main import VideoObject
@@ -134,8 +130,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
                 field_name="input_reference",
             )
         # Convert to dict for JSON serialization
-        print(f"OpenAI video request data: {data_without_files}")
-        print(f"OpenAI video request files: {files_list}")
         return data_without_files, files_list
 
     def transform_video_create_response(
@@ -300,7 +294,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> Dict[str,str]:
-        print(f"OpenAI video list response: {raw_response.json()}")
         return raw_response.json()
 
     def transform_video_delete_request(
@@ -370,7 +363,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
         Transform the OpenAI video retrieve response.
         """
         response_data = raw_response.json()
-        print(f"OpenAI video status retrieve response: {response_data}")
         # Transform the response data
         video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
 
