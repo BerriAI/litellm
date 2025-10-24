@@ -135,6 +135,7 @@ MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 10000))
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(
     os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000)
 )
+MAX_QUEUE_SIZE_BEFORE_REQUEUE = int(os.getenv("MAX_QUEUE_SIZE_BEFORE_REQUEUE", 5000))
 ###############################################################################################
 MINIMUM_PROMPT_CACHE_TOKEN_COUNT = int(
     os.getenv("MINIMUM_PROMPT_CACHE_TOKEN_COUNT", 1024)

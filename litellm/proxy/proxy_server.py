@@ -4425,6 +4425,11 @@ async def chat_completion(  # noqa: PLR0915
     ```
 
     """
+    # Fallback to datetime.now() if middleware is not present (e.g., in tests)
+    start_time = getattr(request.state, "proxy_start_time", None)
+    if start_time is None:
+        start_time = datetime.now()
+            
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = await _read_request_body(request=request)

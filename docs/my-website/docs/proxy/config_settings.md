@@ -718,6 +718,7 @@ router_settings:
 | PROXY_BATCH_POLLING_INTERVAL | Time in seconds to wait before polling a batch, to check if it's completed. Default is 6000s (1 hour)
 | PROXY_BUDGET_RESCHEDULER_MAX_TIME | Maximum time in seconds to wait before checking database for budget resets. Default is 605
 | PROXY_BUDGET_RESCHEDULER_MIN_TIME | Minimum time in seconds to wait before checking database for budget resets. Default is 597
+| MAX_QUEUE_SIZE_BEFORE_REQUEUE | Maximum queue size before dropping failed transactions instead of re-queuing them. Default is 5000
 | PYTHON_GC_THRESHOLD | GC thresholds ('gen0,gen1,gen2', e.g. '1000,50,50'); defaults to Python’s values.
 | PROXY_LOGOUT_URL | URL for logging out of the proxy service
 | QDRANT_API_BASE | Base URL for Qdrant API
