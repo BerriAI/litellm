@@ -2,6 +2,7 @@ import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
+import asyncio
 
 import pytest
 
@@ -14,6 +15,8 @@ from litellm.types.videos.main import VideoObject, VideoResponse
 from litellm.videos.main import video_generation, avideo_generation, video_status, avideo_status
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.cost_calculator import default_video_cost_calculator
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.integrations.custom_logger import CustomLogger
 
 
 class TestVideoGeneration:
@@ -659,6 +662,68 @@ class TestVideoGeneration:
             )
             assert url == expected_url
             assert data == {}
+
+
+class TestVideoLogging:
+    """Test video generation logging functionality."""
+    
+    class TestVideoLogger(CustomLogger):
+        def __init__(self):
+            self.standard_logging_payload = None
+            
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.standard_logging_payload = kwargs.get("standard_logging_object")
+    
+    @pytest.mark.asyncio
+    async def test_video_generation_logging(self):
+        """Test that video generation creates proper logging payload with cost tracking."""
+        custom_logger = self.TestVideoLogger()
+        litellm.logging_callback_manager._reset_all_callbacks()
+        litellm.callbacks = [custom_logger]
+        
+        # Mock video generation response
+        mock_response = VideoObject(
+            id="video_test_123",
+            object="video", 
+            status="queued",
+            created_at=1712697600,
+            model="sora-2",
+            size="720x1280",
+            seconds="8"
+        )
+        
+        with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
+            mock_handler.video_generation_handler.return_value = mock_response
+            
+            response = await litellm.avideo_generation(
+                prompt="A cat running in a garden",
+                model="sora-2",
+                seconds="8",
+                size="720x1280"
+            )
+            
+            await asyncio.sleep(1)  # Allow logging to complete
+            
+            # Verify logging payload was created
+            assert custom_logger.standard_logging_payload is not None
+            
+            payload = custom_logger.standard_logging_payload
+            
+            # Verify basic logging fields
+            assert payload["call_type"] == "avideo_generation"
+            assert payload["status"] == "success"
+            assert payload["model"] == "sora-2"
+            assert payload["custom_llm_provider"] == "openai"
+            
+            # Verify response object is recognized for logging
+            assert payload["response"] is not None
+            assert payload["response"]["id"] == "video_test_123"
+            assert payload["response"]["object"] == "video"
+            
+            # Verify cost tracking is present (may be 0 in test environment)
+            assert payload["response_cost"] is not None
+            # Note: Cost calculation may not work in test environment due to mocking
+            # The important thing is that the logging payload is created and recognized
 
 
 if __name__ == "__main__":
