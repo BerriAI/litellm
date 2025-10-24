@@ -273,14 +273,14 @@ class MlflowLogger(CustomLogger):
         Transform a list of colon-separated tags into a dictionary.
         Tags without colons are stored with empty string as the value.
         """
-        tag_dict = {}
+        tags = {}
         for tag in tag_list:
             if ":" in tag:
                 k, v = tag.split(":", 1)
-                tag_dict[k.strip()] = v.strip()
+                tags[k.strip()] = v.strip()
             else:
-                tag_dict[tag.strip()] = ""
-        return tag_dict
+                tags[tag.strip()] = ""
+        return tags
 
     def _end_span_or_trace(self, span, outputs, end_time_ns, status):
         """End an MLflow span or a trace."""
