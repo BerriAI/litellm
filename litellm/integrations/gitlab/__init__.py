@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 from litellm.types.prompts.init_prompts import SupportedPromptIntegrations
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.types.prompts.init_prompts import PromptSpec, PromptLiteLLMParams
-from .gitlab_prompt_manager import GitLabPromptManager
+from .gitlab_prompt_manager import GitLabPromptManager, GitLabPromptCache
 
 # Global instances
 global_gitlab_config: Optional[dict] = None
@@ -90,6 +90,7 @@ prompt_initializer_registry = {
 # Export public API
 __all__ = [
     "GitLabPromptManager",
+    "GitLabPromptCache",
     "set_global_gitlab_config",
     "global_gitlab_config",
 ]
