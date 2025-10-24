@@ -289,6 +289,7 @@ LITELLM_CHAT_PROVIDERS = [
     "cohere",
     "cohere_chat",
     "clarifai",
+    "cloudrift",
     "anthropic",
     "anthropic_text",
     "replicate",
@@ -362,6 +363,7 @@ LITELLM_CHAT_PROVIDERS = [
     "wandb",
     "ovhcloud",
     "lemonade"
+    "cloudrift"
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -500,6 +502,7 @@ openai_compatible_endpoints: List = [
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
+    "https://inference.cloudrift.ai/v1/chat/completions"
 ]
 
 
@@ -547,6 +550,7 @@ openai_compatible_providers: List = [
     "wandb",
     "cometapi",
     "clarifai",
+    "cloudrift"
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -563,6 +567,7 @@ openai_text_completion_compatible_providers: List = (
         "lambda_ai",
         "hyperbolic",
         "wandb",
+        "cloudrift"
     ]
 )
 _openai_like_providers: List = [
@@ -620,7 +625,7 @@ clarifai_models: set = set(
         "clarifai/qwen.qwenLM.Qwen3-14B",
         "clarifai/qwen.qwenLM.QwQ-32B-AWQ",
         "clarifai/anthropic.completion.claude-3_5-haiku",
-        "clarifai/anthropic.completion.claude-3_7-sonnet",    
+        "clarifai/anthropic.completion.claude-3_7-sonnet",
     ]
 )
 
