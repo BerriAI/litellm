@@ -170,6 +170,8 @@ class JavelinGuardrail(CustomGuardrail):
             "text_completion",
             "embeddings",
             "image_generation",
+            "video_generation",
+            "video_remix",
             "moderation",
             "audio_transcription",
             "pass_through_endpoint",

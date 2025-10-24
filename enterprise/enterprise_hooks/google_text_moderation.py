@@ -93,6 +93,8 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
             "completion",
             "embeddings",
             "image_generation",
+            "video_generation",
+            "video_remix",
             "moderation",
             "audio_transcription",
             "responses",
