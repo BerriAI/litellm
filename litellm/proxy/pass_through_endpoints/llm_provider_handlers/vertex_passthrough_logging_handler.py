@@ -462,7 +462,7 @@ class VertexPassthroughLoggingHandler:
         return kwargs
 
     @staticmethod
-    def batch_prediction_jobs_handler(
+    def batch_prediction_jobs_handler(  # noqa: PLR0915
         httpx_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,

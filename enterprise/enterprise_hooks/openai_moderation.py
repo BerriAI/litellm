@@ -39,6 +39,8 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
             "completion",
             "embeddings",
             "image_generation",
+            "video_generation",
+            "video_remix",
             "moderation",
             "audio_transcription",
             "responses",
