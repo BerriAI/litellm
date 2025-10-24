@@ -11,7 +11,32 @@ This endpoint supports various guardrail types including:
 - **Presidio** - PII detection and masking
 - **Bedrock** - AWS Bedrock guardrails for content moderation
 - **Lakera** - AI safety guardrails
-- **Custom guardrails** - User-defined guardrails 
+- **Custom guardrails** - User-defined guardrails
+
+## Configuration
+
+### Bedrock Guardrail Configuration
+
+To use Bedrock guardrails with the apply_guardrail endpoint, configure your guardrail in your LiteLLM config.yaml:
+
+```yaml
+guardrails:
+  - guardrail_name: "bedrock-content-guard"
+    litellm_params:
+      guardrail: bedrock
+      mode: "pre_call"
+      guardrailIdentifier: "your-guardrail-id"  # Your actual Bedrock guardrail ID
+      guardrailVersion: "DRAFT"  # or your version number
+      aws_region_name: "us-east-1"  # Your AWS region
+      aws_role_name: "your-role-arn"  # Your AWS role with Bedrock permissions
+      default_on: true
+```
+
+**Required AWS Setup:**
+1. Create a Bedrock guardrail in AWS Console
+2. Get the guardrail ID and version
+3. Ensure your AWS credentials have Bedrock permissions
+4. Configure the guardrail in your LiteLLM config 
 
 
 ## Usage
