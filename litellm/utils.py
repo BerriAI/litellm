@@ -266,12 +266,12 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
-from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -861,11 +861,18 @@ async def _client_async_logging_helper(
         ################################################
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine=logging_obj.async_success_handler(
+        if litellm.instant_log_for_testing:
+            # For testing: log synchronously without create_task/worker
+            await logging_obj.async_success_handler(
                 result=result, start_time=start_time, end_time=end_time
             )
-        )
+        else:
+            # Production: use worker for async logging
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=logging_obj.async_success_handler(
+                    result=result, start_time=start_time, end_time=end_time
+                )
+            )
 
         ################################################
         # Sync Logging Worker
@@ -1525,15 +1532,26 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            asyncio.create_task(
-                _client_async_logging_helper(
+            if litellm.instant_log_for_testing:
+                # For testing: log synchronously without create_task
+                await _client_async_logging_helper(
                     logging_obj=logging_obj,
                     result=result,
                     start_time=start_time,
                     end_time=end_time,
                     is_completion_with_fallbacks=is_completion_with_fallbacks,
                 )
-            )
+            else:
+                # Production: use create_task for pure async logging
+                asyncio.create_task(
+                    _client_async_logging_helper(
+                        logging_obj=logging_obj,
+                        result=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        is_completion_with_fallbacks=is_completion_with_fallbacks,
+                    )
+                )
             logging_obj.handle_sync_success_callbacks_for_async_calls(
                 result=result,
                 start_time=start_time,

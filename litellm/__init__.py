@@ -195,6 +195,7 @@ post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False
 log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
+instant_log_for_testing: bool = False  # when True, logging is done synchronously without create_task/worker
 redact_user_api_key_info: Optional[bool] = False
 filter_invalid_headers: Optional[bool] = False
 add_user_information_to_llm_headers: Optional[
