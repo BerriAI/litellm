@@ -878,3 +878,331 @@ class TestVertexBase:
         
         expected_no_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
         assert result_url_no_streaming == expected_no_streaming_url, f"Expected {expected_no_streaming_url}, got {result_url_no_streaming}"
+
+    @pytest.mark.asyncio
+    async def test_async_auth_with_feature_flag_enabled(self):
+        """Test that async auth uses load_auth_async and refresh_auth_async when feature flag is enabled"""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "async-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "async-project"
+        mock_creds.quota_project_id = "async-project"
+
+        credentials = {"type": "service_account", "project_id": "async-project"}
+
+        # Enable the async feature flag
+        original_flag = getattr(litellm, "use_async_vertex_auth", False)
+        litellm.use_async_vertex_auth = True
+
+        try:
+            with patch.object(
+                vertex_base, "load_auth_async", return_value=(mock_creds, "async-project")
+            ) as mock_load_auth_async, patch.object(
+                vertex_base, "load_auth"
+            ) as mock_load_auth_sync:
+
+                token, project = await vertex_base.get_access_token_async(
+                    credentials=credentials,
+                    project_id="async-project",
+                )
+
+                # Verify async method was called
+                assert mock_load_auth_async.called
+                # Verify sync method was NOT called
+                assert not mock_load_auth_sync.called
+                assert token == "async-token"
+                assert project == "async-project"
+        finally:
+            # Restore original flag
+            litellm.use_async_vertex_auth = original_flag
+
+    @pytest.mark.asyncio
+    async def test_async_auth_with_feature_flag_disabled(self):
+        """Test that async auth falls back to asyncify when feature flag is disabled"""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "sync-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "sync-project"
+        mock_creds.quota_project_id = "sync-project"
+
+        credentials = {"type": "service_account", "project_id": "sync-project"}
+
+        # Ensure the async feature flag is disabled
+        original_flag = getattr(litellm, "use_async_vertex_auth", False)
+        litellm.use_async_vertex_auth = False
+
+        try:
+            with patch.object(
+                vertex_base, "load_auth", return_value=(mock_creds, "sync-project")
+            ) as mock_load_auth_sync, patch.object(
+                vertex_base, "load_auth_async"
+            ) as mock_load_auth_async:
+
+                token, project = await vertex_base._ensure_access_token_async(
+                    credentials=credentials,
+                    project_id="sync-project",
+                    custom_llm_provider="vertex_ai",
+                )
+
+                # With flag disabled, should use old asyncify path
+                # The load_auth will be called via asyncify
+                assert token == "sync-token"
+                assert project == "sync-project"
+                # load_auth_async should NOT be called when flag is disabled
+                assert not mock_load_auth_async.called
+        finally:
+            # Restore original flag
+            litellm.use_async_vertex_auth = original_flag
+
+    @pytest.mark.asyncio
+    async def test_refresh_auth_async_with_aiohttp(self):
+        """Test that refresh_auth_async uses aiohttp when available"""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.expired = True
+        mock_creds.token = None
+
+        def mock_refresh(request):
+            # Simulate successful token refresh
+            mock_creds.token = "refreshed-async-token"
+            mock_creds.expired = False
+
+        mock_creds.refresh = mock_refresh
+
+        # Call refresh_auth_async
+        await vertex_base.refresh_auth_async(mock_creds)
+
+        # Verify credentials were refreshed
+        assert mock_creds.token == "refreshed-async-token"
+        assert not mock_creds.expired
+
+    @pytest.mark.asyncio
+    async def test_load_auth_async_service_account(self):
+        """Test load_auth_async with service account credentials"""
+        vertex_base = VertexBase()
+
+        credentials = {
+            "type": "service_account",
+            "project_id": "test-project",
+            "client_email": "test@test-project.iam.gserviceaccount.com",
+        }
+
+        mock_creds = MagicMock()
+        mock_creds.token = "loaded-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "test-project"
+
+        with patch.object(
+            vertex_base, "_credentials_from_service_account", return_value=mock_creds
+        ) as mock_service_account, patch.object(
+            vertex_base, "refresh_auth_async"
+        ) as mock_refresh_async:
+
+            async def mock_refresh_impl(creds):
+                creds.token = "async-refreshed-token"
+                creds.expired = False
+
+            mock_refresh_async.side_effect = mock_refresh_impl
+
+            creds, project = await vertex_base.load_auth_async(
+                credentials=credentials,
+                project_id="test-project"
+            )
+
+            # Verify service account method was called
+            assert mock_service_account.called
+            # Verify async refresh was called
+            assert mock_refresh_async.called
+            assert creds.token == "async-refreshed-token"
+            assert project == "test-project"
+
+    @pytest.mark.asyncio
+    async def test_async_token_refresh_when_expired(self):
+        """Test that expired tokens are refreshed using async method when flag is enabled"""
+        vertex_base = VertexBase()
+
+        # Create expired credentials
+        mock_creds = MagicMock()
+        mock_creds.token = "old-token"
+        mock_creds.expired = True
+        mock_creds.project_id = "test-project"
+        mock_creds.quota_project_id = "test-project"
+
+        credentials = {"type": "service_account", "project_id": "test-project"}
+
+        # Enable the async feature flag
+        original_flag = getattr(litellm, "use_async_vertex_auth", False)
+        litellm.use_async_vertex_auth = True
+
+        try:
+            with patch.object(
+                vertex_base, "load_auth_async", return_value=(mock_creds, "test-project")
+            ) as mock_load_auth_async, patch.object(
+                vertex_base, "refresh_auth_async"
+            ) as mock_refresh_async:
+
+                async def mock_refresh_impl(creds):
+                    creds.token = "refreshed-async-token"
+                    creds.expired = False
+
+                mock_refresh_async.side_effect = mock_refresh_impl
+
+                token, project = await vertex_base.get_access_token_async(
+                    credentials=credentials,
+                    project_id="test-project",
+                )
+
+                # Verify refresh_auth_async was called for expired credentials
+                assert mock_refresh_async.called
+                assert token == "refreshed-async-token"
+                assert not mock_creds.expired
+                assert project == "test-project"
+        finally:
+            # Restore original flag
+            litellm.use_async_vertex_auth = original_flag
+
+    @pytest.mark.asyncio
+    async def test_async_caching_with_new_implementation(self):
+        """Test that credential caching works correctly with async implementation"""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "cached-async-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "cached-project"
+        mock_creds.quota_project_id = "cached-project"
+
+        credentials = {"type": "service_account", "project_id": "cached-project"}
+
+        # Enable the async feature flag
+        original_flag = getattr(litellm, "use_async_vertex_auth", False)
+        litellm.use_async_vertex_auth = True
+
+        try:
+            with patch.object(
+                vertex_base, "load_auth_async", return_value=(mock_creds, "cached-project")
+            ) as mock_load_auth_async:
+
+                # First call - should load credentials
+                token1, project1 = await vertex_base.get_access_token_async(
+                    credentials=credentials,
+                    project_id="cached-project",
+                )
+
+                assert mock_load_auth_async.call_count == 1
+                assert token1 == "cached-async-token"
+
+                # Second call - should use cached credentials
+                token2, project2 = await vertex_base.get_access_token_async(
+                    credentials=credentials,
+                    project_id="cached-project",
+                )
+
+                # Should still be only 1 call (used cache)
+                assert mock_load_auth_async.call_count == 1
+                assert token2 == "cached-async-token"
+                assert project2 == "cached-project"
+
+                # Verify cache entry exists
+                cache_key = (json.dumps(credentials), "cached-project")
+                assert cache_key in vertex_base._credentials_project_mapping
+        finally:
+            # Restore original flag
+            litellm.use_async_vertex_auth = original_flag
+
+    @pytest.mark.asyncio
+    async def test_async_and_sync_share_same_cache(self):
+        """Test that async and sync implementations share the same credential cache"""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "shared-cache-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "shared-project"
+        mock_creds.quota_project_id = "shared-project"
+
+        credentials = {"type": "service_account", "project_id": "shared-project"}
+
+        # Enable the async feature flag
+        original_flag = getattr(litellm, "use_async_vertex_auth", False)
+        litellm.use_async_vertex_auth = True
+
+        try:
+            with patch.object(
+                vertex_base, "load_auth_async", return_value=(mock_creds, "shared-project")
+            ) as mock_load_auth_async, patch.object(
+                vertex_base, "load_auth", return_value=(mock_creds, "shared-project")
+            ) as mock_load_auth_sync:
+
+                # First call with async
+                token1, project1 = await vertex_base.get_access_token_async(
+                    credentials=credentials,
+                    project_id="shared-project",
+                )
+
+                assert mock_load_auth_async.call_count == 1
+                assert token1 == "shared-cache-token"
+
+                # Disable async flag for sync call
+                litellm.use_async_vertex_auth = False
+
+                # Second call with sync (should use same cache)
+                token2, project2 = vertex_base.get_access_token(
+                    credentials=credentials,
+                    project_id="shared-project",
+                )
+
+                # Should NOT call load_auth because cache was populated by async call
+                assert mock_load_auth_sync.call_count == 0
+                assert token2 == "shared-cache-token"
+                assert project2 == "shared-project"
+        finally:
+            # Restore original flag
+            litellm.use_async_vertex_auth = original_flag
+
+    @pytest.mark.asyncio
+    async def test_load_auth_async_authorized_user(self):
+        """Test load_auth_async with authorized user credentials"""
+        vertex_base = VertexBase()
+
+        credentials = {
+            "type": "authorized_user",
+            "client_id": "test-client-id",
+            "client_secret": "test-secret",
+            "refresh_token": "test-refresh-token",
+            "quota_project_id": "test-quota-project",
+        }
+
+        mock_creds = MagicMock()
+        mock_creds.token = "authorized-user-token"
+        mock_creds.expired = False
+        mock_creds.quota_project_id = "test-quota-project"
+
+        with patch.object(
+            vertex_base, "_credentials_from_authorized_user", return_value=mock_creds
+        ) as mock_authorized_user, patch.object(
+            vertex_base, "refresh_auth_async"
+        ) as mock_refresh_async:
+
+            async def mock_refresh_impl(creds):
+                creds.token = "refreshed-authorized-token"
+
+            mock_refresh_async.side_effect = mock_refresh_impl
+
+            creds, project = await vertex_base.load_auth_async(
+                credentials=credentials,
+                project_id=None
+            )
+
+            # Verify authorized user method was called
+            assert mock_authorized_user.called
+            # Verify async refresh was called
+            assert mock_refresh_async.called
+            assert creds.token == "refreshed-authorized-token"
+            # Should use quota_project_id when project_id is None
+            assert project == "test-quota-project"

@@ -400,6 +400,12 @@ allowed_fails: int = 3
 num_retries_per_request: Optional[
     int
 ] = None  # for the request overall (incl. fallbacks + model retries)
+
+#### VERTEX AI AUTH ####
+use_async_vertex_auth: bool = (
+    os.getenv("LITELLM_USE_ASYNC_VERTEX_AUTH", "false").lower() == "true"
+)  # Use native async aiohttp for Vertex AI token retrieval instead of asyncify wrapper
+
 ####### SECRET MANAGERS #####################
 secret_manager_client: Optional[
     Any

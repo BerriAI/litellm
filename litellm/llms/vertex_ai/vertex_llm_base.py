@@ -4,13 +4,13 @@ Base Vertex, Google AI Studio LLM Class
 Handles Authentication and generating request urls for Vertex AI and Google AI Studio
 """
 
+import asyncio
 import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexPartnerProvider
@@ -250,6 +250,119 @@ class VertexBase:
 
         credentials.refresh(Request())
 
+    async def refresh_auth_async(self, credentials: Any) -> None:
+        """
+        Async version of refresh_auth using aiohttp transport.
+        This makes a true async HTTP call to Google's token endpoint instead of blocking.
+        """
+        try:
+            from google.auth.transport._aiohttp_requests import Request
+            import aiohttp
+        except ImportError:
+            # Fallback to sync version if aiohttp not available
+            verbose_logger.warning(
+                "aiohttp not available, falling back to sync token refresh"
+            )
+            from google.auth.transport.requests import Request
+
+            credentials.refresh(Request())
+            return
+
+        # Create an aiohttp session for the token request
+        async with aiohttp.ClientSession(auto_decompress=False) as session:
+            request = Request(session)
+            # Google's credentials.refresh() is sync, but the Request will use aiohttp
+            # Note: We still need to call the sync refresh method, but it will use async transport
+            await asyncio.get_event_loop().run_in_executor(
+                None, credentials.refresh, request
+            )
+
+    async def load_auth_async(
+        self, credentials: Optional[VERTEX_CREDENTIALS_TYPES], project_id: Optional[str]
+    ) -> Tuple[Any, str]:
+        """
+        Async version of load_auth that uses refresh_auth_async.
+        """
+        if credentials is not None:
+            if isinstance(credentials, str):
+                verbose_logger.debug(
+                    "Vertex: Loading vertex credentials from %s", credentials
+                )
+                verbose_logger.debug(
+                    "Vertex: checking if credentials is a valid path, os.path.exists(%s)=%s, current dir %s",
+                    credentials,
+                    os.path.exists(credentials),
+                    os.getcwd(),
+                )
+
+                try:
+                    if os.path.exists(credentials):
+                        json_obj = json.load(open(credentials))
+                    else:
+                        json_obj = json.loads(credentials)
+                except Exception:
+                    raise Exception(
+                        "Unable to load vertex credentials from environment. Got={}".format(
+                            credentials
+                        )
+                    )
+            elif isinstance(credentials, dict):
+                json_obj = credentials
+            else:
+                raise ValueError(
+                    "Invalid credentials type: {}".format(type(credentials))
+                )
+
+            # Check if the JSON object contains Workload Identity Federation configuration
+            if "type" in json_obj and json_obj["type"] == "external_account":
+                # If environment_id key contains "aws" value it corresponds to an AWS config file
+                credential_source = json_obj.get("credential_source", {})
+                environment_id = (
+                    credential_source.get("environment_id", "")
+                    if isinstance(credential_source, dict)
+                    else ""
+                )
+                if isinstance(environment_id, str) and "aws" in environment_id:
+                    creds = self._credentials_from_identity_pool_with_aws(json_obj)
+                else:
+                    creds = self._credentials_from_identity_pool(json_obj)
+            # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
+            elif "type" in json_obj and json_obj["type"] == "authorized_user":
+                creds = self._credentials_from_authorized_user(
+                    json_obj,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
+                if project_id is None:
+                    project_id = (
+                        creds.quota_project_id
+                    )  # authorized user credentials don't have a project_id, only quota_project_id
+            else:
+                creds = self._credentials_from_service_account(
+                    json_obj,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
+
+            if project_id is None:
+                project_id = getattr(creds, "project_id", None)
+        else:
+            creds, creds_project_id = self._credentials_from_default_auth(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            if project_id is None:
+                project_id = creds_project_id
+
+        await self.refresh_auth_async(creds)
+
+        if not project_id:
+            raise ValueError("Could not resolve project_id")
+
+        if not isinstance(project_id, str):
+            raise TypeError(
+                f"Expected project_id to be a str but got {type(project_id)}"
+            )
+
+        return creds, project_id
+
     def _ensure_access_token(
         self,
         credentials: Optional[VERTEX_CREDENTIALS_TYPES],
@@ -426,6 +539,56 @@ class VertexBase:
             # Re-raise the original error for better context
             raise error
 
+    async def _handle_reauthentication_async(
+        self,
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        project_id: Optional[str],
+        credential_cache_key: Tuple,
+        error: Exception,
+    ) -> Tuple[str, str]:
+        """
+        Async version of _handle_reauthentication.
+        
+        Handle reauthentication when credentials refresh fails in async context.
+        This method clears the cached credentials and attempts to reload them once.
+        It should only be called when "Reauthentication is needed" error occurs.
+
+        Args:
+            credentials: The original credentials
+            project_id: The project ID
+            credential_cache_key: The cache key to clear
+            error: The original error that triggered reauthentication
+
+        Returns:
+            Tuple of (access_token, project_id)
+
+        Raises:
+            The original error if reauthentication fails
+        """
+        verbose_logger.debug(
+            f"[ASYNC] Handling reauthentication for project_id: {project_id}. "
+            f"Clearing cache and retrying once."
+        )
+
+        # Clear the cached credentials
+        if credential_cache_key in self._credentials_project_mapping:
+            del self._credentials_project_mapping[credential_cache_key]
+
+        # Retry once with _retry_reauth=True to prevent infinite recursion
+        try:
+            return await self.get_access_token_async(
+                credentials=credentials,
+                project_id=project_id,
+                _retry_reauth=True,
+            )
+        except Exception as retry_error:
+            verbose_logger.error(
+                f"[ASYNC] Reauthentication retry failed for project_id: {project_id}. "
+                f"Original error: {str(error)}. Retry error: {str(retry_error)}"
+            )
+            # Re-raise the original error for better context
+            raise error
+
     def get_access_token(
         self,
         credentials: Optional[VERTEX_CREDENTIALS_TYPES],
@@ -563,6 +726,113 @@ class VertexBase:
 
         return _credentials.token, project_id
 
+    async def _refresh_expired_credentials_async(
+        self,
+        _credentials: GoogleCredentialsObject,
+        credential_cache_key: Tuple,
+        credential_project_id: str,
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        project_id: Optional[str],
+        _retry_reauth: bool,
+    ) -> None:
+        """Helper to refresh expired credentials with reauthentication handling."""
+        try:
+            verbose_logger.debug(
+                f"[ASYNC] Credentials expired, refreshing for project_id: {project_id}"
+            )
+            await self.refresh_auth_async(_credentials)
+            self._credentials_project_mapping[credential_cache_key] = (
+                _credentials,
+                credential_project_id,
+            )
+        except Exception as e:
+            if "Reauthentication is needed" in str(e) and not _retry_reauth:
+                # Use dedicated method for consistency with sync path
+                raise  # Re-raise to be caught by get_access_token_async
+            raise e
+
+    async def get_access_token_async(
+        self,
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        project_id: Optional[str],
+        _retry_reauth: bool = False,
+    ) -> Tuple[str, str]:
+        """
+        Async version of get_access_token that uses aiohttp for token retrieval.
+        """
+        cache_credentials = (
+            json.dumps(credentials) if isinstance(credentials, dict) else credentials
+        )
+        credential_cache_key = (cache_credentials, project_id)
+
+        # Try to get cached credentials
+        if credential_cache_key in self._credentials_project_mapping:
+            cached_entry = self._credentials_project_mapping[credential_cache_key]
+            if isinstance(cached_entry, tuple):
+                _credentials, credential_project_id = cached_entry
+            else:
+                _credentials = cached_entry
+                credential_project_id = _credentials.quota_project_id or getattr(
+                    _credentials, "project_id", None
+                )
+        else:
+            # Load new credentials using async method
+            _credentials, credential_project_id = await self.load_auth_async(
+                credentials, project_id
+            )
+            if _credentials is None:
+                raise ValueError(
+                    f"Could not resolve credentials for project_id: {project_id}"
+                )
+            self._credentials_project_mapping[credential_cache_key] = (
+                _credentials,
+                credential_project_id,
+            )
+
+        # Resolve project_id
+        if project_id is None and credential_project_id:
+            project_id = credential_project_id
+            resolved_cache_key = (cache_credentials, project_id)
+            if resolved_cache_key not in self._credentials_project_mapping:
+                self._credentials_project_mapping[resolved_cache_key] = (
+                    _credentials,
+                    credential_project_id,
+                )
+
+        if _credentials is None:
+            raise ValueError("Credentials are None after loading")
+
+        # Refresh if expired
+        if _credentials.expired:
+            try:
+                await self._refresh_expired_credentials_async(
+                    _credentials,
+                    credential_cache_key,
+                    credential_project_id,
+                    credentials,
+                    project_id,
+                    _retry_reauth,
+                )
+            except Exception as e:
+                if "Reauthentication is needed" in str(e) and not _retry_reauth:
+                    return await self._handle_reauthentication_async(
+                        credentials=credentials,
+                        project_id=project_id,
+                        credential_cache_key=credential_cache_key,
+                        error=e,
+                    )
+                raise
+
+        # Validate
+        if _credentials.token is None or not isinstance(_credentials.token, str):
+            raise ValueError(
+                f"Could not resolve credentials token: {_credentials.token}"
+            )
+        if project_id is None:
+            raise ValueError("Could not resolve project_id")
+
+        return _credentials.token, project_id
+
     async def _ensure_access_token_async(
         self,
         credentials: Optional[VERTEX_CREDENTIALS_TYPES],
@@ -572,12 +842,36 @@ class VertexBase:
         ],  # if it's vertex_ai or gemini (google ai studio)
     ) -> Tuple[str, str]:
         """
-        Async version of _ensure_access_token
+        Async version of _ensure_access_token.
+
+        Uses native async implementation with aiohttp if LITELLM_USE_ASYNC_VERTEX_AUTH=true,
+        otherwise falls back to asyncify wrapper for backward compatibility.
         """
         if custom_llm_provider == "gemini":
             return "", ""
-        else:
+
+        # Feature flag: Use new async implementation or fall back to old behavior
+        use_async_auth = getattr(litellm, "use_async_vertex_auth", False)
+
+        if use_async_auth:
+            verbose_logger.debug(
+                "[VERTEX AUTH] Using native async aiohttp implementation for token retrieval"
+            )
             try:
+                return await self.get_access_token_async(
+                    credentials=credentials,
+                    project_id=project_id,
+                )
+            except Exception as e:
+                raise e
+        else:
+            # Fall back to old behavior (asyncify wrapper)
+            verbose_logger.debug(
+                "[VERTEX AUTH] Using legacy asyncify implementation for token retrieval"
+            )
+            try:
+                from litellm.litellm_core_utils.asyncify import asyncify
+
                 return await asyncify(self.get_access_token)(
                     credentials=credentials,
                     project_id=project_id,
