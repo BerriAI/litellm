@@ -11,6 +11,39 @@ import SearchConnectionTest from "./search_connection_test";
 
 const { TextArea } = Input;
 
+// Search provider logos folder path (matches existing provider logo pattern)
+const searchProviderLogosFolder = "/ui/assets/logos/";
+
+// Helper function to get logo path for a search provider
+const getSearchProviderLogo = (providerName: string): string => {
+  return `${searchProviderLogosFolder}${providerName}.png`;
+};
+
+// Component to display search provider logo and name
+interface SearchProviderLabelProps {
+  providerName: string;
+  displayName: string;
+}
+
+const SearchProviderLabel: React.FC<SearchProviderLabelProps> = ({ providerName, displayName }) => (
+  <div style={{ display: "flex", alignItems: "center" }}>
+    <img
+      src={getSearchProviderLogo(providerName)}
+      alt=""
+      style={{
+        height: "20px",
+        width: "20px",
+        marginRight: "8px",
+        objectFit: "contain",
+      }}
+      onError={(e) => {
+        e.currentTarget.style.display = "none";
+      }}
+    />
+    <span>{displayName}</span>
+  </div>
+);
+
 interface CreateSearchToolProps {
   userRole: string;
   accessToken: string | null;
@@ -188,10 +221,23 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                 loading={isLoadingProviders}
                 showSearch
                 optionFilterProp="children"
+                optionLabelProp="label"
               >
                 {availableProviders.map((provider) => (
-                  <Select.Option key={provider.provider_name} value={provider.provider_name}>
-                    {provider.ui_friendly_name}
+                  <Select.Option 
+                    key={provider.provider_name} 
+                    value={provider.provider_name}
+                    label={
+                      <SearchProviderLabel
+                        providerName={provider.provider_name}
+                        displayName={provider.ui_friendly_name}
+                      />
+                    }
+                  >
+                    <SearchProviderLabel
+                      providerName={provider.provider_name}
+                      displayName={provider.ui_friendly_name}
+                    />
                   </Select.Option>
                 ))}
               </Select>
