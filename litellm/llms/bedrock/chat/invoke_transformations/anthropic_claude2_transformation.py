@@ -27,6 +27,13 @@ class AmazonAnthropicConfig(AmazonInvokeConfig):
     top_p: Optional[int] = None
     anthropic_version: Optional[str] = None
 
+    @property
+    def supports_defs(self) -> bool:
+        """
+        Bedrock models do not support $defs in JSON schemas, so they need to be flattened.
+        """
+        return False
+
     def __init__(
         self,
         max_tokens_to_sample: Optional[int] = None,

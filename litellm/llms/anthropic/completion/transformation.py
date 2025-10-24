@@ -64,6 +64,13 @@ class AnthropicTextConfig(BaseConfig):
     top_k: Optional[int] = None
     metadata: Optional[dict] = None
 
+    @property
+    def supports_defs(self) -> bool:
+        """
+        Anthropic fully supports $defs in JSON schemas and needs them for proper tool calling.
+        """
+        return True
+
     def __init__(
         self,
         max_tokens_to_sample: Optional[

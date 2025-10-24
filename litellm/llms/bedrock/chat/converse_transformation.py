@@ -95,6 +95,13 @@ class AmazonConverseConfig(BaseConfig):
     def custom_llm_provider(self) -> Optional[str]:
         return "bedrock_converse"
 
+    @property
+    def supports_defs(self) -> bool:
+        """
+        Bedrock models do not support $defs in JSON schemas, so they need to be flattened.
+        """
+        return False
+
     @classmethod
     def get_config_blocks(cls) -> dict:
         return {
