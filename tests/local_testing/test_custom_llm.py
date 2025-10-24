@@ -542,7 +542,7 @@ async def test_simple_aembedding():
 
 def test_custom_llm_provider_entrypoint(mocker: MockerFixture):
     # This test mocks the use of entry-points in pyproject.toml:
-    #   [project.entry-point."litellm.provider"]
+    #   [project.entry-point.litellm]
     #   custom_llm = <module>:MyCustomLLM
     #   another-custom-llm = <module>:AnotherCustomLLM
 
@@ -566,8 +566,8 @@ def test_custom_llm_provider_entrypoint(mocker: MockerFixture):
     from importlib.metadata import EntryPoints, EntryPoint
 
     entry_points = EntryPoints([
-        EntryPoint(group="litellm.providers", name="custom_llm", value="package.module:MyCustomLLM"),
-        EntryPoint(group="litellm.providers", name="another-custom-llm", value="package.module:AnotherCustomLLM"),
+        EntryPoint(group="litellm", name="custom_llm", value="package.module:MyCustomLLM"),
+        EntryPoint(group="litellm", name="another-custom-llm", value="package.module:AnotherCustomLLM"),
     ])
     mocked = mocker.patch("litellm.utils.entry_points")
     mocked.return_value = entry_points

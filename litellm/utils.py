@@ -381,9 +381,7 @@ def print_verbose(
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def load_custom_provider_entrypoints():
-    group_name = "litellm.providers"
-
-    found_entry_points = tuple(entry_points().select(group=group_name))  # type: ignore
+    found_entry_points = tuple(entry_points().select(group="litellm"))  # type: ignore
     for entry_point in found_entry_points:
         # types are ignored because of circular dependency issues importing CustomLLM and CustomLLMItem
         handler = entry_point.load()
