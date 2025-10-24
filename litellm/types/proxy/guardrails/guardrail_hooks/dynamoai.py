@@ -3,6 +3,10 @@
 import enum
 from typing import Any, Dict, List, Literal, Optional, TypedDict
 
+from pydantic import Field
+
+from .base import GuardrailConfigModel
+
 
 class DynamoAIMessage(TypedDict):
     """Message structure for DynamoAI API"""
@@ -84,10 +88,27 @@ class DynamoAIProcessedResult(TypedDict):
 
 
 
-class DynamoAIGuardrailConfigModel(TypedDict, total=False):
+class DynamoAIGuardrailConfigModel(GuardrailConfigModel):
     """Configuration model for DynamoAI Guardrails"""
-    api_key: Optional[str]
-    api_base: Optional[str]
-    model_id: Optional[str]
-    guardrail_name: Optional[str]
+    
+    api_key: Optional[str] = Field(
+        default=None,
+        description="API key for DynamoAI Guardrails. If not provided, the `DYNAMOAI_API_KEY` environment variable is checked.",
+    )
+    api_base: Optional[str] = Field(
+        default=None,
+        description="Base URL for DynamoAI API. If not provided, the `DYNAMOAI_API_BASE` environment variable is checked, defaults to https://api.dynamo.ai",
+    )
+    model_id: Optional[str] = Field(
+        default=None,
+        description="Model ID for tracking/logging purposes. If not provided, the `DYNAMOAI_MODEL_ID` environment variable is checked.",
+    )
+    guardrail_name: Optional[str] = Field(
+        default=None,
+        description="Name of the guardrail for identification in logs and traces.",
+    )
+    
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "DynamoAI Guardrails"
 
