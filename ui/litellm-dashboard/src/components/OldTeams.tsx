@@ -122,6 +122,26 @@ const getOrganizationModels = (organization: Organization | null, userModels: st
   return unfurlWildcardModelsInList(tempModelsToPick, userModels);
 };
 
+const canCreateOrManageTeams = (
+  userRole: string | null,
+  userID: string | null,
+  organizations: Organization[] | null
+): boolean => {
+  // Admin role always has permission
+  if (userRole === "Admin") {
+    return true;
+  }
+
+  // Check if user is an org_admin in any organization
+  if (organizations && userID) {
+    return organizations.some((org) =>
+      org.members?.some((member) => member.user_id === userID && member.user_role === "org_admin")
+    );
+  }
+
+  return false;
+};
+
 // @deprecated
 const Teams: React.FC<TeamProps> = ({
   teams,
@@ -133,6 +153,7 @@ const Teams: React.FC<TeamProps> = ({
   organizations,
   premiumUser = false,
 }) => {
+  console.log(`organizations: ${JSON.stringify(organizations)}`);
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
@@ -525,7 +546,7 @@ const Teams: React.FC<TeamProps> = ({
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
-          {(userRole == "Admin" || userRole == "Org Admin") && (
+          {canCreateOrManageTeams(userRole, userID, organizations) && (
             <Button className="w-fit" onClick={() => setIsTeamModalVisible(true)}>
               + Create New Team
             </Button>
@@ -1007,7 +1028,7 @@ const Teams: React.FC<TeamProps> = ({
               </TabPanels>
             </TabGroup>
           )}
-          {(userRole == "Admin" || userRole == "Org Admin") && (
+          {canCreateOrManageTeams(userRole, userID, organizations) && (
             <Modal
               title="Create Team"
               visible={isTeamModalVisible}
