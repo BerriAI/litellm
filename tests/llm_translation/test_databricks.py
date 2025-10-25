@@ -1136,7 +1136,7 @@ def test_databricks_anthropic_function_call_with_no_schema(model, monkeypatch):
     ]
     
     with patch.object(HTTPHandler, "post", return_value=mock_response):
-        response = completion(
+        response = litellm.completion(
             model=model,
             messages=messages,
             tools=tools,
