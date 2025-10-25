@@ -1,7 +1,53 @@
 global:
-  scrape_interval: 15s
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  external_labels:
+    cluster: 'litellm-production'
+    environment: 'openwebui'
+
+# Retention и Storage настройки
+# Оптимальная стратегия: многоуровневое хранение
+rule_files:
+  # Будущие алерты
+  # - "alert_rules.yml"
 
 scrape_configs:
-  - job_name: 'litellm'
+  - job_name: 'prometheus-self'
     static_configs:
-      - targets: ['litellm:4000']  # Assuming Litellm exposes metrics at port 4000
+      - targets: ['localhost:9090']
+    scrape_interval: 2m
+    scrape_timeout: 30s
+
+  - job_name: 'litellm-unified-metrics'
+    static_configs:
+      - targets: ['litellm-metrics-exporter:9090']
+    scrape_interval: 30s
+    scrape_timeout: 25s
+    metrics_path: /metrics
+
+    # Retention-friendly labeling
+    metric_relabel_configs:
+      # Сохраняем важные метрики дольше
+      - source_labels: [__name__]
+        regex: 'litellm_(spend_usd|requests_total|team_budget_usd)'
+        target_label: retention_tier
+        replacement: 'long_term'
+
+      # Производительность - средний срок
+      - source_labels: [__name__]
+        regex: 'litellm_(request_duration_seconds|tokens_per_second|quality_metrics)'
+        target_label: retention_tier
+        replacement: 'medium_term'
+
+      # Детальная аналитика - короткий срок
+      - source_labels: [__name__]
+        regex: 'litellm_(model_migration_score|optimization_opportunities)'
+        target_label: retention_tier
+        replacement: 'short_term'
+
+# Remote write для долгосрочного хранения (опционально)
+# remote_write:
+#   - url: "http://thanos-receiver:19291/api/v1/receive"
+#     queue_config:
+#       batch_send_deadline: 5s
+#       batch_size: 1000
