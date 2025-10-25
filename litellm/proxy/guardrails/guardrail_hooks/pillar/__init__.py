@@ -44,6 +44,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         include_evidence=_get_config_value(
             litellm_params, optional_params, "include_evidence"
         ),
+        fallback_on_error=_get_config_value(
+            litellm_params, optional_params, "fallback_on_error"
+        ),
+        timeout=_get_config_value(litellm_params, optional_params, "timeout"),
     )
     litellm.logging_callback_manager.add_litellm_callback(_pillar_callback)
 
