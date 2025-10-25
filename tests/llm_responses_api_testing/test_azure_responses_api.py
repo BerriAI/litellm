@@ -23,7 +23,7 @@ from base_responses_api import BaseResponsesAPITest
 class TestAzureResponsesAPITest(BaseResponsesAPITest):
     def get_base_completion_call_args(self):
         return {
-            "model": "azure/gpt-5-mini",
+            "model": "azure/gpt-4.1-mini",
             "truncation": "auto",
             "api_base": os.getenv("AZURE_API_BASE"),
             "api_key": os.getenv("AZURE_API_KEY"),
