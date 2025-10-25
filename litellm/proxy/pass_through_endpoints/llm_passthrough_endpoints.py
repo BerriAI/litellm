@@ -1381,7 +1381,7 @@ async def _base_vertex_proxy_route(
         headers_passed_through,
         vertex_project,
         vertex_location,
-    ) = await _prepare_vertex_auth_headers(  # type: ignore
+    ) = await _prepare_vertex_auth_headers(
         request=request,
         vertex_credentials=vertex_credentials,
         router_credentials=router_credentials,
