@@ -186,9 +186,11 @@ class OpenTelemetry(CustomLogger):
             )
             return
 
-        # Add Otel as a service callback
-        if "otel" not in litellm.service_callback:
-            litellm.service_callback.append("otel")
+        # Add self as a service callback
+        if "otel" not in litellm.service_callback and all(
+            not isinstance(cb, OpenTelemetry) for cb in litellm.service_callback
+        ):
+            litellm.service_callback.append(self)
         setattr(proxy_server, "open_telemetry_logger", self)
 
     def _init_tracing(self, tracer_provider):
