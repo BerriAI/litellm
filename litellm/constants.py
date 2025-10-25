@@ -897,6 +897,11 @@ bedrock_embedding_models: set = set(
         "twelvelabs.marengo-embed-2-7-v1:0",
     ]
 )
+isaacus_embedding_models: set = set(
+    [
+        "kanon-2-embedder",
+    ]
+)
 
 known_tokenizer_config = {
     "mistralai/Mistral-7B-Instruct-v0.1": {

@@ -547,6 +547,54 @@ All models listed here https://docs.voyageai.com/embeddings/#models-and-specific
 | voyage-lite-01 | `embedding(model="voyage/voyage-lite-01", input)` | 
 | voyage-lite-01-instruct | `embedding(model="voyage/voyage-lite-01-instruct", input)` | 
 
+
+## Isaacus AI Embedding Models
+
+### Usage - Embedding
+```python
+from litellm import embedding
+import os
+
+os.environ['ISAACUS_API_KEY'] = ""
+response = embedding(
+    model="isaacus/kanon-2-embedder",
+    input=["good morning from litellm"],
+)
+print(response)
+```
+
+### Supported Models
+All models listed here https://docs.isaacus.com/api-reference/embeddings are supported
+
+| Model Name | Function Call |
+|------------|---------------|
+| kanon-2-embedder | `embedding(model="isaacus/kanon-2-embedder", input)` |
+
+**Supported optional params:**
+- `task` - Optimize embeddings for specific use case: `"retrieval/query"` (for search queries) or `"retrieval/document"` (for documents to be indexed)
+- `dimensions` - Optionally reduce embedding dimensionality (e.g., 256, 768, 1024)
+- `overflow_strategy` - How to handle text that exceeds model limits: `"drop_end"` (default, truncates text at the end)
+
+```python
+# Example with optional params
+response = embedding(
+    model="isaacus/kanon-2-embedder",
+    input=["contract text"],
+    task="retrieval/query",  # or "retrieval/document"
+    dimensions=1024,
+    overflow_strategy="drop_end"
+)
+```
+
+### Task Parameter
+
+Isaacus embeddings support task-specific optimization to improve retrieval accuracy. Set the `task` parameter based on your use case:
+
+- `"retrieval/query"` – for embedding search queries during retrieval
+- `"retrieval/document"` – for embedding documents during indexing
+
+> **Note:** Using the correct task type ensures optimal performance for legal document retrieval.
+
 ### Provider-specific Params
 
 
