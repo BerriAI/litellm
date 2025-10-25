@@ -315,6 +315,12 @@ class BedrockImageGeneration(BaseAWSLLM):
         if response_dict is None:
             raise ValueError("Error in response object format, got None")
 
+        config_class: Union[
+            type[AmazonTitanImageGenerationConfig],
+            type[AmazonNovaCanvasConfig],
+            type[AmazonStability3Config],
+            type[litellm.AmazonStabilityConfig],
+        ]
         if AmazonTitanImageGenerationConfig._is_titan_model(model=model):
             config_class = AmazonTitanImageGenerationConfig
         elif AmazonNovaCanvasConfig._is_nova_model(model=model):
