@@ -30,8 +30,8 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.guardrails import GuardrailEventHooks, PiiEntityType
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
     BedrockGuardrailOutput,
@@ -1085,3 +1085,61 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         verbose_proxy_logger.debug(
                             "Applied masking to choice text content"
                         )
+
+    async def apply_guardrail(
+        self,
+        text: str,
+        language: Optional[str] = None,
+        entities: Optional[List[PiiEntityType]] = None,
+    ) -> str:
+        """
+        Apply Bedrock guardrail to the given text for testing purposes.
+        
+        This method allows users to test Bedrock guardrails without making actual LLM calls.
+        It creates a mock request and response to test the guardrail functionality.
+        """
+        try:
+            verbose_proxy_logger.debug(
+                "Bedrock Guardrail: Applying guardrail"
+            )
+            mock_messages: List[AllMessageValues] = [ChatCompletionUserMessage(role="user", content=text)]
+            bedrock_response = await self.make_bedrock_api_request(
+                source="INPUT",
+                messages=mock_messages,
+                request_data={"messages": mock_messages}
+            )
+            
+            if bedrock_response.get("action") == "BLOCKED":
+                raise Exception(f"Content blocked by Bedrock guardrail: {bedrock_response.get('reason', 'Unknown reason')}")
+            
+            # Apply any masking that was applied by the guardrail
+            masked_text = text
+            output_list = bedrock_response.get("output")
+            if output_list:
+                # If the guardrail returned modified content, use that
+                for output_item in output_list:
+                    text_content = output_item.get("text")
+                    if text_content:
+                        masked_text = str(text_content)
+                        break
+            else:
+                outputs_list = bedrock_response.get("outputs")
+                if outputs_list:
+                    # Fallback to outputs field if output is not available
+                    for output_item in outputs_list:
+                        text_content = output_item.get("text")
+                        if text_content:
+                            masked_text = str(text_content)
+                            break
+            
+            verbose_proxy_logger.debug(
+                "Bedrock Guardrail: Successfully applied guardrail"
+            )
+            
+            return masked_text
+            
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Bedrock Guardrail: Failed to apply guardrail: %s", str(e)
+            )
+            raise Exception(f"Bedrock guardrail failed: {str(e)}")

@@ -304,6 +304,15 @@ def test_update_litellm_params_for_health_check():
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     assert "voice" not in updated_params
 
+    # Test with Bedrock model
+    model_info = {}
+    litellm_params = {
+        "model": "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "anthropic.claude-3-7-sonnet-20250219-v1:0"
+
 @pytest.mark.asyncio
 async def test_perform_health_check_with_health_check_model():
     """
@@ -393,3 +402,16 @@ async def test_health_check_bad_model():
         assert (
             end_time - start_time < 2
         ), "Health check took longer than health_check_timeout"
+
+@pytest.mark.asyncio
+async def test_ahealth_check_ocr():
+    litellm._turn_on_debug()
+    response = await litellm.ahealth_check(
+        model_params={
+            "model": "mistral/mistral-ocr-latest",
+            "api_key": os.getenv("MISTRAL_API_KEY"),
+        },
+        mode="ocr",
+    )
+    print(response)
+    return response
