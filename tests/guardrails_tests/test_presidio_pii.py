@@ -592,3 +592,48 @@ async def test_presidio_language_configuration_with_per_request_override():
     # Verify the default language (German) is used
     assert analyze_request_default["language"] == "de"
     assert analyze_request_default["text"] == test_text
+
+
+@pytest.mark.asyncio
+async def test_presidio_pre_call_hook_with_content_list_single_block():
+    """
+    Ensure async_pre_call_hook redacts list-of-blocks content with a 'text' field.
+    """
+    mock_redacted = {
+        "text": "email is <EMAIL_ADDRESS>",
+        "items": [
+            {
+                "start": 9,
+                "end": 24,
+                "entity_type": "EMAIL_ADDRESS",
+                "text": "<EMAIL_ADDRESS>",
+                "operator": "replace",
+            }
+        ],
+    }
+
+    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        mock_redacted_text=mock_redacted,
+    )
+
+    data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "email is test@example.com"}
+                ],
+            }
+        ]
+    }
+
+    new_data = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="x"),
+        cache=DualCache(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert isinstance(new_data["messages"][0]["content"], list)
+    assert new_data["messages"][0]["content"][0]["text"] == "email is <EMAIL_ADDRESS>"
