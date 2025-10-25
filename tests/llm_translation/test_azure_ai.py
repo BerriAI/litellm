@@ -300,16 +300,16 @@ async def test_azure_ai_request_format():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["azure/gpt5_series/gpt-5", "azure/gpt-5"])
+@pytest.mark.parametrize("model", ["azure/gpt5_series/gpt-5-mini", "azure/gpt-5-mini"])
 async def test_azure_gpt5_reasoning(model):
     litellm._turn_on_debug()
     response = await litellm.acompletion(
-        model="azure/gpt5_series/gpt-5",
+        model=model,
         messages=[{"role": "user", "content": "What is the capital of France?"}],
         reasoning_effort="minimal",
         max_tokens=10,
-        api_base=os.getenv("AZURE_GPT5_API_BASE"),
-        api_key=os.getenv("AZURE_GPT5_API_KEY"),
+        api_base=os.getenv("AZURE_API_BASE"),
+        api_key=os.getenv("AZURE_API_KEY"),
     )
     print("response: ", response)
     assert response.choices[0].message.content is not None
