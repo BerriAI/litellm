@@ -354,8 +354,6 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
 
     async def async_send_message(self, payload: StandardLoggingPayload) -> None:
         try:
-            # if self.sqs_strip_base64_files:
-            #     payload = await self._strip_base64_from_messages(payload)
             from urllib.parse import quote
 
             import requests
