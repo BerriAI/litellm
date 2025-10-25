@@ -1212,8 +1212,6 @@ class Logging(LiteLLMLoggingBaseClass):
         if discount_amount is not None:
             self.cost_breakdown["discount_amount"] = discount_amount
 
-
-
     def _response_cost_calculator(
         self,
         result: Union[
@@ -1307,6 +1305,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return None
 
         try:
+
             response_cost = litellm.response_cost_calculator(
                 **response_cost_calculator_kwargs
             )
@@ -1620,6 +1619,8 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OpenAIFileObject)
             or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
             or isinstance(logging_result, OpenAIModerationResponse)
+            or isinstance(logging_result, dict)
+            and logging_result.get("object") == "vector_store.search_results.page"
             or isinstance(logging_result, VideoObject) 
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
@@ -3110,7 +3111,7 @@ def _get_masked_values(
                 (
                     v[: unmasked_length // 2]
                     + "*" * number_of_asterisks
-                    + v[-unmasked_length // 2:]
+                    + v[-unmasked_length // 2 :]
                 )
                 if (
                     isinstance(v, str)
@@ -3121,7 +3122,7 @@ def _get_masked_values(
                     (
                         v[: unmasked_length // 2]
                         + "*" * (len(v) - unmasked_length)
-                        + v[-unmasked_length // 2:]
+                        + v[-unmasked_length // 2 :]
                     )
                     if (isinstance(v, str) and len(v) > unmasked_length)
                     else ("*****" if isinstance(v, str) else v)
@@ -4505,7 +4506,6 @@ def _get_status_fields(
 
     # Set LLM API status
     llm_api_status: StandardLoggingPayloadStatus = status
-
 
     #########################################################
     # Map - guardrail_information.guardrail_status to guardrail_status

@@ -1,7 +1,7 @@
 import json
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -12,16 +12,21 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
+from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
+    VertexSearchAPIVectorStoreConfig,
+)
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    StandardPassThroughResponseObject,
     TextCompletionResponse,
     Choices,
 )
 from litellm.types.utils import SpecialEnums
 
+vertex_search_api_config = VertexSearchAPIVectorStoreConfig()
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
     from litellm.types.utils import LiteLLMBatch
@@ -34,6 +39,7 @@ EndpointType = Any
 
 
 class VertexPassthroughLoggingHandler:
+
     @staticmethod
     def vertex_passthrough_handler(
         httpx_response: httpx.Response,
@@ -207,6 +213,37 @@ class VertexPassthroughLoggingHandler:
 
             return {
                 "result": litellm_prediction_response,
+                "kwargs": kwargs,
+            }
+        elif "search" in url_route:
+
+            litellm_vs_response = (
+                vertex_search_api_config.transform_search_vector_store_response(
+                    response=httpx_response,
+                    litellm_logging_obj=logging_obj,
+                )
+            )
+            response_cost = litellm.completion_cost(
+                completion_response=litellm_vs_response,
+                model="vertex_ai/search_api",
+                custom_llm_provider="vertex_ai",
+                call_type="vector_store_search",
+            )
+
+            standard_pass_through_response_object: StandardPassThroughResponseObject = {
+                "response": cast(dict, litellm_vs_response),
+            }
+
+            kwargs["response_cost"] = response_cost
+            kwargs["model"] = "vertex_ai/search_api"
+            logging_obj.model_call_details.setdefault("litellm_params", {})
+            logging_obj.model_call_details["litellm_params"][
+                "base_model"
+            ] = "vertex_ai/search_api"
+            logging_obj.model_call_details["response_cost"] = response_cost
+
+            return {
+                "result": standard_pass_through_response_object,
                 "kwargs": kwargs,
             }
         elif "batchPredictionJobs" in url_route:

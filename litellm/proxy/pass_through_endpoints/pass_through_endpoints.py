@@ -1603,12 +1603,12 @@ class SafeRouteAdder:
     def _is_path_registered(app: FastAPI, path: str, methods: List[str]) -> bool:
         """
         Check if a path with any of the specified methods is already registered on the app.
-        
+
         Args:
             app: The FastAPI application instance
             path: The path to check (e.g., "/v1/chat/completions")
             methods: List of HTTP methods to check (e.g., ["GET", "POST"])
-            
+
         Returns:
             True if the path is already registered with any of the methods, False otherwise
         """
@@ -1616,7 +1616,7 @@ class SafeRouteAdder:
             # Use getattr to safely access route attributes
             route_path = getattr(route, "path", None)
             route_methods = getattr(route, "methods", None)
-            
+
             if route_path == path and route_methods is not None:
                 # Check if any of the methods overlap
                 if any(method in route_methods for method in methods):
@@ -1633,14 +1633,14 @@ class SafeRouteAdder:
     ) -> bool:
         """
         Add an API route to the app only if it doesn't already exist.
-        
+
         Args:
             app: The FastAPI application instance
             path: The path for the route
             endpoint: The endpoint function/callable
             methods: List of HTTP methods
             dependencies: Optional list of dependencies
-            
+
         Returns:
             True if route was added, False if it already existed
         """

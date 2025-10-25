@@ -155,6 +155,7 @@ class VertexBase:
         )
 
     def _credentials_from_default_auth(self, scopes):
+
         import google.auth as google_auth
 
         return google_auth.default(scopes=scopes)
