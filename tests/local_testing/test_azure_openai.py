@@ -96,6 +96,6 @@ async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
 
         assert json_body == {
             "messages": [{"role": "user", "content": "Hello world!"}],
-            "model": "gpt-4.1-nano",
+            "model": "gpt-4.1-mini",
             "stream": False,
         }
