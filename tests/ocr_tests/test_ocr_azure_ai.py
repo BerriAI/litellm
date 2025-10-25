@@ -22,6 +22,6 @@ class TestAzureAIOCR(BaseOCRTest):
         """
         return {
             "model": "azure_ai/mistral-document-ai-2505",
-            "api_key": os.getenv("AZURE_AI_API_KEY_MISTRAL"),
-            "api_base": os.getenv("AZURE_AI_API_BASE_MISTRAL"),
+            "api_key": os.getenv("AZURE_API_KEY"),
+            "api_base": os.getenv("AZURE_API_BASE"),
         }
