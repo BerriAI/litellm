@@ -44,7 +44,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         return [
             param for param in all_openai_params if param not in non_supported_params
         ]
-    
+
     def _get_o_series_only_params(self, model: str) -> list:
         """
         Helper function to get the o-series only params for the model
@@ -52,7 +52,6 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         - reasoning_effort
         """
         o_series_only_param = []
-        
 
         #########################################################
         # Case 1: If the model is recognized and in litellm model cost map
@@ -63,13 +62,28 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
                 o_series_only_param.append("reasoning_effort")
         #########################################################
         # Case 2: If the model is not recognized, then we assume it supports reasoning
-        # This is critical because several users tend to use custom deployment names 
+        # This is critical because several users tend to use custom deployment names
         # for azure o-series models.
         #########################################################
         else:
             o_series_only_param.append("reasoning_effort")
-        
+
         return o_series_only_param
+
+    def does_o_series_support_native_streaming(self, model: Optional[str]) -> bool:
+        """
+        Check if the given O-series model supports native streaming.
+
+        Args:
+            model: The model name to check
+
+        Returns:
+            bool: True if the model supports native streaming, False otherwise
+        """
+        if not model:
+            return False
+
+        return "o3" in model or "o4" in model
 
     def should_fake_stream(
         self,
@@ -78,15 +92,13 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         custom_llm_provider: Optional[str] = None,
     ) -> bool:
         """
-        Currently no Azure O Series models support native streaming.
+        Azure O3 and O4 models support native streaming.
         """
 
         if stream is not True:
             return False
 
-        if (
-            model and "o3" in model
-        ):  # o3 models support streaming - https://github.com/BerriAI/litellm/issues/8274
+        if self.does_o_series_support_native_streaming(model):
             return False
 
         if model is not None:
