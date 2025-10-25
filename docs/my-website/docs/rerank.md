@@ -6,6 +6,18 @@ LiteLLM Follows the [cohere api request / response for the rerank api](https://c
 
 :::
 
+## Overview
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Cost Tracking | ✅ | Works with all supported models |
+| Logging | ✅ | Works across all integrations |
+| End-user Tracking | ✅ | |
+| Fallbacks | ✅ | Works between supported models |
+| Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to input query only (not documents) |
+| Supported Providers | Cohere, Together AI, Azure AI, DeepInfra, Nvidia NIM, Infinity | |
+
 ## **LiteLLM Python SDK Usage**
 ### Quick Start 
 
