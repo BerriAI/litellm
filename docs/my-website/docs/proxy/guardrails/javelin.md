@@ -29,7 +29,7 @@ guardrails:
       api_version: "v1"
       metadata:
         request_source: "litellm-proxy"
-      application: "my-app"
+      application: "my-app" # Optional
   - guardrail_name: "javelin-trust-safety"
     litellm_params:
       guardrail: javelin
@@ -46,6 +46,17 @@ guardrails:
       api_base: os.environ/JAVELIN_API_BASE
       guardrail_name: "lang_detector"
       api_version: "v1"
+  - guardrail_name: "javelin-guard"
+    litellm_params:
+      guardrail: javelin
+      mode: "pre_call"
+      api_key: os.environ/JAVELIN_API_KEY
+      api_base: os.environ/JAVELIN_API_BASE
+      guard_name: "javelin_guard"
+      api_version: "v1"
+      metadata:
+        request_source: "litellm-proxy"
+      application: "litellm-test-app"
 ```
 
 #### Supported values for `mode`
@@ -62,7 +73,6 @@ litellm --config config.yaml --detailed_debug
 
 ### 3. Test request 
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Prompt Injection Detection" value = "prompt-injection">
@@ -292,7 +302,7 @@ guardrails:
 
 - `api_base`: (Optional[str]) The base URL of the Javelin API. Defaults to `https://api-dev.javelin.live`
 - `api_key`: (str) The API Key for the Javelin integration.
-- `guardrail_name`: (str) The type of guardrail to use. Supported values: `promptinjectiondetection`, `trustsafety`, `lang_detector`
+- `guardrail_name`: (str) The type of guardrail to use. Supported values: `promptinjectiondetection`, `trustsafety`, `lang_detector`, `javelin_guard`
 - `api_version`: (Optional[str]) The API version to use. Defaults to `v1`
 - `metadata`: (Optional[Dict]) Metadata tags can be attached to screening requests as an object that can contain any arbitrary key-value pairs.
 - `config`: (Optional[Dict]) Configuration parameters for the guardrail.
