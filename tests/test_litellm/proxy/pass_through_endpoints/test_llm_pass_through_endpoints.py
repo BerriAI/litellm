@@ -1105,15 +1105,6 @@ class TestBedrockLLMProxyRoute:
             handle_bedrock_passthrough_router_model,
         )
 
-        mock_request = Mock()
-        mock_request.method = "POST"
-        mock_request.headers = {"content-type": "application/json"}
-        mock_request.query_params = {}
-
-        mock_request_body = {
-            "messages": [{"role": "user", "content": [{"textaaa": "Hello"}]}]
-        }
-
         bedrock_error_message = '{"message":"ContentBlock object at messages.0.content.0 must set one of the following keys: text, image, toolUse, toolResult, document, video."}'
 
         # Create a mock httpx.Response for the error
@@ -1130,26 +1121,61 @@ class TestBedrockLLMProxyRoute:
             response=mock_error_response,
         )
 
+        # Create mocks for all required parameters
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_request.url = MagicMock()
+        mock_request.url.path = "/bedrock/model/test-model/converse"
+
+        mock_request_body = {
+            "messages": [{"role": "user", "content": [{"textaaa": "Hello"}]}]
+        }
+
         mock_llm_router = Mock()
-        mock_llm_router.allm_passthrough_route = AsyncMock(side_effect=mock_http_error)
+        
+        # Mock ProxyBaseLLMRequestProcessing to raise the httpx error
+        with patch(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_passthrough_process_llm_request",
+            new_callable=AsyncMock,
+            side_effect=mock_http_error
+        ):
+            mock_user_api_key_dict = Mock()
+            mock_user_api_key_dict.api_key = "test-key"
+            mock_user_api_key_dict.allowed_model_region = None
+            
+            mock_proxy_logging_obj = Mock()
+            mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
 
-        endpoint = "model/test-model/converse"
-        model = "test-model"
+            endpoint = "model/test-model/converse"
+            model = "test-model"
 
-        with pytest.raises(HTTPException) as exc_info:
-            await handle_bedrock_passthrough_router_model(
-                model=model,
-                endpoint=endpoint,
-                request=mock_request,
-                request_body=mock_request_body,
-                llm_router=mock_llm_router,
+            with pytest.raises(HTTPException) as exc_info:
+                await handle_bedrock_passthrough_router_model(
+                    model=model,
+                    endpoint=endpoint,
+                    request=mock_request,
+                    request_body=mock_request_body,
+                    llm_router=mock_llm_router,
+                    user_api_key_dict=mock_user_api_key_dict,
+                    proxy_logging_obj=mock_proxy_logging_obj,
+                    general_settings={},
+                    proxy_config=None,
+                    select_data_generator=None,
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    version=None,
+                )
+
+            assert exc_info.value.status_code == 400
+            assert (
+                "ContentBlock object at messages.0.content.0 must set one of the following keys"
+                in str(exc_info.value.detail)
             )
-
-        assert exc_info.value.status_code == 400
-        assert (
-            "ContentBlock object at messages.0.content.0 must set one of the following keys"
-            in str(exc_info.value.detail)
-        )
 
 
 class TestLLMPassthroughFactoryProxyRoute:

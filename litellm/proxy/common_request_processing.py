@@ -740,6 +740,16 @@ class ProxyBaseLLMRequestProcessing:
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
                 headers=headers,
             )
+        elif isinstance(e, httpx.HTTPStatusError):
+            # Handle httpx.HTTPStatusError - extract actual error from response
+            # This matches the original behavior before the refactor in commit 511d435f6f
+            error_body = await e.response.aread()
+            error_text = error_body.decode("utf-8")
+            
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail={"error": error_text},
+            )
         error_msg = f"{str(e)}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
