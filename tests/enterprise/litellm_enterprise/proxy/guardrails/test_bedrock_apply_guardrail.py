@@ -1,17 +1,19 @@
 """
 Test the Bedrock guardrail apply_guardrail functionality
 """
-import sys
 import os
-import pytest
+import sys
 from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from fastapi import HTTPException
-from litellm.types.guardrails import ApplyGuardrailRequest, ApplyGuardrailResponse
+
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+from litellm.types.guardrails import ApplyGuardrailRequest, ApplyGuardrailResponse
 
 
 @pytest.mark.asyncio
@@ -95,11 +97,9 @@ async def test_bedrock_apply_guardrail_with_masking():
         # Mock a response with masked content
         mock_response = {
             "action": "ALLOWED",
-            "content": [
+            "outputs": [
                 {
-                    "text": {
-                        "text": "This is a test message with [REDACTED] content"
-                    }
+                    "text": "This is a test message with [REDACTED] content"
                 }
             ]
         }
@@ -145,7 +145,7 @@ async def test_bedrock_apply_guardrail_api_failure():
 async def test_bedrock_apply_guardrail_endpoint_integration():
     """Test the full endpoint integration with Bedrock guardrail"""
     from enterprise.litellm_enterprise.proxy.guardrails.endpoints import apply_guardrail
-    
+
     # Create a real BedrockGuardrail instance
     guardrail = BedrockGuardrail(
         guardrail_name="test-bedrock-guard",
@@ -160,11 +160,9 @@ async def test_bedrock_apply_guardrail_endpoint_integration():
             # Mock a successful response from Bedrock
             mock_response = {
                 "action": "ALLOWED",
-                "content": [
+                "outputs": [
                     {
-                        "text": {
-                            "text": "This is a test message with processed content"
-                        }
+                        "text": "This is a test message with processed content"
                     }
                 ]
             }

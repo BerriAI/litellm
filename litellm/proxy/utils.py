@@ -81,6 +81,9 @@ from litellm.proxy.db.create_views import (
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+    UnifiedLLMGuardrails,
+)
 from litellm.proxy.hooks import PROXY_HOOKS, get_proxy_hook
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
@@ -105,6 +108,9 @@ if TYPE_CHECKING:
     Span = Union[_Span, Any]
 else:
     Span = Any
+
+
+unified_guardrail = UnifiedLLMGuardrails()
 
 
 def print_verbose(print_statement):
@@ -785,6 +791,74 @@ class ProxyLogging:
                 raise HTTPException(status_code=400, detail={"error": response})
         return data
 
+    async def _process_guardrail_callback(
+        self,
+        callback: CustomGuardrail,
+        data: dict,
+        user_api_key_dict: Optional[UserAPIKeyAuth],
+        call_type: Literal[
+            "completion",
+            "text_completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+            "pass_through_endpoint",
+            "rerank",
+            "mcp_call",
+            "anthropic_messages",
+        ],
+    ) -> Optional[dict]:
+        """
+        Process a guardrail callback during pre-call hook.
+
+        Args:
+            callback: The CustomGuardrail callback to process
+            data: The request data dictionary
+            user_api_key_dict: User API key authentication details
+            call_type: The type of API call being made
+
+        Returns:
+            Updated data dictionary if guardrail passes, None if guardrail should be skipped
+        """
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        # Determine the event type based on call type
+        event_type = GuardrailEventHooks.pre_call
+        if call_type == "mcp_call":
+            event_type = GuardrailEventHooks.pre_mcp_call
+
+        # Check if the guardrail should run for this request
+        if callback.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return None
+
+        # Execute the appropriate guardrail hook
+        if "apply_guardrail" in type(callback).__dict__:
+            # Use unified guardrail for callbacks with apply_guardrail method
+            data["guardrail_to_apply"] = callback
+            response = await unified_guardrail.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,  # type: ignore
+                cache=self.call_details["user_api_key_cache"],
+                data=data,  # type: ignore
+                call_type=call_type,  # type: ignore
+            )
+        else:
+            # Use the callback's own async_pre_call_hook method
+            response = await callback.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,  # type: ignore
+                cache=self.call_details["user_api_key_cache"],
+                data=data,  # type: ignore
+                call_type=call_type,  # type: ignore
+            )
+
+        # Process the response if one was returned
+        if response is not None:
+            data = await self.process_pre_call_hook_response(
+                response=response, data=data, call_type=call_type
+            )
+
+        return data
+
     # The actual implementation of the function
     @overload
     async def pre_call_hook(
@@ -912,28 +986,15 @@ class ProxyLogging:
                 else:
                     _callback = callback  # type: ignore
                 if _callback is not None and isinstance(_callback, CustomGuardrail):
-                    from litellm.types.guardrails import GuardrailEventHooks
-
-                    event_type = GuardrailEventHooks.pre_call
-                    if call_type == "mcp_call":
-                        event_type = GuardrailEventHooks.pre_mcp_call
-
-                    if (
-                        _callback.should_run_guardrail(data=data, event_type=event_type)
-                        is not True
-                    ):
-                        continue
-
-                    response = await _callback.async_pre_call_hook(
+                    result = await self._process_guardrail_callback(
+                        callback=_callback,
+                        data=data,
                         user_api_key_dict=user_api_key_dict,
-                        cache=self.call_details["user_api_key_cache"],
-                        data=data,  # type: ignore
                         call_type=call_type,
                     )
-                    if response is not None:
-                        data = await self.process_pre_call_hook_response(
-                            response=response, data=data, call_type=call_type
-                        )
+                    if result is None:
+                        continue
+                    data = result
 
                 elif (
                     _callback is not None
@@ -1424,6 +1485,7 @@ class ProxyLogging:
 
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
+
                 if (
                     callback.should_run_guardrail(
                         data=data, event_type=GuardrailEventHooks.post_call
@@ -1432,11 +1494,19 @@ class ProxyLogging:
                 ):
                     continue
 
-                await callback.async_post_call_success_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    data=data,
-                    response=response,
-                )
+                if "apply_guardrail" in type(callback).__dict__:
+                    data["guardrail_to_apply"] = callback
+                    response = await unified_guardrail.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
+                    )
+                else:
+                    response = await callback.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
+                    )
 
             ############ Handle CustomLogger ###############################
             #################################################################
@@ -2158,12 +2228,18 @@ class PrismaClient:
                             b.tpm_limit AS litellm_budget_table_tpm_limit,
                             b.rpm_limit AS litellm_budget_table_rpm_limit,
                             b.model_max_budget as litellm_budget_table_model_max_budget,
-                            b.soft_budget as litellm_budget_table_soft_budget
+                            b.soft_budget as litellm_budget_table_soft_budget,
+                            o.metadata as organization_metadata,
+                            b2.max_budget as organization_max_budget,
+                            b2.tpm_limit as organization_tpm_limit,
+                            b2.rpm_limit as organization_rpm_limit
                         FROM "LiteLLM_VerificationToken" AS v
                         LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
                         LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id
                         LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
                         LEFT JOIN "LiteLLM_BudgetTable" AS b ON v.budget_id = b.budget_id
+                        LEFT JOIN "LiteLLM_OrganizationTable" AS o ON v.organization_id = o.organization_id
+                        LEFT JOIN "LiteLLM_BudgetTable" AS b2 ON o.budget_id = b2.budget_id
                         WHERE v.token = '{token}'
                     """
 

@@ -452,7 +452,7 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
     try:
         # Your test data
         test_data = {
-            "model": "azure/gpt-4.1-nano",
+            "model": "azure/gpt-4.1-mini",
             "messages": [
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -463,7 +463,7 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
         response = client_no_auth.post("/v1/chat/completions", json=test_data)
 
         mock_acompletion.assert_called_once_with(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=[
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -496,19 +496,19 @@ def test_openai_deployments_model_chat_completions_azure(
     try:
         # Your test data
         test_data = {
-            "model": "azure/gpt-4.1-nano",
+            "model": "azure/gpt-4.1-mini",
             "messages": [
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
             "max_tokens": 10,
         }
 
-        url = "/openai/deployments/azure/gpt-4.1-nano/chat/completions"
+        url = "/openai/deployments/azure/gpt-4.1-mini/chat/completions"
         print(f"testing proxy server with Azure Request {url}")
         response = client_no_auth.post(url, json=test_data)
 
         mock_acompletion.assert_called_once_with(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=[
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -1322,7 +1322,7 @@ async def test_add_callback_via_key(prisma_client):
     try:
         # Your test data
         test_data = {
-            "model": "azure/gpt-4.1-nano",
+            "model": "azure/gpt-4.1-mini",
             "messages": [
                 {"role": "user", "content": "write 1 sentence poem"},
             ],
@@ -1416,7 +1416,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
     request._url = URL(url="/chat/completions")
 
     test_data = {
-        "model": "azure/gpt-4.1-nano",
+        "model": "azure/gpt-4.1-mini",
         "messages": [
             {"role": "user", "content": "write 1 sentence poem"},
         ],
@@ -1431,7 +1431,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
 
     data = {
         "data": {
-            "model": "azure/gpt-4.1-nano",
+            "model": "azure/gpt-4.1-mini",
             "messages": [{"role": "user", "content": "write 1 sentence poem"}],
             "max_tokens": 10,
             "mock_response": "Hello world",
@@ -1531,7 +1531,7 @@ async def test_disable_fallbacks_by_key(disable_fallbacks_set):
 
     key_metadata = {"disable_fallbacks": disable_fallbacks_set}
     existing_data = {
-        "model": "azure/gpt-4.1-nano",
+        "model": "azure/gpt-4.1-mini",
         "messages": [{"role": "user", "content": "write 1 sentence poem"}],
     }
     data = LiteLLMProxyRequestSetup.add_key_level_controls(
@@ -1572,7 +1572,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
     request._url = URL(url="/chat/completions")
 
     test_data = {
-        "model": "azure/gpt-4.1-nano",
+        "model": "azure/gpt-4.1-mini",
         "messages": [
             {"role": "user", "content": "write 1 sentence poem"},
         ],
@@ -1587,7 +1587,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
 
     data = {
         "data": {
-            "model": "azure/gpt-4.1-nano",
+            "model": "azure/gpt-4.1-mini",
             "messages": [{"role": "user", "content": "write 1 sentence poem"}],
             "max_tokens": 10,
             "mock_response": "Hello world",
@@ -1705,7 +1705,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
     request._url = URL(url="/chat/completions")
 
     test_data = {
-        "model": "azure/gpt-4.1-nano",
+        "model": "azure/gpt-4.1-mini",
         "messages": [
             {"role": "user", "content": "write 1 sentence poem"},
         ],
@@ -1720,7 +1720,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
 
     data = {
         "data": {
-            "model": "azure/gpt-4.1-nano",
+            "model": "azure/gpt-4.1-mini",
             "messages": [{"role": "user", "content": "write 1 sentence poem"}],
             "max_tokens": 10,
             "mock_response": "Hello world",
