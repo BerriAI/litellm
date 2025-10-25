@@ -8,7 +8,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 
 import json
 import os
-from typing import Any, Optional, Union, cast
+from typing import Any, Optional, Tuple, Union, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -559,10 +559,10 @@ async def handle_bedrock_passthrough_router_model(
 ) -> Union[Response, StreamingResponse]:
     """
     Handle Bedrock passthrough for router models (models defined in config.yaml).
-    
+
     Uses the same common processing path as non-router models to ensure
     metadata and hooks are properly initialized.
-    
+
     Args:
         model: The router model name (e.g., "aws/anthropic/bedrock-claude-3-5-sonnet-v1")
         endpoint: The Bedrock endpoint path (e.g., "/model/{modelId}/invoke")
@@ -571,7 +571,7 @@ async def handle_bedrock_passthrough_router_model(
         llm_router: The LiteLLM router instance
         user_api_key_dict: The user API key authentication dictionary
         (additional args for common processing)
-        
+
     Returns:
         Response or StreamingResponse depending on endpoint type
     """
@@ -585,18 +585,18 @@ async def handle_bedrock_passthrough_router_model(
     verbose_proxy_logger.debug(
         f"Bedrock router passthrough: model='{model}', endpoint='{endpoint}', streaming={is_streaming}"
     )
-    
+
     # Use the common processing path (same as non-router models)
     # This ensures all metadata, hooks, and logging are properly initialized
     data: Dict[str, Any] = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
-    
+
     data["model"] = model
     data["method"] = request.method
     data["endpoint"] = endpoint
     data["data"] = request_body
     data["custom_llm_provider"] = "bedrock"
-    
+
     # Use the common passthrough processing to handle metadata and hooks
     # This also handles all response formatting (streaming/non-streaming) and exceptions
     try:
@@ -1222,6 +1222,95 @@ def _override_vertex_params_from_router_credentials(
     return vertex_project, vertex_location
 
 
+async def _prepare_vertex_auth_headers(
+    request: Request,
+    vertex_credentials: Optional[Any],
+    router_credentials: Optional[Any],
+    vertex_project: Optional[str],
+    vertex_location: Optional[str],
+    base_target_url: Optional[str],
+    get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
+) -> Tuple[dict, Optional[str], bool, Optional[str], Optional[str]]:
+    """
+    Prepare authentication headers for Vertex AI pass-through requests.
+
+    Args:
+        request: FastAPI request object
+        vertex_credentials: Vertex AI credentials from config
+        router_credentials: Optional vector store credentials from registry
+        vertex_project: Vertex project ID
+        vertex_location: Vertex location
+        base_target_url: Base URL for the Vertex AI service
+        get_vertex_pass_through_handler: Handler for the specific Vertex AI service
+
+    Returns:
+        Tuple containing:
+            - headers: dict - Authentication headers to use
+            - base_target_url: Optional[str] - Updated base target URL
+            - headers_passed_through: bool - Whether headers were passed through from request
+            - vertex_project: Optional[str] - Updated vertex project ID
+            - vertex_location: Optional[str] - Updated vertex location
+    """
+    vertex_llm_base = VertexBase()
+    headers_passed_through = False
+
+    # Use headers from the incoming request if no vertex credentials are found
+    if (
+        vertex_credentials is None or vertex_credentials.vertex_project is None
+    ) and router_credentials is None:
+        headers = dict(request.headers) or {}
+        headers_passed_through = True
+        verbose_proxy_logger.debug(
+            "default_vertex_config  not set, incoming request headers %s", headers
+        )
+        headers.pop("content-length", None)
+        headers.pop("host", None)
+    else:
+        if router_credentials is not None:
+            vertex_credentials_str = None
+        elif vertex_credentials is not None:
+            vertex_project = vertex_credentials.vertex_project
+            vertex_location = vertex_credentials.vertex_location
+            vertex_credentials_str = vertex_credentials.vertex_credentials
+        else:
+            raise ValueError("No vertex credentials found")
+
+        _auth_header, vertex_project = await vertex_llm_base._ensure_access_token_async(
+            credentials=vertex_credentials_str,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai_beta",
+        )
+
+        auth_header, _ = vertex_llm_base._get_token_and_url(
+            model="",
+            auth_header=_auth_header,
+            gemini_api_key=None,
+            vertex_credentials=vertex_credentials_str,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            stream=False,
+            custom_llm_provider="vertex_ai_beta",
+            api_base="",
+        )
+
+        headers = {
+            "Authorization": f"Bearer {auth_header}",
+        }
+
+        if base_target_url is not None:
+            base_target_url = get_vertex_pass_through_handler.update_base_target_url_with_credential_location(
+                base_target_url, vertex_location
+            )
+
+    return (
+        headers,
+        base_target_url,
+        headers_passed_through,
+        vertex_project,
+        vertex_location,
+    )
+
+
 async def _base_vertex_proxy_route(
     endpoint: str,
     request: Request,
@@ -1285,53 +1374,22 @@ async def _base_vertex_proxy_route(
         vertex_location
     )
 
-    headers_passed_through = False
-    # Use headers from the incoming request if no vertex credentials are found
-    if (
-        vertex_credentials is None or vertex_credentials.vertex_project is None
-    ) and router_credentials is None:
-        headers = dict(request.headers) or {}
-        headers_passed_through = True
-        verbose_proxy_logger.debug(
-            "default_vertex_config  not set, incoming request headers %s", headers
-        )
-        headers.pop("content-length", None)
-        headers.pop("host", None)
-    else:
-        if router_credentials is not None:
-            vertex_credentials_str = None
-        elif vertex_credentials is not None:
-            vertex_project = vertex_credentials.vertex_project
-            vertex_location = vertex_credentials.vertex_location
-            vertex_credentials_str = vertex_credentials.vertex_credentials
-        else:
-            raise ValueError("No vertex credentials found")
-
-        _auth_header, vertex_project = await vertex_llm_base._ensure_access_token_async(
-            credentials=vertex_credentials_str,
-            project_id=vertex_project,
-            custom_llm_provider="vertex_ai_beta",
-        )
-
-        auth_header, _ = vertex_llm_base._get_token_and_url(
-            model="",
-            auth_header=_auth_header,
-            gemini_api_key=None,
-            vertex_credentials=vertex_credentials_str,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            stream=False,
-            custom_llm_provider="vertex_ai_beta",
-            api_base="",
-        )
-
-        headers = {
-            "Authorization": f"Bearer {auth_header}",
-        }
-
-        base_target_url = get_vertex_pass_through_handler.update_base_target_url_with_credential_location(
-            base_target_url, vertex_location
-        )
+    # Prepare authentication headers
+    (
+        headers,
+        base_target_url,
+        headers_passed_through,
+        vertex_project,
+        vertex_location,
+    ) = await _prepare_vertex_auth_headers(
+        request=request,
+        vertex_credentials=vertex_credentials,
+        router_credentials=router_credentials,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        base_target_url=base_target_url,
+        get_vertex_pass_through_handler=get_vertex_pass_through_handler,
+    )
 
     if base_target_url is None:
         base_target_url = get_vertex_base_url(vertex_location)
