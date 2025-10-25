@@ -49,6 +49,14 @@ class BaseSearchConfig:
     def __init__(self) -> None:
         pass
     
+    @staticmethod
+    def ui_friendly_name() -> str:
+        """
+        UI-friendly name for the search provider.
+        Override in provider-specific implementations.
+        """
+        return "Unknown Search Provider"
+    
     def get_http_method(self) -> Literal["GET", "POST"]:
         """
         Get HTTP method for search requests.

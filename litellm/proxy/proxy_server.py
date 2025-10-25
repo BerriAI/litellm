@@ -309,6 +309,7 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
+from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
@@ -336,6 +337,9 @@ from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.search_endpoints.endpoints import router as search_router
+from litellm.proxy.search_endpoints.search_tool_management import (
+    router as search_tool_management_router,
+)
 from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
@@ -397,7 +401,9 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import (
+    DeploymentTypedDict,
+)
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -3320,6 +3326,9 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="prompts"):
             await self._init_prompts_in_db(prisma_client=prisma_client)
 
+        if self._should_load_db_object(object_type="search_tools"):
+            await self._init_search_tools_in_db(prisma_client=prisma_client)
+
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
 
@@ -3513,7 +3522,44 @@ class ProxyConfig:
                     str(e)
                 )
             )
-
+    
+    async def _init_search_tools_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize search tools from database into the router on startup.
+        """
+        global llm_router
+        
+        from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+        from litellm.router_utils.search_api_router import SearchAPIRouter
+        
+        try:
+            search_tools = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
+            
+            verbose_proxy_logger.info(
+                f"Loading {len(search_tools)} search tool(s) from database into router"
+            )
+            
+            if llm_router is not None:
+                # Add search tools to the router
+                await SearchAPIRouter.update_router_search_tools(
+                    router_instance=llm_router,
+                    search_tools=search_tools
+                )
+                verbose_proxy_logger.info(
+                    f"Successfully loaded {len(search_tools)} search tool(s) into router"
+                )
+            else:
+                verbose_proxy_logger.debug(
+                    "Router not initialized yet, search tools will be added when router is created"
+                )
+                
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_search_tools_in_db - {}".format(
+                    str(e)
+                )
+            )
+    
     async def _init_pass_through_endpoints_in_db(self):
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             initialize_pass_through_endpoints_in_db,
@@ -4132,8 +4178,12 @@ class ProxyStartupEvent:
                     "interval",
                     seconds=proxy_batch_polling_interval,  # these can run infrequently, as batch jobs take time to complete
                 )
+                verbose_proxy_logger.info("Batch cost check job scheduled successfully")
 
-            except Exception:
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Failed to setup batch cost checking: {e}"
+                )
                 verbose_proxy_logger.debug(
                     "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
@@ -9853,6 +9903,7 @@ app.include_router(batches_router)
 app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
+app.include_router(video_router)
 app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
@@ -9877,6 +9928,7 @@ app.include_router(cloudzero_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)
+app.include_router(search_tool_management_router)
 app.include_router(prompts_router)
 app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)

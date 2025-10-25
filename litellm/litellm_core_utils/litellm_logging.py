@@ -116,6 +116,7 @@ from litellm.types.utils import (
     Usage,
     VectorStoreSearchResponse,
 )
+from litellm.types.videos.main import VideoObject
 from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
@@ -1621,6 +1622,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OpenAIModerationResponse)
             or isinstance(logging_result, dict)
             and logging_result.get("object") == "vector_store.search_results.page"
+            or isinstance(logging_result, VideoObject) 
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
             return True
@@ -4452,12 +4454,18 @@ class StandardLoggingPayloadSetup:
         return header_tags if header_tags else None
 
     @staticmethod
-    def _get_request_tags(metadata: dict, proxy_server_request: dict) -> List[str]:
-        request_tags = (
-            metadata.get("tags", [])
-            if isinstance(metadata.get("tags", []), list)
-            else []
-        )
+    def _get_request_tags(
+        litellm_params: dict, proxy_server_request: dict
+    ) -> List[str]:
+        # check for 'tags' in both 'metadata' and 'litellm_metadata'
+        metadata = litellm_params.get("metadata") or {}
+        litellm_metadata = litellm_params.get("litellm_metadata") or {}
+        if metadata.get("tags", []):
+            request_tags = metadata.get("tags", [])
+        elif litellm_metadata.get("tags", []):
+            request_tags = litellm_metadata.get("tags", [])
+        else:
+            request_tags = []
         user_agent_tags = StandardLoggingPayloadSetup._get_user_agent_tags(
             proxy_server_request
         )
@@ -4558,7 +4566,7 @@ def get_standard_logging_object_payload(
                 )
 
         # standardize this function to be used across, s3, dynamoDB, langfuse logging
-        litellm_params = kwargs.get("litellm_params", {})
+        litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
 
         metadata: dict = (
@@ -4583,7 +4591,7 @@ def get_standard_logging_object_payload(
         _model_group = metadata.get("model_group", "")
 
         request_tags = StandardLoggingPayloadSetup._get_request_tags(
-            metadata=metadata, proxy_server_request=proxy_server_request
+            litellm_params=litellm_params, proxy_server_request=proxy_server_request
         )
 
         # cleanup timestamps

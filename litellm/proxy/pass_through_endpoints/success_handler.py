@@ -41,6 +41,7 @@ class PassThroughEndpointLogging:
             "rawPredict",
             "streamRawPredict",
             "search",
+            "batchPredictionJobs",
         ]
 
         # Anthropic
