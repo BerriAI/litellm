@@ -1102,7 +1102,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: Applying guardrail"
             )
-            mock_messages: List[AllMessageValues] = [ChatCompletionUserMessage(role="user", content=text)]
+            mock_messages: List[AllMessageValues] = [ChatCompletionUserMessage(role="user", content=text)]  # type: ignore
             bedrock_response = await self.make_bedrock_api_request(
                 source="INPUT",
                 messages=mock_messages,
@@ -1117,11 +1117,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             output_list = bedrock_response.get("output")
             if output_list:
                 # If the guardrail returned modified content, use that
-                for output_item in output_list:
                     text_content = output_item.get("text")
                     if text_content:
                         masked_text = str(text_content)
-                        break
             else:
                 outputs_list = bedrock_response.get("outputs")
                 if outputs_list:

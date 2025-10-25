@@ -29,11 +29,9 @@ async def test_bedrock_apply_guardrail_success():
         # Mock a successful response from Bedrock
         mock_response = {
             "action": "ALLOWED",
-            "content": [
+            "outputs": [
                 {
-                    "text": {
-                        "text": "This is a test message with some content"
-                    }
+                    "text": "This is a test message with some content"
                 }
             ]
         }
@@ -95,11 +93,9 @@ async def test_bedrock_apply_guardrail_with_masking():
         # Mock a response with masked content
         mock_response = {
             "action": "ALLOWED",
-            "content": [
+            "outputs": [
                 {
-                    "text": {
-                        "text": "This is a test message with [REDACTED] content"
-                    }
+                    "text": "This is a test message with [REDACTED] content"
                 }
             ]
         }
@@ -160,11 +156,9 @@ async def test_bedrock_apply_guardrail_endpoint_integration():
             # Mock a successful response from Bedrock
             mock_response = {
                 "action": "ALLOWED",
-                "content": [
+                "outputs": [
                     {
-                        "text": {
-                            "text": "This is a test message with processed content"
-                        }
+                        "text": "This is a test message with some content"
                     }
                 ]
             }
@@ -188,5 +182,5 @@ async def test_bedrock_apply_guardrail_endpoint_integration():
             
             # Verify the response
             assert isinstance(response, ApplyGuardrailResponse)
-            assert response.response_text == "This is a test message with processed content"
+            assert response.response_text == "This is a test message with some content"
             mock_api_request.assert_called_once()
