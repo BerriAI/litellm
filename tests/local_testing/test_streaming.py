@@ -2751,13 +2751,13 @@ def test_azure_streaming_and_function_calling():
     messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
     try:
         response = completion(
-            model="azure/gpt-4-nov-release",
+            model="azure/gpt-4.1-mini",
             tools=tools,
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_FRANCE_API_BASE"),
-            api_key=os.getenv("AZURE_FRANCE_API_KEY"),
+            api_base=os.getenv("AZURE_API_BASE"),
+            api_key=os.getenv("AZURE_API_KEY"),
             api_version="2024-02-15-preview",
         )
         # Add any assertions here to check the response
