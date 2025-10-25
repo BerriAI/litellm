@@ -2681,22 +2681,6 @@ def test_completion_azure_with_litellm_key():
 # test_completion_azure()
 
 
-def test_completion_azure_deployment_id():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            deployment_id="gpt-4.1-nano",
-            model="gpt-3.5-turbo",
-            messages=messages,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_azure_deployment_id()
-
 import asyncio
 
 

@@ -50,7 +50,7 @@ def get_current_weather(location, unit="fahrenheit"):
         "claude-3-haiku-20240307",
         "gemini/gemini-2.5-flash-lite",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "cohere_chat/command-r",
+        "cohere_chat/command-a-03-2025",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
