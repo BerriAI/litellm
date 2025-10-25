@@ -12,13 +12,15 @@ from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
     GraySwanGuardrailConfigModel,
 )
 
+
+
 """
 Pydantic object defining how to set guardrails on litellm proxy
 
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera", "zscaler_ai_guard"
       mode: "during_call"
       guardrailIdentifier: ff6ujrregl1q
       guardrailVersion: "DRAFT"
@@ -46,6 +48,7 @@ class SupportedGuardrailIntegrations(Enum):
     OPENAI_MODERATION = "openai_moderation"
     NOMA = "noma"
     TOOL_PERMISSION = "tool_permission"
+    ZSCALER_AI_GUARD = "zscaler_ai_guard"    
     JAVELIN = "javelin"
     ENKRYPTAI = "enkryptai"
 
@@ -419,6 +422,23 @@ class ToolPermissionGuardrailConfigModel(BaseModel):
     )
 
 
+class ZscalerAIGuardConfigModel(BaseModel):
+    """Configuration parameters for the Zscaler AI Guard guardrail"""
+
+    policy_id: Optional[int] = Field(
+        default=None,
+        description="Policy ID for Zscaler AI Guard. Can also be set via ZSCALER_AI_GUARD_POLICY_ID environment variable"
+    )
+    send_user_api_key_alias: Optional[bool] = Field(
+        default=False, description="Whether to send user_API_key_alias in headers"
+    )
+    send_user_api_key_user_id: Optional[bool] = Field(
+        default=False, description="Whether to send user_API_key_user_id in headers"
+    )
+    send_user_api_key_team_id: Optional[bool] = Field(
+        default=False, description="Whether to send user_API_key_team_id in headers"
+    )
+
 class JavelinGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Javelin guardrail"""
 
@@ -529,6 +549,7 @@ class LitellmParams(
     GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,
     ToolPermissionGuardrailConfigModel,
+    ZscalerAIGuardConfigModel, 
     JavelinGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
