@@ -336,7 +336,7 @@ async def test_azure_ava_tts_async():
     """
     litellm._turn_on_debug()
     api_key = os.getenv("AZURE_TTS_API_KEY")
-    api_base = "https://eastus.tts.speech.microsoft.com"
+    api_base = os.getenv("AZURE_TTS_API_BASE")
     
 
     speech_file_path = Path(__file__).parent / "azure_speech.mp3"
