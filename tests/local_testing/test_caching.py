@@ -1226,7 +1226,7 @@ async def test_s3_cache_stream_azure(sync_mode):
 
         if sync_mode:
             response1 = litellm.completion(
-                model="azure/gpt-4.1-nano",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1239,7 +1239,7 @@ async def test_s3_cache_stream_azure(sync_mode):
             print(response_1_content)
         else:
             response1 = await litellm.acompletion(
-                model="azure/gpt-4.1-nano",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1259,7 +1259,7 @@ async def test_s3_cache_stream_azure(sync_mode):
 
         if sync_mode:
             response2 = litellm.completion(
-                model="azure/gpt-4.1-nano",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1272,7 +1272,7 @@ async def test_s3_cache_stream_azure(sync_mode):
             print(response_2_content)
         else:
             response2 = await litellm.acompletion(
-                model="azure/gpt-4.1-nano",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1335,7 +1335,7 @@ async def test_s3_cache_acompletion_azure():
         print("s3 Cache: test for caching, streaming + completion")
 
         response1 = await litellm.acompletion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=messages,
             max_tokens=40,
             temperature=1,
@@ -1345,7 +1345,7 @@ async def test_s3_cache_acompletion_azure():
         time.sleep(2)
 
         response2 = await litellm.acompletion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=messages,
             max_tokens=40,
             temperature=1,
