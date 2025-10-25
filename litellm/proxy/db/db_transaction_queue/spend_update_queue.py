@@ -35,9 +35,11 @@ class SpendUpdateQueue(BaseUpdateQueue):
         """Enqueue an update to the spend update queue"""
         verbose_proxy_logger.debug("Adding update to queue: %s", update)
         await self.update_queue.put(update)
+        
+        current_size = self.update_queue.qsize()
 
         # if the queue is full, aggregate the updates
-        if self.update_queue.qsize() >= self.MAX_SIZE_IN_MEMORY_QUEUE:
+        if current_size >= self.MAX_SIZE_IN_MEMORY_QUEUE:
             verbose_proxy_logger.warning(
                 "Spend update queue is full. Aggregating all entries in queue to concatenate entries."
             )
