@@ -27,7 +27,7 @@ class TestAzureResponsesAPITest(BaseResponsesAPITest):
             "truncation": "auto",
             "api_base": os.getenv("AZURE_API_BASE"),
             "api_key": os.getenv("AZURE_API_KEY"),
-            "api_version": os.getenv("AZURE_RESPONSES_OPENAI_API_VERSION"),
+            "api_version": "2025-03-01-preview",
         }
 
 
