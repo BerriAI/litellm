@@ -1165,7 +1165,7 @@ def _override_vertex_params_from_router_credentials(
     router_credentials: Optional[Any],
     vertex_project: Optional[str],
     vertex_location: Optional[str],
-) -> tuple[Optional[str], Optional[str]]:
+) -> Tuple[Optional[str], Optional[str]]:
     """
     Override vertex_project and vertex_location with values from router_credentials if available.
 
