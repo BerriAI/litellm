@@ -278,6 +278,9 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         Removes or redacts base64-encoded file data (e.g., PDFs, images, audio)
         from messages and responses before sending to SQS.
         """
+        verbose_logger.debug(
+            f"Stripping base64 from contents {payload["messages"]}"
+        )
         base64_pattern = re.compile(r"data:([^;]+);base64,[A-Za-z0-9+/=\n\r]+")
         placeholder_map = {
             "application/pdf": "[base64 PDF content redacted]",
@@ -311,9 +314,9 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         # apply recursively
         if payload.get("messages"):
             payload["messages"] = _strip_obj(payload["messages"])
-        if payload.get("response"):
-            payload["response"] = _strip_obj(payload["response"])
-
+        verbose_logger.debug(
+            f"Stripped base64 file {payload["messages"]}"
+        )
         return payload
 
     async def async_send_message(self, payload: StandardLoggingPayload) -> None:
