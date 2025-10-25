@@ -133,8 +133,11 @@ class ResponsesIDSecurity(CustomLogger):
         return True
 
     def _is_encrypted_response_id(self, response_id: str) -> bool:
-
-        remaining_string = response_id.split("resp_")[1]
+        split_result = response_id.split("resp_")
+        if len(split_result) < 2:
+            return False
+        
+        remaining_string = split_result[1]
         decrypted_value = decrypt_value_helper(
             value=remaining_string, key="response_id", return_original_value=True
         )
@@ -155,7 +158,11 @@ class ResponsesIDSecurity(CustomLogger):
          - user_id: the user id
          - team_id: the team id
         """
-        remaining_string = response_id.split("resp_")[1]
+        split_result = response_id.split("resp_")
+        if len(split_result) < 2:
+            return response_id, None, None
+        
+        remaining_string = split_result[1]
         decrypted_value = decrypt_value_helper(
             value=remaining_string, key="response_id", return_original_value=True
         )
