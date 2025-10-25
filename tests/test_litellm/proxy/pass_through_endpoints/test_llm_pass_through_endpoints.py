@@ -242,21 +242,34 @@ class TestVertexAIPassThroughHandler:
         test_token = vertex_credentials
 
         with mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
-        ) as mock_ensure_token, mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
-        ) as mock_get_token, mock.patch(
+            "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth"
+        ) as mock_load_auth, mock.patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
         ) as mock_create_route, mock.patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_litellm_virtual_key"
         ) as mock_get_virtual_key, mock.patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
-        ) as mock_user_auth:
+        ) as mock_user_auth, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_vertex_pass_through_handler"
+        ) as mock_get_handler:
+            # Mock credentials object with necessary attributes
+            mock_credentials = Mock()
+            mock_credentials.token = test_token
+
             # Setup mocks
-            mock_ensure_token.return_value = ("test-auth-header", test_project)
-            mock_get_token.return_value = (test_token, "")
+            mock_load_auth.return_value = (mock_credentials, test_project)
             mock_get_virtual_key.return_value = "Bearer test-key"
             mock_user_auth.return_value = {"api_key": "test-key"}
+
+            # Mock the vertex handler
+            mock_handler = Mock()
+            mock_handler.get_default_base_target_url.return_value = (
+                f"https://{test_location}-aiplatform.googleapis.com/"
+            )
+            mock_handler.update_base_target_url_with_credential_location = Mock(
+                return_value=f"https://{test_location}-aiplatform.googleapis.com/"
+            )
+            mock_get_handler.return_value = mock_handler
 
             # Mock create_pass_through_route to return a function that returns a mock response
             mock_endpoint_func = AsyncMock(return_value={"status": "success"})
@@ -327,21 +340,34 @@ class TestVertexAIPassThroughHandler:
         test_token = vertex_credentials
 
         with mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
-        ) as mock_ensure_token, mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
-        ) as mock_get_token, mock.patch(
+            "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth"
+        ) as mock_load_auth, mock.patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
         ) as mock_create_route, mock.patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_litellm_virtual_key"
         ) as mock_get_virtual_key, mock.patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
-        ) as mock_user_auth:
+        ) as mock_user_auth, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_vertex_pass_through_handler"
+        ) as mock_get_handler:
+            # Mock credentials object with necessary attributes
+            mock_credentials = Mock()
+            mock_credentials.token = test_token
+
             # Setup mocks
-            mock_ensure_token.return_value = ("test-auth-header", test_project)
-            mock_get_token.return_value = (test_token, "")
+            mock_load_auth.return_value = (mock_credentials, test_project)
             mock_get_virtual_key.return_value = "Bearer test-key"
             mock_user_auth.return_value = {"api_key": "test-key"}
+
+            # Mock the vertex handler for global location
+            mock_handler = Mock()
+            mock_handler.get_default_base_target_url.return_value = (
+                "https://aiplatform.googleapis.com/"
+            )
+            mock_handler.update_base_target_url_with_credential_location = Mock(
+                return_value="https://aiplatform.googleapis.com/"
+            )
+            mock_get_handler.return_value = mock_handler
 
             # Mock create_pass_through_route to return a function that returns a mock response
             mock_endpoint_func = AsyncMock(return_value={"status": "success"})
@@ -414,14 +440,31 @@ class TestVertexAIPassThroughHandler:
         mock_response = Response()
 
         with mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
-        ) as mock_ensure_token, mock.patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
-        ) as mock_get_token, mock.patch(
+            "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth"
+        ) as mock_load_auth, mock.patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
-        ) as mock_create_route:
-            mock_ensure_token.return_value = ("test-auth-header", default_project)
-            mock_get_token.return_value = (default_credentials, "")
+        ) as mock_create_route, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_vertex_pass_through_handler"
+        ) as mock_get_handler:
+            # Mock credentials object with necessary attributes
+            mock_credentials = Mock()
+            mock_credentials.token = default_credentials
+
+            mock_load_auth.return_value = (mock_credentials, default_project)
+
+            # Mock the vertex handler
+            mock_handler = Mock()
+            mock_handler.get_default_base_target_url.return_value = (
+                f"https://{default_location}-aiplatform.googleapis.com/"
+            )
+            mock_handler.update_base_target_url_with_credential_location = Mock(
+                return_value=f"https://{default_location}-aiplatform.googleapis.com/"
+            )
+            mock_get_handler.return_value = mock_handler
+
+            # Mock create_pass_through_route to return a function that returns a mock response
+            mock_endpoint_func = AsyncMock(return_value={"status": "success"})
+            mock_create_route.return_value = mock_endpoint_func
 
             try:
                 await vertex_proxy_route(
