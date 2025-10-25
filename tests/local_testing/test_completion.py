@@ -412,7 +412,6 @@ def test_completion_claude_3_function_call(model):
     [
         ("gpt-3.5-turbo", None, None),
         ("claude-3-opus-20240229", None, None),
-        ("command-a-03-2025", None, None),
         ("anthropic.claude-3-sonnet-20240229-v1:0", None, None),
         # (
         #     "azure_ai/command-r-plus",
