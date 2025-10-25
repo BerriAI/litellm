@@ -132,49 +132,6 @@ def test_null_role_response():
         assert response.choices[0].message.role == "assistant"
 
 
-@pytest.mark.skip(reason="Cohere having RBAC issues")
-def test_completion_azure_command_r():
-    try:
-        litellm._turn_on_debug()
-
-        response = completion(
-            model="azure/command-r-plus",
-            api_base="https://Cohere-command-r-plus-gylpd-serverless.eastus2.inference.ai.azure.com",
-            api_key="AO89xyvmOLLMgoMI7WaiEaP0t6M09itr",
-            messages=[{"role": "user", "content": "What is the meaning of life?"}],
-        )
-
-        print(response)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.parametrize(
-    "api_base",
-    [
-        "https://litellm8397336933.openai.azure.com",
-        "https://litellm8397336933.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2023-03-15-preview",
-    ],
-)
-def test_completion_azure_ai_gpt_4o(api_base):
-    try:
-        litellm.set_verbose = True
-
-        response = completion(
-            model="azure_ai/gpt-4o",
-            api_base=api_base,
-            api_key=os.getenv("AZURE_AI_OPENAI_KEY"),
-            messages=[{"role": "user", "content": "What is the meaning of life?"}],
-        )
-
-        print(response)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
 
 def predibase_mock_post(url, data=None, json=None, headers=None, timeout=None):
     mock_response = MagicMock()

@@ -340,3 +340,28 @@ def test_completion_azure():
         print("Cost for azure completion request", cost)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://ci-cd-foundry.cognitiveservices.azure.com/",
+        "https://ci-cd-foundry.cognitiveservices.azure.com/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2023-03-15-preview",
+    ],
+)
+def test_completion_azure_ai_gpt_4o_with_flexible_api_base(api_base):
+    try:
+        litellm.set_verbose = True
+
+        response = completion(
+            model="azure_ai/gpt-4.1-mini",
+            api_base=api_base,
+            api_key=os.getenv("AZURE_API_KEY"),
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+        )
+
+        print(response)
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
