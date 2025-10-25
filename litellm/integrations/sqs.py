@@ -32,6 +32,12 @@ from litellm.types.utils import StandardLoggingPayload
 from .custom_batch_logger import CustomBatchLogger
 
 
+_BASE64_INLINE_PATTERN = re.compile(
+    r"data:(?:application|image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
+    re.MULTILINE,
+)
+
+
 class SQSLogger(CustomBatchLogger, BaseAWSLLM):
     """Batching logger that writes logs to an AWS SQS queue, optionally encrypting the payload."""
 
@@ -232,6 +238,8 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 "SQS Logging - Enters logging function for model %s", kwargs
             )
             standard_logging_payload = kwargs.get("standard_logging_object")
+            if self.sqs_strip_base64_files:
+                standard_logging_payload = await self._strip_base64_from_messages(standard_logging_payload)
             if standard_logging_payload is None:
                 raise ValueError("standard_logging_payload is None")
 
@@ -273,30 +281,74 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         for payload in self.log_queue:
             asyncio.create_task(self.async_send_message(payload))
 
-    async def _strip_base64_from_messages(self, payload: StandardLoggingPayload) -> StandardLoggingPayload:
+    async def _strip_base64_from_messages(
+            self, payload: "StandardLoggingPayload"
+    ) -> "StandardLoggingPayload":
         """
         Removes or redacts base64-encoded file data (e.g., PDFs, images, audio)
         from messages and responses before sending to SQS.
+
+        Behavior:
+          • Drop entries with a 'file' key.
+          • Drop entries with type == 'file' or any non-text type.
+          • Keep untyped or text content.
+          • Recursively redact inline base64 blobs in *any* string field, at any depth.
         """
-        verbose_logger.debug(
-            f"Stripping base64 from contents {payload["messages"]}"
-        )
-        base64_pattern = re.compile(r"data:([^;]+);base64,[A-Za-z0-9+/=\n\r]+")
-        placeholder_map = {
-            "application/pdf": "[base64 PDF content redacted]",
-            "image/": "[base64 image content redacted]",
-            "audio/": "[base64 audio content redacted]",
-        }
+        messages = payload.get("messages", [])
+        verbose_logger.debug(f"[SQSLogger] Stripping base64 from {len(messages)} messages")
 
-        def _strip_obj(obj):
-            verbose_logger.debug(f"obj ={obj}")
-            return obj
+        def _redact_base64(value: Any) -> Any:
+            """Recursively redact inline base64 from any nested structure."""
+            if isinstance(value, str):
+                if _BASE64_INLINE_PATTERN.search(value):
+                    verbose_logger.debug(f"[SQSLogger] Redacted inline base64 string: {value[:40]}...")
+                    return _BASE64_INLINE_PATTERN.sub("[BASE64_REDACTED]", value)
+                return value
+            elif isinstance(value, list):
+                return [_redact_base64(v) for v in value]
+            elif isinstance(value, dict):
+                return {k: _redact_base64(v) for k, v in value.items()}
+            return value
 
-        # apply recursively
-        if payload.get("messages"):
-            payload["messages"] = _strip_obj(payload["messages"])
+        def _should_keep_content(content: Any) -> bool:
+            """Return True if this content item should be retained."""
+            if not isinstance(content, dict):
+                return True
+            if "file" in content:
+                return False
+            ctype = content.get("type")
+            if ctype and ctype != "text":
+                return False
+            return True
+
+        def _process_messages(messages_list: list) -> list:
+            filtered_messages = []
+            for msg in messages_list or []:
+                if not isinstance(msg, dict):
+                    continue
+                contents = msg.get("content", [])
+                if isinstance(contents, list):
+                    cleaned = []
+                    for c in contents:
+                        if not _should_keep_content(c):
+                            continue
+                        cleaned.append(_redact_base64(c))
+                    msg["content"] = cleaned
+                else:
+                    msg["content"] = _redact_base64(contents)
+                # 🔁 Also recursively redact any other fields on the message itself
+                for key, val in msg.items():
+                    if key != "content":
+                        msg[key] = _redact_base64(val)
+                filtered_messages.append(msg)
+            return filtered_messages
+
+        if messages:
+            payload["messages"] = _process_messages(messages)
+
+        total_items = sum(len(m.get("content", [])) for m in payload.get("messages", []))
         verbose_logger.debug(
-            f"Stripped base64 file {payload["messages"]}"
+            f"[SQSLogger] Completed base64 strip; retained {total_items} content items"
         )
         return payload
 

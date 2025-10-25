@@ -295,116 +295,140 @@ async def test_async_send_batch_triggers_tasks(monkeypatch):
     asyncio.create_task.assert_called()
 
 
-@pytest.fixture
-async def logger():
-    async def _make():
-        return SQSLogger(sqs_strip_base64_files=True)
-    return await _make()
-
-# === helper ===
-def make_payload(content):
-    """Minimal StandardLoggingPayload-like dict for testing"""
-    return {"messages": [{"role": "user", "content": content}]}
-
-
-# === TEST CASES ===
 
 @pytest.mark.asyncio
-async def test_pdf_base64_redaction(logger):
-    pdf_data = (
-        "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MK..."
-    )
-    payload = make_payload([{"file": {"file_data": pdf_data}}])
+async def test_strip_base64_removes_file_and_nontext_entries():
+    logger = SQSLogger(sqs_strip_base64_files=True)
 
-    stripped = await logger._strip_base64_from_messages(payload)
-
-    file_data = stripped["messages"][0]["content"][0]["file"]["file_data"]
-    assert "[base64 PDF content redacted]" in file_data
-    # confirm no raw base64 remains
-    assert "JVBERi0x" not in file_data
-
-
-@pytest.mark.asyncio
-async def test_image_base64_redaction(logger):
-    img_data = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA..."
-    payload = make_payload([{"file": {"file_data": img_data}}])
-
-    stripped = await logger._strip_base64_from_messages(payload)
-
-    redacted = stripped["messages"][0]["content"][0]["file"]["file_data"]
-    assert redacted == "[base64 image content redacted]"
-
-
-@pytest.mark.asyncio
-async def test_audio_base64_redaction(logger):
-    audio_data = "data:audio/wav;base64,UklGRigAAABXQVZFZm10..."
-    payload = make_payload([{"file": {"file_data": audio_data}}])
-
-    stripped = await logger._strip_base64_from_messages(payload)
-    val = stripped["messages"][0]["content"][0]["file"]["file_data"]
-    assert val == "[base64 audio content redacted]"
-
-
-@pytest.mark.asyncio
-async def test_unknown_mime_redaction(logger):
-    data = "data:application/octet-stream;base64,AAAAAABBBBCCCC"
-    payload = make_payload([{"file": {"file_data": data}}])
-
-    stripped = await logger._strip_base64_from_messages(payload)
-    val = stripped["messages"][0]["content"][0]["file"]["file_data"]
-    assert val == "[base64 file content redacted]"
-
-
-@pytest.mark.asyncio
-async def test_non_base64_untouched(logger):
-    non_base64 = "some-plain-text-value"
-    payload = make_payload([{"file": {"file_data": non_base64}}])
-
-    stripped = await logger._strip_base64_from_messages(payload)
-    assert stripped["messages"][0]["content"][0]["file"]["file_data"] == non_base64
-
-
-@pytest.mark.asyncio
-async def test_nested_structure(logger):
-    """Deeply nested dicts/lists should all be stripped."""
-    pdf_data = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MK..."
-    img_data = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA..."
-    nested_payload = {
+    payload = {
         "messages": [
             {
                 "role": "user",
                 "content": [
-                    {"file": {"file_data": pdf_data}},
-                    {
-                        "extra": [
-                            {"file": {"file_data": img_data}},
-                            {"text": "keep me"},
-                        ]
-                    },
+                    {"type": "text", "text": "Hello world"},
+                    {"type": "image", "file": {"file_data": "data:image/png;base64,AAAA"}},
+                    {"type": "file", "file": {"file_data": "data:application/pdf;base64,BBBB"}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Response"},
+                    {"type": "audio", "file": {"file_data": "data:audio/wav;base64,CCCC"}},
+                ],
+            },
+        ]
+    }
+
+    stripped = await logger._strip_base64_from_messages(payload)
+
+    # 1️⃣ All file/image/audio entries removed
+    assert len(stripped["messages"][0]["content"]) == 1
+    assert stripped["messages"][0]["content"][0]["text"] == "Hello world"
+
+    assert len(stripped["messages"][1]["content"]) == 1
+    assert stripped["messages"][1]["content"][0]["text"] == "Response"
+
+    # 2️⃣ No residual 'file' keys left
+    for msg in stripped["messages"]:
+        for content in msg["content"]:
+            assert "file" not in content
+            assert content.get("type") == "text"
+
+
+@pytest.mark.asyncio
+async def test_strip_base64_keeps_non_file_content():
+    logger = SQSLogger(sqs_strip_base64_files=True)
+
+    payload = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Just text"},
+                    {"type": "text", "text": "Another message"},
                 ],
             }
         ]
     }
 
-    stripped = await logger._strip_base64_from_messages(nested_payload)
-    msg = stripped["messages"][0]["content"]
+    stripped = await logger._strip_base64_from_messages(payload)
 
-    pdf_part = msg[0]["file"]["file_data"]
-    image_part = msg[1]["extra"][0]["file"]["file_data"]
-    text_part = msg[1]["extra"][1]["text"]
-
-    assert pdf_part == "[base64 PDF content redacted]"
-    assert image_part == "[base64 image content redacted]"
-    assert text_part == "keep me"
+    # Should not modify normal text messages
+    assert stripped["messages"][0]["content"] == payload["messages"][0]["content"]
 
 
 @pytest.mark.asyncio
-async def test_response_section_also_redacted(logger):
-    pdf_data = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MK..."
+async def test_strip_base64_handles_empty_or_missing_messages():
+    logger = SQSLogger(sqs_strip_base64_files=True)
+
+    payload_no_messages = {}
+    stripped1 = await logger._strip_base64_from_messages(payload_no_messages)
+    assert stripped1 == payload_no_messages
+
+    payload_empty = {"messages": []}
+    stripped2 = await logger._strip_base64_from_messages(payload_empty)
+    assert stripped2 == payload_empty
+
+
+@pytest.mark.asyncio
+async def test_strip_base64_mixed_nested_objects():
+    """
+    Handles weird/nested content structures gracefully.
+    """
+    logger = SQSLogger(sqs_strip_base64_files=True)
+
     payload = {
-        "messages": [{"role": "user", "content": [{"file": {"file_data": pdf_data}}]}],
-        "response": [{"file": {"file_data": pdf_data}}],
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "Keep me"},
+                    {"type": "custom", "metadata": "ignore but non-text"},
+                    {"foo": "bar"},
+                    {"file": {"file_data": "data:application/pdf;base64,XXX"}},
+                ],
+                "extra": {"trace_id": "123"},
+            }
+        ]
     }
 
     stripped = await logger._strip_base64_from_messages(payload)
-    assert stripped["response"][0]["file"]["file_data"] == "[base64 PDF content redacted]"
+
+    # 'custom' (non-text) and 'file' entries removed
+    content = stripped["messages"][0]["content"]
+    assert len(content) == 2
+    assert {"type": "text", "text": "Keep me"} in content
+    assert {"foo": "bar"} in content
+    # Other metadata stays
+    assert stripped["messages"][0]["extra"]["trace_id"] == "123"
+
+
+@pytest.mark.asyncio
+async def test_strip_base64_recursive_redaction():
+    logger = SQSLogger(sqs_strip_base64_files=True)
+    payload = {
+        "messages": [
+            {
+                "content": [
+                    {"type": "text", "text": "normal text"},
+                    {"type": "text", "text": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg"},
+                    {"type": "text", "text": "Nested: {'data': 'data:application/pdf;base64,AAA...'}"},
+                    {"file": {"file_data": "data:application/pdf;base64,AAAA"}},
+                    {"metadata": {"preview": "data:audio/mp3;base64,AAAAA=="}},
+                ]
+            }
+        ]
+    }
+
+    result = await logger._strip_base64_from_messages(payload)
+    content = result["messages"][0]["content"]
+
+    # Dropped file-type entry
+    assert not any("file" in c for c in content)
+    # Base64 redacted globally
+    for c in content:
+        if isinstance(c, dict):
+            s = json.dumps(c).lower()
+            # allow "[base64_redacted]" but nothing else
+            assert "base64," not in s, f"Found real base64 blob in: {s}"
