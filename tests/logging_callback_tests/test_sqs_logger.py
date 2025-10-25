@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import unquote
 
@@ -292,3 +293,121 @@ async def test_async_send_batch_triggers_tasks(monkeypatch):
     await logger.async_send_batch()
     # It uses asyncio.create_task() so direct await count = 0 is expected
     asyncio.create_task.assert_called()
+
+
+@pytest.fixture
+def logger():
+    """Return a logger instance with stripping enabled."""
+    return SQSLogger(sqs_strip_base64_files=True)
+
+
+@pytest.fixture
+def base_payload():
+    """A sample payload similar to StandardLoggingPayload."""
+    return {
+        "id": "123",
+        "trace_id": "abc",
+        "call_type": "acompletion",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_data": "data:application/pdf;base64,JVBERi0xYzQ1N..."
+                        },
+                    },
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA..."
+                        },
+                    },
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_data": "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAA..."
+                        },
+                    },
+                    {"type": "text", "text": "This is normal text"},
+                ],
+            }
+        ],
+        "response": {
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {
+                                "file": {
+                                    "file_data": "data:application/pdf;base64,AAAABBBBCCCC"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+    }
+
+
+def test_pdf_image_audio_redacted(logger, base_payload):
+    stripped = logger._strip_base64_from_messages(deepcopy(base_payload))
+    content = stripped["messages"][0]["content"]
+
+    # PDF
+    assert content[0]["file"]["file_data"] == "[base64 PDF content redacted]"
+    # image
+    assert content[1]["file"]["file_data"] == "[base64 image content redacted]"
+    # audio
+    assert content[2]["file"]["file_data"] == "[base64 audio content redacted]"
+    # text untouched
+    assert content[3]["text"] == "This is normal text"
+
+    # response PDF redacted too
+    resp_file = stripped["response"]["choices"][0]["message"]["content"][0]["file"]["file_data"]
+    assert resp_file == "[base64 PDF content redacted]"
+
+
+def test_no_base64_unchanged(logger):
+    payload = {
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "no base64"}]}]
+    }
+    stripped = logger._strip_base64_from_messages(deepcopy(payload))
+    assert stripped == payload
+
+
+def test_nested_mixed_payload(logger):
+    """Ensure nested lists/dicts inside messages are still processed recursively."""
+    payload = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {
+                            "extra": [
+                                {"file_data": "data:image/jpeg;base64,AAAABBBB"}
+                            ]
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    stripped = logger._strip_base64_from_messages(deepcopy(payload))
+    nested_value = stripped["messages"][0]["content"][0]["file"]["extra"][0]["file_data"]
+    assert nested_value == "[base64 image content redacted]"
+
+
+def test_partial_base64_string_does_not_match(logger):
+    """Should not modify strings that only look like base64 fragments."""
+    payload = {
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "data:image/png but not base64"}]}
+        ]
+    }
+    stripped = logger._strip_base64_from_messages(deepcopy(payload))
+    assert stripped == payload
