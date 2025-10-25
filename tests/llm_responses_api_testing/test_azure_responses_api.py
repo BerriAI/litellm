@@ -23,7 +23,7 @@ from base_responses_api import BaseResponsesAPITest
 class TestAzureResponsesAPITest(BaseResponsesAPITest):
     def get_base_completion_call_args(self):
         return {
-            "model": "azure/computer-use-preview",
+            "model": "azure/gpt-5-nano",
             "truncation": "auto",
             "api_base": os.getenv("AZURE_RESPONSES_OPENAI_ENDPOINT"),
             "api_key": os.getenv("AZURE_RESPONSES_OPENAI_API_KEY"),
@@ -38,7 +38,7 @@ async def test_azure_responses_api_preview_api_version():
     """
     litellm._turn_on_debug()
     response = await litellm.aresponses(
-        model="azure/computer-use-preview",
+        model="azure/gpt-5-nano",
         truncation="auto",
         api_version="preview",
         api_base=os.getenv("AZURE_RESPONSES_OPENAI_ENDPOINT"),

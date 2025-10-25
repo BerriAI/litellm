@@ -137,7 +137,7 @@ def test_azure_extra_headers(input, call_type, header_value):
                 func = image_generation
 
             data = {
-                "model": "azure/gpt-4.1-nano",
+                "model": "azure/gpt-4.1-mini",
                 "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
                 "api_version": "2023-07-01-preview",
                 "api_key": "my-azure-api-key",
@@ -339,7 +339,7 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
 
     with patch.object(client.chat.completions.with_raw_response, "create") as mock_post:
         response = litellm.completion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=[
                 {
                     "role": "system",
@@ -474,7 +474,7 @@ def test_azure_max_retries_0(
 
     try:
         completion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=[{"role": "user", "content": "Hello world"}],
             max_retries=max_retries,
             stream=stream,
@@ -502,7 +502,7 @@ async def test_async_azure_max_retries_0(
 
     try:
         await acompletion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=[{"role": "user", "content": "Hello world"}],
             max_retries=max_retries,
             stream=stream,
@@ -598,7 +598,7 @@ def test_azure_safety_result():
     litellm._turn_on_debug()
 
     response = completion(
-        model="azure/gpt-4.1-nano",
+        model="azure/gpt-4.1-mini",
         messages=[{"role": "user", "content": "Hello world"}],
     )
     print(f"response: {response}")
@@ -630,20 +630,3 @@ def test_azure_openai_responses_bridge():
             == "test-azure-computer-use-preview"
         )
         assert mock_responses.call_args.kwargs["custom_llm_provider"] == "azure"
-
-
-def test_azure_openai_gpt_5_responses_api():
-    try:
-        from litellm import responses
-
-        litellm._turn_on_debug()
-
-        response = responses(
-            model="azure/gpt-5",
-            input="Hi good morning",
-            api_key=os.getenv("AZURE_GPT5_API_KEY"),
-            api_base=os.getenv("AZURE_GPT5_API_BASE"),
-        )
-        print(f"response: {response}")
-    except litellm.RateLimitError:
-        pytest.skip("Skipping test due to RateLimitError")
