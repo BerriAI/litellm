@@ -181,11 +181,11 @@ class LangfuseOtelLogger(OpenTelemetry):
 
                         # Create Langfuse-compatible tool call object
                         langfuse_tool_call = {
+                            "id": response_obj.get("id", ""),
                             "name": function.get("name", ""),
                             "call_id": tool_call.get("id", ""),
                             "type": "function_call",
                             "arguments": arguments_obj,
-                            "status": "completed"
                         }
                         transformed_tool_calls.append(langfuse_tool_call)
 
