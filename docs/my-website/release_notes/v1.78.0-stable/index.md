@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.78.0-stable - MCP Gateway: Control Tool Access by Team, Key"
+title: "v1.78.0-stable - MCP Gateway: Control Tool Access by Team, Key"
 slug: "v1-78-0"
 date: 2025-10-11T10:00:00
 authors:
@@ -28,7 +28,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.78.0.rc.2
+ghcr.io/berriai/litellm:v1.78.0-stable
 ```
 
 </TabItem>
@@ -36,7 +36,7 @@ ghcr.io/berriai/litellm:v1.78.0.rc.2
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.78.0.rc.2
+pip install litellm==1.78.0.post1
 ```
 
 </TabItem>
