@@ -38,9 +38,33 @@ class LiteLLMDatabaseConnectionPool(Enum):
 
 def append_query_params(url, params) -> str:
     from litellm._logging import verbose_proxy_logger
+    import re
 
     verbose_proxy_logger.debug(f"url: {url}")
     verbose_proxy_logger.debug(f"params: {params}")
+
+    # Pre-process URL to handle special characters in password
+    # More robust pattern that handles passwords with colons
+    # Look for scheme, then find the last @ before the host/port
+    pattern = r"^(postgresql://|postgres://|mysql://|sqlite://)(.+)@([^@]+)$"
+    match = re.match(pattern, url)
+
+    if match:
+        scheme = match.group(1)
+        user_pass = match.group(2)
+        host_and_rest = match.group(3)
+
+        # Split username and password at the first colon
+        if ":" in user_pass:
+            username, password = user_pass.split(":", 1)
+
+            # URL-encode the password to handle special characters
+            encoded_password = urllib.parse.quote(password, safe="")
+
+            # Reconstruct URL with encoded password
+            url = f"{scheme}{username}:{encoded_password}@{host_and_rest}"
+            verbose_proxy_logger.debug(f"URL with encoded password: {url}")
+
     parsed_url = urlparse.urlparse(url)
     parsed_query = urlparse.parse_qs(parsed_url.query)
     parsed_query.update(params)
