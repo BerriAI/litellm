@@ -41,6 +41,7 @@ from litellm.types.mcp import MCPServerCostInfo
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
+from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from .llms.base import HiddenParams
 from .llms.openai import (
     Batch,
@@ -2783,6 +2784,7 @@ LLMResponseTypes = Union[
     OpenAIFileObject,
     LiteLLMBatch,
     LiteLLMFineTuningJob,
+    AnthropicMessagesResponse,
     ResponsesAPIResponse,
 ]
 
