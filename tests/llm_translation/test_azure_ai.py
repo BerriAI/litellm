@@ -283,7 +283,7 @@ async def test_azure_ai_request_format():
     # Set up the test parameters
     api_key = os.getenv("AZURE_API_KEY")
     api_base = os.getenv("AZURE_API_BASE")
-    model = "azure_ai/gpt-4.1-nano"
+    model = "azure_ai/gpt-4.1-mini"
     messages = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "Hello! How can I assist you today?"},
