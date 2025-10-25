@@ -87,7 +87,7 @@ async def test_openai_img_gen_health_check():
 async def test_azure_img_gen_health_check():
     response = await litellm.ahealth_check(
         model_params={
-            "model": "azure/",
+            "model": "azure/dall-e-3",
             "api_base": os.getenv("AZURE_API_BASE"),
             "api_key": os.getenv("AZURE_API_KEY"),
             "api_version": "2023-06-01-preview",
