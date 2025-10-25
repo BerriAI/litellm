@@ -926,6 +926,7 @@ async def test_model_connection(
             "batch",
             "rerank",
             "realtime",
+            "responses",
             "ocr",
         ]
     ] = fastapi.Body("chat", description="The mode to test the model with"),

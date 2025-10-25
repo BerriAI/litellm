@@ -29,7 +29,7 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Coroutine, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -79,7 +79,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         if not isinstance(input_data, list):
             return data
 
-        tasks = []
+        tasks: List[Coroutine[Any, Any, str]] = []
         task_mappings: List[Tuple[int, Optional[int]]] = []
         # Track (message_index, content_index) for each task
         # content_index is None for string content, int for list content
@@ -113,9 +113,9 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     async def _extract_input_text_and_create_tasks(
         self,
-        message: Dict[str, Any],
+        message: Any,  # Can be Dict[str, Any] or ResponseInputParam
         msg_idx: int,
-        tasks: List,
+        tasks: List[Coroutine[Any, Any, str]],
         task_mappings: List[Tuple[int, Optional[int]]],
         guardrail_to_apply: "CustomGuardrail",
     ) -> None:
@@ -144,7 +144,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     async def _apply_guardrail_responses_to_input(
         self,
-        messages: List[Dict[str, Any]],
+        messages: Any,  # Can be List[Dict[str, Any]] or ResponseInputParam
         responses: List[str],
         task_mappings: List[Tuple[int, Optional[int]]],
     ) -> None:
@@ -200,7 +200,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
             return response
 
-        tasks = []
+        tasks: List[Coroutine[Any, Any, str]] = []
         task_mappings: List[Tuple[int, int]] = []
         # Track (output_item_index, content_index) for each task
 
