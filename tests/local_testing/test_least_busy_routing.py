@@ -152,9 +152,8 @@ async def test_router_atext_completion_streaming():
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 1440,
             },
             "model_info": {"id": 1},
@@ -162,9 +161,8 @@ async def test_router_atext_completion_streaming():
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 6,
             },
             "model_info": {"id": 2},
@@ -172,9 +170,8 @@ async def test_router_atext_completion_streaming():
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 6,
             },
             "model_info": {"id": 3},
@@ -222,9 +219,8 @@ async def test_router_completion_streaming():
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 1440,
             },
             "model_info": {"id": 1},
@@ -232,9 +228,8 @@ async def test_router_completion_streaming():
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 6,
             },
             "model_info": {"id": 2},
@@ -242,9 +237,8 @@ async def test_router_completion_streaming():
         {
             "model_name": "azure-model",
             "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
                 "rpm": 6,
             },
             "model_info": {"id": 3},
