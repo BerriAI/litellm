@@ -34,7 +34,6 @@ from litellm.types.utils import LLMResponseTypes, SpecialEnums
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.types.utils import ModelResponseStream
 
 
 class ResponsesIDSecurity(CustomLogger):
