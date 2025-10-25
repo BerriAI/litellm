@@ -919,7 +919,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 assembled_model_response = self.create_guardrail_blocked_response(
                     response=output_guardrail_response
                 )
-            else:
+            elif output_guardrail_response is not None:
                 self._apply_masking_to_response(
                     response=assembled_model_response,
                     bedrock_guardrail_response=output_guardrail_response,
