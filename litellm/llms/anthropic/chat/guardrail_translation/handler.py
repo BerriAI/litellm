@@ -13,7 +13,7 @@ Pattern Overview:
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Optional, Tuple, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -49,7 +49,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         if messages is None:
             return data
 
-        tasks = []
+        tasks: List[Coroutine[Any, Any, str]] = []
         task_mappings: List[Tuple[int, Optional[int]]] = []
         # Track (message_index, content_index) for each task
         # content_index is None for string content, int for list content
@@ -166,7 +166,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
             return response
 
-        tasks = []
+        tasks: List[Coroutine[Any, Any, str]] = []
         task_mappings: List[Tuple[int, Optional[int]]] = []
         # Track (choice_index, content_index) for each task
 
