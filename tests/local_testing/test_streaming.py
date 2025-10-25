@@ -2822,13 +2822,13 @@ async def test_azure_astreaming_and_function_calling():
     try:
         litellm.set_verbose = True
         response = await litellm.acompletion(
-            model="azure/gpt-4-nov-release",
+            model="azure/gpt-4.1-mini",
             tools=tools,
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_FRANCE_API_BASE"),
-            api_key=os.getenv("AZURE_FRANCE_API_KEY"),
+            api_base=os.getenv("AZURE_API_BASE"),
+            api_key=os.getenv("AZURE_API_KEY"),
             api_version="2024-02-15-preview",
             caching=True,
         )
@@ -2853,13 +2853,13 @@ async def test_azure_astreaming_and_function_calling():
         ## CACHING TEST
         print("\n\nCACHING TESTS\n\n")
         response = await litellm.acompletion(
-            model="azure/gpt-4-nov-release",
+            model="azure/gpt-4.1-mini",
             tools=tools,
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_FRANCE_API_BASE"),
-            api_key=os.getenv("AZURE_FRANCE_API_KEY"),
+            api_base=os.getenv("AZURE_API_BASE"),
+            api_key=os.getenv("AZURE_API_KEY"),
             api_version="2024-02-15-preview",
             caching=True,
         )
