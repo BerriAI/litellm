@@ -43,11 +43,10 @@ from litellm import Router
     "model, api_key, api_base",
     [
         ("whisper-1", None, None),
-        # ("groq/whisper-large-v3", None, None),
         (
-            "azure/azure-whisper",
-            os.getenv("AZURE_EUROPE_API_KEY"),
-            "https://my-endpoint-europe-berri-992.openai.azure.com/",
+            "azure/whisper",
+            os.getenv("AZURE_WHISPER_API_KEY"),
+            os.getenv("AZURE_WHISPER_API_BASE"),
         ),
     ],
 )
@@ -213,24 +212,59 @@ async def test_gpt_4o_transcribe_model_mapping():
 
 @pytest.mark.asyncio
 async def test_azure_transcribe_model_mapping():
-    """Test that Azure transcription models are correctly mapped and not hardcoded to whisper-1"""
+    """
+    Test that Azure transcription models are correctly mapped and not hardcoded to whisper-1.
+    This test validates that the request body contains the correct model parameter.
+    """
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from openai import AsyncAzureOpenAI
     
-    # Test Azure whisper-1
-    try:
+    # Create a mock response that looks like OpenAI's transcription response (as a BaseModel)
+    from pydantic import BaseModel as PydanticBaseModel
+    
+    class MockTranscriptionResponse(PydanticBaseModel):
+        text: str
+    
+    mock_transcription_response = MockTranscriptionResponse(text="This is a test transcription")
+    
+    # Create mock raw response with headers and parse() method
+    mock_raw_response = MagicMock()
+    mock_raw_response.headers = {"content-type": "application/json"}
+    mock_raw_response.parse = MagicMock(return_value=mock_transcription_response)
+    
+    # Create a mock Azure client instance
+    mock_azure_client = MagicMock(spec=AsyncAzureOpenAI)
+    mock_azure_client.audio.transcriptions.with_raw_response.create = AsyncMock(return_value=mock_raw_response)
+    mock_azure_client.api_key = "test-api-key"
+    mock_azure_client._base_url = MagicMock()
+    mock_azure_client._base_url._uri_reference = "https://my-endpoint-europe-berri-992.openai.azure.com/"
+    
+    # Mock the get_azure_openai_client method to return our mock client
+    with patch("litellm.llms.azure.audio_transcriptions.AzureAudioTranscription.get_azure_openai_client", return_value=mock_azure_client):
+        # Make the transcription call
         response = await litellm.atranscription(
-            model="azure/whisper-1", 
-            file=audio_file, 
+            model="azure/whisper-1",
+            file=audio_file,
             response_format="json",
-            api_key=os.getenv("AZURE_EUROPE_API_KEY"),
+            api_key="test-api-key",
             api_base="https://my-endpoint-europe-berri-992.openai.azure.com/",
+            api_version="2024-02-15-preview",
             drop_params=True
         )
+        
+        # Verify the create method was called
+        mock_azure_client.audio.transcriptions.with_raw_response.create.assert_called_once()
+        
+        # Get the call arguments to validate the model parameter
+        call_kwargs = mock_azure_client.audio.transcriptions.with_raw_response.create.call_args.kwargs
+        
+        # Assert that the model parameter is "whisper-1" (not hardcoded incorrectly)
+        assert call_kwargs["model"] == "whisper-1", f"Expected model 'whisper-1', got {call_kwargs['model']}"
+        assert "file" in call_kwargs
+        assert call_kwargs["response_format"] == "json"
         
         # Check that the response contains the correct model in hidden params
         assert response._hidden_params is not None
         assert response._hidden_params["model"] == "whisper-1"
         assert response._hidden_params["custom_llm_provider"] == "azure"
         assert response.text is not None
-    except Exception as e:
-        # If Azure credentials are not available, skip this test
-        pytest.skip(f"Azure credentials not available: {str(e)}")
