@@ -9,6 +9,7 @@ Use Amazon Bedrock Batch Inference API through LiteLLM.
 |----------|---------|
 | Description | Amazon Bedrock Batch Inference allows you to run inference on large datasets asynchronously |
 | Provider Doc | [AWS Bedrock Batch Inference ↗](https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference.html) |
+| Cost Tracking | ✅ Supported |
 
 ## Overview
 

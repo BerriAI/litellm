@@ -1,6 +1,9 @@
 from typing import Optional
 
 import litellm
+from litellm.llms.bedrock.image.amazon_titan_transformation import (
+    AmazonTitanImageGenerationConfig,
+)
 from litellm.types.utils import ImageResponse
 
 
@@ -17,6 +20,13 @@ def cost_calculator(
     """
     if litellm.AmazonStability3Config()._is_stability_3_model(model=model):
         pass
+    elif AmazonTitanImageGenerationConfig._is_titan_model(model=model):
+        return AmazonTitanImageGenerationConfig.cost_calculator(
+            model=model,
+            image_response=image_response,
+            size=size,
+            optional_params=optional_params,
+        )
     else:
         # Stability 1 models
         optional_params = optional_params or {}

@@ -508,3 +508,19 @@ def test_backward_compatibility_regular_nova_model():
     assert result["taskType"] == "TEXT_IMAGE"
     assert result["textToImageParams"]["text"] == prompt
     assert result["imageGenerationConfig"]["cfg_scale"] == 7
+
+
+def test_amazon_titan_image_gen():
+    from litellm import image_generation
+
+    model_id = "bedrock/amazon.titan-image-generator-v1"
+
+    response = litellm.image_generation(
+        model=model_id,
+        prompt="A serene mountain landscape at sunset with a lake reflection",
+        aws_region_name="us-east-1",
+    )
+
+    print(f"response cost: {response._hidden_params['response_cost']}")
+
+    assert response._hidden_params["response_cost"] > 0
