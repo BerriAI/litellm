@@ -672,7 +672,13 @@ class Message(OpenAIObject):
             init_values["images"] = images
 
         if thinking_blocks is not None:
-            init_values["thinking_blocks"] = thinking_blocks
+            import copy
+            valid_thinking_blocks = [
+                {k: copy.deepcopy(v) for k, v in tb.items() if v is not None}
+                for tb in thinking_blocks
+                if isinstance(tb, dict)
+            ]
+            init_values["thinking_blocks"] = valid_thinking_blocks
 
         if annotations is not None:
             init_values["annotations"] = annotations
@@ -2070,7 +2076,7 @@ class GuardrailMode(TypedDict, total=False):
 
 GuardrailStatus = Literal[
     "success",
-    "guardrail_intervened", 
+    "guardrail_intervened",
     "guardrail_failed_to_respond",
     "not_run"
 ]
@@ -2264,7 +2270,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_second: Optional[float] = None
     input_cost_per_pixel: Optional[float] = None
     output_cost_per_pixel: Optional[float] = None
-    
+
     # Include all ModelInfoBase fields as optional
     # This allows any model_info parameter to be set in litellm_params
     input_cost_per_token_flex: Optional[float] = None
@@ -2832,7 +2838,7 @@ class PriorityReservationSettings(BaseModel):
         default=0.25,
         description="Priority level to assign to API keys without explicit priority metadata. Should match a key in litellm.priority_reservation.",
     )
-    
+
     saturation_threshold: float = Field(
         default=0.50,
         description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits."
