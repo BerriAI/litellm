@@ -254,8 +254,13 @@ async def get_vector_store_info(
             )
             if vector_store is not None:
                 vector_store_metadata = vector_store.get("vector_store_metadata")
+                # Parse metadata if it's a JSON string
+                parsed_metadata: Optional[dict] = None
                 if isinstance(vector_store_metadata, str):
-                    vector_store_metadata = json.loads(vector_store_metadata)
+                    parsed_metadata = json.loads(vector_store_metadata)
+                elif isinstance(vector_store_metadata, dict):
+                    parsed_metadata = vector_store_metadata
+
                 vector_store_pydantic_obj = LiteLLM_ManagedVectorStoresTable(
                     vector_store_id=vector_store.get("vector_store_id") or "",
                     custom_llm_provider=vector_store.get("custom_llm_provider") or "",
@@ -264,7 +269,7 @@ async def get_vector_store_info(
                         "vector_store_description"
                     )
                     or None,
-                    vector_store_metadata=vector_store_metadata,
+                    vector_store_metadata=parsed_metadata,
                     created_at=vector_store.get("created_at") or None,
                     updated_at=vector_store.get("updated_at") or None,
                     litellm_credential_name=vector_store.get("litellm_credential_name"),
@@ -283,7 +288,7 @@ async def get_vector_store_info(
                 detail=f"Vector store with ID {data.vector_store_id} not found",
             )
 
-        vector_store_dict = vector_store.model_dump()
+        vector_store_dict = vector_store.model_dump()  # type: ignore[attr-defined]
         return {"vector_store": vector_store_dict}
     except Exception as e:
         verbose_proxy_logger.exception(f"Error getting vector store info: {str(e)}")
