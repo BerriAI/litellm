@@ -1415,18 +1415,80 @@ AWS_REGION_NAME = ""
 
 ```yaml
 model_list:
- - model_name: gpt-4o
+  - model_name: gpt-4o
     litellm_params:
       model: gpt-4o
+
 litellm_settings:
   callbacks: ["aws_sqs"]
+
   aws_sqs_callback_params:
-    sqs_queue_url: https://sqs.us-west-2.amazonaws.com/123456789012/my-queue   # AWS SQS Queue URL
-    sqs_region_name: us-west-2              # AWS Region Name for SQS
-    sqs_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # use os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for SQS
-    sqs_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for SQS
-    sqs_batch_size: 10  # [OPTIONAL] Number of messages to batch before sending (default: 10)
-    sqs_flush_interval: 30  # [OPTIONAL] Time in seconds to wait before flushing batch (default: 30)
+    # --- 🧱 Required Parameters ---
+    sqs_queue_url: https://sqs.us-west-2.amazonaws.com/123456789012/my-queue
+    # The AWS SQS Queue URL to which LiteLLM will send log events.
+
+    sqs_region_name: us-west-2
+    # AWS Region for your SQS queue (e.g., us-east-1, eu-central-1, etc.)
+    
+    # --- ⚙️ Optional Runtime Parameters ---
+    sqs_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+    # AWS Access Key ID — use `os.environ/<VAR>` for environment variable resolution.
+
+    sqs_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+    # AWS Secret Access Key — environment variable resolution supported.
+
+    sqs_batch_size: 10
+    # Number of log messages to buffer before sending (default: 10).
+
+    sqs_flush_interval: 30
+    # Time in seconds to wait before flushing the batch (default: 30s).
+
+    sqs_use_ssl: true
+    # Whether to use HTTPS for SQS requests (default: true).
+
+    sqs_verify: true
+    # Whether to verify SSL certificates (default: true).
+
+    sqs_api_version: "2012-11-05"
+    # AWS SQS API version (default: latest stable).
+
+    sqs_endpoint_url: null
+    # Optional custom SQS endpoint (useful for LocalStack or testing).
+
+    # --- 🔐 Optional AWS Authentication Parameters ---
+    sqs_aws_session_token: os.environ/AWS_SESSION_TOKEN
+    # Temporary AWS STS session token (optional).
+
+    sqs_aws_session_name: null
+    # AWS STS session name when assuming roles.
+
+    sqs_aws_profile_name: null
+    # AWS CLI profile to use for credentials lookup.
+
+    sqs_aws_role_name: null
+    # Optional IAM role to assume before sending SQS messages.
+
+    sqs_aws_web_identity_token: null
+    # Path or value for AWS Web Identity Token (for OIDC federation).
+
+    sqs_aws_sts_endpoint: null
+    # Optional custom AWS STS endpoint.
+
+    # --- Logging Controls ---
+    sqs_strip_base64_files: true
+            # If true, LiteLLM will remove or redact base64-encoded binary data (e.g., PDFs, images, audio)
+    # from logged messages to avoid large payloads or sensitive data leaks.
+
+    # --- 🔒 Application-level Encryption (Optional) ---
+    sqs_aws_use_application_level_encryption: false
+    # Enable to encrypt messages with an application-managed key before sending to SQS.
+
+    sqs_app_encryption_key_b64: os.environ/SQS_APP_ENCRYPTION_KEY
+    # Base64-encoded AES key for encrypting messages (required if encryption is enabled).
+
+    sqs_app_encryption_aad: "litellm_sqs"
+    # Optional AAD (Additional Authenticated Data) for AES-GCM encryption context.
+
 ```
 
 **Step 3**: Start the proxy, make a test request
