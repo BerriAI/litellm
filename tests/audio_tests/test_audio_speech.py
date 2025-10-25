@@ -34,7 +34,7 @@ import litellm
     "model, api_key, api_base",
     [
         (
-            "azure/azure-tts",
+            "azure/tts",
             os.getenv("AZURE_SWEDEN_API_KEY"),
             os.getenv("AZURE_SWEDEN_API_BASE"),
         ),
@@ -44,6 +44,7 @@ import litellm
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
+    litellm._turn_on_debug()
     speech_file_path = Path(__file__).parent / "speech.mp3"
 
     if sync_mode:
