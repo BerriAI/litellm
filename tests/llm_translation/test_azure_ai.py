@@ -345,8 +345,8 @@ def test_completion_azure():
 @pytest.mark.parametrize(
     "api_base",
     [
-        "https://ci-cd-foundry.cognitiveservices.azure.com/",
-        "https://ci-cd-foundry.cognitiveservices.azure.com/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2023-03-15-preview",
+        "https://litellm-ci-cd-prod.cognitiveservices.azure.com/",
+        "https://litellm-ci-cd-prod.cognitiveservices.azure.com/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2023-03-15-preview",
     ],
 )
 def test_completion_azure_ai_gpt_4o_with_flexible_api_base(api_base):
