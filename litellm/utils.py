@@ -266,12 +266,12 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
-from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -306,6 +306,9 @@ from .types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from .types.router import LiteLLM_Params
+
+if TYPE_CHECKING:
+    from litellm import MockException
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -6035,6 +6038,9 @@ def mock_completion_streaming_obj(
 ):
     if isinstance(mock_response, litellm.MockException):
         raise mock_response
+    if isinstance(mock_response, ModelResponseStream):
+        yield mock_response
+        return
     for i in range(0, len(mock_response), 3):
         completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:
@@ -6054,10 +6060,16 @@ def mock_completion_streaming_obj(
 
 
 async def async_mock_completion_streaming_obj(
-    model_response, mock_response, model, n: Optional[int] = None
+    model_response,
+    mock_response: Union[str, "MockException", ModelResponseStream],
+    model,
+    n: Optional[int] = None,
 ):
     if isinstance(mock_response, litellm.MockException):
         raise mock_response
+    if isinstance(mock_response, ModelResponseStream):
+        yield mock_response
+        return
     for i in range(0, len(mock_response), 3):
         completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:
@@ -7609,15 +7621,11 @@ class ProviderConfigManager:
         provider: LlmProviders,
     ) -> Optional[BaseVideoConfig]:
         if LlmProviders.OPENAI == provider:
-            from litellm.llms.openai.videos.transformation import (
-                OpenAIVideoConfig,
-            )
+            from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 
             return OpenAIVideoConfig()
         elif LlmProviders.AZURE == provider:
-            from litellm.llms.azure.videos.transformation import (
-                AzureVideoConfig,
-            )
+            from litellm.llms.azure.videos.transformation import AzureVideoConfig
 
             return AzureVideoConfig()
         return None
