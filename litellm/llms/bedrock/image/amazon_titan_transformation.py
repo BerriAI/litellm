@@ -125,7 +125,7 @@ class AmazonTitanImageGenerationConfig:
         }
         return AmazonTitanImageGenerationRequestBody(
             taskType=task_type,
-            textToImageParams=AmazonTitanTextToImageParams(**text_to_image_params),
+            textToImageParams=AmazonTitanTextToImageParams(**text_to_image_params),  # type: ignore
             imageGenerationConfig=AmazonNovaCanvasImageGenerationConfig(
                 **image_generation_config
             ),
