@@ -1978,13 +1978,13 @@ class UserAPIKeyAuth(
         1. Regular API keys from LiteLLM DB
         2. JWT tokens used for connecting to LiteLLM API
         """
+        from litellm.proxy.auth.handle_jwt import JWTHandler
         if api_key.startswith("sk-"):
             return hash_token(api_key)
-        from litellm.proxy.auth.handle_jwt import JWTHandler
-
-        if JWTHandler.is_jwt(token=api_key):
+        elif JWTHandler.is_jwt(token=api_key):
             return f"hashed-jwt-{hash_token(token=api_key)}"
-        return api_key
+        # failsafe ensure we hash it to ensure the size is upperbound
+        return hash_token(api_key)
 
     @classmethod
     def get_litellm_internal_health_check_user_api_key_auth(cls) -> "UserAPIKeyAuth":
