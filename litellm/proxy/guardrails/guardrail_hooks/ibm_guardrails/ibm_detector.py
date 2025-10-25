@@ -8,6 +8,7 @@
 import os
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Union
+from urllib.parse import urlencode
 
 import httpx
 
@@ -124,9 +125,13 @@ class IBMGuardrailDetector(CustomGuardrail):
 
         headers = {
             "Authorization": f"Bearer {self.auth_token}",
-            "detector-id": self.detector_id,
             "content-type": "application/json",
         }
+
+        query_params = {"detector_id": self.detector_id}
+
+        # update the api_url with the query params
+        self.api_url = f"{self.api_url}?{urlencode(query_params)}"
 
         verbose_proxy_logger.debug(
             "IBM Detector Server request to %s with payload: %s",
@@ -135,6 +140,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         )
 
         try:
+
             response = await self.async_handler.post(
                 url=self.api_url,
                 json=payload,
@@ -155,7 +161,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     guardrail_provider=self.guardrail_provider,
                     guardrail_json_response={
                         "detections": [
-                            [dict(detection) for detection in message_detections]
+                            [detection for detection in message_detections]
                             for message_detections in response_json
                         ]
                     },

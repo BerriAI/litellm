@@ -35,8 +35,7 @@ class DetectorParams(BaseModel):
 class TextDetectionRequest(BaseModel):
     """Request model for text detection."""
 
-    detector_id: str = Field(..., description="ID of the detector to use")
-    content: str = Field(..., description="Text content to analyze")
+    contents: List[str] = Field(..., description="Text content to analyze")
     detector_params: Optional[DetectorParams] = None
 
 
@@ -123,7 +122,7 @@ def simulate_detection(
         List of Detection objects
     """
     detections = []
-    content_lower = content.lower()
+    content_lower = " ".join(c for c in content).lower()
 
     # Get detector config
     detector_config = MOCK_DETECTORS.get(detector_id)
@@ -233,8 +232,9 @@ async def root():
     }
 
 
-@app.post("/api/v1/text/detection", response_model=DetectionResponse)
+@app.post("/api/v1/text/contents")
 async def text_detection(
+    detector_id: str,  # query parameter
     request: TextDetectionRequest,
     authorization: Optional[str] = Header(None),
 ):
@@ -251,15 +251,12 @@ async def text_detection(
     verify_auth_token(authorization)
 
     detections = simulate_detection(
-        detector_id=request.detector_id,
-        content=request.content,
+        detector_id=detector_id,
+        content=request.contents,
         detector_params=request.detector_params,
     )
 
-    return DetectionResponse(
-        detections=detections,
-        detection_id=str(uuid.uuid4()),
-    )
+    return detections
 
 
 @app.post("/api/v1/text/generation/detection", response_model=DetectionResponse)
