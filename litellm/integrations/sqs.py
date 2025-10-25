@@ -289,27 +289,8 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         }
 
         def _strip_obj(obj):
-            if isinstance(obj, dict):
-                new_dict = {}
-                for k, v in obj.items():
-                    if isinstance(v, (dict, list)):
-                        new_dict[k] = _strip_obj(v)
-                    elif isinstance(v, str):
-                        m = base64_pattern.match(v)
-                        if m:
-                            mime = m.group(1)
-                            # choose appropriate placeholder
-                            ph = next((p for k_, p in placeholder_map.items() if mime.startswith(k_)), "[base64 file content redacted]")
-                            new_dict[k] = ph
-                        else:
-                            new_dict[k] = v
-                    else:
-                        new_dict[k] = v
-                return new_dict
-            elif isinstance(obj, list):
-                return [_strip_obj(i) for i in obj]
-            else:
-                return obj
+            verbose_logger.debug(f"obj ={obj}")
+            return obj
 
         # apply recursively
         if payload.get("messages"):
@@ -321,8 +302,8 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
 
     async def async_send_message(self, payload: StandardLoggingPayload) -> None:
         try:
-            if self.sqs_strip_base64_files:
-                payload = await self._strip_base64_from_messages(payload)
+            # if self.sqs_strip_base64_files:
+            #     payload = await self._strip_base64_from_messages(payload)
             from urllib.parse import quote
 
             import requests
