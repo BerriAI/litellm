@@ -636,14 +636,16 @@ def test_completion_azure_deployment_id():
     """
     Ensure deployment_id takes precedence over model.
     """
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            deployment_id="gpt-4.1-mini",
-            model="gpt-3.5-turbo",
-            messages=messages,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+    litellm.set_verbose = True
+    response = completion(
+        deployment_id="gpt-4.1-mini",
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": "Hello, how are you?",
+            }
+        ],
+    )
+    # Add any assertions here to check the response
+    print(response)
