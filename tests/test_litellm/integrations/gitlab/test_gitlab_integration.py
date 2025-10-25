@@ -1,11 +1,14 @@
 import os
 import sys
-from unittest.mock import MagicMock, patch
+
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
 
+from unittest.mock import MagicMock, patch
 from litellm.integrations.gitlab.gitlab_prompt_manager import GitLabPromptManager
 
 
@@ -84,8 +87,9 @@ def test_gitlab_prompt_manager_error_handling_load(mock_client_class):
 
     config = {"project": "g/s/r", "access_token": "tkn"}
 
-    with pytest.raises(Exception, match="Failed to load prompt 'oops' from GitLab"):
-        GitLabPromptManager(config, prompt_id="oops").prompt_manager  # triggers load
+    with pytest.raises(Exception, match="Failed to load prompt 'gitlab::oops' from GitLab"):
+        GitLabPromptManager(config, prompt_id="oops").prompt_manager
+
 
 
 def test_gitlab_prompt_manager_config_validation_via_client_ctor():
@@ -257,7 +261,7 @@ def test_gitlab_prompt_manager_list_templates_with_prompts_path(mock_client_clas
     # list_templates strips folder prefix + extension
     ids = manager.get_available_prompts()
     assert "a" in ids
-    assert "sub/b" in ids
+    assert "gitlab::sub::b" in ids
     assert all(not x.endswith(".prompt") for x in ids)
     assert all("/prompts/chat/" not in x for x in ids)
 
@@ -284,8 +288,8 @@ def test_gitlab_template_manager_load_all_prompts(mock_client_class):
 
     pm = GitLabPromptManager(config).prompt_manager
     loaded = pm.load_all_prompts()
-    assert set(loaded) == {"a", "sub/b"}
-    assert "a" in pm.prompts and "sub/b" in pm.prompts
+    assert set(loaded) == {"gitlab::a", "gitlab::sub::b"}
+    assert "gitlab::a" in pm.prompts and "gitlab::sub::b" in pm.prompts
 
 
 # -----------------------------
