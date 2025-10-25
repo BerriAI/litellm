@@ -34,7 +34,22 @@ from litellm.proxy.health_check import (
 #### Health ENDPOINTS ####
 
 router = APIRouter()
-services = Union[Literal["slack_budget_alerts", "langfuse", "slack", "openmeter", "webhook", "email", "braintrust", "datadog", "generic_api", "arize"], str]
+services = Union[
+    Literal[
+        "slack_budget_alerts",
+        "langfuse",
+        "slack",
+        "openmeter",
+        "webhook",
+        "email",
+        "braintrust",
+        "datadog",
+        "generic_api",
+        "arize",
+    ],
+    str,
+]
+
 
 @router.get(
     "/test",
@@ -617,41 +632,42 @@ async def shared_health_check_status_endpoint(
 ):
     """
     Get the status of shared health check coordination across pods.
-    
+
     Returns information about Redis connectivity, lock status, and cache status.
     """
-    from litellm.proxy.proxy_server import use_shared_health_check, redis_usage_cache
-    
+    from litellm.proxy.proxy_server import redis_usage_cache, use_shared_health_check
+
     if not use_shared_health_check:
         return {
             "shared_health_check_enabled": False,
-            "message": "Shared health check is not enabled"
+            "message": "Shared health check is not enabled",
         }
-    
+
     if redis_usage_cache is None:
         return {
             "shared_health_check_enabled": True,
             "redis_available": False,
-            "message": "Redis is not configured"
+            "message": "Redis is not configured",
         }
-    
+
     try:
-        from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
-        
+        from litellm.proxy.health_check_utils.shared_health_check_manager import (
+            SharedHealthCheckManager,
+        )
+
         shared_health_manager = SharedHealthCheckManager(
             redis_cache=redis_usage_cache,
         )
-        
+
         health_status = await shared_health_manager.get_health_check_status()
-        return {
-            "shared_health_check_enabled": True,
-            "status": health_status
-        }
+        return {"shared_health_check_enabled": True, "status": health_status}
     except Exception as e:
         verbose_proxy_logger.error(f"Error getting shared health check status: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to retrieve shared health check status: {str(e)}"},
+            status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": f"Failed to retrieve shared health check status: {str(e)}"
+            },
         )
 
 
@@ -910,6 +926,7 @@ async def test_model_connection(
             "batch",
             "rerank",
             "realtime",
+            "ocr",
         ]
     ] = fastapi.Body("chat", description="The mode to test the model with"),
     litellm_params: Dict = fastapi.Body(

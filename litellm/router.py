@@ -140,6 +140,7 @@ from litellm.types.router import (
     RouterRateLimitError,
     RouterRateLimitErrorBasic,
     RoutingStrategy,
+    SearchToolTypedDict,
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -204,6 +205,8 @@ class Router:
         ] = None,
         ## ASSISTANTS API ##
         assistants_config: Optional[AssistantsTypedDict] = None,
+        ## SEARCH API ##
+        search_tools: Optional[List[SearchToolTypedDict]] = None,
         ## CACHING ##
         redis_url: Optional[str] = None,
         redis_host: Optional[str] = None,
@@ -363,6 +366,7 @@ class Router:
         )
 
         self.assistants_config = assistants_config
+        self.search_tools = search_tools or []
         self.deployment_names: List = (
             []
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
@@ -878,6 +882,39 @@ class Router:
 
         self.aocr = self.factory_function(aocr, call_type="aocr")
         self.ocr = self.factory_function(ocr, call_type="ocr")
+
+        # Search routes
+        #########################################################
+        from litellm.search import asearch, search
+
+        self.asearch = self.factory_function(asearch, call_type="asearch")
+        self.search = self.factory_function(search, call_type="search")
+
+        # Video routes
+        #########################################################
+        from litellm.videos import (
+            avideo_generation,
+            video_generation,
+            avideo_list,
+            video_list,
+            avideo_status,
+            video_status,
+            avideo_content,
+            video_content,
+            avideo_remix,
+            video_remix,
+        )
+
+        self.avideo_generation = self.factory_function(avideo_generation, call_type="avideo_generation")
+        self.video_generation = self.factory_function(video_generation, call_type="video_generation")
+        self.avideo_list = self.factory_function(avideo_list, call_type="avideo_list")
+        self.video_list = self.factory_function(video_list, call_type="video_list")
+        self.avideo_status = self.factory_function(avideo_status, call_type="avideo_status")
+        self.video_status = self.factory_function(video_status, call_type="video_status")
+        self.avideo_content = self.factory_function(avideo_content, call_type="avideo_content")
+        self.video_content = self.factory_function(video_content, call_type="video_content")
+        self.avideo_remix = self.factory_function(avideo_remix, call_type="avideo_remix")
+        self.video_remix = self.factory_function(video_remix, call_type="video_remix")
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -2705,6 +2742,37 @@ class Router:
                 self.fail_calls[model] += 1
             raise e
 
+    async def _asearch_with_fallbacks(
+        self, original_function: Callable, **kwargs
+    ):
+        """
+        Helper function to make a search API call through the router with load balancing and fallbacks.
+        Reuses the router's retry/fallback infrastructure.
+        """
+        from litellm.router_utils.search_api_router import SearchAPIRouter
+        
+        return await SearchAPIRouter.async_search_with_fallbacks(
+            router_instance=self,
+            original_function=original_function,
+            **kwargs,
+        )
+    
+    async def _asearch_with_fallbacks_helper(
+        self, model: str, original_generic_function: Callable, **kwargs
+    ):
+        """
+        Helper function for search API calls - selects a search tool and calls the original function.
+        Called by async_function_with_fallbacks for each retry attempt.
+        """
+        from litellm.router_utils.search_api_router import SearchAPIRouter
+        
+        return await SearchAPIRouter.async_search_with_fallbacks_helper(
+            router_instance=self,
+            model=model,
+            original_generic_function=original_generic_function,
+            **kwargs,
+        )
+
     async def _ageneric_api_call_with_fallbacks(
         self, model: str, original_function: Callable, **kwargs
     ):
@@ -3580,7 +3648,19 @@ class Router:
             "vector_store_create",
             "aocr",
             "ocr",
-            "aadapter_generate_content"
+            "asearch",
+            "search",
+            "aadapter_generate_content",
+            "avideo_generation",
+            "video_generation",
+            "avideo_list",
+            "video_list",
+            "avideo_status",
+            "video_status",
+            "avideo_content",
+            "video_content",
+            "avideo_remix",
+            "video_remix"
         ] = "assistants",
     ):
         """
@@ -3598,6 +3678,12 @@ class Router:
             "vector_store_search",
             "vector_store_create",
             "ocr",
+            "search",
+            "video_generation",
+            "video_list",
+            "video_status",
+            "video_content",
+            "video_remix",
         ):
 
             def sync_wrapper(
@@ -3628,6 +3714,11 @@ class Router:
                 return await self._pass_through_moderation_endpoint_factory(
                     original_function=original_function, **kwargs
                 )
+            elif call_type in ("asearch", "search"):
+                return await self._asearch_with_fallbacks(
+                    original_function=original_function,
+                    **kwargs,
+                )
             elif call_type in (
                 "anthropic_messages",
                 "aresponses",
@@ -3642,6 +3733,11 @@ class Router:
                 "agenerate_content_stream",
                 "aocr",
                 "ocr",
+                "avideo_generation",
+                "avideo_list",
+                "avideo_status",
+                "avideo_content",
+                "avideo_remix",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

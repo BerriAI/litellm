@@ -100,6 +100,7 @@ litellm --config /path/to/config.yaml
 |-------------|--------------------|
 | OpenAI      |   [Usage](#quick-start)                 |
 | Azure OpenAI|   [Usage](../docs/providers/azure#azure-text-to-speech-tts)                 |
+| Azure AI Speech Service (AVA)|   [Usage](../docs/providers/azure_ai_speech)                 |
 | Vertex AI   |   [Usage](../docs/providers/vertex#text-to-speech-apis)                 |
 | Gemini      |   [Usage](#gemini-text-to-speech)                 |
 

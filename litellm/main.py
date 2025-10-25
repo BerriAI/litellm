@@ -83,6 +83,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
+from litellm.llms.base_llm.base_model_iterator import (
+    convert_model_response_to_streaming,
+)
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import (
@@ -92,7 +95,7 @@ from litellm.llms.vertex_ai.common_utils import (
 from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import RawRequestTypedDict
+from litellm.types.utils import RawRequestTypedDict, StreamingChoices
 from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
@@ -154,7 +157,6 @@ from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
 from .llms.bytez.chat.transformation import BytezChatConfig
-from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
@@ -226,6 +228,7 @@ from .types.utils import (
 )
 
 encoding = tiktoken.get_encoding("cl100k_base")
+from litellm.types.utils import ModelResponseStream
 from litellm.utils import (
     Choices,
     EmbeddingResponse,
@@ -277,10 +280,13 @@ heroku_transformation = HerokuChatConfig()
 oci_transformation = OCIChatConfig()
 ovhcloud_transformation = OVHCloudChatConfig()
 lemonade_transformation = LemonadeChatConfig()
+
+MOCK_RESPONSE_TYPE = Union[str, Exception, dict, ModelResponse, ModelResponseStream]
 ####### COMPLETION ENDPOINTS ################
 
 
 class LiteLLM:
+
     def __init__(
         self,
         *,
@@ -380,7 +386,6 @@ async def acompletion(
         Literal["none", "minimal", "low", "medium", "high", "default"]
     ] = None,
     safety_identifier: Optional[str] = None,
-    service_tier: Optional[str] = None,
     # set api_base, api_version, api_key
     base_url: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -530,7 +535,6 @@ async def acompletion(
         "model_list": model_list,
         "reasoning_effort": reasoning_effort,
         "safety_identifier": safety_identifier,
-        "service_tier": service_tier,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
@@ -630,7 +634,7 @@ async def _async_streaming(response, model, custom_llm_provider, args):
 
 
 def _handle_mock_potential_exceptions(
-    mock_response: Union[str, Exception, dict],
+    mock_response: Union[str, Exception],
     model: str,
     custom_llm_provider: Optional[str] = None,
 ):
@@ -734,9 +738,6 @@ async def _sleep_for_timeout_async(timeout: Union[float, str, httpx.Timeout]):
         await asyncio.sleep(timeout.connect)
 
 
-MOCK_RESPONSE_TYPE = Union[str, Exception, dict]
-
-
 def mock_completion(
     model: str,
     messages: List,
@@ -787,15 +788,16 @@ def mock_completion(
                 api_key="mock-key",
             )
 
-        _handle_mock_potential_exceptions(
-            mock_response=mock_response,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-        )
+        if isinstance(mock_response, str) or isinstance(mock_response, Exception):
+            _handle_mock_potential_exceptions(
+                mock_response=mock_response,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+            )
 
         mock_response = cast(
-            Union[str, dict], mock_response
-        )  # after this point, mock_response is a string or dict
+            Union[str, dict, ModelResponse, ModelResponseStream], mock_response
+        )  # after this point, mock_response is a string, dict, ModelResponse, or ModelResponseStream
         if isinstance(mock_response, str) and mock_response.startswith(
             "Exception: mock_streaming_error"
         ):
@@ -812,8 +814,16 @@ def mock_completion(
         if isinstance(mock_response, dict):
             return ModelResponse(**mock_response)
 
-        model_response = ModelResponse(stream=stream)
+        if isinstance(mock_response, ModelResponse):
+            if not stream:
+                return mock_response
+            # convert to ModelResponseStream
+            mock_response = convert_model_response_to_streaming(mock_response)  # type: ignore
+
+        model_response: Union[ModelResponse, ModelResponseStream] = ModelResponse()
+
         if stream is True:
+            model_response = ModelResponseStream()
             # don't try to access stream object,
             if kwargs.get("acompletion", False) is True:
                 return CustomStreamWrapper(
@@ -834,6 +844,8 @@ def mock_completion(
             )
         if isinstance(mock_response, litellm.MockException):
             raise mock_response
+        # At this point, mock_response must be a string (all other types have been handled or returned early)
+        mock_response = cast(str, mock_response)
         if n is None:
             model_response.choices[0].message.content = mock_response  # type: ignore
         else:
@@ -953,7 +965,6 @@ def completion(  # type: ignore # noqa: PLR0915
     deployment_id=None,
     extra_headers: Optional[dict] = None,
     safety_identifier: Optional[str] = None,
-    service_tier: Optional[str] = None,
     # soon to be deprecated params by OpenAI
     functions: Optional[List] = None,
     function_call: Optional[str] = None,
@@ -1296,7 +1307,6 @@ def completion(  # type: ignore # noqa: PLR0915
             "thinking": thinking,
             "web_search_options": web_search_options,
             "safety_identifier": safety_identifier,
-            "service_tier": service_tier,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
         }
         optional_params = get_optional_params(
@@ -2032,7 +2042,6 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nebius"
             or custom_llm_provider == "wandb"
-            or custom_llm_provider == "clarifai"
             or custom_llm_provider in litellm.openai_compatible_providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
@@ -2227,7 +2236,40 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "clarifai"
             or model in litellm.clarifai_models
         ):
-            pass # Deprecated - handled in the openai compatible provider section above
+            clarifai_key = None
+            clarifai_key = (
+                api_key
+                or litellm.clarifai_key
+                or litellm.api_key
+                or get_secret("CLARIFAI_API_KEY")
+                or get_secret("CLARIFAI_API_TOKEN")
+            )
+
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("CLARIFAI_API_BASE")
+                or "https://api.clarifai.com/v2"
+            )
+            api_base = litellm.ClarifaiConfig()._convert_model_to_url(model, api_base)
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                fake_stream=True,  # clarifai does not support streaming, we fake it
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                custom_llm_provider="clarifai",
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=clarifai_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+            )
         elif custom_llm_provider == "anthropic_text":
             api_key = (
                 api_key
@@ -2854,7 +2896,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 extra_headers=headers,
             )
 
-        elif custom_llm_provider == "vertex_ai":          
+        elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
                 optional_params.pop("vertex_project", None)
                 or optional_params.pop("vertex_ai_project", None)
@@ -2876,8 +2918,10 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = api_base or litellm.api_base or get_secret("VERTEXAI_API_BASE")
 
             new_params = safe_deep_copy(optional_params or {})
-            model_route = get_vertex_ai_model_route(model=model, litellm_params=litellm_params)
-            
+            model_route = get_vertex_ai_model_route(
+                model=model, litellm_params=litellm_params
+            )
+
             if model_route == VertexAIModelRoute.PARTNER_MODELS:
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
@@ -3577,7 +3621,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             pass
 
-
         elif custom_llm_provider == "ovhcloud" or model in litellm.ovhcloud_models:
             api_key = (
                 api_key
@@ -3969,7 +4012,6 @@ def embedding(  # noqa: PLR0915
     """
     azure = kwargs.get("azure", None)
     client = kwargs.pop("client", None)
-    shared_session = kwargs.get("shared_session", None)
     max_retries = kwargs.get("max_retries", None)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
@@ -4159,7 +4201,6 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
                 max_retries=max_retries,
-                shared_session=shared_session,
             )
         elif custom_llm_provider == "databricks":
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")  # type: ignore
@@ -4727,33 +4768,6 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
                 litellm_params={},
             )
-        elif custom_llm_provider == "cometapi":
-            api_key = (
-                api_key
-                or litellm.cometapi_key
-                or get_secret_str("COMETAPI_KEY")
-                or litellm.api_key
-            )
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("COMETAPI_API_BASE")
-                or "https://api.cometapi.com/v1"
-            )
-            response = base_llm_http_handler.embedding(
-                model=model,
-                input=input,
-                custom_llm_provider=custom_llm_provider,
-                api_base=api_base,
-                api_key=api_key,
-                logging_obj=logging,
-                timeout=timeout,
-                model_response=EmbeddingResponse(),
-                optional_params=optional_params,
-                client=client,
-                aembedding=aembedding,
-                litellm_params={},
-            )
         elif custom_llm_provider in litellm._custom_providers:
             custom_handler: Optional[CustomLLM] = None
             for item in litellm.custom_provider_map:
@@ -5200,12 +5214,11 @@ async def aadapter_completion(
     except Exception as e:
         raise e
 
+
 async def aadapter_generate_content(
     **kwargs,
 ) -> Union[Dict[str, Any], AsyncIterator[bytes]]:
-    from litellm.google_genai.adapters.handler import (
-        GenerateContentToCompletionHandler,
-    )
+    from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
 
     coro = cast(
         Coroutine[Any, Any, Union[Dict[str, Any], AsyncIterator[bytes]]],
@@ -5910,7 +5923,6 @@ async def ahealth_check(
             "batch",
             "rerank",
             "realtime",
-            "responses",
         ]
     ] = "chat",
     prompt: Optional[str] = None,
@@ -6018,10 +6030,6 @@ async def ahealth_check(
             ),
             "batch": lambda: litellm.alist_batches(
                 **_filter_model_params(model_params),
-            ),
-            "responses": lambda: litellm.aresponses(
-                **_filter_model_params(model_params),
-                input=prompt or "test",
             ),
         }
 

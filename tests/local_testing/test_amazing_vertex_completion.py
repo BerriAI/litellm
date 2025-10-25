@@ -1730,7 +1730,7 @@ async def test_gemini_pro_function_calling(provider, sync_mode):
         ]
 
         data = {
-            "model": "{}/gemini-1.5-pro-preview-0514".format(provider),
+            "model": "{}/gemini-2.5-flash-lite".format(provider),
             "messages": messages,
             "tools": tools,
         }

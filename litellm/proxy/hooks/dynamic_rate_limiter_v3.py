@@ -18,6 +18,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitDescriptorRateLimitObject,
     _PROXY_MaxParallelRequestsHandler_v3,
 )
+from litellm.proxy.hooks.rate_limiter_utils import convert_priority_to_percent
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.router import ModelGroupInfo
 
@@ -48,7 +49,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     def update_variables(self, llm_router: Router):
         self.llm_router = llm_router
 
-    def _get_priority_weight(self, priority: Optional[str]) -> float:
+    def _get_priority_weight(self, priority: Optional[str], model_info: Optional[ModelGroupInfo] = None) -> float:
         """Get the weight for a given priority from litellm.priority_reservation"""
         weight: float = litellm.priority_reservation_settings.default_priority
         if (
@@ -64,19 +65,25 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/proxy/enterprise."
                 )
             else:
-                weight = litellm.priority_reservation[priority]
+                value = litellm.priority_reservation[priority]
+                weight = convert_priority_to_percent(value, model_info)
         return weight
 
-    def _normalize_priority_weights(self) -> Dict[str, float]:
+    def _normalize_priority_weights(self, model_info: ModelGroupInfo) -> Dict[str, float]:
         """
         Normalize priority weights if they sum to > 1.0
         
         Handles over-allocation: {key_a: 0.60, key_b: 0.80} -> {key_a: 0.43, key_b: 0.57}
+        Converts absolute rpm/tpm values to percentages based on model capacity.
         """
         if litellm.priority_reservation is None:
             return {}
         
-        weights = dict(litellm.priority_reservation)
+        # Convert all values to percentages first
+        weights: Dict[str, float] = {}
+        for k, v in litellm.priority_reservation.items():
+            weights[k] = convert_priority_to_percent(v, model_info)
+        
         total_weight = sum(weights.values())
         
         if total_weight > 1.0:
@@ -93,6 +100,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         model: str,
         priority: Optional[str],
         normalized_weights: Dict[str, float],
+        model_info: Optional[ModelGroupInfo] = None,
     ) -> tuple[float, str]:
         """
         Get priority weight and pool key for a given priority.
@@ -104,6 +112,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             model: Model name
             priority: Priority level (None for default)
             normalized_weights: Pre-computed normalized weights
+            model_info: Model configuration (optional, for fallback conversion)
             
         Returns:
             tuple: (priority_weight, priority_key)
@@ -117,7 +126,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         
         if has_explicit_priority and priority is not None:
             # Explicit priority: get its specific allocation
-            priority_weight = normalized_weights.get(priority, self._get_priority_weight(priority))
+            priority_weight = normalized_weights.get(priority, self._get_priority_weight(priority, model_info))
             # Use unique key per priority level
             priority_key = f"{model}:{priority}"
         else:
@@ -232,11 +241,12 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return descriptors
 
         # Get normalized priority weight and pool key
-        normalized_weights = self._normalize_priority_weights()
+        normalized_weights = self._normalize_priority_weights(model_group_info)
         priority_weight, priority_key = self._get_priority_allocation(
             model=model,
             priority=priority,
             normalized_weights=normalized_weights,
+            model_info=model_group_info,
         )
         
         rate_limit_config: RateLimitDescriptorRateLimitObject = {}
