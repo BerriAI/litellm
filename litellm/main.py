@@ -824,9 +824,10 @@ def mock_completion(
             # convert to ModelResponseStream
             mock_response = convert_model_response_to_streaming(mock_response)  # type: ignore
 
-        model_response = ModelResponseStream()
+        model_response: Union[ModelResponse, ModelResponseStream] = ModelResponse()
 
         if stream is True:
+            model_response = ModelResponseStream()
             # don't try to access stream object,
             if kwargs.get("acompletion", False) is True:
                 return CustomStreamWrapper(
@@ -2242,7 +2243,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "clarifai"
             or model in litellm.clarifai_models
         ):
-            pass # Deprecated - handled in the openai compatible provider section above
+            pass  # Deprecated - handled in the openai compatible provider section above
         elif custom_llm_provider == "anthropic_text":
             api_key = (
                 api_key
@@ -2435,7 +2436,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 return response
             response = model_response
-        elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere": 
+        elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere":
             cohere_key = (
                 api_key
                 or litellm.cohere_key
@@ -5729,13 +5730,15 @@ def speech(  # noqa: PLR0915
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
     litellm_params_dict = get_litellm_params(**kwargs)
-    
+
     # Get provider-specific text-to-speech config and map parameters
-    text_to_speech_provider_config = ProviderConfigManager.get_provider_text_to_speech_config(
-        model=model,
-        provider=litellm.LlmProviders(custom_llm_provider),
+    text_to_speech_provider_config = (
+        ProviderConfigManager.get_provider_text_to_speech_config(
+            model=model,
+            provider=litellm.LlmProviders(custom_llm_provider),
+        )
     )
-    
+
     # Map OpenAI params to provider-specific params if config exists
     if text_to_speech_provider_config is not None:
         voice, optional_params = text_to_speech_provider_config.map_openai_params(
@@ -5745,7 +5748,7 @@ def speech(  # noqa: PLR0915
             drop_params=False,
             kwargs=kwargs,
         )
-    
+
     logging_obj: Logging = cast(Logging, kwargs.get("litellm_logging_obj"))
     logging_obj.update_environment_variables(
         model=model,
@@ -5834,8 +5837,10 @@ def speech(  # noqa: PLR0915
                 )
 
             # Cast to specific Azure config type to access dispatch method
-            azure_config = cast(AzureAVATextToSpeechConfig, text_to_speech_provider_config)
-            
+            azure_config = cast(
+                AzureAVATextToSpeechConfig, text_to_speech_provider_config
+            )
+
             response = azure_config.dispatch_text_to_speech(  # type: ignore
                 model=model,
                 input=input,
