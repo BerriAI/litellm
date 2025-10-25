@@ -2762,8 +2762,8 @@ jobs:
               -e GEMINI_API_KEY=$GEMINI_API_KEY \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
               -e ASSEMBLYAI_API_KEY=$ASSEMBLYAI_API_KEY \
-              -e AZURE_API_KEY_PASSHROUGH=$AZURE_API_KEY_PASSHROUGH \
-              -e AZURE_API_BASE_PASSHROUGH=$AZURE_API_BASE_PASSHROUGH \
+              -e AZURE_API_KEY=$AZURE_API_KEY \
+              -e AZURE_API_BASE=$AZURE_API_BASE \
               -e USE_DDTRACE=True \
               -e DD_API_KEY=$DD_API_KEY \
               -e DD_SITE=$DD_SITE \
