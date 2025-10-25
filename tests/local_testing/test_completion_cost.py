@@ -24,6 +24,9 @@ from litellm import (
     model_cost,
     open_ai_chat_completion_models,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+import json
+import httpx
 from litellm.types.utils import PromptTokensDetails
 from litellm.litellm_core_utils.litellm_logging import CustomLogger
 
@@ -1148,13 +1151,58 @@ def test_completion_cost_databricks(model):
         "databricks/databricks-gte-large-en",
     ],
 )
-def test_completion_cost_databricks_embedding(model):
+def test_completion_cost_databricks_embedding(model, monkeypatch):
+    """
+    Test completion cost calculation for Databricks embedding models using mocked HTTP responses.
+    """
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+    
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    resp = litellm.embedding(model=model, input=["hey, how's it going?"])  # works fine
+    
+    mock_response_data = {
+        "object": "list",
+        "model": model.split("/")[1],
+        "data": [
+            {
+                "index": 0,
+                "object": "embedding",
+                "embedding": [
+                    0.06768798828125,
+                    -0.01291656494140625,
+                    -0.0501708984375,
+                    0.0245361328125,
+                    -0.030364990234375,
+                ],
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 8,
+            "total_tokens": 8,
+            "completion_tokens": 0,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+        },
+    }
+    
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_response_data
+    
+    sync_handler = HTTPHandler()
+    
+    with patch.object(HTTPHandler, "post", return_value=mock_response):
+        resp = litellm.embedding(
+            model=model, 
+            input=["hey, how's it going?"],
+            client=sync_handler
+        )
 
-    print(resp)
-    cost = completion_cost(completion_response=resp)
+        print(resp)
+        cost = completion_cost(completion_response=resp)
 
 
 from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
