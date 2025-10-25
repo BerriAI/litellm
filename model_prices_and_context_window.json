@@ -9691,7 +9691,7 @@
         "supports_web_search": true
     },
     "gemini-2.5-flash": {
-        "cache_read_input_token_cost": 7.5e-08,
+        "cache_read_input_token_cost": 3e-08,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "vertex_ai-language-models",
@@ -10101,7 +10101,8 @@
         "supports_web_search": true
     },
     "gemini-2.5-pro": {
-        "cache_read_input_token_cost": 3.125e-07,
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "litellm_provider": "vertex_ai-language-models",
@@ -22283,6 +22284,50 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159
     },
+    "vertex_ai/mistralai/codestral-2@001": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/codestral-2": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/codestral-2@001": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistralai/codestral-2": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
     "vertex_ai/codestral-2501": {
         "input_cost_per_token": 2e-07,
         "litellm_provider": "vertex_ai-mistral_models",
@@ -22610,6 +22655,50 @@
         "mode": "chat",
         "output_cost_per_token": 0.0,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistral-medium-3": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistral-medium-3@001": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistralai/mistral-medium-3": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistralai/mistral-medium-3@001": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "supports_function_calling": true,
         "supports_tool_choice": true
     },
     "vertex_ai/mistral-large-2411": {
@@ -23832,5 +23921,69 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
+    },
+    "openai/sora-2": {
+        "litellm_provider": "openai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.10,
+        "source": "https://platform.openai.com/docs/api-reference/videos",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "720x1280",
+            "1280x720"
+        ]
+    },
+    "azure/sora-2": {
+        "litellm_provider": "azure",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.10,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/video-generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "720x1280",
+            "1280x720"
+        ]
+    },
+    "azure/sora-2-pro": {
+        "litellm_provider": "azure",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.30,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/video-generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "720x1280",
+            "1280x720"
+        ]
+    },
+    "azure/sora-2-pro-high-res": {
+        "litellm_provider": "azure",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.50,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/video-generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "1024x1792",
+            "1792x1024"
+        ]
     }
 }

@@ -8,6 +8,7 @@ import { isAdminRole } from "@/utils/roles";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useQuery } from "@tanstack/react-query";
 import SearchConnectionTest from "./search_connection_test";
+import Image from "next/image";
 
 const { TextArea } = Input;
 
@@ -27,12 +28,12 @@ interface SearchProviderLabelProps {
 
 const SearchProviderLabel: React.FC<SearchProviderLabelProps> = ({ providerName, displayName }) => (
   <div style={{ display: "flex", alignItems: "center" }}>
-    <img
+    <Image
       src={getSearchProviderLogo(providerName)}
       alt=""
+      width={20}
+      height={20}
       style={{
-        height: "20px",
-        width: "20px",
         marginRight: "8px",
         objectFit: "contain",
       }}
