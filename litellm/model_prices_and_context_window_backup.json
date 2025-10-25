@@ -1,4 +1,44 @@
 {
+    "sample_spec": {
+        "code_interpreter_cost_per_session": 0.0,
+        "computer_use_input_cost_per_1k_tokens": 0.0,
+        "computer_use_output_cost_per_1k_tokens": 0.0,
+        "deprecation_date": "date when the model becomes deprecated in the format YYYY-MM-DD",
+        "file_search_cost_per_1k_calls": 0.0,
+        "file_search_cost_per_gb_per_day": 0.0,
+        "input_cost_per_audio_token": 0.0,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "one of https://docs.litellm.ai/docs/providers",
+        "max_input_tokens": "max input tokens, if the provider specifies it. if not default to max_tokens",
+        "max_output_tokens": "max output tokens, if the provider specifies it. if not default to max_tokens",
+        "max_tokens": "LEGACY parameter. set to max_output_tokens if provider specifies it. IF not set to max_input_tokens, if provider specifies it.",
+        "mode": "one of: chat, embedding, completion, image_generation, audio_transcription, audio_speech, image_generation, moderation, rerank, search",
+        "output_cost_per_reasoning_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.0,
+            "search_context_size_low": 0.0,
+            "search_context_size_medium": 0.0
+        },
+        "supported_regions": [
+            "global",
+            "us-west-2",
+            "eu-west-1",
+            "ap-southeast-1",
+            "ap-northeast-1"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "vector_store_cost_per_gb_per_day": 0.0
+    },
     "1024-x-1024/50-steps/bedrock/amazon.nova-canvas-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 2600,
@@ -467,6 +507,26 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "anthropic.claude-3-7-sonnet-20240620-v1:0": {
+        "cache_creation_input_token_cost": 4.5e-06,
+        "cache_read_input_token_cost": 3.6e-07,
+        "input_cost_per_token": 3.6e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.8e-05,
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -2769,6 +2829,18 @@
         "mode": "embedding",
         "output_cost_per_token": 0.0
     },
+    "azure/speech/azure-tts": {
+        "input_cost_per_character": 15e-06,
+        "litellm_provider": "azure",
+        "mode": "audio_speech",
+        "source": "https://azure.microsoft.com/en-us/pricing/calculator/"
+    },
+    "azure/speech/azure-tts-hd": {
+        "input_cost_per_character": 30e-06,
+        "litellm_provider": "azure",
+        "mode": "audio_speech",
+        "source": "https://azure.microsoft.com/en-us/pricing/calculator/"
+    },
     "azure/tts-1": {
         "input_cost_per_character": 1.5e-05,
         "litellm_provider": "azure",
@@ -4271,6 +4343,26 @@
         "max_tokens": 32000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-06
+    },
+    "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0": {
+        "cache_creation_input_token_cost": 4.5e-06,
+        "cache_read_input_token_cost": 3.6e-07,
+        "input_cost_per_token": 3.6e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.8e-05,
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "bedrock/us-gov-west-1/anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "input_cost_per_token": 3.6e-06,
@@ -6368,6 +6460,11 @@
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
     },
+    "dataforseo/search": {
+        "input_cost_per_query": 0.003,
+        "litellm_provider": "dataforseo",
+        "mode": "search"
+    },
     "davinci-002": {
         "input_cost_per_token": 2e-06,
         "litellm_provider": "text-completion-openai",
@@ -7708,6 +7805,31 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 2560
     },
+    "exa_ai/search": {
+        "litellm_provider": "exa_ai",
+        "mode": "search",
+        "tiered_pricing": [
+            {
+                "input_cost_per_query": 5e-03,
+                "max_results_range": [
+                    0,
+                    25
+                ]
+            },
+            {
+                "input_cost_per_query": 25e-03,
+                "max_results_range": [
+                    26,
+                    100
+                ]
+            }
+        ]
+    },
+    "perplexity/search": {
+        "input_cost_per_query": 5e-03,
+        "litellm_provider": "perplexity",
+        "mode": "search"
+    },    
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",
@@ -9569,7 +9691,7 @@
         "supports_web_search": true
     },
     "gemini-2.5-flash": {
-        "cache_read_input_token_cost": 7.5e-08,
+        "cache_read_input_token_cost": 3e-08,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "vertex_ai-language-models",
@@ -9979,7 +10101,8 @@
         "supports_web_search": true
     },
     "gemini-2.5-pro": {
-        "cache_read_input_token_cost": 3.125e-07,
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "litellm_provider": "vertex_ai-language-models",
@@ -12118,6 +12241,11 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "google_pse/search": {
+        "input_cost_per_query": 0.005,
+        "litellm_provider": "google_pse",
+        "mode": "search"
     },
     "global.anthropic.claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -18710,6 +18838,16 @@
         "output_cost_per_token": 1.25e-07,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
+    "parallel_ai/search": {
+        "input_cost_per_query": 0.004,
+        "litellm_provider": "parallel_ai",
+        "mode": "search"
+    },
+    "parallel_ai/search-pro": {
+        "input_cost_per_query": 0.009,
+        "litellm_provider": "parallel_ai",
+        "mode": "search"
+    },
     "perplexity/codellama-34b-instruct": {
         "input_cost_per_token": 3.5e-07,
         "litellm_provider": "perplexity",
@@ -19489,46 +19627,7 @@
         "supports_reasoning": true,
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
-    "sample_spec": {
-        "code_interpreter_cost_per_session": 0.0,
-        "computer_use_input_cost_per_1k_tokens": 0.0,
-        "computer_use_output_cost_per_1k_tokens": 0.0,
-        "deprecation_date": "date when the model becomes deprecated in the format YYYY-MM-DD",
-        "file_search_cost_per_1k_calls": 0.0,
-        "file_search_cost_per_gb_per_day": 0.0,
-        "input_cost_per_audio_token": 0.0,
-        "input_cost_per_token": 0.0,
-        "litellm_provider": "one of https://docs.litellm.ai/docs/providers",
-        "max_input_tokens": "max input tokens, if the provider specifies it. if not default to max_tokens",
-        "max_output_tokens": "max output tokens, if the provider specifies it. if not default to max_tokens",
-        "max_tokens": "LEGACY parameter. set to max_output_tokens if provider specifies it. IF not set to max_input_tokens, if provider specifies it.",
-        "mode": "one of: chat, embedding, completion, image_generation, audio_transcription, audio_speech, image_generation, moderation, rerank",
-        "output_cost_per_reasoning_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "search_context_cost_per_query": {
-            "search_context_size_high": 0.0,
-            "search_context_size_low": 0.0,
-            "search_context_size_medium": 0.0
-        },
-        "supported_regions": [
-            "global",
-            "us-west-2",
-            "eu-west-1",
-            "ap-southeast-1",
-            "ap-northeast-1"
-        ],
-        "supports_audio_input": true,
-        "supports_audio_output": true,
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_vision": true,
-        "supports_web_search": true,
-        "vector_store_cost_per_gb_per_day": 0.0
-    },
+
     "snowflake/claude-3-5-sonnet": {
         "litellm_provider": "snowflake",
         "max_input_tokens": 18000,
@@ -19758,6 +19857,16 @@
         "litellm_provider": "openai",
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0
+    },
+    "tavily/search": {
+        "input_cost_per_query": 0.008,
+        "litellm_provider": "tavily",
+        "mode": "search"
+    },
+    "tavily/search-advanced": {
+        "input_cost_per_query": 0.016,
+        "litellm_provider": "tavily",
+        "mode": "search"
     },
     "text-bison": {
         "input_cost_per_character": 2.5e-07,
@@ -22175,6 +22284,50 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159
     },
+    "vertex_ai/mistralai/codestral-2@001": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/codestral-2": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/codestral-2@001": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistralai/codestral-2": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
     "vertex_ai/codestral-2501": {
         "input_cost_per_token": 2e-07,
         "litellm_provider": "vertex_ai-mistral_models",
@@ -22502,6 +22655,50 @@
         "mode": "chat",
         "output_cost_per_token": 0.0,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistral-medium-3": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistral-medium-3@001": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistralai/mistral-medium-3": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/mistralai/mistral-medium-3@001": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "supports_function_calling": true,
         "supports_tool_choice": true
     },
     "vertex_ai/mistral-large-2411": {
@@ -23724,5 +23921,74 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
+    },
+    "vertex_ai/search_api": {
+        "input_cost_per_query": 1.5e-03,
+        "litellm_provider": "vertex_ai",
+        "mode": "vector_store"
+    },
+    "openai/sora-2": {
+        "litellm_provider": "openai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.10,
+        "source": "https://platform.openai.com/docs/api-reference/videos",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "720x1280",
+            "1280x720"
+        ]
+    },
+    "azure/sora-2": {
+        "litellm_provider": "azure",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.10,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/video-generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "720x1280",
+            "1280x720"
+        ]
+    },
+    "azure/sora-2-pro": {
+        "litellm_provider": "azure",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.30,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/video-generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "720x1280",
+            "1280x720"
+        ]
+    },
+    "azure/sora-2-pro-high-res": {
+        "litellm_provider": "azure",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.50,
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/video-generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_resolutions": [
+            "1024x1792",
+            "1792x1024"
+        ]
     }
 }

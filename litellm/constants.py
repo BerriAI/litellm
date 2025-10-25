@@ -273,6 +273,12 @@ ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "high": 10,
 }
 DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
+DEFAULT_VIDEO_ENDPOINT_MODEL = "sora-2"
+
+### DATAFORSEO CONSTANTS ###
+DEFAULT_DATAFORSEO_LOCATION_CODE = int(
+    os.getenv("DEFAULT_DATAFORSEO_LOCATION_CODE", 2250)
+)  # Default to France (2250) - lower number, commonly used location
 
 LITELLM_CHAT_PROVIDERS = [
     "openai",
@@ -818,6 +824,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "ai21",
     "nova",
     "deepseek_r1",
+    "qwen3",
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[

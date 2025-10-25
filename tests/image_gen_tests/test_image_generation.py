@@ -174,10 +174,10 @@ class TestAzureOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.set_verbose = True
         return {
-            "model": "azure/dall-e-3-test",
-            "api_version": "2023-12-01-preview",
-            "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
-            "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
+            "model": "azure/dall-e-3",
+            "api_version": "2024-02-01",
+            "api_base": os.getenv("AZURE_API_BASE"),
+            "api_key": os.getenv("AZURE_API_KEY"),
             "metadata": {
                 "model_info": {
                     "base_model": "azure/dall-e-3",
