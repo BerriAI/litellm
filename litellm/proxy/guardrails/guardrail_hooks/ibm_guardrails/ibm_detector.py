@@ -502,19 +502,22 @@ class IBMGuardrailDetector(CustomGuardrail):
                 else:
                     # Call orchestrator for each content separately
                     for content in contents_to_check:
-                        result = await self._call_orchestrator(
+                        orchestrator_result = await self._call_orchestrator(
                             content=content,
                             request_data=data,
                         )
 
                         verbose_proxy_logger.debug(
-                            "IBM Orchestrator async_pre_call_hook result: %s", result
+                            "IBM Orchestrator async_pre_call_hook result: %s",
+                            orchestrator_result,
                         )
 
-                        filtered = self._filter_detections_by_threshold(result)
+                        filtered = self._filter_detections_by_threshold(
+                            orchestrator_result
+                        )
                         if filtered and self.block_on_detection:
                             error_message = self._create_error_message_orchestrator(
-                                result
+                                orchestrator_result
                             )
                             raise ValueError(error_message)
 
@@ -593,19 +596,22 @@ class IBMGuardrailDetector(CustomGuardrail):
                 else:
                     # Call orchestrator for each content separately
                     for content in contents_to_check:
-                        result = await self._call_orchestrator(
+                        orchestrator_result = await self._call_orchestrator(
                             content=content,
                             request_data=data,
                         )
 
                         verbose_proxy_logger.debug(
-                            "IBM Orchestrator async_moderation_hook result: %s", result
+                            "IBM Orchestrator async_moderation_hook result: %s",
+                            orchestrator_result,
                         )
 
-                        filtered = self._filter_detections_by_threshold(result)
+                        filtered = self._filter_detections_by_threshold(
+                            orchestrator_result
+                        )
                         if filtered and self.block_on_detection:
                             error_message = self._create_error_message_orchestrator(
-                                result
+                                orchestrator_result
                             )
                             raise ValueError(error_message)
 
@@ -707,20 +713,22 @@ class IBMGuardrailDetector(CustomGuardrail):
                 else:
                     # Call orchestrator for each content separately
                     for content in contents_to_check:
-                        result = await self._call_orchestrator(
+                        orchestrator_result = await self._call_orchestrator(
                             content=content,
                             request_data=data,
                         )
 
                         verbose_proxy_logger.debug(
                             "IBM Orchestrator async_post_call_success_hook result: %s",
-                            result,
+                            orchestrator_result,
                         )
 
-                        filtered = self._filter_detections_by_threshold(result)
+                        filtered = self._filter_detections_by_threshold(
+                            orchestrator_result
+                        )
                         if filtered and self.block_on_detection:
                             error_message = self._create_error_message_orchestrator(
-                                result
+                                orchestrator_result
                             )
                             raise ValueError(error_message)
 

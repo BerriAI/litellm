@@ -56,7 +56,7 @@ class IBMDetectorOptionalParams(BaseModel):
     """Optional parameters for IBM Detector guardrail"""
 
     detector_params: Optional[Dict[str, Any]] = Field(
-        default_factory=dict,
+        default_factory=lambda: {},
         description="Dictionary of arguments to pass to the detector. Can be set per-request or hard-coded at guardrail config time.",
     )
 
