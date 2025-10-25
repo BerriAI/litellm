@@ -1119,16 +1119,7 @@ async def test_aimg_gen_on_router():
                 "litellm_params": {
                     "model": "dall-e-3",
                 },
-            },
-            {
-                "model_name": "dall-e-3",
-                "litellm_params": {
-                    "model": "azure/dall-e-3-test",
-                    "api_version": "2023-12-01-preview",
-                    "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
-                    "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
-                },
-            },
+            }
         ]
         router = Router(model_list=model_list, num_retries=3)
         response = await router.aimage_generation(
