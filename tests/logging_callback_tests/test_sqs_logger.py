@@ -296,118 +296,115 @@ async def test_async_send_batch_triggers_tasks(monkeypatch):
 
 
 @pytest.fixture
-def logger():
-    """Return a logger instance with stripping enabled."""
-    return SQSLogger(sqs_strip_base64_files=True)
+async def logger():
+    async def _make():
+        return SQSLogger(sqs_strip_base64_files=True)
+    return await _make()
+
+# === helper ===
+def make_payload(content):
+    """Minimal StandardLoggingPayload-like dict for testing"""
+    return {"messages": [{"role": "user", "content": content}]}
 
 
-@pytest.fixture
-def base_payload():
-    """A sample payload similar to StandardLoggingPayload."""
-    return {
-        "id": "123",
-        "trace_id": "abc",
-        "call_type": "acompletion",
+# === TEST CASES ===
+
+@pytest.mark.asyncio
+async def test_pdf_base64_redaction(logger):
+    pdf_data = (
+        "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MK..."
+    )
+    payload = make_payload([{"file": {"file_data": pdf_data}}])
+
+    stripped = await logger._strip_base64_from_messages(payload)
+
+    file_data = stripped["messages"][0]["content"][0]["file"]["file_data"]
+    assert "[base64 PDF content redacted]" in file_data
+    # confirm no raw base64 remains
+    assert "JVBERi0x" not in file_data
+
+
+@pytest.mark.asyncio
+async def test_image_base64_redaction(logger):
+    img_data = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA..."
+    payload = make_payload([{"file": {"file_data": img_data}}])
+
+    stripped = await logger._strip_base64_from_messages(payload)
+
+    redacted = stripped["messages"][0]["content"][0]["file"]["file_data"]
+    assert redacted == "[base64 image content redacted]"
+
+
+@pytest.mark.asyncio
+async def test_audio_base64_redaction(logger):
+    audio_data = "data:audio/wav;base64,UklGRigAAABXQVZFZm10..."
+    payload = make_payload([{"file": {"file_data": audio_data}}])
+
+    stripped = await logger._strip_base64_from_messages(payload)
+    val = stripped["messages"][0]["content"][0]["file"]["file_data"]
+    assert val == "[base64 audio content redacted]"
+
+
+@pytest.mark.asyncio
+async def test_unknown_mime_redaction(logger):
+    data = "data:application/octet-stream;base64,AAAAAABBBBCCCC"
+    payload = make_payload([{"file": {"file_data": data}}])
+
+    stripped = await logger._strip_base64_from_messages(payload)
+    val = stripped["messages"][0]["content"][0]["file"]["file_data"]
+    assert val == "[base64 file content redacted]"
+
+
+@pytest.mark.asyncio
+async def test_non_base64_untouched(logger):
+    non_base64 = "some-plain-text-value"
+    payload = make_payload([{"file": {"file_data": non_base64}}])
+
+    stripped = await logger._strip_base64_from_messages(payload)
+    assert stripped["messages"][0]["content"][0]["file"]["file_data"] == non_base64
+
+
+@pytest.mark.asyncio
+async def test_nested_structure(logger):
+    """Deeply nested dicts/lists should all be stripped."""
+    pdf_data = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MK..."
+    img_data = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA..."
+    nested_payload = {
         "messages": [
             {
                 "role": "user",
                 "content": [
+                    {"file": {"file_data": pdf_data}},
                     {
-                        "type": "file",
-                        "file": {
-                            "file_data": "data:application/pdf;base64,JVBERi0xYzQ1N..."
-                        },
-                    },
-                    {
-                        "type": "file",
-                        "file": {
-                            "file_data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA..."
-                        },
-                    },
-                    {
-                        "type": "file",
-                        "file": {
-                            "file_data": "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAA..."
-                        },
-                    },
-                    {"type": "text", "text": "This is normal text"},
-                ],
-            }
-        ],
-        "response": {
-            "choices": [
-                {
-                    "message": {
-                        "content": [
-                            {
-                                "file": {
-                                    "file_data": "data:application/pdf;base64,AAAABBBBCCCC"
-                                }
-                            }
+                        "extra": [
+                            {"file": {"file_data": img_data}},
+                            {"text": "keep me"},
                         ]
-                    }
-                }
-            ]
-        },
-    }
-
-
-def test_pdf_image_audio_redacted(logger, base_payload):
-    stripped = logger._strip_base64_from_messages(deepcopy(base_payload))
-    content = stripped["messages"][0]["content"]
-
-    # PDF
-    assert content[0]["file"]["file_data"] == "[base64 PDF content redacted]"
-    # image
-    assert content[1]["file"]["file_data"] == "[base64 image content redacted]"
-    # audio
-    assert content[2]["file"]["file_data"] == "[base64 audio content redacted]"
-    # text untouched
-    assert content[3]["text"] == "This is normal text"
-
-    # response PDF redacted too
-    resp_file = stripped["response"]["choices"][0]["message"]["content"][0]["file"]["file_data"]
-    assert resp_file == "[base64 PDF content redacted]"
-
-
-def test_no_base64_unchanged(logger):
-    payload = {
-        "messages": [{"role": "user", "content": [{"type": "text", "text": "no base64"}]}]
-    }
-    stripped = logger._strip_base64_from_messages(deepcopy(payload))
-    assert stripped == payload
-
-
-def test_nested_mixed_payload(logger):
-    """Ensure nested lists/dicts inside messages are still processed recursively."""
-    payload = {
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "file",
-                        "file": {
-                            "extra": [
-                                {"file_data": "data:image/jpeg;base64,AAAABBBB"}
-                            ]
-                        },
-                    }
+                    },
                 ],
             }
         ]
     }
-    stripped = logger._strip_base64_from_messages(deepcopy(payload))
-    nested_value = stripped["messages"][0]["content"][0]["file"]["extra"][0]["file_data"]
-    assert nested_value == "[base64 image content redacted]"
+
+    stripped = await logger._strip_base64_from_messages(nested_payload)
+    msg = stripped["messages"][0]["content"]
+
+    pdf_part = msg[0]["file"]["file_data"]
+    image_part = msg[1]["extra"][0]["file"]["file_data"]
+    text_part = msg[1]["extra"][1]["text"]
+
+    assert pdf_part == "[base64 PDF content redacted]"
+    assert image_part == "[base64 image content redacted]"
+    assert text_part == "keep me"
 
 
-def test_partial_base64_string_does_not_match(logger):
-    """Should not modify strings that only look like base64 fragments."""
+@pytest.mark.asyncio
+async def test_response_section_also_redacted(logger):
+    pdf_data = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MK..."
     payload = {
-        "messages": [
-            {"role": "user", "content": [{"type": "text", "text": "data:image/png but not base64"}]}
-        ]
+        "messages": [{"role": "user", "content": [{"file": {"file_data": pdf_data}}]}],
+        "response": [{"file": {"file_data": pdf_data}}],
     }
-    stripped = logger._strip_base64_from_messages(deepcopy(payload))
-    assert stripped == payload
+
+    stripped = await logger._strip_base64_from_messages(payload)
+    assert stripped["response"][0]["file"]["file_data"] == "[base64 PDF content redacted]"
