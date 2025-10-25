@@ -169,6 +169,7 @@ litellm_settings:
       langfuse_secret: os.environ/LANGFUSE_PROJECT2_SECRET # Project 2
       langfuse_host: https://us.cloud.langfuse.com
   # cache: true   # [OPTIONAL] use for caching responses 
+  # enable_caching_on_provider_specific_optional_params: True  # Include provider-specific params in cache keys
   # cache_params:  # And for shared health check
   #   type: redis
   #   host: localhost

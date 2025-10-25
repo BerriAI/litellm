@@ -29,6 +29,7 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.azure.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
 )
+from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.bedrock.cost_calculation import (
     cost_per_token as bedrock_cost_per_token,
 )
@@ -314,6 +315,16 @@ def cost_per_token(  # noqa: PLR0915
             model=model,
             custom_llm_provider=custom_llm_provider,
             duration=audio_transcription_file_duration,
+        )
+    elif call_type == "search" or call_type == "asearch":
+        # Search providers use per-query pricing
+        from litellm.search import search_provider_cost_per_query
+        
+        return search_provider_cost_per_query(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            number_of_queries=number_of_queries or 1,
+            optional_params=response._hidden_params if response and hasattr(response, "_hidden_params") else None
         )
     elif custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
@@ -878,6 +889,35 @@ def completion_cost(  # noqa: PLR0915
                         optional_params=optional_params,
                     )
                 elif (
+                    call_type == CallTypes.create_video.value
+                    or call_type == CallTypes.acreate_video.value
+                    or call_type == CallTypes.video_remix.value
+                    or call_type == CallTypes.avideo_remix.value
+                ):
+                    ### VIDEO GENERATION COST CALCULATION ###
+                    if completion_response is not None and hasattr(completion_response, 'usage'):
+                        usage_obj = completion_response.usage
+                        # Handle both dict and Pydantic Usage object
+                        if isinstance(usage_obj, dict):
+                            duration_seconds = usage_obj.get('duration_seconds', None)
+                        else:
+                            duration_seconds = getattr(usage_obj, 'duration_seconds', None)
+
+                        if duration_seconds is not None:
+                            # Calculate cost based on video duration using video-specific cost calculation
+                            from litellm.llms.openai.cost_calculation import video_generation_cost
+                            return video_generation_cost(
+                                model=model,
+                                duration_seconds=duration_seconds,
+                                custom_llm_provider=custom_llm_provider
+                            )
+                    # Fallback to default video cost calculation if no duration available
+                    return default_video_cost_calculator(
+                        model=model,
+                        duration_seconds=0.0,  # Default to 0 if no duration available
+                        custom_llm_provider=custom_llm_provider
+                    )
+                elif (
                     call_type == CallTypes.speech.value
                     or call_type == CallTypes.aspeech.value
                 ):
@@ -1094,6 +1134,7 @@ def response_cost_calculator(
         LiteLLMRealtimeStreamLoggingObject,
         OpenAIModerationResponse,
         Response,
+        SearchResponse,
     ],
     model: str,
     custom_llm_provider: Optional[str],
@@ -1114,6 +1155,8 @@ def response_cost_calculator(
         "speech",
         "rerank",
         "arerank",
+        "search",
+        "asearch",
     ],
     optional_params: dict,
     cache_hit: Optional[bool] = None,
@@ -1342,6 +1385,80 @@ def default_image_cost_calculator(
         )
 
     return cost_info["input_cost_per_pixel"] * height * width * n
+
+
+def default_video_cost_calculator(
+    model: str,
+    duration_seconds: float,
+    custom_llm_provider: Optional[str] = None,
+) -> float:
+    """
+    Default video cost calculator for video generation
+
+    Args:
+        model (str): Model name
+        duration_seconds (float): Duration of the generated video in seconds
+        custom_llm_provider (Optional[str]): Custom LLM provider
+
+    Returns:
+        float: Cost in USD for the video generation
+
+    Raises:
+        Exception: If model pricing not found in cost map
+    """
+    # Build model names for cost lookup
+    base_model_name = model
+    model_name_without_custom_llm_provider: Optional[str] = None
+    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
+        model_name_without_custom_llm_provider = model.replace(
+            f"{custom_llm_provider}/", ""
+        )
+        base_model_name = f"{custom_llm_provider}/{model_name_without_custom_llm_provider}"
+
+    verbose_logger.debug(
+        f"Looking up cost for video model: {base_model_name}"
+    )
+
+    model_without_provider = model.split('/')[-1]
+
+    # Try model with provider first, fall back to base model name
+    cost_info: Optional[dict] = None
+    models_to_check: List[Optional[str]] = [
+        base_model_name,
+        model,
+        model_without_provider,
+        model_name_without_custom_llm_provider,
+    ]
+    for _model in models_to_check:
+        if _model is not None and _model in litellm.model_cost:
+            cost_info = litellm.model_cost[_model]
+            break
+    
+    # If still not found, try with custom_llm_provider prefix
+    if cost_info is None and custom_llm_provider:
+        prefixed_model = f"{custom_llm_provider}/{model}"
+        if prefixed_model in litellm.model_cost:
+            cost_info = litellm.model_cost[prefixed_model]
+    if cost_info is None:
+        raise Exception(
+            f"Model not found in cost map. Tried checking {models_to_check}"
+        )
+
+    # Check for video-specific cost per second first
+    video_cost_per_second = cost_info.get("output_cost_per_video_per_second")
+    if video_cost_per_second is not None:
+        return video_cost_per_second * duration_seconds
+    
+    # Fallback to general output cost per second
+    output_cost_per_second = cost_info.get("output_cost_per_second")
+    if output_cost_per_second is not None:
+        return output_cost_per_second * duration_seconds
+    
+    # If no cost information found, return 0
+    verbose_logger.info(
+        f"No cost information found for video model {model}. Please add pricing to model_prices_and_context_window.json"
+    )
+    return 0.0
 
 
 def batch_cost_calculator(
