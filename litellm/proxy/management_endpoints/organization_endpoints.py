@@ -88,6 +88,8 @@ async def new_organization(
     - max_budget: *Optional[float]* - Max budget for org
     - tpm_limit: *Optional[int]* - Max tpm limit for org
     - rpm_limit: *Optional[int]* - Max rpm limit for org
+    - model_rpm_limit: *Optional[Dict[str, int]]* - The RPM (Requests Per Minute) limit per model for this organization.
+    - model_tpm_limit: *Optional[Dict[str, int]]* - The TPM (Tokens Per Minute) limit per model for this organization.
     - max_parallel_requests: *Optional[int]* - [Not Implemented Yet] Max parallel requests for org
     - soft_budget: *Optional[float]* - [Not Implemented Yet] Get a slack alert when this soft budget is reached. Don't block requests.
     - model_max_budget: *Optional[dict]* - Max budget for a specific model
