@@ -12,7 +12,7 @@ Search a vector store for relevant chunks based on a query and file attributes f
 | Cost Tracking | ✅ | Tracked per search operation |
 | Logging | ✅ | Works across all integrations |
 | End-user Tracking | ✅ | |
-| Support LLM Providers | **OpenAI, Azure OpenAI, Bedrock, Vertex RAG Engine** | Full vector stores API support across providers |
+| Support LLM Providers | **OpenAI, Azure OpenAI, Bedrock, Vertex RAG Engine, Azure AI** | Full vector stores API support across providers |
 
 ## Usage
 
@@ -104,6 +104,35 @@ response = await litellm.vector_stores.asearch(
 )
 print(response)
 ```
+
+</TabItem>
+
+<TabItem value="azure-ai-provider" label="Azure AI Provider">
+
+#### Using Azure AI Search
+```python showLineNumbers title="Search Vector Store - Azure AI Provider"
+import litellm
+import os
+
+# Set credentials
+os.environ["AZURE_SEARCH_API_KEY"] = "your-search-api-key"
+
+response = await litellm.vector_stores.asearch(
+    vector_store_id="my-vector-index",
+    query="What is the capital of France?",
+    custom_llm_provider="azure_ai",
+    azure_search_service_name="your-search-service",
+    litellm_embedding_model="azure/text-embedding-3-large",
+    litellm_embedding_config={
+        "api_base": "your-embedding-endpoint",
+        "api_key": "your-embedding-api-key",
+    },
+    api_key=os.getenv("AZURE_SEARCH_API_KEY"),
+)
+print(response)
+```
+
+[See full Azure AI vector store documentation](../providers/azure_ai_vector_stores.md)
 
 </TabItem>
 </Tabs>

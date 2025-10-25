@@ -3062,26 +3062,24 @@ def _remove_unsupported_params(
 def filter_out_litellm_params(kwargs: dict) -> dict:
     """
     Filter out LiteLLM internal parameters from kwargs dict.
-    
-    Returns a new dict containing only non-LiteLLM parameters that should be 
+
+    Returns a new dict containing only non-LiteLLM parameters that should be
     passed to external provider APIs.
-    
+
     Args:
         kwargs: Dictionary that may contain LiteLLM internal parameters
-        
+
     Returns:
         Dictionary with LiteLLM internal parameters filtered out
-        
+
     Example:
         >>> kwargs = {"query": "test", "shared_session": session_obj, "metadata": {}}
         >>> filtered = filter_out_litellm_params(kwargs)
         >>> # filtered = {"query": "test"}
     """
-    
+
     return {
-        key: value
-        for key, value in kwargs.items()
-        if key not in all_litellm_params
+        key: value for key, value in kwargs.items() if key not in all_litellm_params
     }
 
 
@@ -7536,6 +7534,12 @@ class ProviderConfigManager:
             )
 
             return PGVectorStoreConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.vector_stores.transformation import (
+                AzureAIVectorStoreConfig,
+            )
+
+            return AzureAIVectorStoreConfig()
         return None
 
     @staticmethod
@@ -7689,15 +7693,9 @@ class ProviderConfigManager:
         """
         Get Search configuration for a given provider.
         """
-        from litellm.llms.dataforseo.search.transformation import (
-            DataForSEOSearchConfig,
-        )
-        from litellm.llms.exa_ai.search.transformation import (
-            ExaAISearchConfig,
-        )
-        from litellm.llms.google_pse.search.transformation import (
-            GooglePSESearchConfig,
-        )
+        from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
+        from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
+        from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.parallel_ai.search.transformation import (
             ParallelAISearchConfig,
         )

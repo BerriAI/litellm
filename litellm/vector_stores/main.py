@@ -287,6 +287,7 @@ async def asearch(
     Async: Search a vector store for relevant chunks based on a query and file attributes filter.
     """
     local_vars = locals()
+
     try:
         loop = asyncio.get_event_loop()
         kwargs["asearch"] = True
