@@ -5,11 +5,17 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from .dall_e_2_transformation import DallE2ImageGenerationConfig
 from .dall_e_3_transformation import DallE3ImageGenerationConfig
 from .gpt_transformation import GPTImageGenerationConfig
+from .guardrail_translation import (
+    OpenAIImageGenerationHandler,
+    guardrail_translation_mappings,
+)
 
 __all__ = [
     "DallE2ImageGenerationConfig",
     "DallE3ImageGenerationConfig",
     "GPTImageGenerationConfig",
+    "OpenAIImageGenerationHandler",
+    "guardrail_translation_mappings",
 ]
 
 
