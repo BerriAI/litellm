@@ -136,6 +136,7 @@ async def _arealtime(
             client=None,
             timeout=timeout,
             query_params=query_params,
+            headers=headers,
         )
     else:
         raise ValueError(f"Unsupported model: {model}")

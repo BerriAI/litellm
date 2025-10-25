@@ -1563,7 +1563,15 @@ class OpenAIRealtimeStreamResponseOutputItemContent(TypedDict, total=False):
     """The text content, used for 'input_text' and 'text' content types"""
     transcript: str
     """The transcript content, used for 'input_audio' content types"""
-    type: Literal["input_audio", "input_text", "text", "item_reference", "audio"]
+    type: Literal[
+        "input_audio",
+        "input_text",
+        "output_text",  # GA
+        "output_audio",  # GA
+        "text",  # deprecated, OpenAI beta spec
+        "audio",  # deprecated, OpenAI beta spec
+        "item_reference",
+    ]
     """The type of content"""
 
 
@@ -1629,18 +1637,34 @@ class OpenAIRealtimeConversationItemCreated(TypedDict, total=False):
     previous_item_id: str
 
 
+class OpenAIRealtimeConversationItemAdded(TypedDict, total=False):
+    """GA API: Replaces conversation.item.created"""
+    type: Required[Literal["conversation.item.added"]]
+    item: OpenAIRealtimeStreamResponseOutputItem
+    event_id: str
+    previous_item_id: str
+
+
+class OpenAIRealtimeConversationItemDone(TypedDict, total=False):
+    """GA API: New event type"""
+    type: Required[Literal["conversation.item.done"]]
+    item: OpenAIRealtimeStreamResponseOutputItem
+    event_id: str
+    previous_item_id: str
+
+
 class OpenAIRealtimeResponseContentPart(TypedDict, total=False):
     audio: str
-    """Base64-encoded audio bytes, if type is 'audio'"""
+    """Base64-encoded audio bytes, if type is 'audio' or 'output_audio'"""
 
     text: str
-    """The text content, if type is 'text'"""
+    """The text content, if type is 'text' or 'output_text'"""
 
     transcript: str
-    """The transcript content, if type is 'audio'"""
+    """The transcript content, if type is 'audio' or 'output_audio'"""
 
-    type: Literal["audio", "text"]
-    """The type of content"""
+    type: Literal["output_audio", "output_text", "audio", "text"]
+    """The type of content (GA uses output_audio/output_text, beta uses audio/text)"""
 
 
 class OpenAIRealtimeResponseContentPartAdded(TypedDict):
@@ -1660,7 +1684,13 @@ class OpenAIRealtimeResponseDelta(TypedDict):
     item_id: str
     output_index: int
     response_id: str
-    type: Union[Literal["response.text.delta"], Literal["response.audio.delta"]]
+    type: Union[
+        Literal["response.output_text.delta"],
+        Literal["response.output_audio.delta"],
+        Literal["response.output_audio_transcript.delta"],
+        Literal["response.text.delta"],  # deprecated, beta
+        Literal["response.audio.delta"],  # deprecated, beta
+    ]
 
 
 class OpenAIRealtimeResponseTextDone(TypedDict):
@@ -1670,7 +1700,10 @@ class OpenAIRealtimeResponseTextDone(TypedDict):
     output_index: int
     response_id: str
     text: str
-    type: Literal["response.text.done"]
+    type: Union[
+        Literal["response.output_text.done"],  # GA
+        Literal["response.text.done"],  # deprecated, beta
+    ]
 
 
 class OpenAIRealtimeResponseAudioDone(TypedDict):
@@ -1679,7 +1712,10 @@ class OpenAIRealtimeResponseAudioDone(TypedDict):
     item_id: str
     output_index: int
     response_id: str
-    type: Literal["response.audio.done"]
+    type: Union[
+        Literal["response.output_audio.done"],  # GA
+        Literal["response.audio.done"],  # deprecated, beta
+    ]
 
 
 class OpenAIRealtimeContentPartDone(TypedDict):
@@ -1724,6 +1760,13 @@ class OpenAIRealtimeDoneEvent(TypedDict):
 
 class OpenAIRealtimeEventTypes(Enum):
     SESSION_CREATED = "session.created"
+    # GA event names (new)
+    RESPONSE_OUTPUT_TEXT_DELTA = "response.output_text.delta"
+    RESPONSE_OUTPUT_AUDIO_DELTA = "response.output_audio.delta"
+    RESPONSE_OUTPUT_AUDIO_TRANSCRIPT_DELTA = "response.output_audio_transcript.delta"
+    RESPONSE_OUTPUT_TEXT_DONE = "response.output_text.done"
+    RESPONSE_OUTPUT_AUDIO_DONE = "response.output_audio.done"
+    # Beta event names (deprecated, kept for backward compatibility)
     RESPONSE_TEXT_DELTA = "response.text.delta"
     RESPONSE_AUDIO_DELTA = "response.audio.delta"
     RESPONSE_TEXT_DONE = "response.text.done"
@@ -1731,6 +1774,10 @@ class OpenAIRealtimeEventTypes(Enum):
     RESPONSE_DONE = "response.done"
     RESPONSE_OUTPUT_ITEM_ADDED = "response.output_item.added"
     RESPONSE_CONTENT_PART_ADDED = "response.content_part.added"
+    # Conversation item events
+    CONVERSATION_ITEM_CREATED = "conversation.item.created"
+    CONVERSATION_ITEM_ADDED = "conversation.item.added"
+    CONVERSATION_ITEM_DONE = "conversation.item.done"
 
 
 OpenAIRealtimeEvents = Union[
@@ -1739,6 +1786,8 @@ OpenAIRealtimeEvents = Union[
     OpenAIRealtimeStreamResponseOutputItemAdded,
     OpenAIRealtimeResponseContentPartAdded,
     OpenAIRealtimeConversationItemCreated,
+    OpenAIRealtimeConversationItemAdded,
+    OpenAIRealtimeConversationItemDone,
     OpenAIRealtimeConversationCreated,
     OpenAIRealtimeResponseDelta,
     OpenAIRealtimeResponseTextDone,
