@@ -273,33 +273,47 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         for payload in self.log_queue:
             asyncio.create_task(self.async_send_message(payload))
 
-    def _strip_base64_from_messages(self, payload: StandardLoggingPayload):
-        """Remove any base64-encoded file data URIs in payload['messages']."""
-        verbose_logger.debug("Stripping base64 data from messages in SQS if any.")
-        messages = payload.get("messages")
-        if not messages:
-            return payload
+    async def _strip_base64_from_messages(self, payload: StandardLoggingPayload) -> StandardLoggingPayload:
+        """
+        Removes or redacts base64-encoded file data (e.g., PDFs, images, audio)
+        from messages and responses before sending to SQS.
+        """
+        base64_pattern = re.compile(r"data:([^;]+);base64,[A-Za-z0-9+/=\n\r]+")
+        placeholder_map = {
+            "application/pdf": "[base64 PDF content redacted]",
+            "image/": "[base64 image content redacted]",
+            "audio/": "[base64 audio content redacted]",
+        }
 
-        base64_pattern = re.compile(
-            r"data:([a-zA-Z0-9+/.-]+);base64,[A-Za-z0-9+/=\n\r]+"
-        )
-
-        def clean_message(msg):
-            if isinstance(msg, dict):
-                return {
-                    k: self._strip_base64_from_messages(v)
-                    if isinstance(v, (dict, list))
-                    else base64_pattern.sub("[BASE64_STRIPPED]", str(v))
-                    for k, v in msg.items()
-                }
-            elif isinstance(msg, list):
-                return [clean_message(m) for m in msg]
-            elif isinstance(msg, str):
-                return base64_pattern.sub("[BASE64_STRIPPED]", msg)
+        def _strip_obj(obj):
+            if isinstance(obj, dict):
+                new_dict = {}
+                for k, v in obj.items():
+                    if isinstance(v, (dict, list)):
+                        new_dict[k] = _strip_obj(v)
+                    elif isinstance(v, str):
+                        m = base64_pattern.match(v)
+                        if m:
+                            mime = m.group(1)
+                            # choose appropriate placeholder
+                            ph = next((p for k_, p in placeholder_map.items() if mime.startswith(k_)), "[base64 file content redacted]")
+                            new_dict[k] = ph
+                        else:
+                            new_dict[k] = v
+                    else:
+                        new_dict[k] = v
+                return new_dict
+            elif isinstance(obj, list):
+                return [_strip_obj(i) for i in obj]
             else:
-                return msg
+                return obj
 
-        payload["messages"] = clean_message(messages)
+        # apply recursively
+        if payload.get("messages"):
+            payload["messages"] = _strip_obj(payload["messages"])
+        if payload.get("response"):
+            payload["response"] = _strip_obj(payload["response"])
+
         return payload
 
     async def async_send_message(self, payload: StandardLoggingPayload) -> None:
