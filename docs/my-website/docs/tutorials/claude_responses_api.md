@@ -253,10 +253,11 @@ In this example, we'll add the Atlassian MCP server to our `config.yaml`
 atlassian_mcp:
   server_id: atlassian_mcp_id
   url: "https://mcp.atlassian.com/v1/sse"
+  transport: "sse"
   auth_type: oauth2
   authorization_url: https://mcp.atlassian.com/v1/authorize
-  token_url: https://atlassian-remote-mcp-production.atlassian-remote-mcp-server-production.workers.dev/v1/token
-  registration_url: https://atlassian-remote-mcp-production.atlassian-remote-mcp-server-production.workers.dev/v1/register
+  token_url: https://cf.mcp.atlassian.com/v1/token
+  registration_url: https://cf.mcp.atlassian.com/v1/register
 ```
 
 </TabItem>
