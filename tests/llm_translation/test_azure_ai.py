@@ -322,7 +322,7 @@ def test_completion_azure():
         litellm.set_verbose = False
         ## Test azure call
         response = completion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=[
                 {
                     "role": "user",
