@@ -6,24 +6,8 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 3. Implements a way to call /applyGuardrail endpoint for `/chat/completions` + `/v1/messages` requests on async_post_call_streaming_iterator_hook
 """
 
-import asyncio
-import os
-from datetime import datetime
-from typing import (
-    Any,
-    AsyncGenerator,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import Any, AsyncGenerator, Literal, Union
 
-import httpx
-
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.cost_calculator import _infer_call_type
@@ -35,7 +19,7 @@ from litellm.llms import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypes, GuardrailStatus, ModelResponseStream
+from litellm.types.utils import CallTypes, ModelResponseStream
 
 GUARDRAIL_NAME = "unified_llm_guardrails"
 
