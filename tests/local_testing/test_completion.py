@@ -4257,6 +4257,42 @@ def test_completion_novita_ai_dynamic_params(api_key):
         pytest.fail(f"Unexpected error: {e}")
 
 
+def test_completion_siliconflow_ai():
+    litellm.set_verbose = True
+    messages = [
+        {"role": "system", "content": "You're a good bot"},
+        {
+            "role": "user",
+            "content": "Hey",
+        },
+    ]
+
+    from openai import OpenAI
+
+    openai_client = OpenAI(api_key="fake-key")
+
+    with patch.object(
+        openai_client.chat.completions, "create", new=MagicMock()
+    ) as mock_call:
+        try:
+            completion(
+                model="siliconflow/deepseek-ai/DeepSeek-V3",
+                messages=messages,
+                client=openai_client,
+                api_base="https://api.siliconflow.com/v1",
+            )
+
+            mock_call.assert_called_once()
+
+            # Verify model is passed correctly
+            assert mock_call.call_args.kwargs["model"] == "deepseek-ai/DeepSeek-V3"
+            # Verify messages are passed correctly
+            assert mock_call.call_args.kwargs["messages"] == messages
+
+        except Exception as e:
+            pytest.fail(f"Error occurred: {e}")
+
+
 def test_deepseek_reasoning_content_completion():
     try:
         litellm.set_verbose = True

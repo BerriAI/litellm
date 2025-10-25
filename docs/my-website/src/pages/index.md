@@ -211,6 +211,22 @@ response = completion(
 ```
 
 </TabItem>
+<TabItem value="siliconflow" label="SiliconFlow">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables. Visit https://cloud.siliconflow.com/me/account/ak to get your API key
+os.environ["SILICONFLOW_API_KEY"] = "siliconflow-api-key"
+
+response = completion(
+  model="siliconflow/deepseek-ai/DeepSeek-V3",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
 
 </Tabs>
 
@@ -460,6 +476,23 @@ os.environ["NOVITA_API_KEY"] = "novita_api_key"
 
 response = completion(
   model="novita/deepseek/deepseek-r1",
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+
+</TabItem>
+<TabItem value="siliconflow" label="SiliconFlow">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables. Visit https://cloud.siliconflow.com/me/account/ak to get your API key
+os.environ["SILICONFLOW_API_KEY"] = "siliconflow_api_key"
+
+response = completion(
+  model="siliconflow/deepseek-ai/DeepSeek-V3",
   messages = [{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )

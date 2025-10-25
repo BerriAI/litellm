@@ -556,6 +556,7 @@ const sidebars = {
         "providers/morph",
         "providers/lambda_ai",
         "providers/novita",
+        "providers/siliconflow",
         "providers/voyage",
         "providers/jina_ai",
         "providers/aleph_alpha",

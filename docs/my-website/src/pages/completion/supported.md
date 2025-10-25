@@ -96,3 +96,14 @@ All the text models from [OpenRouter](https://openrouter.ai/docs) are supported 
 | novita/mistralai/mistral-7b-instruct | `completion('novita/mistralai/mistral-7b-instruct', messages)` | `os.environ['NOVITA_API_KEY']` |
 | novita/qwen/qwen-2.5-72b-instruct | `completion('novita/qwen/qwen-2.5-72b-instruct', messages)` | `os.environ['NOVITA_API_KEY']` |
 | novita/qwen/qwen-2-vl-72b-instruct | `completion('novita/qwen/qwen-2-vl-72b-instruct', messages)` | `os.environ['NOVITA_API_KEY']` |
+
+## SiliconFlow Completion Models
+
+🚨 LiteLLM supports ALL SiliconFlow models, send `model=siliconflow/<your-siliconflow-model>` to send it to SiliconFlow. See all SiliconFlow models [here](https://www.siliconflow.com/models?utm_source=github&utm_medium=referral&utm_term=github_readme&utm_content=github_litellm)
+
+| Model Name       | Function Call                              | Required OS Variables                |
+|------------------|--------------------------------------------|--------------------------------------|
+| siliconflow/deepseek-ai/DeepSeek-V3 | `completion('siliconflow/deepseek-ai/DeepSeek-V3', messages)` | `os.environ['SILICONFLOW_API_KEY']` |
+| siliconflow/deepseek-ai/DeepSeek-R1 | `completion('siliconflow/deepseek-ai/DeepSeek-R1', messages)` | `os.environ['SILICONFLOW_API_KEY']` |
+| siliconflow/zai-org/GLM-4.6 | `completion('siliconflow/zai-org/GLM-4.6', messages)` | `os.environ['SILICONFLOW_API_KEY']` |
+| siliconflow/moonshotai/Kimi-K2-Instruct | `completion('siliconflow/moonshotai/Kimi-K2-Instruct', messages)` | `os.environ['SILICONFLOW_API_KEY']` |
