@@ -400,6 +400,7 @@ const sidebars = {
           type: "category",
           label: "/vector_stores",
           items: [
+            "vector_stores/create",
             "vector_stores/search",
           ]
         },
@@ -450,6 +451,7 @@ const sidebars = {
             "providers/azure_ocr",
             "providers/azure_ai_speech",
             "providers/azure_ai_img",
+            "providers/azure_ai_vector_stores",
           ]
         },
         {
