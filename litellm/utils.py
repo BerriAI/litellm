@@ -4419,6 +4419,33 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
+    # Handle Responses API streaming events
+    if hasattr(response_obj, "type") and hasattr(response_obj, "response"):
+        # This is a Responses API streaming event (e.g., ResponseCreatedEvent, ResponseCompletedEvent)
+        # Extract text from the response object's output if available
+        responses_api_response = getattr(response_obj, "response", None)
+        if responses_api_response and hasattr(responses_api_response, "output"):
+            output_list = responses_api_response.output
+            response_str = ""
+            for output_item in output_list:
+                # Handle output items with content array
+                if hasattr(output_item, "content"):
+                    for content_part in output_item.content:
+                        if hasattr(content_part, "text"):
+                            response_str += content_part.text
+                # Handle output items with direct text field
+                elif hasattr(output_item, "text"):
+                    response_str += output_item.text
+            return response_str
+
+    # Handle Responses API text delta events
+    if hasattr(response_obj, "type") and hasattr(response_obj, "delta"):
+        event_type = getattr(response_obj, "type", "")
+        if "text.delta" in event_type or "output_text.delta" in event_type:
+            delta = getattr(response_obj, "delta", "")
+            return delta if isinstance(delta, str) else ""
+
+    # Handle standard ModelResponse and ModelResponseStream
     _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
         response_obj.choices
     )
