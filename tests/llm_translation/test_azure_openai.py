@@ -630,3 +630,20 @@ def test_azure_openai_responses_bridge():
             == "test-azure-computer-use-preview"
         )
         assert mock_responses.call_args.kwargs["custom_llm_provider"] == "azure"
+
+
+def test_completion_azure_deployment_id():
+    """
+    Ensure deployment_id takes precedence over model.
+    """
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            deployment_id="gpt-4.1-mini",
+            model="gpt-3.5-turbo",
+            messages=messages,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
