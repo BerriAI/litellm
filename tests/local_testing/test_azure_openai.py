@@ -47,7 +47,7 @@ async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4.1-nano",
+                    "model": "azure/gpt-4.1-mini",
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "tenant_id": os.getenv("AZURE_TENANT_ID"),
                     "client_id": os.getenv("AZURE_CLIENT_ID"),
@@ -96,6 +96,6 @@ async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
 
         assert json_body == {
             "messages": [{"role": "user", "content": "Hello world!"}],
-            "model": "gpt-4.1-nano",
+            "model": "gpt-4.1-mini",
             "stream": False,
         }

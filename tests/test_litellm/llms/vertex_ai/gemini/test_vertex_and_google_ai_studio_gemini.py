@@ -1205,3 +1205,224 @@ def test_vertex_ai_penalty_parameters_validation():
     assert "max_output_tokens" in result, "max_output_tokens should still be included"
     assert result["temperature"] == 0.7
     assert result["max_output_tokens"] == 100
+
+
+def test_vertex_ai_annotation_streaming_events():
+    """
+    Test that annotation events are properly emitted during streaming for Vertex AI Gemini.
+    
+    This test verifies:
+    1. Grounding metadata is converted to annotations in streaming chunks
+    2. Annotations are included in the delta of streaming chunks
+    3. Multiple annotations are handled correctly
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+    from litellm.types.llms.openai import ChatCompletionAnnotation
+
+    litellm_logging = MagicMock()
+
+    # Simulate a streaming chunk with grounding metadata (as Gemini sends it)
+    chunk_with_annotations = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": "The weather in San Francisco today is clear."}]
+                },
+                "groundingMetadata": {
+                    "webSearchQueries": ["weather San Francisco today"],
+                    "searchEntryPoint": {
+                        "renderedContent": '<div>Search results</div>'
+                    },
+                    "groundingChunks": [
+                        {
+                            "web": {
+                                "uri": "https://www.google.com/search?q=weather+in+San+Francisco,+CA",
+                                "title": "Weather information for San Francisco, CA",
+                                "domain": "google.com",
+                            }
+                        }
+                    ],
+                    "groundingSupports": [
+                        {
+                            "segment": {
+                                "startIndex": 0,
+                                "endIndex": 50,
+                                "text": "The weather in San Francisco today is clear.",
+                            },
+                            "groundingChunkIndices": [0],
+                            "confidenceScores": [0.95],
+                        }
+                    ],
+                },
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 15,
+            "totalTokenCount": 25,
+        },
+    }
+
+    # Create iterator and parse chunk
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
+    )
+    streaming_chunk = iterator.chunk_parser(chunk_with_annotations)
+
+    # Verify the chunk was parsed correctly
+    assert streaming_chunk.choices is not None
+    assert len(streaming_chunk.choices) == 1
+    
+    # Check that annotations are present in the delta
+    delta = streaming_chunk.choices[0].delta
+    assert hasattr(delta, "annotations")
+    assert delta.annotations is not None
+    assert len(delta.annotations) > 0
+
+    # Verify annotation structure
+    annotation = delta.annotations[0]
+    assert isinstance(annotation, dict)  # ChatCompletionAnnotation is a TypedDict
+    assert annotation["type"] == "url_citation"
+    assert annotation["url_citation"]["start_index"] == 0
+    assert annotation["url_citation"]["end_index"] == 50
+    assert "google.com" in annotation["url_citation"]["url"]
+    assert "Weather information" in annotation["url_citation"]["title"]
+
+
+def test_vertex_ai_annotation_conversion():
+    """
+    Test the conversion of Vertex AI grounding metadata to OpenAI annotations.
+    
+    This test verifies the _convert_grounding_metadata_to_annotations method
+    correctly transforms grounding metadata into the expected format.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # Sample grounding metadata as returned by Vertex AI
+    grounding_metadata = {
+        "webSearchQueries": ["weather San Francisco", "current time San Francisco"],
+        "searchEntryPoint": {
+            "renderedContent": '<div>Search interface</div>'
+        },
+        "groundingChunks": [
+            {
+                "web": {
+                    "uri": "https://www.google.com/search?q=weather+in+San+Francisco,+CA",
+                    "title": "Weather information for San Francisco, CA",
+                    "domain": "google.com",
+                }
+            },
+            {
+                "web": {
+                    "uri": "https://www.google.com/search?q=time+in+San+Francisco,+CA",
+                    "title": "Current time in San Francisco, CA",
+                    "domain": "google.com",
+                }
+            }
+        ],
+        "groundingSupports": [
+            {
+                "segment": {
+                    "startIndex": 0,
+                    "endIndex": 30,
+                    "text": "The weather in San Francisco",
+                },
+                "groundingChunkIndices": [0],
+                "confidenceScores": [0.95],
+            },
+            {
+                "segment": {
+                    "startIndex": 32,
+                    "endIndex": 60,
+                    "text": "is currently 72°F",
+                },
+                "groundingChunkIndices": [0],
+                "confidenceScores": [0.88],
+            },
+            {
+                "segment": {
+                    "startIndex": 62,
+                    "endIndex": 85,
+                    "text": "and the time is 2:30 PM",
+                },
+                "groundingChunkIndices": [1],
+                "confidenceScores": [0.92],
+            }
+        ],
+    }
+
+    # Convert grounding metadata to annotations
+    content_text = "The weather in San Francisco is currently 72°F and the time is 2:30 PM"
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+        [grounding_metadata], content_text
+    )
+
+    # Verify annotations were created
+    assert len(annotations) == 3  # One for each grounding support
+
+    # Check first annotation (weather)
+    weather_annotation = annotations[0]
+    assert weather_annotation["type"] == "url_citation"
+    assert weather_annotation["url_citation"]["start_index"] == 0
+    assert weather_annotation["url_citation"]["end_index"] == 30
+    assert "google.com" in weather_annotation["url_citation"]["url"]
+    assert "Weather information" in weather_annotation["url_citation"]["title"]
+
+    # Check second annotation (weather continuation)
+    weather_cont_annotation = annotations[1]
+    assert weather_cont_annotation["type"] == "url_citation"
+    assert weather_cont_annotation["url_citation"]["start_index"] == 32
+    assert weather_cont_annotation["url_citation"]["end_index"] == 60
+    assert "google.com" in weather_cont_annotation["url_citation"]["url"]
+    assert "Weather information" in weather_cont_annotation["url_citation"]["title"]
+
+    # Check third annotation (time)
+    time_annotation = annotations[2]
+    assert time_annotation["type"] == "url_citation"
+    assert time_annotation["url_citation"]["start_index"] == 62
+    assert time_annotation["url_citation"]["end_index"] == 85
+    assert "google.com" in time_annotation["url_citation"]["url"]
+    assert "Current time" in time_annotation["url_citation"]["title"]
+
+
+def test_vertex_ai_annotation_empty_grounding_metadata():
+    """
+    Test handling of empty or missing grounding metadata.
+    
+    This test ensures the annotation conversion handles edge cases gracefully.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # Test with empty grounding metadata
+    empty_metadata = {}
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+        [empty_metadata], "test content"
+    )
+    assert len(annotations) == 0
+
+    # Test with missing groundingSupports
+    metadata_no_supports = {
+        "webSearchQueries": ["test query"],
+        "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Test"}}],
+    }
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+        [metadata_no_supports], "test content"
+    )
+    assert len(annotations) == 0
+
+    # Test with empty groundingSupports
+    metadata_empty_supports = {
+        "webSearchQueries": ["test query"],
+        "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Test"}}],
+        "groundingSupports": [],
+    }
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+        [metadata_empty_supports], "test content"
+    )
+    assert len(annotations) == 0
