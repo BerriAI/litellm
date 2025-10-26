@@ -11,6 +11,7 @@ from math import floor
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Dict,
     List,
     Literal,
@@ -137,8 +138,13 @@ class RateLimitResponseWithDescriptors(TypedDict):
 
 
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
-    def __init__(self, internal_usage_cache: InternalUsageCache):
+    def __init__(
+        self,
+        internal_usage_cache: InternalUsageCache,
+        time_provider: Optional[Callable[[], datetime]] = None,
+    ):
         self.internal_usage_cache = internal_usage_cache
+        self._time_provider = time_provider or datetime.now
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             self.batch_rate_limiter_script = (
                 self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
@@ -155,6 +161,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.token_increment_script = None
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
+
+    def _get_current_time(self) -> datetime:
+        """Return the current time for rate limiting calculations."""
+        return self._time_provider()
 
     def _is_redis_cluster(self) -> bool:
         """
@@ -425,7 +435,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             read_only: If True, only check limits without incrementing counters
         """
 
-        now = datetime.now().timestamp()
+        current_time = self._get_current_time()
+        now = current_time.timestamp()
         now_int = int(now)  # Convert to integer for Redis Lua script
 
         # Collect all keys and their metadata upfront
@@ -1090,7 +1101,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         descriptor = descriptors[floor(i / 2)]
 
                         # Calculate reset time (window_start + window_size)
-                        now = datetime.now().timestamp()
+                        now = self._get_current_time().timestamp()
                         reset_time = now + self.window_size  # Conservative estimate
                         reset_time_formatted = datetime.fromtimestamp(
                             reset_time
