@@ -43,6 +43,12 @@ pip install litellm==1.79.0
 
 ---
 
+## Major Changes
+
+- **Cohere models will now be routed to Cohere v2 API by default** - [PR #15722](https://github.com/BerriAI/litellm/pull/15722)
+
+---
+
 ## Key Highlights
 
 - **Search APIs** - Native `/v1/search` endpoint with support for Perplexity, Tavily, Parallel AI, Exa AI, DataforSEO, and Google PSE with cost tracking
@@ -280,6 +286,20 @@ pip install litellm==1.79.0
 * @CAFxX made their first contribution in [PR #15281](https://github.com/BerriAI/litellm/pull/15281)
 * @reflection made their first contribution in [PR #15914](https://github.com/BerriAI/litellm/pull/15914)
 * @shadielfares made their first contribution in [PR #15917](https://github.com/BerriAI/litellm/pull/15917)
+
+---
+
+## PR Count Summary
+
+### 10/26/2025
+* New Models / Updated Models: 18
+* LLM API Endpoints: 27
+* Management Endpoints / UI: 5
+* Logging / Guardrail / Prompt Management Integrations: 10
+* Spend Tracking, Budgets and Rate Limiting: 2
+* MCP Gateway: 2
+* Performance / Loadbalancing / Reliability improvements: 3
+* Documentation Updates: 5
 
 ---
 
