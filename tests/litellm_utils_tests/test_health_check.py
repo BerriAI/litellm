@@ -302,7 +302,8 @@ def test_update_litellm_params_for_health_check():
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     assert "voice" not in updated_params
 
-    # Test with Bedrock model
+    # Test with Bedrock model with region routing - should strip bedrock/ and region/ prefix
+    # Issue #15807: Fixes health checks sending "region/model" as model ID to AWS
     model_info = {}
     litellm_params = {
         "model": "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0",
@@ -310,6 +311,112 @@ def test_update_litellm_params_for_health_check():
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "anthropic.claude-3-7-sonnet-20250219-v1:0"
+
+    # Test with Bedrock cross-region inference profile - should preserve the inference profile prefix
+    # AWS requires inference profile IDs like "us.anthropic.claude..." for cross-region routing
+    litellm_params = {
+        "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+
+    # Test with Bedrock model without region routing - should just strip bedrock/ prefix
+    litellm_params = {
+        "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "anthropic.claude-3-5-sonnet-20240620-v1:0"
+
+    # Test that non-Bedrock models are not affected by Bedrock-specific logic
+    litellm_params = {
+        "model": "openai/gpt-4",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "openai/gpt-4"  # Should remain unchanged
+
+    # Test ALL cross-region inference profile prefixes (CRIS)
+    cris_prefixes = ["us.", "eu.", "apac.", "jp.", "au.", "us-gov.", "global."]
+    for prefix in cris_prefixes:
+        litellm_params = {
+            "model": f"bedrock/{prefix}anthropic.claude-3-haiku-20240307-v1:0",
+            "api_key": "fake_key",
+        }
+        updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+        assert updated_params["model"] == f"{prefix}anthropic.claude-3-haiku-20240307-v1:0", \
+            f"Failed to preserve CRIS prefix: {prefix}"
+
+    # Test regional + CRIS combination - region should be stripped, CRIS preserved
+    litellm_params = {
+        "model": "bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "us.anthropic.claude-3-haiku-20240307-v1:0"
+
+    # Test GovCloud regions
+    litellm_params = {
+        "model": "bedrock/us-gov-east-1/anthropic.claude-instant-v1",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "anthropic.claude-instant-v1"
+
+    # Test imported models with handler prefixes - handlers should be preserved
+    litellm_params = {
+        "model": "bedrock/llama/arn:aws:bedrock:us-east-1:123:imported-model/abc",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
+
+    litellm_params = {
+        "model": "bedrock/deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz"
+
+    # Test route specifications - routes should be preserved
+    litellm_params = {
+        "model": "bedrock/converse/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "converse/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+
+    litellm_params = {
+        "model": "bedrock/invoke/us-west-2/anthropic.claude-instant-v1",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "invoke/anthropic.claude-instant-v1"
+
+    # Test ARN formats - should be preserved
+    litellm_params = {
+        "model": "bedrock/arn:aws:bedrock:eu-central-1:000:application-inference-profile/abc",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "arn:aws:bedrock:eu-central-1:000:application-inference-profile/abc"
+
+    # Test edge case: region + handler + ARN
+    litellm_params = {
+        "model": "bedrock/us-west-2/llama/arn:aws:bedrock:us-east-1:123:imported-model/abc",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
+
+    # Test edge case: route + region + CRIS
+    litellm_params = {
+        "model": "bedrock/converse/us-west-2/eu.anthropic.claude-3-sonnet-20240229-v1:0",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "converse/eu.anthropic.claude-3-sonnet-20240229-v1:0"
 
 @pytest.mark.asyncio
 async def test_perform_health_check_with_health_check_model():
