@@ -198,12 +198,43 @@ class OpenTelemetry(CustomLogger):
 
         # use provided tracer or create a new one
         if tracer_provider is None:
-            tracer_provider = TracerProvider(resource=_get_litellm_resource())
-            # Only add OTLP span processor if we created the tracer provider ourselves
-            tracer_provider.add_span_processor(self._get_span_processor())
+            # Check if a TracerProvider is already set globally (e.g., by Langfuse SDK)
+            try:
+                from opentelemetry.trace import ProxyTracerProvider
+                existing_provider = trace.get_tracer_provider()
 
-        # register global provider and grab our tracer
-        trace.set_tracer_provider(tracer_provider)
+                # If an actual provider exists (not the default proxy), use it
+                if not isinstance(existing_provider, ProxyTracerProvider):
+                    verbose_logger.debug(
+                        "OpenTelemetry: Using existing TracerProvider: %s",
+                        type(existing_provider).__name__
+                    )
+                    tracer_provider = existing_provider
+                    # Don't call set_tracer_provider to preserve existing context
+                else:
+                    # No real provider exists yet, create our own
+                    verbose_logger.debug("OpenTelemetry: Creating new TracerProvider")
+                    tracer_provider = TracerProvider(resource=_get_litellm_resource())
+                    tracer_provider.add_span_processor(self._get_span_processor())
+                    trace.set_tracer_provider(tracer_provider)
+            except Exception as e:
+                # Fallback: create a new provider if something goes wrong
+                verbose_logger.debug(
+                    "OpenTelemetry: Exception checking existing provider, creating new one: %s",
+                    str(e)
+                )
+                tracer_provider = TracerProvider(resource=_get_litellm_resource())
+                tracer_provider.add_span_processor(self._get_span_processor())
+                trace.set_tracer_provider(tracer_provider)
+        else:
+            # Tracer provider explicitly provided (e.g., for testing)
+            verbose_logger.debug(
+                "OpenTelemetry: Using provided TracerProvider: %s",
+                type(tracer_provider).__name__
+            )
+            trace.set_tracer_provider(tracer_provider)
+
+        # grab our tracer
         self.tracer = trace.get_tracer(LITELLM_TRACER_NAME)
         self.span_kind = SpanKind
 
@@ -522,7 +553,6 @@ class OpenTelemetry(CustomLogger):
     #########################################################
 
     def _handle_success(self, kwargs, response_obj, start_time, end_time):
-
         verbose_logger.debug(
             "OpenTelemetry Logger: Logging kwargs: %s, OTEL config settings=%s",
             kwargs,
@@ -1228,7 +1258,7 @@ class OpenTelemetry(CustomLogger):
         return _parent_context
 
     def _get_span_context(self, kwargs):
-        from opentelemetry import trace
+        from opentelemetry import context, trace
         from opentelemetry.trace.propagation.tracecontext import (
             TraceContextTextMapPropagator,
         )
@@ -1240,19 +1270,37 @@ class OpenTelemetry(CustomLogger):
         _metadata = litellm_params.get("metadata", {}) or {}
         parent_otel_span = _metadata.get("litellm_parent_otel_span", None)
 
-        """
-        Two way to use parents in opentelemetry
-        - using the traceparent header
-        - using the parent_otel_span in the [metadata][parent_otel_span]
-        """
+        # Priority 1: Explicit parent span from metadata
         if parent_otel_span is not None:
+            verbose_logger.debug("OpenTelemetry: Using explicit parent span from metadata")
             return trace.set_span_in_context(parent_otel_span), parent_otel_span
 
-        if traceparent is None:
-            return None, None
-        else:
+        # Priority 2: Active span from global context (auto-detection)
+        try:
+            current_span = trace.get_current_span()
+            if current_span is not None:
+                span_context = current_span.get_span_context()
+                if span_context.is_valid:
+                    verbose_logger.debug(
+                        "OpenTelemetry: Using active span from global context: %s (trace_id=%s, span_id=%s, is_recording=%s)",
+                        current_span,
+                        format(span_context.trace_id, '032x'),
+                        format(span_context.span_id, '016x'),
+                        current_span.is_recording()
+                    )
+                    return context.get_current(), current_span
+        except Exception as e:
+            verbose_logger.debug("OpenTelemetry: Error getting current span: %s", str(e))
+
+        # Priority 3: HTTP traceparent header
+        if traceparent is not None:
+            verbose_logger.debug("OpenTelemetry: Using traceparent header for context propagation")
             carrier = {"traceparent": traceparent}
             return TraceContextTextMapPropagator().extract(carrier=carrier), None
+
+        # Priority 4: No parent context
+        verbose_logger.debug("OpenTelemetry: No parent context found, creating root span")
+        return None, None
 
     def _get_span_processor(self, dynamic_headers: Optional[dict] = None):
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
