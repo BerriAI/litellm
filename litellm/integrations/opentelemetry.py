@@ -1275,7 +1275,13 @@ class OpenTelemetry(CustomLogger):
             verbose_logger.debug("OpenTelemetry: Using explicit parent span from metadata")
             return trace.set_span_in_context(parent_otel_span), parent_otel_span
 
-        # Priority 2: Active span from global context (auto-detection)
+        # Priority 2: HTTP traceparent header
+        if traceparent is not None:
+            verbose_logger.debug("OpenTelemetry: Using traceparent header for context propagation")
+            carrier = {"traceparent": traceparent}
+            return TraceContextTextMapPropagator().extract(carrier=carrier), None
+
+        # Priority 3: Active span from global context (auto-detection)
         try:
             current_span = trace.get_current_span()
             if current_span is not None:
@@ -1291,12 +1297,6 @@ class OpenTelemetry(CustomLogger):
                     return context.get_current(), current_span
         except Exception as e:
             verbose_logger.debug("OpenTelemetry: Error getting current span: %s", str(e))
-
-        # Priority 3: HTTP traceparent header
-        if traceparent is not None:
-            verbose_logger.debug("OpenTelemetry: Using traceparent header for context propagation")
-            carrier = {"traceparent": traceparent}
-            return TraceContextTextMapPropagator().extract(carrier=carrier), None
 
         # Priority 4: No parent context
         verbose_logger.debug("OpenTelemetry: No parent context found, creating root span")
