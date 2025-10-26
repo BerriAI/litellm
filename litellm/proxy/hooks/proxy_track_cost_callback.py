@@ -132,9 +132,7 @@ class _ProxyDBLogger(CustomLogger):
                 else kwargs.get("response_cost", None)
             )
             tags: Optional[List[str]] = (
-                sl_object.get("request_tags", None)
-                if sl_object is not None
-                else None
+                sl_object.get("request_tags", None) if sl_object is not None else None
             )
 
             if response_cost is not None:

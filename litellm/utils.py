@@ -147,6 +147,7 @@ from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.router_utils.get_retry_from_policy import (
@@ -270,6 +271,7 @@ from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -304,6 +306,9 @@ from .types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from .types.router import LiteLLM_Params
+
+if TYPE_CHECKING:
+    from litellm import MockException
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -3057,6 +3062,30 @@ def _remove_unsupported_params(
     return non_default_params
 
 
+def filter_out_litellm_params(kwargs: dict) -> dict:
+    """
+    Filter out LiteLLM internal parameters from kwargs dict.
+
+    Returns a new dict containing only non-LiteLLM parameters that should be
+    passed to external provider APIs.
+
+    Args:
+        kwargs: Dictionary that may contain LiteLLM internal parameters
+
+    Returns:
+        Dictionary with LiteLLM internal parameters filtered out
+
+    Example:
+        >>> kwargs = {"query": "test", "shared_session": session_obj, "metadata": {}}
+        >>> filtered = filter_out_litellm_params(kwargs)
+        >>> # filtered = {"query": "test"}
+    """
+
+    return {
+        key: value for key, value in kwargs.items() if key not in all_litellm_params
+    }
+
+
 class PreProcessNonDefaultParams:
     @staticmethod
     def base_pre_process_non_default_params(
@@ -4390,6 +4419,33 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
+    # Handle Responses API streaming events
+    if hasattr(response_obj, "type") and hasattr(response_obj, "response"):
+        # This is a Responses API streaming event (e.g., ResponseCreatedEvent, ResponseCompletedEvent)
+        # Extract text from the response object's output if available
+        responses_api_response = getattr(response_obj, "response", None)
+        if responses_api_response and hasattr(responses_api_response, "output"):
+            output_list = responses_api_response.output
+            response_str = ""
+            for output_item in output_list:
+                # Handle output items with content array
+                if hasattr(output_item, "content"):
+                    for content_part in output_item.content:
+                        if hasattr(content_part, "text"):
+                            response_str += content_part.text
+                # Handle output items with direct text field
+                elif hasattr(output_item, "text"):
+                    response_str += output_item.text
+            return response_str
+
+    # Handle Responses API text delta events
+    if hasattr(response_obj, "type") and hasattr(response_obj, "delta"):
+        event_type = getattr(response_obj, "type", "")
+        if "text.delta" in event_type or "output_text.delta" in event_type:
+            delta = getattr(response_obj, "delta", "")
+            return delta if isinstance(delta, str) else ""
+
+    # Handle standard ModelResponse and ModelResponseStream
     _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
         response_obj.choices
     )
@@ -4948,6 +5004,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "output_cost_per_token_above_200k_tokens", None
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
+                output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get(
@@ -6008,6 +6065,9 @@ def mock_completion_streaming_obj(
 ):
     if isinstance(mock_response, litellm.MockException):
         raise mock_response
+    if isinstance(mock_response, ModelResponseStream):
+        yield mock_response
+        return
     for i in range(0, len(mock_response), 3):
         completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:
@@ -6027,10 +6087,16 @@ def mock_completion_streaming_obj(
 
 
 async def async_mock_completion_streaming_obj(
-    model_response, mock_response, model, n: Optional[int] = None
+    model_response,
+    mock_response: Union[str, "MockException", ModelResponseStream],
+    model,
+    n: Optional[int] = None,
 ):
     if isinstance(mock_response, litellm.MockException):
         raise mock_response
+    if isinstance(mock_response, ModelResponseStream):
+        yield mock_response
+        return
     for i in range(0, len(mock_response), 3):
         completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:
@@ -6952,7 +7018,12 @@ class ProviderConfigManager:
             litellm.LlmProviders.COHERE_CHAT == provider
             or litellm.LlmProviders.COHERE == provider
         ):
-            return litellm.CohereChatConfig()
+            route = CohereModelInfo.get_cohere_route(model)
+            if route == "v2":
+                return litellm.CohereV2ChatConfig()
+            else:
+
+                return litellm.CohereChatConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
             return litellm.SnowflakeConfig()
         elif litellm.LlmProviders.CLARIFAI == provider:
@@ -7153,6 +7224,8 @@ class ProviderConfigManager:
                 return litellm.AmazonDeepSeekR1Config()
             elif bedrock_invoke_provider == "nova":
                 return litellm.AmazonInvokeNovaConfig()
+            elif bedrock_invoke_provider == "qwen3":
+                return litellm.AmazonQwen3Config()
             else:
                 return litellm.AmazonInvokeConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
@@ -7500,6 +7573,12 @@ class ProviderConfigManager:
             )
 
             return PGVectorStoreConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.vector_stores.transformation import (
+                AzureAIVectorStoreConfig,
+            )
+
+            return AzureAIVectorStoreConfig()
         return None
 
     @staticmethod
@@ -7562,6 +7641,22 @@ class ProviderConfigManager:
 
             return LiteLLMProxyImageGenerationConfig()
         return None
+
+    @staticmethod
+    def get_provider_video_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseVideoConfig]:
+        if LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+
+            return OpenAIVideoConfig()
+        elif LlmProviders.AZURE == provider:
+            from litellm.llms.azure.videos.transformation import AzureVideoConfig
+
+            return AzureVideoConfig()
+        return None
+
 
     @staticmethod
     def get_provider_realtime_config(
@@ -7633,15 +7728,9 @@ class ProviderConfigManager:
         """
         Get Search configuration for a given provider.
         """
-        from litellm.llms.dataforseo.search.transformation import (
-            DataForSEOSearchConfig,
-        )
-        from litellm.llms.exa_ai.search.transformation import (
-            ExaAISearchConfig,
-        )
-        from litellm.llms.google_pse.search.transformation import (
-            GooglePSESearchConfig,
-        )
+        from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
+        from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
+        from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.parallel_ai.search.transformation import (
             ParallelAISearchConfig,
         )

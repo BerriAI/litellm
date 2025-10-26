@@ -227,7 +227,9 @@ class OpenTelemetry(CustomLogger):
                 PeriodicExportingMetricReader,
             )
 
-            normalized_endpoint = self._normalize_otel_endpoint(self.config.endpoint, 'metrics')
+            normalized_endpoint = self._normalize_otel_endpoint(
+                self.config.endpoint, "metrics"
+            )
             _metric_exporter = OTLPMetricExporter(
                 endpoint=normalized_endpoint,
                 headers=OpenTelemetry._get_headers_dictionary(self.config.headers),
@@ -664,7 +666,9 @@ class OpenTelemetry(CustomLogger):
 
         # Get the resource from the logger provider
         logger_provider = get_logger_provider()
-        resource = getattr(logger_provider, '_resource', None) or _get_litellm_resource()
+        resource = (
+            getattr(logger_provider, "_resource", None) or _get_litellm_resource()
+        )
 
         parent_ctx = span.get_span_context()
         provider = (kwargs.get("litellm_params") or {}).get(
@@ -1302,7 +1306,9 @@ class OpenTelemetry(CustomLogger):
                 "OpenTelemetry: intiializing http exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
             )
-            normalized_endpoint = self._normalize_otel_endpoint(self.OTEL_ENDPOINT, 'traces')
+            normalized_endpoint = self._normalize_otel_endpoint(
+                self.OTEL_ENDPOINT, "traces"
+            )
             return BatchSpanProcessor(
                 OTLPSpanExporterHTTP(
                     endpoint=normalized_endpoint, headers=_split_otel_headers
@@ -1313,7 +1319,9 @@ class OpenTelemetry(CustomLogger):
                 "OpenTelemetry: intiializing grpc exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
             )
-            normalized_endpoint = self._normalize_otel_endpoint(self.OTEL_ENDPOINT, 'traces')
+            normalized_endpoint = self._normalize_otel_endpoint(
+                self.OTEL_ENDPOINT, "traces"
+            )
             return BatchSpanProcessor(
                 OTLPSpanExporterGRPC(
                     endpoint=normalized_endpoint, headers=_split_otel_headers
@@ -1340,7 +1348,7 @@ class OpenTelemetry(CustomLogger):
         _split_otel_headers = OpenTelemetry._get_headers_dictionary(self.OTEL_HEADERS)
 
         # Normalize endpoint for logs - ensure it points to /v1/logs instead of /v1/traces
-        normalized_endpoint = self._normalize_otel_endpoint(self.OTEL_ENDPOINT, 'logs')
+        normalized_endpoint = self._normalize_otel_endpoint(self.OTEL_ENDPOINT, "logs")
 
         verbose_logger.debug(
             "OpenTelemetry: Log endpoint normalized from %s to %s",
@@ -1358,6 +1366,7 @@ class OpenTelemetry(CustomLogger):
 
         if self.OTEL_EXPORTER == "console":
             from opentelemetry.sdk._logs.export import ConsoleLogExporter
+
             verbose_logger.debug(
                 "OpenTelemetry: Using console log exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
@@ -1368,7 +1377,10 @@ class OpenTelemetry(CustomLogger):
             or self.OTEL_EXPORTER == "http/protobuf"
             or self.OTEL_EXPORTER == "http/json"
         ):
-            from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+            from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+                OTLPLogExporter,
+            )
+
             verbose_logger.debug(
                 "OpenTelemetry: Using HTTP log exporter. Value of OTEL_EXPORTER: %s, endpoint: %s",
                 self.OTEL_EXPORTER,
@@ -1378,7 +1390,10 @@ class OpenTelemetry(CustomLogger):
                 endpoint=normalized_endpoint, headers=_split_otel_headers
             )
         elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
-            from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+            from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+                OTLPLogExporter,
+            )
+
             verbose_logger.debug(
                 "OpenTelemetry: Using gRPC log exporter. Value of OTEL_EXPORTER: %s, endpoint: %s",
                 self.OTEL_EXPORTER,
@@ -1393,12 +1408,11 @@ class OpenTelemetry(CustomLogger):
                 self.OTEL_EXPORTER,
             )
             from opentelemetry.sdk._logs.export import ConsoleLogExporter
+
             return ConsoleLogExporter()
 
     def _normalize_otel_endpoint(
-        self,
-        endpoint: Optional[str],
-        signal_type: str
+        self, endpoint: Optional[str], signal_type: str
     ) -> Optional[str]:
         """
         Normalize the endpoint URL for a specific OpenTelemetry signal type.
@@ -1431,37 +1445,37 @@ class OpenTelemetry(CustomLogger):
             return endpoint
 
         # Validate signal_type
-        valid_signals = {'traces', 'metrics', 'logs'}
+        valid_signals = {"traces", "metrics", "logs"}
         if signal_type not in valid_signals:
             verbose_logger.warning(
                 "Invalid signal_type '%s' provided to _normalize_otel_endpoint. "
                 "Valid values: %s. Returning endpoint unchanged.",
                 signal_type,
-                valid_signals
+                valid_signals,
             )
             return endpoint
 
         # Remove trailing slash
-        endpoint = endpoint.rstrip('/')
+        endpoint = endpoint.rstrip("/")
 
         # Check if endpoint already ends with the correct signal path
-        target_path = f'/v1/{signal_type}'
+        target_path = f"/v1/{signal_type}"
         if endpoint.endswith(target_path):
             return endpoint
 
         # Replace existing signal path with the target signal path
         other_signals = valid_signals - {signal_type}
         for other_signal in other_signals:
-            other_path = f'/v1/{other_signal}'
+            other_path = f"/v1/{other_signal}"
             if endpoint.endswith(other_path):
-                endpoint = endpoint.rsplit('/', 1)[0] + f'/{signal_type}'
+                endpoint = endpoint.rsplit("/", 1)[0] + f"/{signal_type}"
                 return endpoint
 
         # No existing signal path found, append the target path
-        if not endpoint.endswith('/v1'):
+        if not endpoint.endswith("/v1"):
             endpoint = endpoint + target_path
         else:
-            endpoint = endpoint + f'/{signal_type}'
+            endpoint = endpoint + f"/{signal_type}"
 
         return endpoint
 
@@ -1475,11 +1489,10 @@ class OpenTelemetry(CustomLogger):
             if isinstance(headers, str):
                 # when passed HEADERS="x-honeycomb-team=B85YgLm96******"
                 # Split only on first '=' occurrence
-                parts = headers.split("=", 1)
-                if len(parts) == 2:
-                    _split_otel_headers = {parts[0]: parts[1]}
-                else:
-                    _split_otel_headers = {}
+                parts = headers.split(",")
+                for part in parts:
+                    key, value = part.split("=", 1)
+                    _split_otel_headers[key] = value
             elif isinstance(headers, dict):
                 _split_otel_headers = headers
         return _split_otel_headers

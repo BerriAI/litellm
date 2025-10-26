@@ -1796,10 +1796,13 @@ def test_provider_specific_header_multi_provider():
     }
 
 
-
 @pytest.mark.parametrize(
     "custom_llm_provider, expected_result",
-    [("anthropic", {"anthropic-beta": "test"}), ("bedrock", {"anthropic-beta": "test"}), ("vertex_ai", {"anthropic-beta": "test"})],
+    [
+        ("anthropic", {"anthropic-beta": "test"}),
+        ("bedrock", {"anthropic-beta": "test"}),
+        ("vertex_ai", {"anthropic-beta": "test"}),
+    ],
 )
 def test_provider_specific_header_in_request(custom_llm_provider, expected_result):
     from litellm.types.utils import ProviderSpecificHeader
@@ -1825,7 +1828,6 @@ def test_provider_specific_header_in_request(custom_llm_provider, expected_resul
         mock_post.assert_called_once()
         print(mock_post.call_args.kwargs["headers"])
         assert "anthropic-beta" in mock_post.call_args.kwargs["headers"]
-
 
 
 from litellm.proxy._types import LiteLLM_UserTable

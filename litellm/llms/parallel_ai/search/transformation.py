@@ -45,6 +45,10 @@ class ParallelAISearchConfig(BaseSearchConfig):
     PARALLEL_AI_API_BASE = "https://api.parallel.ai"
     PARALLEL_HEADER_SEARCH_EXTRACT_VALUE = "search-extract-2025-10-10"
     
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "Parallel AI"
+    
     def validate_environment(
         self,
         headers: Dict,

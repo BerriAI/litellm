@@ -284,7 +284,7 @@ class PillarGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug("Pillar Guardrail: Post-call hook")
 
         # Extract response messages in the format Pillar expects
-        response_dict = response.model_dump() if hasattr(response, "model_dump") else {}
+        response_dict = response.model_dump() if hasattr(response, "model_dump") else {}  # type: ignore[union-attr]
         response_messages = [
             choice.get("message")
             for choice in response_dict.get("choices", [])
