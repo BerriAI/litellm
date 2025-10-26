@@ -395,12 +395,12 @@ async def test_async_chat_azure():
             {
                 "model_name": "gpt-4.1-nano",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4.1-nano",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                 },
-                "model_info": {"base_model": "azure/gpt-4.1-nano"},
+                "model_info": {"base_model": "azure/gpt-4.1-mini"},
                 "tpm": 240000,
                 "rpm": 1800,
             },
@@ -546,7 +546,7 @@ async def test_async_chat_azure_with_fallbacks():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4.1-nano",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": "my-bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -607,7 +607,7 @@ async def test_async_completion_azure_caching():
         {
             "model_name": "gpt-4.1-nano",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/gpt-4.1-nano",
+                "model": "azure/gpt-4.1-mini",
                 "api_key": os.getenv("AZURE_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
@@ -670,7 +670,7 @@ async def test_async_completion_azure_caching_streaming():
         {
             "model_name": "gpt-4.1-nano",
             "litellm_params": {
-                "model": "azure/gpt-4.1-nano",
+                "model": "azure/gpt-4.1-mini",
                 "api_key": os.getenv("AZURE_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),

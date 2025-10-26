@@ -5,6 +5,18 @@ import TabItem from '@theme/TabItem';
 
 # Image Generations
 
+## Overview
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Cost Tracking | ✅ | Works with all supported models |
+| Logging | ✅ | Works across all integrations |
+| End-user Tracking | ✅ | |
+| Fallbacks | ✅ | Works between supported models |
+| Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to input prompts (non-streaming only) |
+| Supported Providers | OpenAI, Azure, Google AI Studio, Vertex AI, AWS Bedrock, Recraft, Xinference, Nscale | |
+
 ## Quick Start
 
 ### LiteLLM Python SDK

@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES ####################
+### INIT VARIABLES ######################
 import threading
 import os
 from typing import (

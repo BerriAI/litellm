@@ -9,6 +9,7 @@
 
 import ast
 import asyncio
+import contextvars
 import base64
 import binascii
 import copy
@@ -266,12 +267,12 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
-from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -306,6 +307,9 @@ from .types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from .types.router import LiteLLM_Params
+
+if TYPE_CHECKING:
+    from litellm import MockException
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -1296,7 +1300,11 @@ def client(original_function):  # noqa: PLR0915
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
+            # Copy the current context to propagate it to the background thread
+            # This is essential for OpenTelemetry span context propagation
+            ctx = contextvars.copy_context()
             executor.submit(
+                ctx.run,
                 logging_obj.success_handler,
                 result,
                 start_time,
@@ -3062,26 +3070,24 @@ def _remove_unsupported_params(
 def filter_out_litellm_params(kwargs: dict) -> dict:
     """
     Filter out LiteLLM internal parameters from kwargs dict.
-    
-    Returns a new dict containing only non-LiteLLM parameters that should be 
+
+    Returns a new dict containing only non-LiteLLM parameters that should be
     passed to external provider APIs.
-    
+
     Args:
         kwargs: Dictionary that may contain LiteLLM internal parameters
-        
+
     Returns:
         Dictionary with LiteLLM internal parameters filtered out
-        
+
     Example:
         >>> kwargs = {"query": "test", "shared_session": session_obj, "metadata": {}}
         >>> filtered = filter_out_litellm_params(kwargs)
         >>> # filtered = {"query": "test"}
     """
-    
+
     return {
-        key: value
-        for key, value in kwargs.items()
-        if key not in all_litellm_params
+        key: value for key, value in kwargs.items() if key not in all_litellm_params
     }
 
 
@@ -4418,6 +4424,33 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
+    # Handle Responses API streaming events
+    if hasattr(response_obj, "type") and hasattr(response_obj, "response"):
+        # This is a Responses API streaming event (e.g., ResponseCreatedEvent, ResponseCompletedEvent)
+        # Extract text from the response object's output if available
+        responses_api_response = getattr(response_obj, "response", None)
+        if responses_api_response and hasattr(responses_api_response, "output"):
+            output_list = responses_api_response.output
+            response_str = ""
+            for output_item in output_list:
+                # Handle output items with content array
+                if hasattr(output_item, "content"):
+                    for content_part in output_item.content:
+                        if hasattr(content_part, "text"):
+                            response_str += content_part.text
+                # Handle output items with direct text field
+                elif hasattr(output_item, "text"):
+                    response_str += output_item.text
+            return response_str
+
+    # Handle Responses API text delta events
+    if hasattr(response_obj, "type") and hasattr(response_obj, "delta"):
+        event_type = getattr(response_obj, "type", "")
+        if "text.delta" in event_type or "output_text.delta" in event_type:
+            delta = getattr(response_obj, "delta", "")
+            return delta if isinstance(delta, str) else ""
+
+    # Handle standard ModelResponse and ModelResponseStream
     _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
         response_obj.choices
     )
@@ -6037,6 +6070,9 @@ def mock_completion_streaming_obj(
 ):
     if isinstance(mock_response, litellm.MockException):
         raise mock_response
+    if isinstance(mock_response, ModelResponseStream):
+        yield mock_response
+        return
     for i in range(0, len(mock_response), 3):
         completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:
@@ -6056,10 +6092,16 @@ def mock_completion_streaming_obj(
 
 
 async def async_mock_completion_streaming_obj(
-    model_response, mock_response, model, n: Optional[int] = None
+    model_response,
+    mock_response: Union[str, "MockException", ModelResponseStream],
+    model,
+    n: Optional[int] = None,
 ):
     if isinstance(mock_response, litellm.MockException):
         raise mock_response
+    if isinstance(mock_response, ModelResponseStream):
+        yield mock_response
+        return
     for i in range(0, len(mock_response), 3):
         completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:
@@ -7536,6 +7578,12 @@ class ProviderConfigManager:
             )
 
             return PGVectorStoreConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.vector_stores.transformation import (
+                AzureAIVectorStoreConfig,
+            )
+
+            return AzureAIVectorStoreConfig()
         return None
 
     @staticmethod
@@ -7605,15 +7653,11 @@ class ProviderConfigManager:
         provider: LlmProviders,
     ) -> Optional[BaseVideoConfig]:
         if LlmProviders.OPENAI == provider:
-            from litellm.llms.openai.videos.transformation import (
-                OpenAIVideoConfig,
-            )
+            from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 
             return OpenAIVideoConfig()
         elif LlmProviders.AZURE == provider:
-            from litellm.llms.azure.videos.transformation import (
-                AzureVideoConfig,
-            )
+            from litellm.llms.azure.videos.transformation import AzureVideoConfig
 
             return AzureVideoConfig()
         return None
@@ -7689,15 +7733,9 @@ class ProviderConfigManager:
         """
         Get Search configuration for a given provider.
         """
-        from litellm.llms.dataforseo.search.transformation import (
-            DataForSEOSearchConfig,
-        )
-        from litellm.llms.exa_ai.search.transformation import (
-            ExaAISearchConfig,
-        )
-        from litellm.llms.google_pse.search.transformation import (
-            GooglePSESearchConfig,
-        )
+        from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
+        from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
+        from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.parallel_ai.search.transformation import (
             ParallelAISearchConfig,
         )

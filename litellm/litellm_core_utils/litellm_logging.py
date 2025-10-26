@@ -701,8 +701,13 @@ class Logging(LiteLLMLoggingBaseClass):
                 vector_store_custom_logger.__class__.__name__
             )
             # Add to global callbacks so post-call hooks are invoked
-            if vector_store_custom_logger and vector_store_custom_logger not in litellm.callbacks:
-                litellm.logging_callback_manager.add_litellm_callback(vector_store_custom_logger)
+            if (
+                vector_store_custom_logger
+                and vector_store_custom_logger not in litellm.callbacks
+            ):
+                litellm.logging_callback_manager.add_litellm_callback(
+                    vector_store_custom_logger
+                )
             return vector_store_custom_logger
 
         return None
@@ -1207,8 +1212,6 @@ class Logging(LiteLLMLoggingBaseClass):
         if discount_amount is not None:
             self.cost_breakdown["discount_amount"] = discount_amount
 
-
-
     def _response_cost_calculator(
         self,
         result: Union[
@@ -1302,6 +1305,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return None
 
         try:
+
             response_cost = litellm.response_cost_calculator(
                 **response_cost_calculator_kwargs
             )
@@ -1615,6 +1619,8 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OpenAIFileObject)
             or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
             or isinstance(logging_result, OpenAIModerationResponse)
+            or isinstance(logging_result, dict)
+            and logging_result.get("object") == "vector_store.search_results.page"
             or isinstance(logging_result, VideoObject) 
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
@@ -3105,7 +3111,7 @@ def _get_masked_values(
                 (
                     v[: unmasked_length // 2]
                     + "*" * number_of_asterisks
-                    + v[-unmasked_length // 2:]
+                    + v[-unmasked_length // 2 :]
                 )
                 if (
                     isinstance(v, str)
@@ -3116,7 +3122,7 @@ def _get_masked_values(
                     (
                         v[: unmasked_length // 2]
                         + "*" * (len(v) - unmasked_length)
-                        + v[-unmasked_length // 2:]
+                        + v[-unmasked_length // 2 :]
                     )
                     if (isinstance(v, str) and len(v) > unmasked_length)
                     else ("*****" if isinstance(v, str) else v)
@@ -4447,12 +4453,18 @@ class StandardLoggingPayloadSetup:
         return header_tags if header_tags else None
 
     @staticmethod
-    def _get_request_tags(metadata: dict, proxy_server_request: dict) -> List[str]:
-        request_tags = (
-            metadata.get("tags", [])
-            if isinstance(metadata.get("tags", []), list)
-            else []
-        )
+    def _get_request_tags(
+        litellm_params: dict, proxy_server_request: dict
+    ) -> List[str]:
+        # check for 'tags' in both 'metadata' and 'litellm_metadata'
+        metadata = litellm_params.get("metadata") or {}
+        litellm_metadata = litellm_params.get("litellm_metadata") or {}
+        if metadata.get("tags", []):
+            request_tags = metadata.get("tags", [])
+        elif litellm_metadata.get("tags", []):
+            request_tags = litellm_metadata.get("tags", [])
+        else:
+            request_tags = []
         user_agent_tags = StandardLoggingPayloadSetup._get_user_agent_tags(
             proxy_server_request
         )
@@ -4466,11 +4478,10 @@ class StandardLoggingPayloadSetup:
         return request_tags
 
 
-
 def _get_status_fields(
     status: StandardLoggingPayloadStatus,
     guardrail_information: Optional[dict],
-    error_str: Optional[str]
+    error_str: Optional[str],
 ) -> "StandardLoggingPayloadStatusFields":
     """
     Determine status fields based on request status and guardrail information.
@@ -4490,12 +4501,11 @@ def _get_status_fields(
         "guardrail_intervened": "guardrail_intervened",  # direct
         "failure": "guardrail_failed_to_respond",  # legacy
         "guardrail_failed_to_respond": "guardrail_failed_to_respond",  # direct
-        "not_run": "not_run"
+        "not_run": "not_run",
     }
 
     # Set LLM API status
     llm_api_status: StandardLoggingPayloadStatus = status
-
 
     #########################################################
     # Map - guardrail_information.guardrail_status to guardrail_status
@@ -4506,8 +4516,7 @@ def _get_status_fields(
         guardrail_status = GUARDRAIL_STATUS_MAP.get(raw_status, "not_run")
 
     return StandardLoggingPayloadStatusFields(
-        llm_api_status=llm_api_status,
-        guardrail_status=guardrail_status
+        llm_api_status=llm_api_status, guardrail_status=guardrail_status
     )
 
 
@@ -4556,7 +4565,7 @@ def get_standard_logging_object_payload(
                 )
 
         # standardize this function to be used across, s3, dynamoDB, langfuse logging
-        litellm_params = kwargs.get("litellm_params", {})
+        litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
 
         metadata: dict = (
@@ -4581,7 +4590,7 @@ def get_standard_logging_object_payload(
         _model_group = metadata.get("model_group", "")
 
         request_tags = StandardLoggingPayloadSetup._get_request_tags(
-            metadata=metadata, proxy_server_request=proxy_server_request
+            litellm_params=litellm_params, proxy_server_request=proxy_server_request
         )
 
         # cleanup timestamps
@@ -4677,8 +4686,10 @@ def get_standard_logging_object_payload(
             status=status,
             status_fields=_get_status_fields(
                 status=status,
-                guardrail_information=metadata.get("standard_logging_guardrail_information", None),
-                error_str=error_str
+                guardrail_information=metadata.get(
+                    "standard_logging_guardrail_information", None
+                ),
+                error_str=error_str,
             ),
             custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),
             saved_cache_cost=saved_cache_cost,
