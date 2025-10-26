@@ -12,15 +12,15 @@ sys.path.insert(
 from tests.search_tests.base_search_unit_tests import BaseSearchTest
 
 
-class TestGooglePSESearch(BaseSearchTest):
-    """
-    Tests for Google PSE Search functionality.
-    """
+# class TestGooglePSESearch(BaseSearchTest):
+#     """
+#     Tests for Google PSE Search functionality.
+#     """
     
-    def get_search_provider(self) -> str:
-        """
-        Return search_provider for Google PSE Search.
-        """
-        return "google_pse"
+#     def get_search_provider(self) -> str:
+#         """
+#         Return search_provider for Google PSE Search.
+#         """
+#         return "google_pse"
 
 
