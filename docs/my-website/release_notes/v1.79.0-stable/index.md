@@ -287,17 +287,3 @@ pip install litellm==1.79.0
 
 **[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.78.5-stable...v1.79.0-stable)**
 
----
-
-## PR Count Summary
-
-### 10/26/2025
-* New Models / Updated Models: 18
-* LLM API Endpoints: 25
-* Management Endpoints / UI: 5
-* Logging / Guardrail / Prompt Management Integrations: 11
-* Spend Tracking, Budgets and Rate Limiting: 2
-* MCP Gateway: 2
-* Performance / Loadbalancing / Reliability improvements: 2
-* Documentation Updates: 5
-
