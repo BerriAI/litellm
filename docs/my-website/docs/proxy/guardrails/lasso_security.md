@@ -35,7 +35,7 @@ guardrails:
       guardrail: lasso
       mode: "pre_call"
       api_key: os.environ/LASSO_API_KEY
-      api_base: "https://server.lasso.security/gateway/v3/classify"  # Optional: defaults to v3 endpoint
+      api_base: "https://server.lasso.security"
   - guardrail_name: "lasso-post-guard"
     litellm_params:
       guardrail: lasso
