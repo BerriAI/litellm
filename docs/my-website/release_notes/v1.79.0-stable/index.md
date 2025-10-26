@@ -72,7 +72,6 @@ pip install litellm==1.79.0
     - Fix cache_control incorrectly applied to all content items instead of last item only - [PR #15699](https://github.com/BerriAI/litellm/pull/15699)
     - Forward anthropic-beta headers to Bedrock, VertexAI - [PR #15700](https://github.com/BerriAI/litellm/pull/15700)
     - Change max_tokens value to match max_output_tokens for claude sonnet - [PR #15715](https://github.com/BerriAI/litellm/pull/15715)
-    - Allow prompt caching to be used for Anthropic Claude on Databricks - [PR #15801](https://github.com/BerriAI/litellm/pull/15801)
 
 - **[Bedrock](../../docs/providers/bedrock)**
     - Add AWS us-gov-west-1 Claude 3.7 Sonnet costs - [PR #15775](https://github.com/BerriAI/litellm/pull/15775)
@@ -93,6 +92,9 @@ pip install litellm==1.79.0
 - **[Vertex AI](../../docs/providers/vertex)**
     - Add mistral medium 3 and Codestral 2 on vertex - [PR #15887](https://github.com/BerriAI/litellm/pull/15887)
 
+- **[Databricks](../../docs/providers/databricks)**
+    - Allow prompt caching to be used for Anthropic Claude on Databricks - [PR #15801](https://github.com/BerriAI/litellm/pull/15801)
+
 - **[Azure](../../docs/providers/azure)**
     - Add Azure AVA TTS integration - [PR #15749](https://github.com/BerriAI/litellm/pull/15749)
     - Add Azure AVA (Speech AI) Cost Tracking - [PR #15754](https://github.com/BerriAI/litellm/pull/15754)
@@ -100,11 +102,6 @@ pip install litellm==1.79.0
 
 - **General**
     - Read from custom-llm-provider header - [PR #15528](https://github.com/BerriAI/litellm/pull/15528)
-
-### Bug Fixes
-
-- **[Bedrock](../../docs/providers/bedrock)**
-    - Hooks broken on /bedrock passthrough due to missing metadata - [PR #15849](https://github.com/BerriAI/litellm/pull/15849)
 
 ---
 
@@ -152,10 +149,12 @@ pip install litellm==1.79.0
 - **[Images API](../../docs/image_generation)**
     - Pass user-defined headers and extra_headers to image-edit calls - [PR #15811](https://github.com/BerriAI/litellm/pull/15811)
 
+- **[Bedrock /invoke](../../docs/bedrock_invoke)**
+    - Fix: Hooks broken on /bedrock passthrough due to missing metadata - [PR #15849](https://github.com/BerriAI/litellm/pull/15849)
+
 #### Bugs
 
 - **General**
-    - Fix JSON serialization error in Helicone logging by removing OpenTelemetry span from metadata - [PR #15728](https://github.com/BerriAI/litellm/pull/15728)
     - OpenAI Realtime API integration fails due to websockets.exceptions.PayloadTooBig error - [PR #15751](https://github.com/BerriAI/litellm/pull/15751)
     - Fix reasoning item ID auto-generation causing encrypted content verification errors - [PR #15782](https://github.com/BerriAI/litellm/pull/15782)
 
@@ -191,6 +190,9 @@ pip install litellm==1.79.0
 
 - **[Sentry](../../docs/proxy/logging#sentry)**
     - Add SENTRY_ENVIRONMENT configuration for Sentry integration - [PR #15760](https://github.com/BerriAI/litellm/pull/15760)
+
+- **[Helicone](../../docs/proxy/logging#helicone)**
+    - Fix JSON serialization error in Helicone logging by removing OpenTelemetry span from metadata - [PR #15728](https://github.com/BerriAI/litellm/pull/15728)
 
 - **[MLFlow](../../docs/proxy/logging#mlflow)**
     - Fix MLFlow tags - split request_tags into (key, val) if request_tag has colon - [PR #15914](https://github.com/BerriAI/litellm/pull/15914)
