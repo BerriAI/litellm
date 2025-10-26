@@ -1223,6 +1223,10 @@ mcp_servers:
     scopes: ["public_repo", "user:email"]
 ```
 
+**Note**  
+In the future, users will only need to specify the `url` of the MCP server.
+LiteLLM will automatically resolve the corresponding `authorization_url`, `token_url`, and `registration_url` based on the MCP server metadata (e.g., `.well-known/oauth-authorization-server` or `oauth-protected-resource`).
+
 [**See Claude Code Tutorial**](./tutorials/claude_responses_api#connecting-mcp-servers)
 
 ## Using your MCP with client side credentials

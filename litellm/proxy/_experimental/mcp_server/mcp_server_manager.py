@@ -206,6 +206,7 @@ class MCPServerManager:
                 scopes=server_config.get("scopes", None),
                 authorization_url=server_config.get("authorization_url", None),
                 token_url=server_config.get("token_url", None),
+                registration_url=server_config.get("registration_url", None),
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),
                 auth_type=server_config.get("auth_type", None),
@@ -356,12 +357,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
-                        server_prefix
-                    )
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
-                        server_prefix
-                    )
+                    self.tool_name_to_mcp_server_name_mapping[
+                        base_tool_name
+                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[
+                        prefixed_tool_name
+                    ] = server_prefix
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -431,6 +432,7 @@ class MCPServerManager:
                     scopes=getattr(mcp_server, "scopes", None),
                     authorization_url=getattr(mcp_server, "authorization_url", None),
                     token_url=getattr(mcp_server, "token_url", None),
+                    registration_url=getattr(mcp_server, "registration_url", None),
                     # Stdio-specific fields
                     command=getattr(mcp_server, "command", None),
                     args=getattr(mcp_server, "args", None) or [],
