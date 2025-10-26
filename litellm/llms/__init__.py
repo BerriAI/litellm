@@ -39,6 +39,10 @@ def get_cost_for_web_search_request(
         )
 
         return cost_per_web_search_request_vertex_ai(usage=usage, model_info=model_info)
+    elif custom_llm_provider == "perplexity":
+        # Perplexity handles search costs internally in its own cost calculator
+        # Return 0.0 to indicate costs are already accounted for
+        return 0.0
     else:
         return None
 
