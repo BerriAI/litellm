@@ -55,6 +55,7 @@ pip install litellm==1.79.0
 - **Vector Stores** - Vertex AI Search API integration as vector store through LiteLLM with passthrough endpoint support
 - **Guardrails Expansion** - Apply guardrails across Responses API, Image Gen, Text completions, Audio transcriptions, Audio Speech, Rerank, and Anthropic Messages API via unified `apply_guardrails` function
 - **New Guardrail Providers** - Gray Swan, Dynamo AI, IBM Guardrails, Lasso Security v3, and Bedrock Guardrail apply_guardrail endpoint support
+- **Video Generation API** - Native support for OpenAI Sora-2 and Azure Sora-2 (Pro, Pro-High-Res) with cost tracking and logging support
 - **Azure AI Speech (TTS)** - Native Azure AI Speech integration with cost tracking for standard and HD voices
 
 ---
@@ -71,6 +72,10 @@ pip install litellm==1.79.0
 | Vertex AI | `codestral-2` | 128K | $0.30 | $0.90 | Chat, function calling, tool choice |
 | Bedrock | `amazon.titan-image-generator-v1` | - | - | - | Image generation - $0.008/image, $0.01/premium image |
 | Bedrock | `amazon.titan-image-generator-v2` | - | - | - | Image generation - $0.008/image, $0.01/premium image |
+| OpenAI | `sora-2` | - | - | - | Video generation - $0.10/video/second |
+| Azure | `sora-2` | - | - | - | Video generation - $0.10/video/second |
+| Azure | `sora-2-pro` | - | - | - | Video generation - $0.30/video/second |
+| Azure | `sora-2-pro-high-res` | - | - | - | Video generation - $0.50/video/second |
 
 #### Features
 
@@ -105,6 +110,10 @@ pip install litellm==1.79.0
     - Add Azure AVA TTS integration - [PR #15749](https://github.com/BerriAI/litellm/pull/15749)
     - Add Azure AVA (Speech AI) Cost Tracking - [PR #15754](https://github.com/BerriAI/litellm/pull/15754)
     - Azure AI Speech - Ensure `voice` is mapped from request body to SSML body, allow sending `role` and `style` - [PR #15810](https://github.com/BerriAI/litellm/pull/15810)
+    - Add Azure support for video generation functionality (Sora-2) - [PR #15901](https://github.com/BerriAI/litellm/pull/15901)
+
+- **[OpenAI](../../docs/providers/openai)**
+    - OpenAI videos refactoring - [PR #15900](https://github.com/BerriAI/litellm/pull/15900)
 
 - **General**
     - Read from custom-llm-provider header - [PR #15528](https://github.com/BerriAI/litellm/pull/15528)
@@ -155,6 +164,10 @@ pip install litellm==1.79.0
 
 - **[Images API](../../docs/image_generation)**
     - Pass user-defined headers and extra_headers to image-edit calls - [PR #15811](https://github.com/BerriAI/litellm/pull/15811)
+
+- **[Video Generation API](../../docs/video_generation)**
+    - Add Azure support for video generation functionality (Sora-2, Sora-2-Pro, Sora-2-Pro-High-Res) - [PR #15901](https://github.com/BerriAI/litellm/pull/15901)
+    - OpenAI video generation refactoring (Sora-2) - [PR #15900](https://github.com/BerriAI/litellm/pull/15900)
 
 - **[Bedrock /invoke](../../docs/bedrock_invoke)**
     - Fix: Hooks broken on /bedrock passthrough due to missing metadata - [PR #15849](https://github.com/BerriAI/litellm/pull/15849)
@@ -292,8 +305,8 @@ pip install litellm==1.79.0
 ## PR Count Summary
 
 ### 10/26/2025
-* New Models / Updated Models: 18
-* LLM API Endpoints: 27
+* New Models / Updated Models: 20
+* LLM API Endpoints: 29
 * Management Endpoints / UI: 5
 * Logging / Guardrail / Prompt Management Integrations: 10
 * Spend Tracking, Budgets and Rate Limiting: 2
