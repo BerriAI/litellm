@@ -340,6 +340,7 @@ const sidebars = {
             "image_variations",
           ]
         },
+        "videos",
         {
           type: "category",
           label: "/mcp - Model Context Protocol",
