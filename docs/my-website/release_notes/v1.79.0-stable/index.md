@@ -114,6 +114,7 @@ pip install litellm==1.79.0
     - Fix Incorrect status value in responses api with gemini - [PR #15753](https://github.com/BerriAI/litellm/pull/15753)
     - Simplify reasoning item handling for gpt-5-codex - [PR #15815](https://github.com/BerriAI/litellm/pull/15815)
     - ErrorEvent ValidationError when OpenAI Responses API returns nested error structure - [PR #15804](https://github.com/BerriAI/litellm/pull/15804)
+    - Fix reasoning item ID auto-generation causing encrypted content verification errors - [PR #15782](https://github.com/BerriAI/litellm/pull/15782)
     - Support tags in metadata - [PR #15867](https://github.com/BerriAI/litellm/pull/15867)
     - Security: prevent User A from retrieving User B's response, if response.id is leaked - [PR #15757](https://github.com/BerriAI/litellm/pull/15757)
 
@@ -152,11 +153,8 @@ pip install litellm==1.79.0
 - **[Bedrock /invoke](../../docs/bedrock_invoke)**
     - Fix: Hooks broken on /bedrock passthrough due to missing metadata - [PR #15849](https://github.com/BerriAI/litellm/pull/15849)
 
-#### Bugs
-
-- **General**
-    - OpenAI Realtime API integration fails due to websockets.exceptions.PayloadTooBig error - [PR #15751](https://github.com/BerriAI/litellm/pull/15751)
-    - Fix reasoning item ID auto-generation causing encrypted content verification errors - [PR #15782](https://github.com/BerriAI/litellm/pull/15782)
+- **[Realtime API](../../docs/realtime_api)**
+    - Fix: OpenAI Realtime API integration fails due to websockets.exceptions.PayloadTooBig error - [PR #15751](https://github.com/BerriAI/litellm/pull/15751)
 
 ---
 
@@ -199,7 +197,6 @@ pip install litellm==1.79.0
 
 - **General**
     - Rename configured_cold_storage_logger to cold_storage_custom_logger - [PR #15798](https://github.com/BerriAI/litellm/pull/15798)
-    - Apply max_connections configuration to Redis async client - [PR #15797](https://github.com/BerriAI/litellm/pull/15797)
 
 #### Guardrails
 
@@ -245,6 +242,9 @@ pip install litellm==1.79.0
 
 - **Database**
     - Minimize the occurrence of deadlocks - [PR #15281](https://github.com/BerriAI/litellm/pull/15281)
+
+- **Redis**
+    - Apply max_connections configuration to Redis async client - [PR #15797](https://github.com/BerriAI/litellm/pull/15797)
 
 - **Caching**
     - Add documentation for `enable_caching_on_provider_specific_optional_params` setting - [PR #15885](https://github.com/BerriAI/litellm/pull/15885)
