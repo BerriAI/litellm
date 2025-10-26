@@ -294,19 +294,22 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
           • Keep untyped or text content.
           • Recursively redact inline base64 blobs in *any* string field, at any depth.
         """
-        messages = payload.get("messages", [])
+        raw_messages: Any = payload.get("messages", [])
+        messages: list[Any] = raw_messages if isinstance(raw_messages, list) else []
         verbose_logger.debug(f"[SQSLogger] Stripping base64 from {len(messages)} messages")
 
         def _redact_base64(value: Any) -> Any:
             """Recursively redact inline base64 from any nested structure."""
             if isinstance(value, str):
                 if _BASE64_INLINE_PATTERN.search(value):
-                    verbose_logger.debug(f"[SQSLogger] Redacted inline base64 string: {value[:40]}...")
+                    verbose_logger.debug(
+                        f"[SQSLogger] Redacted inline base64 string: {value[:40]}..."
+                    )
                     return _BASE64_INLINE_PATTERN.sub("[BASE64_REDACTED]", value)
                 return value
-            elif isinstance(value, list):
+            if isinstance(value, list):
                 return [_redact_base64(v) for v in value]
-            elif isinstance(value, dict):
+            if isinstance(value, dict):
                 return {k: _redact_base64(v) for k, v in value.items()}
             return value
 
@@ -317,27 +320,25 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             if "file" in content:
                 return False
             ctype = content.get("type")
-            if ctype and ctype != "text":
-                return False
-            return True
+            return not (isinstance(ctype, str) and ctype != "text")
 
-        def _process_messages(messages_list: list) -> list:
-            filtered_messages = []
-            for msg in messages_list or []:
+        def _process_messages(messages_list: list[Any]) -> list[dict[str, Any]]:
+            filtered_messages: list[dict[str, Any]] = []
+            for msg in messages_list:
                 if not isinstance(msg, dict):
                     continue
-                contents = msg.get("content", [])
+                contents: Any = msg.get("content")
                 if isinstance(contents, list):
-                    cleaned = []
+                    cleaned: list[Any] = []
                     for c in contents:
-                        if not _should_keep_content(c):
-                            continue
-                        cleaned.append(_redact_base64(c))
+                        if _should_keep_content(c):
+                            cleaned.append(_redact_base64(c))
                     msg["content"] = cleaned
                 else:
                     msg["content"] = _redact_base64(contents)
+
                 # 🔁 Also recursively redact any other fields on the message itself
-                for key, val in msg.items():
+                for key, val in list(msg.items()):
                     if key != "content":
                         msg[key] = _redact_base64(val)
                 filtered_messages.append(msg)
@@ -346,11 +347,18 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         if messages:
             payload["messages"] = _process_messages(messages)
 
-        total_items = sum(len(m.get("content", [])) for m in payload.get("messages", []))
+        total_items = 0
+        for m in payload.get("messages", []) or []:
+            if isinstance(m, dict):
+                content = m.get("content", [])
+                if isinstance(content, list):
+                    total_items += len(content)
+
         verbose_logger.debug(
             f"[SQSLogger] Completed base64 strip; retained {total_items} content items"
         )
         return payload
+
 
     async def async_send_message(self, payload: StandardLoggingPayload) -> None:
         try:
