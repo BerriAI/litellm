@@ -49,10 +49,6 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
         headers: dict,
     ) -> dict:
         prompt = _transform_prompt(messages=messages)
-
-        if not model.startswith("accounts/"):
-            model = f"accounts/fireworks/models/{model}"
-
         data = {
             "model": model,
             "prompt": prompt,
