@@ -6,6 +6,16 @@ import TabItem from '@theme/TabItem';
 
 Use [Lasso Security](https://www.lasso.security/) to protect your LLM applications from prompt injection attacks, harmful content generation, and other security threats through comprehensive input and output validation.
 
+## Prerequisites
+
+The Lasso guardrail requires the `ulid-py` package (version 1.1.0 or higher) for generating unique conversation identifiers:
+
+```shell
+pip install ulid-py>=1.1.0
+```
+
+This package is used to create lexicographically sortable identifiers for tracking conversations and sessions in the Lasso Security platform.
+
 ## Quick Start
 
 ### 1. Define Guardrails on your LiteLLM config.yaml 
@@ -25,7 +35,7 @@ guardrails:
       guardrail: lasso
       mode: "pre_call"
       api_key: os.environ/LASSO_API_KEY
-      api_base: "https://server.lasso.security/gateway/v3/classify"  # Optional: defaults to v3 endpoint
+      api_base: "https://server.lasso.security"
   - guardrail_name: "lasso-post-guard"
     litellm_params:
       guardrail: lasso

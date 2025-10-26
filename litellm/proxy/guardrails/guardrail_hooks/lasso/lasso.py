@@ -10,10 +10,11 @@ import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, TypedDict
 
 try:
-    from ulid import ULID
+    import ulid
 
     ULID_AVAILABLE = True
 except ImportError:
+    ulid = None  # type: ignore
     ULID_AVAILABLE = False
 
 try:
@@ -114,8 +115,8 @@ class LassoGuardrail(CustomGuardrail):
         Generate a ULID (Universally Unique Lexicographically Sortable Identifier).
         Falls back to UUID if ULID library is not available.
         """
-        if ULID_AVAILABLE:
-            return str(ULID())  # type: ignore
+        if ULID_AVAILABLE and ulid is not None:
+            return str(ulid.new())  # type: ignore
         else:
             verbose_proxy_logger.debug("ULID library not available, using UUID")
             return str(uuid.uuid4())
@@ -222,7 +223,7 @@ class LassoGuardrail(CustomGuardrail):
                 if self.mask:
                     headers = self._prepare_headers(response_data)
                     payload = self._prepare_payload(response_messages, "COMPLETION", response_data)
-                    api_url = f"{self.api_base}/gateway/v1/classifix"
+                    api_url = f"{self.api_base}/gateway/v3/classifix"
 
                     try:
                         lasso_response = await self._call_lasso_api(headers=headers, payload=payload, api_url=api_url)
@@ -370,7 +371,7 @@ class LassoGuardrail(CustomGuardrail):
         try:
             headers = self._prepare_headers(data, cache)
             payload = self._prepare_payload(messages, message_type, data, cache)
-            api_url = f"{self.api_base}/gateway/v1/classifix"
+            api_url = f"{self.api_base}/gateway/v3/classifix"
             response = await self._call_lasso_api(headers=headers, payload=payload, api_url=api_url)
             self._process_lasso_response(response)
 
@@ -513,7 +514,7 @@ class LassoGuardrail(CustomGuardrail):
         api_url: Optional[str] = None,
     ) -> LassoResponse:
         """Call the Lasso API and return the response."""
-        url = api_url or f"{self.api_base}/gateway/v2/classify"
+        url = api_url or f"{self.api_base}/gateway/v3/classify"
         verbose_proxy_logger.debug(f"Calling Lasso API with messageType: {payload.get('messageType')}")
         response = await self.async_handler.post(
             url=url,
