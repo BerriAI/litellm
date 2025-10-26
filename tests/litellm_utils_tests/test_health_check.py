@@ -3,7 +3,6 @@
 
 import os
 import sys
-import traceback
 
 import pytest
 from unittest.mock import AsyncMock, patch
