@@ -1593,8 +1593,6 @@ class BaseLLMHTTPHandler:
             headers=headers or {},
         )
 
-
-
         # Transform the request
         data = provider_config.transform_search_request(
             query=query,
@@ -1682,7 +1680,7 @@ class BaseLLMHTTPHandler:
             query=query,
             optional_params=optional_params,
         )
-        
+
         # Get complete URL (pass data for providers that need request body for URL construction)
         complete_url = provider_config.get_complete_url(
             api_base=api_base,
@@ -1704,6 +1702,7 @@ class BaseLLMHTTPHandler:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             # For search providers, use special Search provider type
             from litellm.types.llms.custom_http import httpxSpecialProvider
+
             async_httpx_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.Search
             )
@@ -1726,7 +1725,7 @@ class BaseLLMHTTPHandler:
                 response = await async_httpx_client.post(
                     url=complete_url,
                     headers=headers,
-                    json=data,
+                    json=data,  # type: ignore
                     timeout=timeout,
                 )
         except Exception as e:
@@ -4074,16 +4073,16 @@ class BaseLLMHTTPHandler:
         try:
             # Use JSON when no files, otherwise use form data with files
             if files and len(files) > 0:
-                    # Use multipart/form-data when files are present
-                    response = sync_httpx_client.post(
-                        url=api_base,
-                        headers=headers,
-                        data=data,
-                        files=files,
-                        timeout=timeout,
-                    )
+                # Use multipart/form-data when files are present
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files=files,
+                    timeout=timeout,
+                )
 
-                # --- END MOCK VIDEO RESPONSE ---
+            # --- END MOCK VIDEO RESPONSE ---
             else:
                 response = sync_httpx_client.post(
                     url=api_base,
@@ -4350,7 +4349,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=video_content_provider_config,
             )
-            
+
     def video_remix_handler(
         self,
         video_id: str,
@@ -4577,6 +4576,7 @@ class BaseLLMHTTPHandler:
         else:
             # For sync calls, we'll use the async handler in a sync context
             import asyncio
+
             return asyncio.run(
                 self.async_video_list_handler(
                     after=after,
@@ -4677,7 +4677,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=video_list_provider_config,
             )
-            
+
     async def async_video_delete_handler(
         self,
         video_id: str,
@@ -4815,12 +4815,14 @@ class BaseLLMHTTPHandler:
         )
 
         # Transform the request using the provider config
-        url, data = video_status_provider_config.transform_video_status_retrieve_request(
-            video_id=video_id,
-            model=model,
-            api_base=api_base,
-            litellm_params=litellm_params,
-            headers=headers,
+        url, data = (
+            video_status_provider_config.transform_video_status_retrieve_request(
+                video_id=video_id,
+                model=model,
+                api_base=api_base,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
         )
 
         ## LOGGING
@@ -4840,10 +4842,12 @@ class BaseLLMHTTPHandler:
                 headers=headers,
             )
 
-            return video_status_provider_config.transform_video_status_retrieve_response(
-                model=model,
-                raw_response=response,
-                logging_obj=logging_obj,
+            return (
+                video_status_provider_config.transform_video_status_retrieve_response(
+                    model=model,
+                    raw_response=response,
+                    logging_obj=logging_obj,
+                )
             )
 
         except Exception as e:
@@ -4893,12 +4897,14 @@ class BaseLLMHTTPHandler:
         )
 
         # Transform the request using the provider config
-        url, data = video_status_provider_config.transform_video_status_retrieve_request(
-            video_id=video_id,
-            model=model,
-            api_base=api_base,
-            litellm_params=litellm_params,
-            headers=headers,
+        url, data = (
+            video_status_provider_config.transform_video_status_retrieve_request(
+                video_id=video_id,
+                model=model,
+                api_base=api_base,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
         )
 
         ## LOGGING
@@ -4918,10 +4924,12 @@ class BaseLLMHTTPHandler:
                 headers=headers,
             )
 
-            return video_status_provider_config.transform_video_status_retrieve_response(
-                model=model,
-                raw_response=response,
-                logging_obj=logging_obj,
+            return (
+                video_status_provider_config.transform_video_status_retrieve_response(
+                    model=model,
+                    raw_response=response,
+                    logging_obj=logging_obj,
+                )
             )
 
         except Exception as e:
@@ -5001,6 +5009,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
+
             response = await async_httpx_client.post(
                 url=url,
                 headers=headers,
