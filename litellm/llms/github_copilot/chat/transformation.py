@@ -20,6 +20,14 @@ class GithubCopilotConfig(OpenAIConfig):
         super().__init__()
         self.authenticator = Authenticator()
 
+    def requires_custom_headers_validation(self) -> bool:
+        """
+        GitHub Copilot requires custom headers validation to add:
+        - X-Initiator header based on message roles
+        - Copilot-Vision-Request header for vision requests
+        """
+        return True
+
     def _get_openai_compatible_provider_info(
         self,
         model: str,
