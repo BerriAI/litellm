@@ -1,11 +1,10 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
-
+import json
 from typing import List, Optional, Union, Dict
 
 from litellm.types.utils import ModelResponse
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -18,7 +17,6 @@ from .models import (
     ResponseFormat,
     SAPUserMessage,
 )
-
 
 def validate_dict(data: dict, model) -> dict:
     return model(**data).model_dump(by_alias=True)
@@ -152,6 +150,17 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 "stream": stream_config,
             }
         }
+        if (
+            model.startswith('anthropic')
+            or model.startswith("amazon")
+            or model.startswith("cohere")
+            or model.startswith("alephalpha")
+            or model == "gpt-4"
+        ):
+            config["config"]["modules"]["prompt_templating"]["prompt"].pop("response_format")
+            config["config"]["modules"]["prompt_templating"]["prompt"]["template"].append(
+                {"role":"system",
+                 'content':json.dumps(response_format, ensure_ascii=False)})
 
         return config
 
