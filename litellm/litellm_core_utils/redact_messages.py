@@ -112,8 +112,6 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
     """
     litellm_params = model_call_details.get("litellm_params", {})
     
-    # Get the appropriate metadata field based on what's present in litellm_params
-    # Responses API uses 'litellm_metadata', completion API uses 'metadata'
     metadata_field = get_metadata_variable_name_from_kwargs(litellm_params)
     metadata = litellm_params.get(metadata_field, {})
     
