@@ -63,7 +63,7 @@ class DatabricksBase:
         self,
         api_key: Optional[str],
         api_base: Optional[str],
-        endpoint_type: Literal["chat_completions", "embeddings"],
+        endpoint_type: Literal["chat_completions", "embeddings", "anthropic_messages"],
         custom_endpoint: Optional[bool],
         headers: Optional[dict],
     ) -> Tuple[str, dict]:
@@ -105,4 +105,7 @@ class DatabricksBase:
             api_base = "{}/chat/completions".format(api_base)
         elif endpoint_type == "embeddings" and custom_endpoint is not True:
             api_base = "{}/embeddings".format(api_base)
+        elif endpoint_type == "anthropic_messages":
+            # For native Anthropic endpoints, don't append any suffix
+            pass
         return api_base, headers
