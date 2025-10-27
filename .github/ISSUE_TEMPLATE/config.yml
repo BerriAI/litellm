@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Schedule Demo
+    url: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat
+    about: Speak directly with Krrish and Ishaan, the founders, to discuss issues, share feedback, or explore improvements for LiteLLM
+  - name: Discord
+    url: https://discord.com/invite/wuPM9dRgDw
+    about: Join 250+ LiteLLM community members! 

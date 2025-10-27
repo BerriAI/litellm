@@ -1,0 +1,6 @@
+litellm[proxy]==1.67.4.dev1 # Specify the litellm version you want to use
+prometheus_client
+langfuse
+prisma
+openai==1.99.9
+ddtrace==2.19.0 # for advanced DD tracing / profiling

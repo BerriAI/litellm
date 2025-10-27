@@ -1,0 +1,250 @@
+# Default values for litellm.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  # Use "ghcr.io/berriai/litellm-database" for optimized image with database
+  repository: ghcr.io/berriai/litellm-database
+  pullPolicy: Always
+  # Overrides the image tag whose default is the chart appVersion.
+  # tag: "main-latest"
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: "litellm"
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: false
+  # Automatically mount a ServiceAccount's API credentials?
+  automount: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# annotations for litellm deployment
+deploymentAnnotations: {}
+# annotations for litellm pods
+podAnnotations: {}
+podLabels: {}
+
+# At the time of writing, the litellm docker image requires write access to the
+#  filesystem on startup so that prisma can install some dependencies.
+podSecurityContext: {}
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #     - ALL
+  # readOnlyRootFilesystem: false
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+# A list of Kubernetes Secret objects that will be exported to the LiteLLM proxy
+#  pod as environment variables.  These secrets can then be referenced in the
+#  configuration file (or "litellm" ConfigMap) with `os.environ/<Env Var Name>`
+environmentSecrets: []
+  # - litellm-env-secret
+
+# A list of Kubernetes ConfigMap objects that will be exported to the LiteLLM proxy
+#  pod as environment variables.  The ConfigMap kv-pairs can then be referenced in the
+#  configuration file (or "litellm" ConfigMap) with `os.environ/<Env Var Name>`
+environmentConfigMaps: []
+  # - litellm-env-configmap
+
+service:
+  type: ClusterIP
+  port: 4000
+  # If service type is `LoadBalancer` you can
+  # optionally specify loadBalancerClass
+  # loadBalancerClass: tailscale
+
+# Separate health app configuration
+# When enabled, health checks will use a separate port and the application
+# will receive SEPARATE_HEALTH_APP=1 and SEPARATE_HEALTH_PORT from environment variables
+separateHealthApp: false
+separateHealthPort: 8081
+
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: api.example.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
+
+# masterkey: changeit
+
+# if set, use this secret for the master key; otherwise, autogenerate a new one
+masterkeySecretName: ""
+
+# if set, use this secret key for the master key; otherwise, use the default key
+masterkeySecretKey: ""
+
+proxyConfigMap:
+  # when true, creates a new configmap
+  create: true
+  # if create is false and name is set, use existing ConfigMap
+  # create: false
+  # name: ""
+  # key: "config.yaml"
+
+# The elements within proxy_config are rendered as config.yaml for the proxy
+#  Examples: https://github.com/BerriAI/litellm/tree/main/litellm/proxy/example_config_yaml
+#  Reference: https://docs.litellm.ai/docs/proxy/configs
+proxy_config:
+  model_list:
+    # At least one model must exist for the proxy to start.
+    - model_name: gpt-3.5-turbo
+      litellm_params:
+        model: gpt-3.5-turbo
+        api_key: eXaMpLeOnLy
+    - model_name: fake-openai-endpoint
+      litellm_params:
+        model: openai/fake
+        api_key: fake-key
+        api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  general_settings:
+    master_key: os.environ/PROXY_MASTER_KEY
+
+resources: {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+# Additional volumes on the output Deployment definition.
+volumes: []
+# - name: foo
+#   secret:
+#     secretName: mysecret
+#     optional: false
+
+# Additional volumeMounts on the output Deployment definition.
+volumeMounts: []
+# - name: foo
+#   mountPath: "/etc/foo"
+#   readOnly: true
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+db:
+  # Use an existing postgres server/cluster
+  useExisting: false
+
+  # How to connect to the existing postgres server/cluster
+  endpoint: localhost
+  database: litellm
+  url: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)
+  secret:
+    name: postgres
+    usernameKey: username
+    passwordKey: password
+    # Optional: when set, DATABASE_HOST will be sourced from this secret key instead of db.endpoint
+    endpointKey: ""
+
+  # Use the Stackgres Helm chart to deploy an instance of a Stackgres cluster.
+  #  The Stackgres Operator must already be installed within the target
+  #  Kubernetes cluster.
+  # TODO: Stackgres deployment currently unsupported
+  useStackgresOperator: false
+
+  # Use the Postgres Helm chart to create a single node, stand alone postgres
+  #  instance.  See the "postgresql" top level key for additional configuration.
+  deployStandalone: true
+
+# Settings for Bitnami postgresql chart (if db.deployStandalone is true, ignored
+#  otherwise)
+postgresql:
+  architecture: standalone
+  auth:
+    username: litellm
+    database: litellm
+
+    # You should override these on the helm command line with
+    #  `--set postgresql.auth.postgres-password=<some good password>,postgresql.auth.password=<some good password>`
+    password: NoTaGrEaTpAsSwOrD
+    postgres-password: NoTaGrEaTpAsSwOrD
+
+    # A secret is created by this chart (litellm-helm) with the credentials that
+    #  the new Postgres instance should use.
+    # existingSecret: ""
+    # secretKeys:
+    #   userPasswordKey: password
+
+# requires cache: true in config file
+# either enable this or pass a secret for REDIS_HOST, REDIS_PORT, REDIS_PASSWORD or REDIS_URL
+# with cache: true to use existing redis instance
+redis:
+  enabled: false
+  architecture: standalone
+
+# Prisma migration job settings
+migrationJob:
+  enabled: true # Enable or disable the schema migration Job
+  retries: 3 # Number of retries for the Job in case of failure
+  backoffLimit: 4 # Backoff limit for Job restarts
+  disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
+  annotations: {}
+  ttlSecondsAfterFinished: 120
+  resources: {}
+  #  requests:
+  #    cpu: 100m
+  #    memory: 100Mi
+  extraContainers: []
+  
+  # Hook configuration
+  hooks:
+    argocd:
+      enabled: true
+    helm:
+      enabled: false
+
+# Additional environment variables to be added to the deployment as a map of key-value pairs
+envVars: {
+    # USE_DDTRACE: "true"
+}
+
+# Additional environment variables to be added to the deployment as a list of k8s env vars
+extraEnvVars: {
+    # - name: EXTRA_ENV_VAR
+    #   value: EXTRA_ENV_VAR_VALUE
+}
+
+# Pod Disruption Budget
+pdb:
+  enabled: false
+  # Set exactly one of the following. If both are set, minAvailable takes precedence.
+  minAvailable: null     # e.g. "50%" or 1
+  maxUnavailable: null   # e.g. 1 or "20%"
+  annotations: {}
+  labels: {}

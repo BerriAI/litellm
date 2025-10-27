@@ -1,0 +1,158 @@
+services:
+  litellm:
+    # build:
+    #   context: .
+    #   args:
+    #     target: runtime
+    image: ghcr.io/berriai/litellm:main-stable
+    #########################################
+    ## Config file for LiteLLM proxy with usage tracking ##
+    volumes:
+      - ./config.yaml:/app/config.yaml
+    command:
+      - "--config=/app/config.yaml"
+    ##############################################
+    ports:
+      - "4000:4000" # Map the container port to the host, accessible from all interfaces
+    environment:
+      DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
+      STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
+    env_file:
+      - .env # Load local .env file
+    depends_on:
+      - db  # Indicates that this service depends on the 'db' service, ensuring 'db' starts first
+      - redis  # Add Redis dependency for caching
+    healthcheck:  # Defines the health check configuration for the container
+      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 http://localhost:4000/health/liveliness || exit 1" ]  # Command to execute for health check
+      interval: 30s  # Perform health check every 30 seconds
+      timeout: 10s   # Health check command times out after 10 seconds
+      retries: 3     # Retry up to 3 times if health check fails
+      start_period: 40s  # Wait 40 seconds after container start before beginning health checks
+
+  db:
+    image: postgres:16
+    restart: always
+    container_name: litellm_db
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: dbpassword9090
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data # Persists Postgres data across container restarts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - prometheus_data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "0.0.0.0:9092:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=90d"
+      - "--storage.tsdb.retention.size=10GB"
+      - "--web.enable-lifecycle"
+    restart: always
+    depends_on:
+      - litellm
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  grafana:
+    image: grafana/grafana-oss:11.3.1
+    ports:
+      - "0.0.0.0:3098:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_DOMAIN=dash.pro-4.ru
+      - GF_SERVER_ROOT_URL=https://dash.pro-4.ru/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=false
+      # Plugin management permissions
+      - GF_PLUGINS_PLUGIN_ADMIN_ENABLED=true
+      - GF_PLUGINS_PLUGIN_ADMIN_EXTERNAL_MANAGE_ENABLED=true
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=true
+      # Support for legacy Angular plugins (if needed)
+      - GF_PLUGINS_ANGULAR_DETECTION_MODE=detect
+      # Feature toggles for UI features and navigation (for Grafana 11.3.1)
+      - GF_FEATURE_TOGGLES_ENABLE=pluginCatalogFilter,newDashboardSharingComponent,externalCorePlugins
+      # Plugin API endpoints configuration
+      - GF_PLUGINS_ENABLE_ALPHA=true
+      - GF_UNIFIED_ALERTING_ENABLED=true
+      # Plugin catalog and marketplace settings (based on community solutions)
+      - GF_PLUGINS_PLUGIN_MARKETPLACE=true
+      - GF_PLUGINS_CATALOG_ENABLED=true
+      - GF_INSTALL_CATALOG_API_URL=https://grafana.com/api/plugins
+      - GF_PLUGINS_GRAFANA_NET_API_URL=https://grafana.com/api/grafana
+      # Additional settings to fix plugin catalog visibility issues
+      - GF_PLUGINS_HIDE_ANGULAR_DEPRECATION=true
+      - GF_SERVER_ENABLE_GZIP=true
+      - GF_ENTERPRISE_LICENSE_VALIDATION_TYPE=none
+      # Modern plugin auto-installation (replaces deprecated GF_INSTALL_PLUGINS)
+      # Temporarily disabled problematic plugins
+      # - GF_PLUGINS_PREINSTALL=grafana-clock-panel,grafana-worldmap-panel,grafana-stat-panel
+    restart: always
+    depends_on:
+      - prometheus
+
+  litellm-metrics-exporter:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.11-slim
+        RUN pip install psycopg2-binary prometheus_client
+        COPY litellm_simple_working_exporter.py /app/litellm_simple_working_exporter.py
+        WORKDIR /app
+        CMD ["python", "litellm_simple_working_exporter.py"]
+    ports:
+      - "9090:9090"
+    environment:
+      DB_HOST: "db"
+      DB_PORT: "5432"
+      DB_USER: "llmproxy"
+      DB_PASSWORD: "dbpassword9090"
+      DB_NAME: "litellm"
+      METRICS_PORT: "9090"
+      SCRAPE_INTERVAL: "30"
+    restart: always
+    depends_on:
+      - db
+      - litellm
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9090/metrics')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+
+volumes:
+  prometheus_data:
+    driver: local
+  postgres_data:
+    name: litellm_postgres_data # Named volume for Postgres data persistence
+  redis_data:
+    driver: local
+  grafana_data:
+    driver: local

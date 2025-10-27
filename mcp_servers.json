@@ -1,0 +1,18 @@
+{
+    "zapier": {
+        "sse_url": "https://mcp.zapier.com/api/mcp"
+    },
+    "deepwiki": {
+        "http_url": "https://mcp.deepwiki.com/mcp",
+        "sse_url": "https://mcp.deepwiki.com/sse",
+        "description": "The DeepWiki MCP server provides programmatic access to DeepWiki's repository documentation (Devin Wiki) and search capabilities (Devin Search)."
+    },
+    "jira": {
+        "sse_url": "https://mcp.atlassian.com/v1/sse",
+        "description": "The Jira MCP server provides programmatic access to Jira's issue tracking capabilities."
+    },
+    "linear": {
+        "sse_url": "https://mcp.linear.app/sse",
+        "description": "The Linear MCP server provides programmatic access to Linear's issue tracking capabilities."
+    }
+}

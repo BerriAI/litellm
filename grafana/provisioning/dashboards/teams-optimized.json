@@ -1,0 +1,426 @@
+{
+  "id": null,
+  "uid": "teams-optimized",
+  "title": "LiteLLM - Проекты (Performance Optimized - FIXED)",
+  "tags": ["litellm", "teams"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "schemaVersion": 30,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "team_filter",
+        "label": "🏢 Проекты",
+        "type": "query",
+        "query": "label_values(litellm_spend_usd_total{team_alias!=\"\"}, team_alias)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": [],
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(litellm_spend_usd_total{team_alias!=\"\"}, team_alias)",
+        "hide": 0,
+        "sort": 1,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "💰 Общие расходы проектов (Всего)",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  SUM(sl.spend) as total_spend\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND (sl.metadata->>'user_api_key_team_alias' ~ '$team_filter' OR '$team_filter' = '.*')\n  AND sl.metadata->>'user_api_key_team_alias' IS NOT NULL\n  AND sl.metadata->>'user_api_key_team_alias' != ''"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 100},
+              {"color": "red", "value": 1000}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "📈 Прогноз на месяц по проектам",
+      "type": "table",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "WITH project_projections AS (\n  SELECT\n    COALESCE(sl.metadata->>'user_api_key_team_alias', 'unknown') as project,\n    ROUND((SUM(sl.spend) / NULLIF(COUNT(DISTINCT DATE(sl.\"startTime\")), 0) * 30)::numeric, 2) as projection,\n    1 as sort_order\n  FROM \"LiteLLM_SpendLogs\" sl\n  WHERE\n    sl.\"startTime\" >= $__timeFrom()\n    AND sl.\"startTime\" < $__timeTo()\n    AND (sl.metadata->>'user_api_key_team_alias' ~ '$team_filter' OR '$team_filter' = '.*')\n    AND sl.metadata->>'user_api_key_team_alias' IS NOT NULL\n    AND sl.metadata->>'user_api_key_team_alias' != ''\n  GROUP BY sl.metadata->>'user_api_key_team_alias'\n  HAVING SUM(sl.spend) > 0\n),\ntotal_projection AS (\n  SELECT\n    '🔹 ИТОГО' as project,\n    ROUND(SUM(projection)::numeric, 2) as projection,\n    0 as sort_order\n  FROM project_projections\n)\nSELECT\n  project as \"🏢 Проект\",\n  projection as \"📈 Прогноз/мес ($)\"\nFROM (\n  SELECT * FROM total_projection\n  UNION ALL\n  SELECT * FROM project_projections\n) combined\nORDER BY sort_order, projection DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "📈 Прогноз/мес ($)"},
+            "properties": [
+              {"id": "unit", "value": "currencyUSD"},
+              {"id": "decimals", "value": 2},
+              {"id": "custom.cellOptions", "value": {"type": "color-background"}},
+              {"id": "color", "value": {"mode": "continuous-GrYlRd"}}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "🏢 Проект"},
+            "properties": [
+              {"id": "custom.width", "value": 180}
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{"desc": true, "displayName": "📈 Прогноз/мес ($)"}]
+      }
+    },
+    {
+      "id": 4,
+      "title": "💰 Распределение расходов",
+      "type": "piechart",
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 8},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  NOW() as time,\n  COALESCE(sl.metadata->>'user_api_key_team_alias', 'unknown') as metric,\n  SUM(sl.spend) as value\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND (sl.metadata->>'user_api_key_team_alias' ~ '$team_filter' OR '$team_filter' = '.*')\n  AND sl.metadata->>'user_api_key_team_alias' IS NOT NULL\n  AND sl.metadata->>'user_api_key_team_alias' != ''\nGROUP BY sl.metadata->>'user_api_key_team_alias'\nHAVING SUM(sl.spend) > 0\nORDER BY value DESC\nLIMIT 10"
+        }
+      ],
+      "options": {
+        "pieType": "donut",
+        "legend": {"displayMode": "table", "placement": "right", "values": ["value", "percent"]}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": {"mode": "palette-classic"}
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "🤖 Распределение по моделям",
+      "type": "piechart",
+      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 8},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  NOW() as time,\n  COALESCE(model, 'unknown') as metric,\n  SUM(spend) as value\nFROM \"LiteLLM_SpendLogs\"\nWHERE\n  \"startTime\" >= $__timeFrom()\n  AND \"startTime\" < $__timeTo()\n  AND model != ''\nGROUP BY model\nHAVING SUM(spend) > 0\nORDER BY value DESC\nLIMIT 10"
+        }
+      ],
+      "options": {
+        "pieType": "donut",
+        "legend": {"displayMode": "table", "placement": "right", "values": ["value", "percent"]}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": {"mode": "palette-classic"}
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "📈 Динамика расходов по проектам",
+      "type": "timeseries",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 18},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  date_trunc('hour', sl.\"startTime\") as time,\n  COALESCE(sl.metadata->>'user_api_key_team_alias', 'unknown') as metric,\n  SUM(sl.spend) as value\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND (sl.metadata->>'user_api_key_team_alias' ~ '$team_filter' OR '$team_filter' = '.*')\n  AND sl.metadata->>'user_api_key_team_alias' IS NOT NULL\n  AND sl.metadata->>'user_api_key_team_alias' != ''\nGROUP BY date_trunc('hour', sl.\"startTime\"), sl.metadata->>'user_api_key_team_alias'\nORDER BY time, metric"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "pointSize": 4,
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "values": ["current", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "🏢 Детальная таблица проектов",
+      "type": "table",
+      "gridPos": {"h": 12, "w": 24, "x": 0, "y": 28},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  COALESCE(sl.metadata->>'user_api_key_team_alias', 'unknown') as \"🏢 Проект\",\n  ROUND(SUM(sl.spend)::numeric, 2) as \"💰 Расходы ($)\",\n  ROUND((SUM(sl.spend) / SUM(SUM(sl.spend)) OVER() * 100)::numeric, 1) as \"📊 Доля (%)\",\n  COUNT(*) as \"📈 Запросов\",\n  SUM(sl.prompt_tokens) as \"📝 Prompt (ток)\",\n  SUM(sl.completion_tokens) as \"💬 Compl. (ток)\",\n  SUM(sl.prompt_tokens + sl.completion_tokens) as \"🔢 Всего (ток)\",\n  ROUND((SUM(sl.prompt_tokens + sl.completion_tokens)::numeric / NULLIF(COUNT(*), 0))::numeric, 0) as \"📏 Ток/запрос\",\n  ROUND((SUM(sl.spend) / NULLIF(SUM(sl.prompt_tokens + sl.completion_tokens), 0) * 1000000)::numeric, 2) as \"💵 $/1M ток\",\n  ROUND((SUM(sl.prompt_tokens + sl.completion_tokens) / NULLIF(SUM(sl.spend), 0))::numeric, 0) as \"⚡ Ток/$\",\n  ROUND((SUM(sl.spend) / NULLIF(COUNT(*), 0))::numeric, 4) as \"💸 $/запрос\"\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND (sl.metadata->>'user_api_key_team_alias' ~ '$team_filter' OR '$team_filter' = '.*')\n  AND sl.metadata->>'user_api_key_team_alias' IS NOT NULL\n  AND sl.metadata->>'user_api_key_team_alias' != ''\nGROUP BY sl.metadata->>'user_api_key_team_alias'\nHAVING SUM(sl.spend) > 0\nORDER BY \"💰 Расходы ($)\" DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "💰 Расходы ($)"},
+            "properties": [
+              {"id": "unit", "value": "currencyUSD"},
+              {"id": "decimals", "value": 2},
+              {"id": "custom.cellOptions", "value": {"type": "color-background"}},
+              {"id": "color", "value": {"mode": "continuous-GrYlRd"}}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "📊 Доля (%)"},
+            "properties": [
+              {"id": "unit", "value": "percent"},
+              {"id": "decimals", "value": 1}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "📈 Запросов"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "📝 Prompt (ток)"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "💬 Compl. (ток)"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "🔢 Всего (ток)"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "📏 Ток/запрос"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "💵 $/1M ток"},
+            "properties": [
+              {"id": "unit", "value": "currencyUSD"},
+              {"id": "decimals", "value": 2}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "⚡ Ток/$"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "💸 $/запрос"},
+            "properties": [
+              {"id": "unit", "value": "currencyUSD"},
+              {"id": "decimals", "value": 4}
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{"desc": true, "displayName": "💰 Расходы ($)"}]
+      }
+    },
+    {
+      "id": 9,
+      "title": "🤖 Детальная таблица моделей",
+      "type": "table",
+      "gridPos": {"h": 12, "w": 24, "x": 0, "y": 40},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  COALESCE(model, 'unknown') as \"🤖 Модель\",\n  ROUND(SUM(spend)::numeric, 2) as \"💰 Расходы ($)\",\n  ROUND((SUM(spend) / SUM(SUM(spend)) OVER() * 100)::numeric, 1) as \"📊 Доля (%)\",\n  COUNT(*) as \"📈 Запросов\",\n  SUM(prompt_tokens) as \"📝 Prompt (ток)\",\n  SUM(completion_tokens) as \"💬 Compl. (ток)\",\n  SUM(prompt_tokens + completion_tokens) as \"🔢 Всего (ток)\",\n  ROUND((SUM(prompt_tokens + completion_tokens)::numeric / NULLIF(COUNT(*), 0))::numeric, 0) as \"📏 Ток/запрос\",\n  ROUND((SUM(spend) / NULLIF(SUM(prompt_tokens + completion_tokens), 0) * 1000000)::numeric, 2) as \"💵 $/1M ток\",\n  ROUND((SUM(prompt_tokens + completion_tokens) / NULLIF(SUM(spend), 0))::numeric, 0) as \"⚡ Ток/$\",\n  ROUND((SUM(spend) / NULLIF(COUNT(*), 0))::numeric, 4) as \"💸 $/запрос\"\nFROM \"LiteLLM_SpendLogs\"\nWHERE\n  \"startTime\" >= $__timeFrom()\n  AND \"startTime\" < $__timeTo()\n  AND model != ''\nGROUP BY model\nHAVING SUM(spend) > 0\nORDER BY \"💰 Расходы ($)\" DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "💰 Расходы ($)"},
+            "properties": [
+              {"id": "unit", "value": "currencyUSD"},
+              {"id": "decimals", "value": 2},
+              {"id": "custom.cellOptions", "value": {"type": "color-background"}},
+              {"id": "color", "value": {"mode": "continuous-GrYlRd"}}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "📊 Доля (%)"},
+            "properties": [
+              {"id": "unit", "value": "percent"},
+              {"id": "decimals", "value": 1}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "📈 Запросов"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "📝 Prompt (ток)"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "💬 Compl. (ток)"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "🔢 Всего (ток)"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "📏 Ток/запрос"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "💵 $/1M ток"},
+            "properties": [
+              {"id": "unit", "value": "currencyUSD"},
+              {"id": "decimals", "value": 2}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "⚡ Ток/$"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "💸 $/запрос"},
+            "properties": [
+              {"id": "unit", "value": "currencyUSD"},
+              {"id": "decimals", "value": 4}
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{"desc": true, "displayName": "💰 Расходы ($)"}]
+      }
+    }
+  ],
+  "overwrite": true
+}

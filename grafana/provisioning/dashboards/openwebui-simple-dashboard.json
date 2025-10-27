@@ -1,0 +1,705 @@
+{
+  "id": null,
+  "uid": "openwebui-simple",
+  "title": "OpenWebUI - Простая панель",
+  "tags": ["litellm", "openwebui", "simple"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "schemaVersion": 30,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "user_filter",
+        "label": "👤 Фильтр по пользователям",
+        "type": "query",
+        "query": "SELECT DISTINCT sl.end_user as user_alias FROM \"LiteLLM_SpendLogs\" sl WHERE sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI' AND sl.end_user IS NOT NULL AND sl.end_user != '' ORDER BY user_alias",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": [],
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres"
+        },
+        "hide": 0,
+        "sort": 0,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 2,
+      "title": "💰 Общие расходы",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 4, "x": 0, "y": 1},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  SUM(sl.spend) as total_spend\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 10},
+              {"color": "red", "value": 100}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "📊 Всего запросов",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 4, "x": 4, "y": 1},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  COUNT(*) as total_requests\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "⬇️ Входные токены",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 4, "x": 8, "y": 1},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  SUM(sl.prompt_tokens) as prompt_tokens\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {"mode": "fixed", "fixedColor": "blue"}
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "⬆️ Выходные токены",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 4, "x": 12, "y": 1},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  SUM(sl.completion_tokens) as completion_tokens\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {"mode": "fixed", "fixedColor": "green"}
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "⚖️ Соотношение вх/вых",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 4, "x": 16, "y": 1},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  ROUND((SUM(sl.prompt_tokens)::numeric / NULLIF(SUM(sl.completion_tokens), 0))::numeric, 2) as token_ratio\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decimal",
+          "decimals": 2,
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 2},
+              {"color": "red", "value": 5}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 7,
+      "title": "⚡ Эффективность (Токенов/$)",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 4, "x": 20, "y": 1},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  ROUND((SUM(sl.prompt_tokens + sl.completion_tokens)::numeric / NULLIF(SUM(sl.spend), 0))::numeric, 0) as tokens_per_dollar\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "displayName": "Токенов/$"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "📈 Распределение токенов",
+      "type": "piechart",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 9},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  NOW() as time,\n  'prompt' as metric,\n  SUM(sl.prompt_tokens) as value\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''\nUNION ALL\nSELECT\n  NOW() as time,\n  'completion' as metric,\n  SUM(sl.completion_tokens) as value\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''"
+        }
+      ],
+      "options": {
+        "pieType": "donut",
+        "legend": {"displayMode": "table", "placement": "right", "values": ["value", "percent"]}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "palette-classic"}
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "📈 Динамика расходов",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 9},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  date_trunc('hour', sl.\"startTime\") as time,\n  'Почасовые расходы' as metric,\n  SUM(sl.spend) as value\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''\nGROUP BY date_trunc('hour', sl.\"startTime\")\nORDER BY time"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        }
+      }
+    },
+    {
+      "id": 25,
+      "title": "📈 Прогноз на месяц",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 9},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  ROUND((SUM(sl.spend) / NULLIF(COUNT(DISTINCT DATE(sl.\"startTime\")), 0) * 30)::numeric, 0) as monthly_forecast\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 0,
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 500},
+              {"color": "red", "value": 1000}
+            ]
+          },
+          "displayName": "Прогноз $/месяц"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "👥 АНАЛИТИКА ПОЛЬЗОВАТЕЛЕЙ",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17},
+      "collapsed": false
+    },
+    {
+      "id": 11,
+      "title": "🏆 Топ пользователей по расходам (Нажмите на имя для детализации)",
+      "type": "table",
+      "gridPos": {"h": 20, "w": 24, "x": 0, "y": 18},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  COALESCE(sl.end_user, 'unknown') as \"👤 Пользователь\",\n  ROUND(SUM(sl.spend)::numeric, 2) as \"💰 Общие расходы\",\n  ROUND((SUM(sl.spend) / SUM(SUM(sl.spend)) OVER())::numeric, 3) as \"📈 % от общих\",\n  COUNT(*) as \"📊 Всего запросов\",\n  SUM(sl.prompt_tokens + sl.completion_tokens) as \"🔢 Всего токенов\",\n  SUM(sl.prompt_tokens) as \"⬇️ Входные токены\",\n  SUM(sl.completion_tokens) as \"⬆️ Выходные токены\",\n  ROUND((SUM(sl.prompt_tokens)::numeric / NULLIF(SUM(sl.completion_tokens), 0))::numeric, 2) as \"⚖️ In/Out\",\n  ROUND((SUM(sl.prompt_tokens + sl.completion_tokens)::numeric / NULLIF(SUM(sl.spend), 0))::numeric, 0) as \"⚡ Токены за $\",\n  ROUND((SUM(sl.spend) / NULLIF(COUNT(*), 0))::numeric, 4) as \"💵 Стоимость за запрос\"\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''\nGROUP BY sl.end_user\nHAVING SUM(sl.spend) > 0\nORDER BY \"💰 Общие расходы\" DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "👤 Пользователь"},
+            "properties": [
+              {"id": "links", "value": [
+                {
+                  "title": "🔍 Подробная информация о пользователе",
+                  "url": "/d/openwebui-user-simple?var-selected_user=${__data.fields['👤 Пользователь']}&from=${__from}&to=${__to}",
+                  "targetBlank": false
+                }
+              ]}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "💰 Общие расходы"},
+            "properties": [
+              {"id": "unit", "value": "currencyUSD"},
+              {"id": "decimals", "value": 2}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "📈 % от общих"},
+            "properties": [
+              {"id": "unit", "value": "percentunit"},
+              {"id": "decimals", "value": 1}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "📊 Всего запросов"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "🔢 Всего токенов"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "⬇️ Входные токены"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "⬆️ Выходные токены"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "⚖️ In/Out"},
+            "properties": [
+              {"id": "unit", "value": "none"},
+              {"id": "decimals", "value": 2}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "⚡ Токены за $"},
+            "properties": [
+              {"id": "unit", "value": "short"},
+              {"id": "decimals", "value": 0}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "💵 Стоимость за запрос"},
+            "properties": [
+              {"id": "unit", "value": "currencyUSD"},
+              {"id": "decimals", "value": 4}
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{"desc": true, "displayName": "💰 Общие расходы"}]
+      }
+    },
+    {
+      "id": 15,
+      "title": "🤖 АНАЛИТИКА МОДЕЛЕЙ",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 48},
+      "collapsed": false
+    },
+    {
+      "id": 12,
+      "title": "💰 Расходы пользователей по моделям",
+      "type": "barchart",
+      "gridPos": {"h": 15, "w": 12, "x": 0, "y": 72},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  sl.end_user as \"end_user_alias\",\n  sl.model,\n  SUM(sl.spend) as \"Value\"\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''\nGROUP BY sl.end_user, sl.model\nHAVING SUM(sl.spend) > 0\nORDER BY \"Value\" DESC"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"Time": true},
+            "renameByName": {
+              "end_user_alias": "Пользователь",
+              "model": "Модель",
+              "Value": "Расходы"
+            }
+          }
+        },
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "fieldName": "Расходы",
+                "config": {
+                  "id": "greater",
+                  "options": {"value": 0}
+                }
+              }
+            ],
+            "type": "include"
+          }
+        },
+        {
+          "id": "groupingToMatrix",
+          "options": {
+            "columnField": "Модель",
+            "rowField": "Пользователь",
+            "valueField": "Расходы"
+          }
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "barWidth": 0.8,
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": ["value"]
+        },
+        "stacking": {
+          "mode": "normal",
+          "group": "A"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {"mode": "palette-classic"}
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "🔢 Использование токенов по моделям",
+      "type": "barchart",
+      "gridPos": {"h": 15, "w": 12, "x": 12, "y": 72},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  sl.end_user as \"end_user_alias\",\n  sl.model,\n  SUM(sl.prompt_tokens + sl.completion_tokens) as \"Value\"\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''\nGROUP BY sl.end_user, sl.model\nHAVING SUM(sl.prompt_tokens + sl.completion_tokens) > 0\nORDER BY \"Value\" DESC"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"Time": true},
+            "renameByName": {
+              "end_user_alias": "Пользователь",
+              "model": "Модель",
+              "Value": "Токены"
+            }
+          }
+        },
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "fieldName": "Токены",
+                "config": {
+                  "id": "greater",
+                  "options": {"value": 0}
+                }
+              }
+            ],
+            "type": "include"
+          }
+        },
+        {
+          "id": "groupingToMatrix",
+          "options": {
+            "columnField": "Модель",
+            "rowField": "Пользователь",
+            "valueField": "Токены"
+          }
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "barWidth": 0.8,
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": ["value"]
+        },
+        "stacking": {
+          "mode": "normal",
+          "group": "A"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {"mode": "palette-classic"}
+        }
+      }
+    },
+    {
+      "id": 14,
+      "title": "📊 Запросы пользователей по моделям",
+      "type": "barchart",
+      "gridPos": {"h": 15, "w": 12, "x": 0, "y": 87},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  sl.end_user as \"end_user_alias\",\n  sl.model,\n  COUNT(*) as \"Value\"\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''\nGROUP BY sl.end_user, sl.model\nHAVING COUNT(*) > 0\nORDER BY \"Value\" DESC"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {"Time": true},
+            "renameByName": {
+              "end_user_alias": "Пользователь",
+              "model": "Модель",
+              "Value": "Запросы"
+            }
+          }
+        },
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "fieldName": "Запросы",
+                "config": {
+                  "id": "greater",
+                  "options": {"value": 0}
+                }
+              }
+            ],
+            "type": "include"
+          }
+        },
+        {
+          "id": "groupingToMatrix",
+          "options": {
+            "columnField": "Модель",
+            "rowField": "Пользователь",
+            "valueField": "Запросы"
+          }
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "barWidth": 0.8,
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": ["value"]
+        },
+        "stacking": {
+          "mode": "normal",
+          "group": "A"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {"mode": "palette-classic"}
+        }
+      }
+    },
+    {
+      "id": 17,
+      "title": "💰 Распределение расходов по моделям",
+      "type": "piechart",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 49},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  NOW() as time,\n  sl.model as metric,\n  SUM(sl.spend) as value\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''\nGROUP BY sl.model\nHAVING SUM(sl.spend) > 0\nORDER BY value DESC\nLIMIT 8"
+        }
+      ],
+      "options": {
+        "pieType": "pie",
+        "legend": {"displayMode": "table", "placement": "right", "values": ["value", "percent"]}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": {"mode": "palette-classic"}
+        }
+      }
+    },
+    {
+      "id": 18,
+      "title": "📊 Распределение запросов по моделям",
+      "type": "piechart",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 49},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  NOW() as time,\n  sl.model as metric,\n  COUNT(*) as value\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''\nGROUP BY sl.model\nHAVING COUNT(*) > 0\nORDER BY value DESC\nLIMIT 8"
+        }
+      ],
+      "options": {
+        "pieType": "pie",
+        "legend": {"displayMode": "table", "placement": "right", "values": ["value", "percent"]}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "palette-classic"}
+        }
+      }
+    },
+    {
+      "id": 19,
+      "title": "🔢 Распределение токенов по моделям",
+      "type": "piechart",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 49},
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  NOW() as time,\n  sl.model as metric,\n  SUM(sl.prompt_tokens + sl.completion_tokens) as value\nFROM \"LiteLLM_SpendLogs\" sl\nWHERE\n  sl.\"startTime\" >= $__timeFrom()\n  AND sl.\"startTime\" < $__timeTo()\n  AND sl.metadata->>'user_api_key_team_alias' = 'OpenWebUI'\n  AND (sl.end_user ~ '$user_filter' OR '$user_filter' = '.*')\n  AND sl.end_user IS NOT NULL\n  AND sl.end_user != ''\nGROUP BY sl.model\nHAVING SUM(sl.prompt_tokens + sl.completion_tokens) > 0\nORDER BY value DESC\nLIMIT 8"
+        }
+      ],
+      "options": {
+        "pieType": "pie",
+        "legend": {"displayMode": "table", "placement": "right", "values": ["value", "percent"]}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "palette-classic"}
+        }
+      }
+    }
+  ],
+  "overwrite": true
+}

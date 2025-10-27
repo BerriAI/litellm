@@ -1,0 +1,5 @@
+include:
+  - non-existent-file.yaml
+
+litellm_settings:
+  callbacks: ["prometheus"]
