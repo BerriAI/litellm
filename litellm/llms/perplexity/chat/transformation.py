@@ -40,6 +40,38 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         )
         return api_base, dynamic_api_key
 
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: list,
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        """Validate Perplexity environment and set headers."""
+        # Get API key from environment if not provided
+        if api_key is None:
+            _, api_key = self._get_openai_compatible_provider_info(
+                api_base=api_base, api_key=api_key
+            )
+        
+        # Validate API key is present
+        if api_key is None:
+            raise ValueError(
+                "The api_key client option must be set either by passing api_key to the client or by setting the PERPLEXITY_API_KEY environment variable"
+            )
+        
+        # Set authorization header
+        headers["Authorization"] = f"Bearer {api_key}"
+        
+        # Ensure Content-Type is set to application/json
+        if "content-type" not in headers and "Content-Type" not in headers:
+            headers["Content-Type"] = "application/json"
+        
+        return headers
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Perplexity supports a subset of OpenAI params
