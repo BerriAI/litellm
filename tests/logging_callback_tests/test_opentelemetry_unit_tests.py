@@ -119,3 +119,108 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
             assert detected_span_context.span_id == parent_span_context.span_id, (
                 "Detected span should have same span_id as parent"
             )
+
+    def test_record_exception_on_span(self):
+        """
+        Test that _record_exception_on_span properly records exception information.
+        
+        This test verifies that StandardLoggingPayloadErrorInformation is properly
+        extracted and set as span attributes using ErrorAttributes constants.
+        """
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+        from litellm.integrations.opentelemetry import OpenTelemetry
+        from litellm.integrations._types.open_inference import ErrorAttributes
+
+        # Setup: Create TracerProvider and tracer
+        tracer_provider = TracerProvider()
+        trace.set_tracer_provider(tracer_provider)
+        tracer = trace.get_tracer(__name__)
+
+        # Create OpenTelemetry integration
+        otel_integration = OpenTelemetry()
+
+        # Create a mock span
+        mock_span = MagicMock()
+
+        # Create test exception
+        test_exception = ValueError("Test error message")
+
+        # Create kwargs with exception and error_information
+        kwargs = {
+            "exception": test_exception,
+            "standard_logging_object": {
+                "error_information": {
+                    "error_code": "500",
+                    "error_class": "ValueError",
+                    "llm_provider": "openai",
+                    "traceback": "Traceback (most recent call last)...",
+                    "error_message": "Test error message",
+                },
+                "error_str": "Test error message",
+            },
+        }
+
+        # Act: Record exception on span
+        otel_integration._record_exception_on_span(span=mock_span, kwargs=kwargs)
+
+        # Assert: span.record_exception should be called with the exception
+        mock_span.record_exception.assert_called_once_with(test_exception)
+
+        # Assert: Error attributes should be set using ErrorAttributes constants
+        expected_calls = [
+            (ErrorAttributes.ERROR_CODE, "500"),
+            (ErrorAttributes.ERROR_TYPE, "ValueError"),
+            (ErrorAttributes.ERROR_MESSAGE, "Test error message"),
+            (ErrorAttributes.ERROR_LLM_PROVIDER, "openai"),
+            (ErrorAttributes.ERROR_STACK_TRACE, "Traceback (most recent call last)..."),
+        ]
+
+        # Check that set_attribute was called with expected values
+        actual_calls = [call.args for call in mock_span.set_attribute.call_args_list]
+        
+        for expected_call in expected_calls:
+            assert expected_call in actual_calls, (
+                f"Expected set_attribute call {expected_call} not found in actual calls: {actual_calls}"
+            )
+
+    def test_record_exception_on_span_with_fallback(self):
+        """
+        Test that _record_exception_on_span falls back to error_str when error_information is None.
+        """
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+        from litellm.integrations.opentelemetry import OpenTelemetry
+        from litellm.integrations._types.open_inference import ErrorAttributes
+
+        # Setup: Create TracerProvider and tracer
+        tracer_provider = TracerProvider()
+        trace.set_tracer_provider(tracer_provider)
+        tracer = trace.get_tracer(__name__)
+
+        # Create OpenTelemetry integration
+        otel_integration = OpenTelemetry()
+
+        # Create a mock span
+        mock_span = MagicMock()
+
+        # Create test exception
+        test_exception = ValueError("Test error message")
+
+        # Create kwargs without error_information (should fallback to error_str)
+        kwargs = {
+            "exception": test_exception,
+            "standard_logging_object": {
+                "error_information": None,
+                "error_str": "Fallback error message",
+            },
+        }
+
+        # Act: Record exception on span
+        otel_integration._record_exception_on_span(span=mock_span, kwargs=kwargs)
+
+        # Assert: span.record_exception should be called
+        mock_span.record_exception.assert_called_once_with(test_exception)
+
+        # Assert: error.message should be set from error_str using ErrorAttributes constant
+        mock_span.set_attribute.assert_called_with(ErrorAttributes.ERROR_MESSAGE, "Fallback error message")
