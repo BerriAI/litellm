@@ -1,7 +1,5 @@
-from litellm.llms.base_llm.chat.transformation import BaseConfig
 import litellm
 from typing import Optional, Tuple, Union
-from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 from litellm.secret_managers.main import get_secret_str
