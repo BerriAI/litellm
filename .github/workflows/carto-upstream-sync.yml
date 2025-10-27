@@ -1,0 +1,491 @@
+################################################################################
+# CARTO - Upstream Sync
+################################################################################
+
+# This workflow automatically syncs CARTO's LiteLLM fork with upstream stable
+# releases from BerriAI/litellm. It detects new stable releases (tagged with
+# -stable suffix), creates a sync branch, attempts the merge, and creates a PR
+# with detailed information about the sync status.
+#
+# The workflow runs every 8 hours to catch new releases quickly. It includes
+# duplicate prevention to avoid creating multiple PRs for the same version.
+
+name: CARTO - Upstream Sync
+
+on:
+  # Automatic sync disabled for initial testing phase
+  # Uncomment after successful manual testing
+  # schedule:
+  #   - cron: "0 */8 * * *"  # Every 8 hours
+
+  workflow_dispatch:  # Manual trigger for testing
+
+jobs:
+  ##############################################################################
+  # Check for New Release
+  ##############################################################################
+
+  check-new-release:
+    runs-on: ubuntu-latest
+    name: "Check for new upstream release"
+    outputs:
+      has-new-release: ${{ steps.detect-release.outputs.has-new-release }}
+      new-version: ${{ steps.detect-release.outputs.new-version }}
+      current-version: ${{ steps.detect-release.outputs.current-version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add upstream remote
+        run: |
+          set -eu
+          git remote add upstream https://github.com/BerriAI/litellm.git || true
+          git fetch upstream --tags
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Detect new stable release
+        id: detect-release
+        run: |
+          set -eu
+
+          echo "[Sync] Running detection script..."
+
+          # Run detection script (exits 0 if new release found, 1 if not)
+          if python .github/scripts/detect_stable_release.py > /tmp/new_version.txt; then
+            NEW_VERSION=$(cat /tmp/new_version.txt | tr -d '\n')
+            echo "[Sync] New stable release detected: ${NEW_VERSION}"
+            echo "has-new-release=true" >> $GITHUB_OUTPUT
+            echo "new-version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+          else
+            echo "[Sync] No new stable release found"
+            echo "has-new-release=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Get current version from pyproject.toml
+          CURRENT_VERSION=$(grep -E "^version\s*=" pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "[Sync] Current version: ${CURRENT_VERSION}"
+          echo "current-version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+
+          # Summary
+          echo "::notice title=New Release Detected::${NEW_VERSION}"
+
+  ##############################################################################
+  # Check if PR Already Exists
+  ##############################################################################
+
+  check-pr-exists:
+    runs-on: ubuntu-latest
+    name: "Check if PR already exists"
+    needs:
+      - check-new-release
+    if: needs.check-new-release.outputs.has-new-release == 'true'
+    outputs:
+      pr-exists: ${{ steps.check-pr.outputs.pr-exists }}
+      pr-url: ${{ steps.check-pr.outputs.pr-url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for existing PR
+        id: check-pr
+        env:
+          NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+
+          BRANCH_NAME="upstream-sync/${NEW_VERSION}"
+
+          echo "[Sync] Checking if branch exists: ${BRANCH_NAME}"
+
+          # Check if branch exists remotely
+          if git ls-remote --heads origin "${BRANCH_NAME}" | grep -q "${BRANCH_NAME}"; then
+            echo "[Sync] Branch ${BRANCH_NAME} already exists"
+
+            # Check if PR exists for this branch
+            PR_URL=$(gh pr list --head "${BRANCH_NAME}" --json url --jq ".[0].url" 2>/dev/null || echo "")
+
+            if [[ -n "${PR_URL}" ]]; then
+              echo "[Sync] PR already exists: ${PR_URL}"
+              echo "pr-exists=true" >> $GITHUB_OUTPUT
+              echo "pr-url=${PR_URL}" >> $GITHUB_OUTPUT
+              echo "::notice title=PR Already Exists::${PR_URL}"
+              exit 0
+            fi
+          fi
+
+          echo "[Sync] No existing PR found for ${NEW_VERSION}"
+          echo "pr-exists=false" >> $GITHUB_OUTPUT
+
+  ##############################################################################
+  # Create Sync PR
+  ##############################################################################
+
+  create-sync-pr:
+    runs-on: ubuntu-latest
+    name: "Create upstream sync PR"
+    needs:
+      - check-new-release
+      - check-pr-exists
+    if: needs.check-pr-exists.outputs.pr-exists == 'false'
+    outputs:
+      pr-url: ${{ steps.create-pr.outputs.pr-url }}
+      merge-status: ${{ steps.merge-upstream.outputs.merge-status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          set -eu
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: Add upstream remote and create branch
+        env:
+          NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
+        run: |
+          set -eu
+
+          BRANCH_NAME="upstream-sync/${NEW_VERSION}"
+          BASE_BRANCH="main"
+
+          echo "[Sync] Creating sync branch: ${BRANCH_NAME}"
+          echo "[Sync] Base branch: ${BASE_BRANCH}"
+          echo "[Sync] Target version: ${NEW_VERSION}"
+
+          # Add upstream remote
+          git remote add upstream https://github.com/BerriAI/litellm.git || true
+          git fetch upstream --tags
+
+          # Create and checkout branch from main
+          git checkout -b "${BRANCH_NAME}" "${BASE_BRANCH}"
+
+      - name: Merge upstream tag
+        id: merge-upstream
+        env:
+          NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
+        run: |
+          set -eu
+
+          echo "::group::[Sync] Merging upstream ${NEW_VERSION}"
+
+          # Attempt merge with --no-ff to preserve merge commit
+          if git merge "${NEW_VERSION}" --no-ff --no-commit 2>&1 | tee /tmp/merge_output.txt; then
+            MERGE_STATUS="clean"
+            echo "[Sync] ✅ Clean merge - no conflicts detected"
+
+            # Commit the clean merge
+            git commit -m "sync: merge upstream ${NEW_VERSION}
+
+Automatic sync from upstream BerriAI/litellm ${NEW_VERSION}"
+          else
+            MERGE_STATUS="conflicts"
+            echo "[Sync] ⚠️ Merge has conflicts - manual resolution required"
+
+            # Stage all changes (including conflicts)
+            git add -A
+
+            # Commit with conflicts marker
+            git commit --no-verify -m "sync: attempt merge upstream ${NEW_VERSION}
+
+⚠️ This merge contains conflicts that need manual resolution.
+See PR description for conflict resolution guidelines.
+
+Automatic sync from upstream BerriAI/litellm ${NEW_VERSION}"
+          fi
+
+          echo "::endgroup::"
+
+          echo "merge-status=${MERGE_STATUS}" >> $GITHUB_OUTPUT
+          echo "::notice title=Merge Status::${MERGE_STATUS}"
+
+      - name: Generate PR body
+        id: generate-pr-body
+        env:
+          NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
+          CURRENT_VERSION: ${{ needs.check-new-release.outputs.current-version }}
+          MERGE_STATUS: ${{ steps.merge-upstream.outputs.merge-status }}
+        run: |
+          set -eu
+
+          echo "::group::[Sync] Generating PR body"
+
+          PR_BODY_FILE="sync-pr-body.md"
+
+          # Determine merge status message
+          if [[ "${MERGE_STATUS}" == "clean" ]]; then
+            MERGE_STATUS_EMOJI="✅"
+            MERGE_STATUS_TEXT="Clean Merge"
+            MERGE_STATUS_DESC="No conflicts detected. Ready for testing and review."
+          else
+            MERGE_STATUS_EMOJI="⚠️"
+            MERGE_STATUS_TEXT="Conflicts Detected"
+            MERGE_STATUS_DESC="Manual conflict resolution required. See guidelines below."
+          fi
+
+          # Count files changed
+          FILES_CHANGED=$(git diff --name-only main | wc -l | tr -d ' ')
+
+          # Create PR body
+          cat > ${PR_BODY_FILE} << EOF
+## 🔄 Upstream Sync: ${NEW_VERSION}
+
+This PR syncs CARTO's LiteLLM fork with the latest stable upstream release.
+
+### 📊 Release Information
+
+- **Upstream Version:** \`${NEW_VERSION}\`
+- **Current Version:** \`${CURRENT_VERSION}\`
+- **Files Changed:** ${FILES_CHANGED}
+- **Upstream Repo:** [BerriAI/litellm](https://github.com/BerriAI/litellm)
+- **Upstream Release:** [${NEW_VERSION}](https://github.com/BerriAI/litellm/releases/tag/${NEW_VERSION})
+- **Compare Changes:** [v${CURRENT_VERSION}-stable...${NEW_VERSION}](https://github.com/BerriAI/litellm/compare/v${CURRENT_VERSION}-stable...${NEW_VERSION})
+
+### 🔍 Merge Status
+
+${MERGE_STATUS_EMOJI} **${MERGE_STATUS_TEXT}**
+
+${MERGE_STATUS_DESC}
+
+### 📝 CARTO-Specific File Guidelines
+
+When reviewing or resolving conflicts, follow these guidelines:
+
+#### ✅ Keep CARTO Versions (Ours)
+- \`.github/workflows/carto_*.yaml\` - All CARTO-specific workflows
+- \`CARTO_*.md\` - CARTO documentation files
+- \`docs/CARTO_*.md\` - CARTO documentation in docs/
+
+#### 🔄 Accept Upstream (Theirs)
+- \`pyproject.toml\` - Version field (should match upstream)
+- \`litellm/\` - Core LiteLLM library code
+- \`tests/\` - Upstream test files
+- \`requirements.txt\` - Upstream dependencies
+
+#### ⚠️ Manual Review Required
+- \`Dockerfile\` - Check sections marked with \`# CARTO:\` comments
+- \`docker/Dockerfile.non_root\` - Contains CARTO customizations
+- \`Makefile\` - Check sections marked with \`# CARTO:\` comments
+- \`db_scripts/\` - CARTO may have custom scripts
+
+### 🧪 Testing Checklist
+
+Before merging, ensure the following tests pass:
+
+- [ ] \`make lint\` - Linting passes
+- [ ] \`make test-unit\` - Unit tests pass
+- [ ] Docker build succeeds: \`docker build -f docker/Dockerfile.non_root .\`
+- [ ] CARTO workflows still work (check \`carto_*.yaml\` files)
+- [ ] Review \`pyproject.toml\` version matches upstream
+
+### 📚 Documentation
+
+- [CARTO Release Process](./docs/CARTO_RELEASE_PROCESS.md) - Full sync and release process
+- [CARTO Customizations](./CARTO_CLAUDE.md) - CARTO-specific modifications
+
+### 🔧 Conflict Resolution (if needed)
+
+If this PR has conflicts:
+
+1. **Pull the branch locally:**
+   \`\`\`bash
+   git fetch origin
+   git checkout upstream-sync/${NEW_VERSION}
+   \`\`\`
+
+2. **Review conflicts:**
+   \`\`\`bash
+   git status
+   git diff
+   \`\`\`
+
+3. **Resolve conflicts following guidelines above**
+
+4. **Test your changes:**
+   \`\`\`bash
+   make lint
+   make test-unit
+   \`\`\`
+
+5. **Push resolved changes:**
+   \`\`\`bash
+   git add .
+   git commit -m "resolve: conflicts from upstream sync"
+   git push origin upstream-sync/${NEW_VERSION}
+   \`\`\`
+
+---
+
+*🤖 This PR was automatically created by the [carto-upstream-sync workflow](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/carto-upstream-sync.yml).*
+EOF
+
+          echo "[Sync] PR body generated successfully"
+          echo "::endgroup::"
+
+      - name: Push branch
+        env:
+          NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
+        run: |
+          set -eu
+
+          BRANCH_NAME="upstream-sync/${NEW_VERSION}"
+
+          echo "[Sync] Pushing branch: ${BRANCH_NAME}"
+          git push --set-upstream origin "${BRANCH_NAME}"
+
+      - name: Create Pull Request
+        id: create-pr
+        env:
+          NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
+          MERGE_STATUS: ${{ steps.merge-upstream.outputs.merge-status }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+
+          BRANCH_NAME="upstream-sync/${NEW_VERSION}"
+          BASE_BRANCH="main"
+          PR_BODY_FILE="sync-pr-body.md"
+
+          echo "::group::[Sync] Creating Pull Request"
+
+          # Create PR
+          PR_URL=$(gh pr create \
+            --repo "${GITHUB_REPOSITORY}" \
+            --base "${BASE_BRANCH}" \
+            --head "${BRANCH_NAME}" \
+            --title "🔄 sync: upstream ${NEW_VERSION}" \
+            --body-file ${PR_BODY_FILE} \
+            --label "upstream-sync" \
+            --label "automated")
+
+          echo "[Sync] Pull Request created: ${PR_URL}"
+
+          # Add status-specific label
+          if [[ "${MERGE_STATUS}" == "conflicts" ]]; then
+            gh pr edit "${PR_URL}" --add-label "conflicts"
+            echo "[Sync] Added 'conflicts' label"
+          else
+            gh pr edit "${PR_URL}" --add-label "clean-merge"
+            echo "[Sync] Added 'clean-merge' label"
+          fi
+
+          echo "::endgroup::"
+
+          echo "pr-url=${PR_URL}" >> $GITHUB_OUTPUT
+          echo "::notice title=PR Created::${PR_URL}"
+
+          # GitHub Actions summary
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## 🎉 Upstream Sync PR Created Successfully
+
+          - **PR URL:** ${PR_URL}
+          - **Version:** ${NEW_VERSION}
+          - **Merge Status:** ${MERGE_STATUS}
+          - **Branch:** ${BRANCH_NAME}
+
+          ### Next Steps
+          1. Review the PR for any conflicts or issues
+          2. Run tests: \`make lint && make test-unit\`
+          3. Approve and merge when ready
+          EOF
+
+  ##############################################################################
+  # Notify Slack
+  ##############################################################################
+
+  notify-slack:
+    runs-on: ubuntu-latest
+    name: "Notify Slack"
+    if: always()
+    needs:
+      - check-new-release
+      - check-pr-exists
+      - create-sync-pr
+    steps:
+      - name: Determine notification message
+        id: message
+        env:
+          HAS_NEW_RELEASE: ${{ needs.check-new-release.outputs.has-new-release }}
+          NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
+          PR_EXISTS: ${{ needs.check-pr-exists.outputs.pr-exists }}
+          EXISTING_PR_URL: ${{ needs.check-pr-exists.outputs.pr-url }}
+          NEW_PR_URL: ${{ needs.create-sync-pr.outputs.pr-url }}
+          MERGE_STATUS: ${{ needs.create-sync-pr.outputs.merge-status }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -eu
+
+          echo "[Slack] Determining notification message..."
+
+          # Check if Slack webhook is configured
+          if [[ -z "${{ vars.SLACK_WEBHOOK_URL }}" ]]; then
+            echo "[Slack] No webhook configured, skipping notification"
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Determine message based on workflow results
+          if [[ "${HAS_NEW_RELEASE}" == "true" && "${PR_EXISTS}" == "false" && -n "${NEW_PR_URL}" ]]; then
+            if [[ "${MERGE_STATUS}" == "conflicts" ]]; then
+              EMOJI="⚠️"
+              MESSAGE="Upstream sync PR created with conflicts: ${NEW_PR_URL}"
+            else
+              EMOJI="✅"
+              MESSAGE="Upstream sync PR created (clean merge): ${NEW_PR_URL}"
+            fi
+          elif [[ "${HAS_NEW_RELEASE}" == "true" && "${PR_EXISTS}" == "true" ]]; then
+            EMOJI="ℹ️"
+            MESSAGE="Upstream sync PR already exists: ${EXISTING_PR_URL}"
+          elif [[ "${HAS_NEW_RELEASE}" == "false" ]]; then
+            EMOJI="✅"
+            MESSAGE="No new upstream releases detected"
+          else
+            EMOJI="❌"
+            MESSAGE="Upstream sync workflow encountered an error"
+          fi
+
+          echo "skip=false" >> $GITHUB_OUTPUT
+          echo "emoji=${EMOJI}" >> $GITHUB_OUTPUT
+          echo "message=${MESSAGE}" >> $GITHUB_OUTPUT
+
+      - name: Send Slack notification
+        if: steps.message.outputs.skip == 'false'
+        env:
+          SLACK_WEBHOOK_URL: ${{ vars.SLACK_WEBHOOK_URL }}
+          EMOJI: ${{ steps.message.outputs.emoji }}
+          MESSAGE: ${{ steps.message.outputs.message }}
+        run: |
+          set -eu
+
+          echo "[Slack] Sending notification..."
+
+          curl -X POST "${SLACK_WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+          {
+            "text": "${EMOJI} ${MESSAGE}",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*CARTO LiteLLM Upstream Sync*\n\n${EMOJI} ${MESSAGE}\n\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>"
+                }
+              }
+            ]
+          }
+          EOF
+
+          echo "[Slack] Notification sent successfully"

@@ -176,9 +176,101 @@ image: ghcr.io/cartodb/litellm-non_root:carto-stable
 
 ## Syncing with Upstream
 
-Occasionally, you may want to sync with upstream LiteLLM to get new features/fixes.
+### Automatic Sync (Recommended)
 
-### Process
+CARTO maintains an **automated upstream sync workflow** that runs every 8 hours to detect new stable releases from BerriAI/litellm.
+
+#### How It Works
+
+1. **Detection**: Workflow checks for new `-stable` tags from upstream
+2. **PR Creation**: Automatically creates a sync PR with:
+   - Merge attempt from upstream stable tag
+   - Conflict detection and resolution guidelines
+   - Comprehensive testing checklist
+3. **Review**: Team reviews and tests the sync PR
+4. **Merge**: Once approved, PR is merged to `main`
+
+#### Workflow Status
+
+Check the latest sync status:
+- **Workflow:** [`carto-upstream-sync.yml`](../.github/workflows/carto-upstream-sync.yml)
+- **Actions:** https://github.com/CartoDB/litellm/actions/workflows/carto-upstream-sync.yml
+
+#### Manual Trigger
+
+You can manually trigger the sync workflow:
+
+```bash
+# Via GitHub UI
+1. Go to Actions → CARTO - Upstream Sync
+2. Click "Run workflow"
+3. Select branch: main
+4. Click "Run workflow"
+
+# Via GitHub CLI
+gh workflow run carto-upstream-sync.yml
+```
+
+#### Handling Sync PRs
+
+When a sync PR is created:
+
+**If Clean Merge (✅ `clean-merge` label):**
+1. Review changes in the PR
+2. Run tests locally or wait for CI
+3. Approve and merge
+
+**If Conflicts (⚠️ `conflicts` label):**
+1. Pull the sync branch locally:
+   ```bash
+   git fetch origin
+   git checkout upstream-sync/v{version}
+   ```
+
+2. Resolve conflicts following PR guidelines:
+   - **Keep CARTO versions:** `carto_*.yaml`, `CARTO_*.md`
+   - **Accept upstream:** Core `litellm/` code, `tests/`
+   - **Manual review:** `Dockerfile`, `Makefile` (check `# CARTO:` comments)
+
+3. Test your changes:
+   ```bash
+   make lint
+   make test-unit
+   docker build -f docker/Dockerfile.non_root .
+   ```
+
+4. Push resolved changes:
+   ```bash
+   git add .
+   git commit -m "resolve: conflicts from upstream sync"
+   git push origin upstream-sync/v{version}
+   ```
+
+5. Get approval and merge
+
+#### After Syncing to main
+
+Once the sync PR is merged to `main`:
+
+1. **Sync main → carto/main** (currently manual):
+   ```bash
+   git checkout carto/main
+   git merge main
+   # Resolve any conflicts
+   git push origin carto/main
+   ```
+
+2. **Create first release for new upstream version**:
+   - Run release workflow
+   - Set upstream_version to match new version (e.g., `1.78.5`)
+   - Select bump type: `patch`
+   - This creates: `carto-v1.78.5-0.1.0`
+
+---
+
+### Manual Sync (Fallback)
+
+If you need to sync manually (e.g., automation is broken):
 
 1. **Fetch upstream changes**
    ```bash
@@ -199,16 +291,16 @@ Occasionally, you may want to sync with upstream LiteLLM to get new features/fix
 3. **Update pyproject.toml version**
    ```bash
    # Update version in pyproject.toml to match new upstream version
-   vim pyproject.toml  # Change version = "1.77.4"
-   git commit -am "chore: sync to upstream v1.77.4"
+   vim pyproject.toml  # Change version = "1.78.5"
+   git commit -am "chore: sync to upstream v1.78.5"
    git push origin carto/main
    ```
 
 4. **Create first release for new upstream version**
    - Run release workflow
-   - Set upstream_version to `1.77.4`
+   - Set upstream_version to `1.78.5`
    - Select bump type: `patch`
-   - This creates: `carto-v1.77.4-0.1.0`
+   - This creates: `carto-v1.78.5-0.1.0`
 
 ---
 
@@ -254,10 +346,16 @@ Navigate to: `Settings → Branches → Branch protection rules → Add rule`
 **A:** No, versions are sequential. The workflow always increments from the latest tag.
 
 ### Q: What if the upstream version changes?
-**A:** Update `pyproject.toml`, commit to `carto/main`, then create a release with the new upstream version. The CARTO semver resets to 0.1.0.
+**A:** The automated sync workflow will detect new stable releases and create a PR. Review, test, and merge the PR. Then update `carto/main` and create a new release with the upstream version.
 
 ### Q: How do I see what changed between releases?
 **A:** Check the GitHub Releases page - release notes are auto-generated from commits.
+
+### Q: How often does the auto-sync check for updates?
+**A:** Every 8 hours. You can also trigger it manually via GitHub Actions.
+
+### Q: What if the auto-sync PR has conflicts?
+**A:** The PR will be labeled with `conflicts` and include detailed resolution guidelines. Follow the instructions in the PR to resolve conflicts locally, test, and push.
 
 ---
 
@@ -270,4 +368,4 @@ For questions or issues with the release process:
 
 ---
 
-**Last Updated:** 2025-10-01
+**Last Updated:** 2025-10-27

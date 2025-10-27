@@ -64,15 +64,15 @@ upstream/v1.75.2       → Stable upstream release tag
 
 ## Upstream Sync Process
 
-CARTO uses an AI-powered automated workflow to sync with upstream LiteLLM stable releases.
+CARTO uses an automated workflow to sync with upstream LiteLLM stable releases.
 
-### Automated Claude Code Sync
+### Automated Upstream Sync
 
-🤖 **New in 2025:** CARTO uses Claude Code (AI) to automatically handle upstream syncing - from detection to conflict resolution to PR creation.
+🔄 **Automated Sync:** CARTO runs an automated workflow that detects new upstream stable releases and creates sync PRs for team review.
 
 #### How It Works
 
-Every night at 3 AM UTC, the `carto_claude_sync.yaml` workflow:
+Every 8 hours, the `carto-upstream-sync.yml` workflow:
 
 1. **Detects** new upstream stable releases (e.g., `v1.78.5-stable`)
    - Skips nightlies and release candidates
@@ -80,46 +80,33 @@ Every night at 3 AM UTC, the `carto_claude_sync.yaml` workflow:
    - Uses detection script: `.github/scripts/detect_stable_release.py`
 
 2. **Creates branch and merges** the stable tag
-   - Automatically handles merge conflicts intelligently
-   - Preserves CARTO-specific workflows (`carto_*.yaml`)
-   - Keeps CARTO modifications in Dockerfile/Makefile
-   - Updates `pyproject.toml` version
+   - Attempts merge from upstream stable tag
+   - Detects if conflicts exist
+   - Creates detailed PR with resolution guidelines
+   - Labels PR appropriately (`clean-merge` or `conflicts`)
 
-3. **Runs tests and fixes issues** (if possible)
-   - Runs `make lint` and `make test-unit`
-   - Attempts to fix linting errors automatically
-   - Attempts to fix test failures
-   - Analyzes and reports issues it can't fix
+3. **Provides comprehensive PR** with:
+   - Link to upstream changes and release notes
+   - Summary of files changed
+   - Merge status (clean or conflicts)
+   - Detailed conflict resolution guidelines
+   - Testing checklist
+   - Step-by-step resolution instructions
 
-4. **Creates detailed PR** with:
-   - Link to upstream changes
-   - Summary of what was merged
-   - Conflict resolution details (how and why)
-   - Test results and recommendations
-   - Context-aware suggestions for review
+#### Conflict Handling Strategy
 
-#### What Makes It Intelligent
+The workflow **detects but does not automatically resolve** conflicts. This ensures:
+- ✅ No silent breaking changes
+- ✅ Human review of important conflicts
+- ✅ Clear documentation of what needs resolution
+- ✅ Safe, conservative approach
 
-Claude Code reads and understands:
-- **CARTO_CLAUDE.md** - This documentation
-- **CARTO conventions** - Workflow naming, file structure
-- **Conflict context** - Why conflicts occurred and how to resolve them
-- **Test failures** - Root causes and potential fixes
-
-This means it can make smart decisions like:
-- "This upstream workflow conflicts with our custom one - keep ours"
-- "This test fails because the upstream API changed - update our mock"
-- "This dependency version conflict needs manual review"
+When conflicts are detected, the PR includes detailed guidelines on which files to:
+- **Keep CARTO versions:** `carto_*.yaml`, `CARTO_*.md`
+- **Accept upstream:** Core `litellm/` code, `tests/`
+- **Manually review:** `Dockerfile`, `Makefile` (check `# CARTO:` comments)
 
 #### Setup
-
-**Required Secret:**
-```bash
-# Add to GitHub repository secrets:
-# Settings → Secrets and variables → Actions → Secrets
-# Name: ANTHROPIC_API_KEY
-# Value: (get from https://console.anthropic.com/settings/keys)
-```
 
 **Optional Variable (for Slack notifications):**
 ```bash
@@ -128,38 +115,35 @@ This means it can make smart decisions like:
 # Value: https://hooks.slack.com/services/YOUR/WEBHOOK/URL
 ```
 
-**See:** [.github/workflows/README_CLAUDE_SYNC.md](.github/workflows/README_CLAUDE_SYNC.md) for full setup guide.
-
-#### Cost
-- Typical sync: $0.15-$1.50 per run
-- Most nights are no-ops (no new releases detected)
-- Upstream releases ~2-4 per month
-- **Estimated: $3-$5/month**
+**Note:** Slack notifications are optional. The workflow functions without them.
 
 #### Monitoring
 
 **GitHub Actions:**
-- View runs: https://github.com/CartoDB/litellm/actions/workflows/carto_claude_sync.yaml
-- Check workflow logs to see Claude's reasoning
+- View runs: https://github.com/CartoDB/litellm/actions/workflows/carto-upstream-sync.yml
+- Check workflow logs for detailed execution steps
 
 **Pull Requests:**
-- Automated PRs labeled: `automated-sync`
-- Ready PRs: `automated-sync,ready`
-- Review needed: `automated-sync,needs-review`
+- Automated PRs labeled: `upstream-sync`, `automated`
+- Clean PRs: `upstream-sync`, `clean-merge`
+- Conflict PRs: `upstream-sync`, `conflicts`
 
 **Slack (if configured):**
 - Success notifications with PR link
-- Failure alerts with workflow run link
+- Conflict alerts requiring attention
+- Workflow run links for debugging
 
 #### Manual Triggering
 
 ```bash
 # Via GitHub CLI
-gh workflow run carto_claude_sync.yaml
+gh workflow run carto-upstream-sync.yml
 
 # Via GitHub UI:
-# Actions → CARTO Claude Code Upstream Sync → Run workflow
+# Actions → CARTO - Upstream Sync → Run workflow
 ```
+
+**Note:** Schedule is currently disabled for initial testing. Will be enabled after successful manual testing.
 
 ---
 
@@ -270,9 +254,9 @@ These modifications exist in `carto/main` but NOT in upstream. Be careful to pre
 ### 1. Custom GitHub Workflows
 
 **Added:**
+- `.github/workflows/carto-upstream-sync.yml` - Automated upstream sync (runs every 8 hours)
 - `.github/workflows/carto_ghcr_deploy.yaml` - CI/CD for CARTO Docker images
 - `.github/workflows/carto_release.yaml` - Automated release creation
-- `.github/workflows/carto_claude_sync.yaml` - **NEW:** AI-powered automated nightly upstream sync
 - `.github/scripts/detect_stable_release.py` - Script to detect new stable upstream releases
 
 **Disabled/Modified:**
@@ -412,26 +396,27 @@ git add <file>
 git commit
 ```
 
-### Claude Code Sync Issues
+### Upstream Sync Workflow Issues
 
-**Problem:** AI-powered sync workflow encounters issues or makes unexpected decisions
+**Problem:** Automated sync workflow encounters issues
 
-#### Issue: Claude Code Workflow Fails
+#### Issue: Workflow Fails
 
 **Symptoms:** Workflow fails to complete or exits with error.
 
 **Solution:**
 
-1. Check workflow logs for Claude's reasoning:
-   - https://github.com/CartoDB/litellm/actions/workflows/carto_claude_sync.yaml
-   - Look for error messages in the "Run Claude Code Sync" step
-2. Verify API key is set:
-   - Settings → Secrets → Check `ANTHROPIC_API_KEY` exists
-3. Check API credits at https://console.anthropic.com/
-4. If persistent, try manual trigger:
+1. Check workflow logs:
+   - https://github.com/CartoDB/litellm/actions/workflows/carto-upstream-sync.yml
+   - Look for error messages in each job step
+2. Try manual trigger:
    ```bash
-   gh workflow run carto_claude_sync.yaml
+   gh workflow run carto-upstream-sync.yml
    ```
+3. If persistent, check for:
+   - Network issues with GitHub API
+   - Issues with upstream repository access
+   - Malformed tags or unexpected release formats
 
 #### Issue: No New Release Detected
 
@@ -441,74 +426,44 @@ git commit
 
 ```bash
 # Check if tag exists locally and might be hiding new release
-git tag -l | grep -stable
+git fetch upstream --tags
+git tag -l "*-stable" | sort -V | tail -5
 
 # Check the detection script manually:
 python .github/scripts/detect_stable_release.py
 
+# Verify pyproject.toml version
+grep '^version = ' pyproject.toml
+
 # If new release should exist, manually trigger:
-gh workflow run carto_claude_sync.yaml
+gh workflow run carto-upstream-sync.yml
 ```
 
-#### Issue: Claude Creates PR Needing Review
+#### Issue: PR Created with Conflicts
 
-**Symptoms:** PR is created but labeled `needs-review` instead of `ready`.
-
-**Solution:**
-
-This is normal and intentional! Claude Code is conservative and requests review when:
-- Conflicts were complex
-- Tests failed despite attempts to fix
-- Upstream changes are significant
-- Uncertain about best resolution approach
-
-**What to do:**
-1. Read Claude's PR description carefully - it explains why review is needed
-2. Review the changes and Claude's reasoning
-3. Check workflow logs to see what Claude tried
-4. Make any needed adjustments
-5. Merge when satisfied
-
-This is actually a feature - Claude won't merge changes it's not confident about!
-
-#### Issue: Conflicts Not Fully Resolved
-
-**Symptoms:** PR has conflicts that Claude didn't resolve correctly.
+**Symptoms:** Sync PR is labeled with `conflicts`.
 
 **Solution:**
+
+This is expected when upstream changes conflict with CARTO modifications. Follow the resolution guide in the PR:
 
 1. Checkout the PR branch:
    ```bash
    gh pr checkout <PR_NUMBER>
    ```
-2. Review Claude's conflict resolution in the commits
-3. Make corrections if needed:
+2. Review conflicts using the guidelines in the PR body
+3. Resolve conflicts:
    ```bash
    # Fix the conflicts
    git add <files>
-   git commit -m "fix: correct conflict resolution"
+   git commit -m "resolve: conflicts from upstream sync"
    git push
    ```
-4. Comment on PR explaining what you changed and why
-5. This helps Claude learn for future syncs!
-
-#### Issue: Tests Fail After Claude's Changes
-
-**Symptoms:** PR created but tests are failing.
-
-**Solution:**
-
-1. Review Claude's attempts to fix tests in the PR description
-2. Check workflow logs to see what Claude tried
-3. Checkout branch and fix locally:
+4. Run tests to verify:
    ```bash
-   gh pr checkout <PR_NUMBER>
    make lint
    make test-unit
-   # Fix issues
-   git push
    ```
-4. Claude may have left helpful comments in the code explaining issues it couldn't fix
 
 #### Issue: Slack Notifications Not Received
 
@@ -526,23 +481,7 @@ This is actually a feature - Claude won't merge changes it's not confident about
    ```
 3. If missing, add the variable and re-run workflow
 
-#### Issue: Claude Made Unexpected Changes
-
-**Symptoms:** Changes in PR don't match expectations.
-
-**Solution:**
-
-1. Read Claude's reasoning in:
-   - PR description (explains what and why)
-   - Commit messages (step-by-step reasoning)
-   - Workflow logs (detailed thought process)
-2. If changes are incorrect:
-   - Comment on the PR explaining the issue
-   - Update `CARTO_CLAUDE.md` to clarify expectations
-   - This helps Claude make better decisions next time
-3. Fix the changes and merge
-
-Remember: Claude learns from the documentation and context - improve docs to improve future syncs!
+**Note:** Slack notifications are optional - the workflow works without them.
 
 ### Version Mismatch Errors
 
