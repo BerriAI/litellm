@@ -37,6 +37,38 @@ def redact_message_input_output_from_custom_logger(
     return result
 
 
+def _redact_choice_content(choice):
+    """Helper to redact content in a choice (message or delta)."""
+    if isinstance(choice, litellm.Choices):
+        choice.message.content = "redacted-by-litellm"
+        if hasattr(choice.message, "reasoning_content"):
+            choice.message.reasoning_content = "redacted-by-litellm"
+        if hasattr(choice.message, "thinking_blocks"):
+            choice.message.thinking_blocks = None
+    elif isinstance(choice, litellm.utils.StreamingChoices):
+        choice.delta.content = "redacted-by-litellm"
+        if hasattr(choice.delta, "reasoning_content"):
+            choice.delta.reasoning_content = "redacted-by-litellm"
+        if hasattr(choice.delta, "thinking_blocks"):
+            choice.delta.thinking_blocks = None
+
+
+def _redact_responses_api_output(output_items):
+    """Helper to redact ResponsesAPIResponse output items."""
+    for output_item in output_items:
+        if hasattr(output_item, "content") and isinstance(output_item.content, list):
+            for content_part in output_item.content:
+                if hasattr(content_part, "text"):
+                    content_part.text = "redacted-by-litellm"
+        
+        # Redact reasoning items in output array
+        if hasattr(output_item, "type") and output_item.type == "reasoning":
+            if hasattr(output_item, "summary") and isinstance(output_item.summary, list):
+                for summary_item in output_item.summary:
+                    if hasattr(summary_item, "text"):
+                        summary_item.text = "redacted-by-litellm"
+
+
 def perform_redaction(model_call_details: dict, result):
     """
     Performs the actual redaction on the logging object and result.
@@ -56,37 +88,9 @@ def perform_redaction(model_call_details: dict, result):
         _streaming_response = model_call_details["complete_streaming_response"]
         if hasattr(_streaming_response, "choices"):
             for choice in _streaming_response.choices:
-                if isinstance(choice, litellm.Choices):
-                    choice.message.content = "redacted-by-litellm"
-                    # Redact reasoning-related fields
-                    if hasattr(choice.message, "reasoning_content"):
-                        choice.message.reasoning_content = "redacted-by-litellm"
-                    if hasattr(choice.message, "thinking_blocks"):
-                        choice.message.thinking_blocks = None
-                elif isinstance(choice, litellm.utils.StreamingChoices):
-                    choice.delta.content = "redacted-by-litellm"
-                    # Redact reasoning-related fields
-                    if hasattr(choice.delta, "reasoning_content"):
-                        choice.delta.reasoning_content = "redacted-by-litellm"
-                    if hasattr(choice.delta, "thinking_blocks"):
-                        choice.delta.thinking_blocks = None
+                _redact_choice_content(choice)
         elif hasattr(_streaming_response, "output"):
-            # Handle ResponsesAPIResponse format
-            for output_item in _streaming_response.output:
-                if hasattr(output_item, "content") and isinstance(
-                    output_item.content, list
-                ):
-                    for content_part in output_item.content:
-                        if hasattr(content_part, "text"):
-                            content_part.text = "redacted-by-litellm"
-                
-                # Redact reasoning items in output array
-                if hasattr(output_item, "type") and output_item.type == "reasoning":
-                    if hasattr(output_item, "summary") and isinstance(output_item.summary, list):
-                        for summary_item in output_item.summary:
-                            if hasattr(summary_item, "text"):
-                                summary_item.text = "redacted-by-litellm"
-            
+            _redact_responses_api_output(_streaming_response.output)
             # Redact reasoning field in ResponsesAPIResponse
             if hasattr(_streaming_response, "reasoning") and _streaming_response.reasoning is not None:
                 _streaming_response.reasoning = None
@@ -105,35 +109,10 @@ def perform_redaction(model_call_details: dict, result):
         if isinstance(_result, litellm.ModelResponse):
             if hasattr(_result, "choices") and _result.choices is not None:
                 for choice in _result.choices:
-                    if isinstance(choice, litellm.Choices):
-                        choice.message.content = "redacted-by-litellm"
-                        # Redact reasoning-related fields
-                        if hasattr(choice.message, "reasoning_content"):
-                            choice.message.reasoning_content = "redacted-by-litellm"
-                        if hasattr(choice.message, "thinking_blocks"):
-                            choice.message.thinking_blocks = None
-                    elif isinstance(choice, litellm.utils.StreamingChoices):
-                        choice.delta.content = "redacted-by-litellm"
-                        # Redact reasoning-related fields
-                        if hasattr(choice.delta, "reasoning_content"):
-                            choice.delta.reasoning_content = "redacted-by-litellm"
-                        if hasattr(choice.delta, "thinking_blocks"):
-                            choice.delta.thinking_blocks = None
+                    _redact_choice_content(choice)
         elif isinstance(_result, litellm.ResponsesAPIResponse):
             if hasattr(_result, "output"):
-                for output_item in _result.output:
-                    if hasattr(output_item, "content") and isinstance(output_item.content, list):
-                        for content_part in output_item.content:
-                            if hasattr(content_part, "text"):
-                                content_part.text = "redacted-by-litellm"
-                    
-                    # Redact reasoning items in output array
-                    if hasattr(output_item, "type") and output_item.type == "reasoning":
-                        if hasattr(output_item, "summary") and isinstance(output_item.summary, list):
-                            for summary_item in output_item.summary:
-                                if hasattr(summary_item, "text"):
-                                    summary_item.text = "redacted-by-litellm"
-            
+                _redact_responses_api_output(_result.output)
             # Redact reasoning field in ResponsesAPIResponse
             if hasattr(_result, "reasoning") and _result.reasoning is not None:
                 _result.reasoning = None
