@@ -9,6 +9,7 @@ export const TEST_MODES = [
   { value: "rerank", label: "Rerank - /rerank" },
   { value: "realtime", label: "Realtime - /realtime" },
   { value: "batch", label: "Batch - /batch" },
+  { value: "ocr", label: "OCR - /ocr" },
 ];
 
 // Define the available auto router routing strategies

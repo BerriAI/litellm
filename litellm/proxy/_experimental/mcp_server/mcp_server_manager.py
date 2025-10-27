@@ -206,6 +206,7 @@ class MCPServerManager:
                 scopes=server_config.get("scopes", None),
                 authorization_url=server_config.get("authorization_url", None),
                 token_url=server_config.get("token_url", None),
+                registration_url=server_config.get("registration_url", None),
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),
                 auth_type=server_config.get("auth_type", None),
@@ -218,6 +219,7 @@ class MCPServerManager:
                 disallowed_tools=server_config.get("disallowed_tools", None),
                 allowed_params=server_config.get("allowed_params", None),
                 access_groups=server_config.get("access_groups", None),
+                static_headers=server_config.get("static_headers", None),
             )
             self.config_mcp_servers[server_id] = new_server
 
@@ -355,12 +357,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
-                        server_prefix
-                    )
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
-                        server_prefix
-                    )
+                    self.tool_name_to_mcp_server_name_mapping[
+                        base_tool_name
+                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[
+                        prefixed_tool_name
+                    ] = server_prefix
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -430,6 +432,7 @@ class MCPServerManager:
                     scopes=getattr(mcp_server, "scopes", None),
                     authorization_url=getattr(mcp_server, "authorization_url", None),
                     token_url=getattr(mcp_server, "token_url", None),
+                    registration_url=getattr(mcp_server, "registration_url", None),
                     # Stdio-specific fields
                     command=getattr(mcp_server, "command", None),
                     args=getattr(mcp_server, "args", None) or [],
@@ -632,6 +635,11 @@ class MCPServerManager:
         client = None
 
         try:
+            if server.static_headers:
+                if extra_headers is None:
+                    extra_headers = {}
+                extra_headers.update(server.static_headers)
+
             client = self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
@@ -1092,12 +1100,22 @@ class MCPServerManager:
             GuardrailRaisedException: If guardrails block the call
             HTTPException: If an HTTP error occurs
         """
-        # Get server-specific auth header if available
+        # Get server-specific auth header if available (case-insensitive)
+        # FIX: Added case-insensitive matching to handle auth header keys that may not match
+        # the exact case of server alias/name (e.g., '1litellmagcgateway' vs '1LiteLLMAGCGateway')
         server_auth_header: Optional[Union[Dict[str, str], str]] = None
-        if mcp_server_auth_headers and mcp_server.alias:
-            server_auth_header = mcp_server_auth_headers.get(mcp_server.alias)
-        elif mcp_server_auth_headers and mcp_server.server_name:
-            server_auth_header = mcp_server_auth_headers.get(mcp_server.server_name)
+        if mcp_server_auth_headers:
+            # Normalize keys for case-insensitive lookup
+            normalized_headers = {
+                k.lower(): v for k, v in mcp_server_auth_headers.items()
+            }
+
+            if mcp_server.alias:
+                server_auth_header = normalized_headers.get(mcp_server.alias.lower())
+            if server_auth_header is None and mcp_server.server_name:
+                server_auth_header = normalized_headers.get(
+                    mcp_server.server_name.lower()
+                )
 
         # Fall back to deprecated mcp_auth_header if no server-specific header found
         if server_auth_header is None:
@@ -1114,6 +1132,11 @@ class MCPServerManager:
             for header in mcp_server.extra_headers:
                 if header in raw_headers:
                     extra_headers[header] = raw_headers[header]
+
+        if mcp_server.static_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            extra_headers.update(mcp_server.static_headers)
 
         client = self._create_mcp_client(
             server=mcp_server,
