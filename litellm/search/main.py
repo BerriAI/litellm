@@ -14,8 +14,8 @@ from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.types.search import SearchProvider
-from litellm.utils import ProviderConfigManager, client
+from litellm.types.utils import SearchProviders
+from litellm.utils import ProviderConfigManager, client, filter_out_litellm_params
 
 ####### ENVIRONMENT VARIABLES ###################
 base_llm_http_handler = BaseLLMHTTPHandler()
@@ -57,7 +57,7 @@ def _build_search_optional_params(
 @client
 async def asearch(
     query: Union[str, List[str]],
-    search_provider: SearchProvider,
+    search_provider: str,
     max_results: Optional[int] = None,
     search_domain_filter: Optional[List[str]] = None,
     max_tokens_per_page: Optional[int] = None,
@@ -149,8 +149,9 @@ async def asearch(
 
         return response
     except Exception as e:
+        model_name = f"{search_provider}/search"
         raise litellm.exception_type(
-            model="",
+            model=model_name,
             custom_llm_provider=search_provider,
             original_exception=e,
             completion_kwargs=local_vars,
@@ -161,7 +162,7 @@ async def asearch(
 @client
 def search(
     query: Union[str, List[str]],
-    search_provider: SearchProvider,
+    search_provider: str,
     max_results: Optional[int] = None,
     search_domain_filter: Optional[List[str]] = None,
     max_tokens_per_page: Optional[int] = None,
@@ -241,7 +242,7 @@ def search(
         # Get provider config
         search_provider_config: Optional[BaseSearchConfig] = (
             ProviderConfigManager.get_provider_search_config(
-                provider=litellm.LlmProviders(search_provider),
+                provider=SearchProviders(search_provider),
             )
         )
 
@@ -262,8 +263,11 @@ def search(
             country=country,
         )
         
+        # Filter out internal LiteLLM parameters from kwargs
+        filtered_kwargs = filter_out_litellm_params(kwargs=kwargs)
+        
         # Add remaining kwargs to optional_params (for provider-specific params)
-        for key, value in kwargs.items():
+        for key, value in filtered_kwargs.items():
             if key not in optional_params:
                 optional_params[key] = value
         
@@ -283,8 +287,9 @@ def search(
         )
 
         # Pre Call logging
+        model_name = f"{search_provider}/search"
         litellm_logging_obj.update_environment_variables(
-            model="",
+            model=model_name,
             optional_params=optional_params,
             litellm_params={
                 "litellm_call_id": litellm_call_id,
@@ -309,8 +314,9 @@ def search(
 
         return response
     except Exception as e:
+        model_name = f"{search_provider}/search"
         raise litellm.exception_type(
-            model="",
+            model=model_name,
             custom_llm_provider=search_provider,
             original_exception=e,
             completion_kwargs=local_vars,
