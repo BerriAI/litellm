@@ -15,6 +15,8 @@ from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
+from litellm.integrations.bitbucket import BitBucketPromptManager
+from litellm.integrations.gitlab import GitLabPromptManager
 from litellm.integrations.braintrust_logging import BraintrustLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
@@ -39,7 +41,6 @@ try:
     from litellm_enterprise.integrations.prometheus import PrometheusLogger
 except Exception:
     PrometheusLogger = None
-from litellm.integrations.bitbucket import BitBucketPromptManager
 from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 from litellm.integrations.dotprompt import DotpromptManager
 from litellm.integrations.s3_v2 import S3Logger
@@ -92,6 +93,7 @@ class CustomLoggerRegistry:
         "vector_store_pre_call_hook": VectorStorePreCallHook,
         "dotprompt": DotpromptManager,
         "bitbucket": BitBucketPromptManager,
+        "gitlab": GitLabPromptManager,
         "cloudzero": CloudZeroLogger,
         "posthog": PostHogLogger,
     }

@@ -162,8 +162,8 @@ def get_azure_ad_token_from_username_password(
 
 def get_azure_ad_token_from_oidc(
     azure_ad_token: str,
-    azure_client_id: Optional[str],
-    azure_tenant_id: Optional[str],
+    azure_client_id: Optional[str] = None,
+    azure_tenant_id: Optional[str] = None,
     scope: Optional[str] = None,
 ) -> str:
     """
@@ -365,6 +365,11 @@ def get_azure_ad_token(
             azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
         except ValueError:
             verbose_logger.debug("Azure AD Token Provider could not be used.")
+        except Exception as e:
+            verbose_logger.error(
+                f"Error calling Azure AD token provider: {str(e)}. Follow docs - https://docs.litellm.ai/docs/providers/azure/#azure-ad-token-refresh---defaultazurecredential"
+            )
+            raise e
 
         #########################################################
         # If litellm.enable_azure_ad_token_refresh is True and no other token provider is available,
@@ -561,7 +566,9 @@ class BaseAzureLLM(BaseOpenAILLM):
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
             )
             try:
-                azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
+                azure_ad_token_provider = get_azure_ad_token_provider(
+                    azure_scope=scope,
+                )
             except ValueError:
                 verbose_logger.debug("Azure AD Token Provider could not be used.")
         if api_version is None:
@@ -576,19 +583,8 @@ class BaseAzureLLM(BaseOpenAILLM):
         verbose_logger.debug(
             f"Initializing Azure OpenAI Client for {model_name}, Api Base: {str(api_base)}, Api Key:{_api_key}"
         )
-        
-        # Extract API key from multiple sources with proper precedence
-        resolved_api_key = (
-            api_key
-            or litellm_params.get("api_key")
-            or litellm.api_key
-            or litellm.azure_key
-            or get_secret_str("AZURE_OPENAI_API_KEY")
-            or get_secret_str("AZURE_API_KEY")
-        )
-
         azure_client_params = {
-            "api_key": resolved_api_key,
+            "api_key": api_key,
             "azure_endpoint": api_base,
             "api_version": api_version,
             "azure_ad_token": azure_ad_token,
@@ -676,7 +672,7 @@ class BaseAzureLLM(BaseOpenAILLM):
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
 
-        # If api-key is already in headers, preserve it
+        # Check if api-key is already in headers; if so, use it
         if "api-key" in headers:
             return headers
 
@@ -704,7 +700,7 @@ class BaseAzureLLM(BaseOpenAILLM):
     def _get_base_azure_url(
         api_base: Optional[str],
         litellm_params: Optional[Union[GenericLiteLLMParams, Dict[str, Any]]],
-        route: Literal["/openai/responses", "/openai/vector_stores"],
+        route: Union[Literal["/openai/responses", "/openai/vector_stores"], str],
         default_api_version: Optional[Union[str, Literal["latest", "preview"]]] = None,
     ) -> str:
         """

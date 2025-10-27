@@ -20,6 +20,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIRequest,
     LakeraAIResponse,
 )
+from litellm.types.utils import GuardrailStatus
 
 
 class LakeraAIGuardrail(CustomGuardrail):
@@ -70,7 +71,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         """
         Call the Lakera AI v2 guard API.
         """
-        status: Literal["success", "failure"] = "success"
+        status: GuardrailStatus = "success"
         exception_str: str = ""
         start_time: datetime = datetime.now()
         lakera_response: Optional[LakeraAIResponse] = None
@@ -99,7 +100,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             lakera_response = LakeraAIResponse(**response.json())
             return lakera_response, masked_entity_count
         except Exception as e:
-            status = "failure"
+            status = "guardrail_failed_to_respond"
             exception_str = str(e)
             raise e
         finally:
@@ -192,6 +193,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[Union[Exception, str, Dict]]:
         from litellm.proxy.common_utils.callback_utils import (
@@ -263,6 +265,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ):
         from litellm.proxy.common_utils.callback_utils import (

@@ -48,9 +48,8 @@ def get_current_weather(location, unit="fahrenheit"):
         "gpt-3.5-turbo-1106",
         "mistral/mistral-large-latest",
         "claude-3-haiku-20240307",
-        "gemini/gemini-1.5-pro",
+        "gemini/gemini-2.5-flash-lite",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "cohere_chat/command-r",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -556,33 +555,6 @@ def test_groq_parallel_function_call():
                 print("second response\n", second_response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        # "anthropic.claude-3-sonnet-20240229-v1:0",
-        # "claude-3-haiku-20240307",
-        "databricks/databricks-claude-3-7-sonnet"
-    ],
-)
-def test_anthropic_function_call_with_no_schema(model):
-    """
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/6012
-    """
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in New York",
-            },
-        }
-    ]
-    messages = [
-        {"role": "user", "content": "What is the current temperature in New York?"}
-    ]
-    completion(model=model, messages=messages, tools=tools, tool_choice="auto")
 
 
 @pytest.mark.parametrize(

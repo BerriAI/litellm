@@ -4,14 +4,12 @@
  */
 
 import React, { useState, useEffect } from "react";
-import BudgetSettings from "./budget_settings";
 import BudgetModal from "./budget_modal";
 import EditBudgetModal from "./edit_budget_modal";
 import {
   Table,
   TableBody,
   TableCell,
-  TableFoot,
   TableHead,
   TableHeaderCell,
   TableRow,
@@ -24,18 +22,10 @@ import {
   TabList,
   TabPanel,
   TabPanels,
-  Grid,
 } from "@tremor/react";
 import {
-  InformationCircleIcon,
   PencilAltIcon,
-  PencilIcon,
-  StatusOnlineIcon,
   TrashIcon,
-  RefreshIcon,
-  CheckCircleIcon,
-  XCircleIcon,
-  QuestionMarkCircleIcon,
 } from "@heroicons/react/outline";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { getBudgetList, budgetDeleteCall } from "../networking";
@@ -68,18 +58,18 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   }, [accessToken]);
 
   const handleEditCall = async (budget_id: string, index: number) => {
-    console.log("budget_id", budget_id)
+    console.log("budget_id", budget_id);
     if (accessToken == null) {
       return;
     }
     // Find the budget first
-    const budget = budgetList.find(budget => budget.budget_id === budget_id) || null;
-    
+    const budget = budgetList.find((budget) => budget.budget_id === budget_id) || null;
+
     // Update state and show modal after state is updated
     setSelectedBudget(budget);
     setIsEditModalVisible(true);
   };
-  
+
   const handleDeleteCall = async (budget_id: string, index: number) => {
     if (accessToken == null) {
       return;
@@ -103,16 +93,11 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
     getBudgetList(accessToken).then((data) => {
       setBudgetList(data);
     });
-  }
+  };
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      <Button
-        size="sm"
-        variant="primary"
-        className="mb-2"
-        onClick={() => setIsModalVisible(true)}
-      >
+      <Button size="sm" variant="primary" className="mb-2" onClick={() => setIsModalVisible(true)}>
         + Create Budget
       </Button>
       <BudgetModal
@@ -121,8 +106,8 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
         setIsModalVisible={setIsModalVisible}
         setBudgetList={setBudgetList}
       />
-      {
-        selectedBudget && <EditBudgetModal
+      {selectedBudget && (
+        <EditBudgetModal
           accessToken={accessToken}
           isModalVisible={isEditModalVisible}
           setIsModalVisible={setIsEditModalVisible}
@@ -130,7 +115,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
           existingBudget={selectedBudget}
           handleUpdateCall={handleUpdateCall}
         />
-      }
+      )}
       <Card>
         <Text>Create a budget to assign to customers.</Text>
         <Table>
@@ -153,16 +138,8 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                   <TableCell>{value.max_budget ? value.max_budget : "n/a"}</TableCell>
                   <TableCell>{value.tpm_limit ? value.tpm_limit : "n/a"}</TableCell>
                   <TableCell>{value.rpm_limit ? value.rpm_limit : "n/a"}</TableCell>
-                  <Icon
-                    icon={PencilAltIcon}
-                    size="sm"
-                    onClick={() => handleEditCall(value.budget_id, index)}
-                  />
-                  <Icon
-                    icon={TrashIcon}
-                    size="sm"
-                    onClick={() => handleDeleteCall(value.budget_id, index)}
-                  />
+                  <Icon icon={PencilAltIcon} size="sm" onClick={() => handleEditCall(value.budget_id, index)} />
+                  <Icon icon={TrashIcon} size="sm" onClick={() => handleDeleteCall(value.budget_id, index)} />
                 </TableRow>
               ))}
           </TableBody>

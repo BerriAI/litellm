@@ -1,33 +1,22 @@
 "use client";
-import React, { Suspense, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { Card, Title, Text, TextInput, Callout, Button, Grid, Col } from "@tremor/react";
+import { RiCheckboxCircleLine } from "@remixicon/react";
 import {
-  Card,
-  Title,
-  Text,
-  TextInput,
-  Callout,
-  Button,
-  Grid,
-  Col,
-} from "@tremor/react";
-import { RiAlarmWarningLine, RiCheckboxCircleLine } from "@remixicon/react";
-import {
-  invitationClaimCall,
-  userUpdateUserCall,
   getOnboardingCredentials,
   claimOnboardingToken,
   getUiConfig,
-  getProxyBaseUrl
+  getProxyBaseUrl,
 } from "@/components/networking";
 import { jwtDecode } from "jwt-decode";
-import { Form, Button as Button2, message } from "antd";
+import { Form, Button as Button2 } from "antd";
 import { getCookie } from "@/utils/cookieUtils";
 
 export default function Onboarding() {
   const [form] = Form.useForm();
   const searchParams = useSearchParams()!;
-  const token = getCookie('token');
+  const token = getCookie("token");
   const inviteID = searchParams.get("invitation_id");
   const action = searchParams.get("action");
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -39,14 +28,16 @@ export default function Onboarding() {
   const [getUiConfigLoading, setGetUiConfigLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    getUiConfig().then((data) => { // get the information for constructing the proxy base url, and then set the token and auth loading
+    getUiConfig().then((data) => {
+      // get the information for constructing the proxy base url, and then set the token and auth loading
       console.log("ui config in onboarding.tsx:", data);
       setGetUiConfigLoading(false);
     });
   }, []);
 
   useEffect(() => {
-    if (!inviteID || getUiConfigLoading) { // wait for the ui config to be loaded
+    if (!inviteID || getUiConfigLoading) {
+      // wait for the ui config to be loaded
       return;
     }
 
@@ -72,14 +63,7 @@ export default function Onboarding() {
   }, [inviteID, getUiConfigLoading]);
 
   const handleSubmit = (formValues: Record<string, any>) => {
-    console.log(
-      "in handle submit. accessToken:",
-      accessToken,
-      "token:",
-      jwtToken,
-      "formValues:",
-      formValues
-    );
+    console.log("in handle submit. accessToken:", accessToken, "token:", jwtToken, "formValues:", formValues);
     if (!accessToken || !jwtToken) {
       return;
     }
@@ -89,27 +73,18 @@ export default function Onboarding() {
     if (!userID || !inviteID) {
       return;
     }
-    claimOnboardingToken(
-      accessToken,
-      inviteID,
-      userID,
-      formValues.password
-    ).then((data) => {
-      let litellm_dashboard_ui = "/ui/";
-      litellm_dashboard_ui += "?login=success";
-
+    claimOnboardingToken(accessToken, inviteID, userID, formValues.password).then((data) => {
       // set cookie "token" to jwtToken
       document.cookie = "token=" + jwtToken;
-      console.log("redirecting to:", litellm_dashboard_ui);
-
+      
       const proxyBaseUrl = getProxyBaseUrl();
       console.log("proxyBaseUrl:", proxyBaseUrl);
+      
+      // Construct the full redirect URL using the proxyBaseUrl which includes the server root path
+      let redirectUrl = proxyBaseUrl ? `${proxyBaseUrl}/ui/?login=success` : "/ui/?login=success";
+      console.log("redirecting to:", redirectUrl);
 
-      if (proxyBaseUrl) {
-        window.location.href = proxyBaseUrl + litellm_dashboard_ui;
-      } else {
-        window.location.href = litellm_dashboard_ui;
-      }
+      window.location.href = redirectUrl;
     });
 
     // redirect to login page
@@ -119,15 +94,14 @@ export default function Onboarding() {
       <Card>
         <Title className="text-sm mb-5 text-center">🚅 LiteLLM</Title>
         <Title className="text-xl">{action === "reset_password" ? "Reset Password" : "Sign up"}</Title>
-        <Text>{action === "reset_password" ? "Reset your password to access Admin UI." : "Claim your user account to login to Admin UI."}</Text>
+        <Text>
+          {action === "reset_password"
+            ? "Reset your password to access Admin UI."
+            : "Claim your user account to login to Admin UI."}
+        </Text>
 
         {action !== "reset_password" && (
-          <Callout
-            className="mt-4"
-            title="SSO"
-            icon={RiCheckboxCircleLine}
-            color="sky"
-          >
+          <Callout className="mt-4" title="SSO" icon={RiCheckboxCircleLine} color="sky">
             <Grid numItems={2} className="flex justify-between items-center">
               <Col>SSO is under the Enterprise Tier.</Col>
 
@@ -142,28 +116,16 @@ export default function Onboarding() {
           </Callout>
         )}
 
-        <Form
-          className="mt-10 mb-5 mx-auto"
-          layout="vertical"
-          onFinish={handleSubmit}
-        >
+        <Form className="mt-10 mb-5 mx-auto" layout="vertical" onFinish={handleSubmit}>
           <>
             <Form.Item label="Email Address" name="user_email">
-              <TextInput
-                type="email"
-                disabled={true}
-                value={userEmail}
-                defaultValue={userEmail}
-                className="max-w-md"
-              />
+              <TextInput type="email" disabled={true} value={userEmail} defaultValue={userEmail} className="max-w-md" />
             </Form.Item>
 
             <Form.Item
               label="Password"
               name="password"
-              rules={[
-                { required: true, message: "password required to sign up" },
-              ]}
+              rules={[{ required: true, message: "password required to sign up" }]}
               help={action === "reset_password" ? "Enter your new password" : "Create a password for your account"}
             >
               <TextInput placeholder="" type="password" className="max-w-md" />

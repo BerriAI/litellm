@@ -282,8 +282,8 @@ async def test_azure_ai_request_format():
 
     # Set up the test parameters
     api_key = os.getenv("AZURE_API_KEY")
-    api_base = f"{os.getenv('AZURE_API_BASE')}/openai/deployments/gpt-4o-new-test/chat/completions?api-version=2024-08-01-preview"
-    model = "azure_ai/gpt-4o"
+    api_base = os.getenv("AZURE_API_BASE")
+    model = "azure_ai/gpt-4.1-mini"
     messages = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "Hello! How can I assist you today?"},
@@ -300,16 +300,68 @@ async def test_azure_ai_request_format():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["azure/gpt5_series/gpt-5", "azure/gpt-5"])
+@pytest.mark.parametrize("model", ["azure/gpt5_series/gpt-5-mini", "azure/gpt-5-mini"])
 async def test_azure_gpt5_reasoning(model):
     litellm._turn_on_debug()
     response = await litellm.acompletion(
-        model="azure/gpt5_series/gpt-5",
+        model=model,
         messages=[{"role": "user", "content": "What is the capital of France?"}],
         reasoning_effort="minimal",
         max_tokens=10,
-        api_base=os.getenv("AZURE_GPT5_API_BASE"),
-        api_key=os.getenv("AZURE_GPT5_API_KEY"),
+        api_base=os.getenv("AZURE_API_BASE"),
+        api_key=os.getenv("AZURE_API_KEY"),
     )
     print("response: ", response)
     assert response.choices[0].message.content is not None
+
+
+
+def test_completion_azure():
+    try:
+        from litellm import completion_cost
+        litellm.set_verbose = False
+        ## Test azure call
+        response = completion(
+            model="azure/gpt-4.1-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hello, how are you?",
+                }
+            ],
+            api_key="os.environ/AZURE_API_KEY",
+        )
+        print(f"response: {response}")
+        print(f"response hidden params: {response._hidden_params}")
+        print(response)
+
+        cost = completion_cost(completion_response=response)
+        assert cost > 0.0
+        print("Cost for azure completion request", cost)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://litellm-ci-cd-prod.cognitiveservices.azure.com/",
+        "https://litellm-ci-cd-prod.cognitiveservices.azure.com/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2023-03-15-preview",
+    ],
+)
+def test_completion_azure_ai_gpt_4o_with_flexible_api_base(api_base):
+    try:
+        litellm.set_verbose = True
+
+        response = completion(
+            model="azure_ai/gpt-4.1-mini",
+            api_base=api_base,
+            api_key=os.getenv("AZURE_API_KEY"),
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+        )
+
+        print(response)
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")

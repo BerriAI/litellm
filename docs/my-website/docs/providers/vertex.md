@@ -12,7 +12,7 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `vertex_ai/` |
 | Link to Provider Doc | [Vertex AI ↗](https://cloud.google.com/vertex-ai) |
 | Base URL | 1. Regional endpoints<br/>`https://{vertex_location}-aiplatform.googleapis.com/`<br/>2. Global endpoints (limited availability)<br/>`https://aiplatform.googleapis.com/`|
-| Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models) |
+| Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models), [`/rerank`](#rerank-api) |
 
 
 <br />
@@ -191,7 +191,7 @@ print(json.loads(completion.choices[0].message.content))
 model_list:
   - model_name: gemini-2.5-pro
     litellm_params:
-      model: vertex_ai/gemini-1.5-pro
+      model: vertex_ai/gemini-2.5-pro
       vertex_project: "project-id"
       vertex_location: "us-central1"
       vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
@@ -277,7 +277,7 @@ except JSONSchemaValidationError as e:
 model_list:
   - model_name: gemini-2.5-pro
     litellm_params:
-      model: vertex_ai/gemini-1.5-pro
+      model: vertex_ai/gemini-2.5-pro
       vertex_project: "project-id"
       vertex_location: "us-central1"
       vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
@@ -621,6 +621,163 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 
 
+#### **Google Maps**
+
+Use Google Maps to provide location-based context to your Gemini models.
+
+[**Relevant Vertex AI Docs**](https://ai.google.dev/gemini-api/docs/grounding#google-maps)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+**Basic Usage - Enable Widget Only**
+
+```python showLineNumbers
+from litellm import completion
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+tools = [{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}] # 👈 ADD GOOGLE MAPS
+
+resp = litellm.completion(
+    model="vertex_ai/gemini-2.0-flash",
+    messages=[{"role": "user", "content": "What restaurants are nearby?"}],
+    tools=tools,
+)
+
+print(resp)
+```
+
+**With Location Data**
+
+You can specify a location to ground the model's responses with location-specific information:
+
+```python showLineNumbers
+from litellm import completion
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+tools = [{
+    "googleMaps": {
+        "enableWidget": "ENABLE_WIDGET",
+        "latitude": 37.7749,        # San Francisco latitude
+        "longitude": -122.4194,     # San Francisco longitude
+        "languageCode": "en_US"     # Optional: language for results
+    }
+}] # 👈 ADD GOOGLE MAPS WITH LOCATION
+
+resp = litellm.completion(
+    model="vertex_ai/gemini-2.0-flash",
+    messages=[{"role": "user", "content": "What restaurants are nearby?"}],
+    tools=tools,
+)
+
+print(resp)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+**Basic Usage - Enable Widget Only**
+
+```python showLineNumbers
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-1234", # pass litellm proxy key, if you're using virtual keys
+    base_url="http://0.0.0.0:4000/v1/" # point to litellm proxy
+)
+
+response = client.chat.completions.create(
+    model="gemini-2.0-flash",
+    messages=[{"role": "user", "content": "What restaurants are nearby?"}],
+    tools=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}],
+)
+
+print(response)
+```
+
+**With Location Data**
+
+```python showLineNumbers
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-1234", # pass litellm proxy key, if you're using virtual keys
+    base_url="http://0.0.0.0:4000/v1/" # point to litellm proxy
+)
+
+response = client.chat.completions.create(
+    model="gemini-2.0-flash",
+    messages=[{"role": "user", "content": "What restaurants are nearby?"}],
+    tools=[{
+        "googleMaps": {
+            "enableWidget": "ENABLE_WIDGET",
+            "latitude": 37.7749,        # San Francisco latitude
+            "longitude": -122.4194,     # San Francisco longitude
+            "languageCode": "en_US"     # Optional: language for results
+        }
+    }],
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="curl" label="cURL">
+
+**Basic Usage - Enable Widget Only**
+
+```bash showLineNumbers
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gemini-2.0-flash",
+    "messages": [
+      {"role": "user", "content": "What restaurants are nearby?"}
+    ],
+   "tools": [
+        {
+            "googleMaps": {"enableWidget": "ENABLE_WIDGET"}
+        }
+    ]
+  }'
+```
+
+**With Location Data**
+
+```bash showLineNumbers
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gemini-2.0-flash",
+    "messages": [
+      {"role": "user", "content": "What restaurants are nearby?"}
+    ],
+   "tools": [
+        {
+            "googleMaps": {
+                "enableWidget": "ENABLE_WIDGET",
+                "latitude": 37.7749,
+                "longitude": -122.4194,
+                "languageCode": "en_US"
+            }
+        }
+    ]
+  }'
+```
+</TabItem>
+</Tabs>
+
+</TabItem>
+</Tabs>
+
 #### **Moving from Vertex AI SDK to LiteLLM (GROUNDING)**
 
 
@@ -824,11 +981,158 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 ### **Context Caching**
 
-Use Vertex AI context caching is supported by calling provider api directly. (Unified Endpoint support coming soon.).
+#### Unified Endpoint
+
+Use Vertex AI context caching in the same way as [**Google AI Studio -  Context Caching**](../providers/gemini.md#context-caching)
+
+
+##### Example usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion 
+
+for _ in range(2): 
+    resp = completion(
+        model="vertex_ai/gemini-2.5-pro",
+        messages=[
+        # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement" * 4000,
+                        "cache_control": {"type": "ephemeral"}, # 👈 KEY CHANGE
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }]
+    )
+
+    print(resp.usage) # 👈 2nd usage block will be less, since cached tokens used
+```
+
+</TabItem>
+<TabItem value="sdk-ttl" label="SDK with Custom TTL">
+
+```python
+from litellm import completion 
+
+# Cache for 2 hours (7200 seconds)
+resp = completion(
+    model="vertex_ai/gemini-2.5-pro",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 4000,
+                    "cache_control": {
+                        "type": "ephemeral", 
+                        "ttl": "7200s"  # 👈 Cache for 2 hours
+                    },
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "3600s"  # 👈 This TTL will be ignored (first one is used)
+                    },
+                }
+            ],
+        }
+    ]
+)
+
+print(resp.usage)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: vertex_ai/gemini-2.5-pro
+      vertex_project: "project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "gemini-2.5-flash",
+    "messages": [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Long cache message (must be >= 1024 tokens)",
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "7200s"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What is the text about?"
+                }
+            ]
+        }
+    ]
+}'
+
+```
+
+</TabItem>
+</Tabs>
+
+#### Calling provider api directly
 
 [**Go straight to provider**](../pass_through/vertex_ai.md#context-caching)
 
-#### 1. Create the Cache
+##### 1. Create the Cache
 
 First, create the cache by sending a `POST` request to the `cachedContents` endpoint via the LiteLLM proxy.
 
@@ -854,7 +1158,7 @@ curl http://0.0.0.0:4000/vertex_ai/v1/projects/{project_id}/locations/{location}
 </TabItem>
 </Tabs>
 
-#### 2. Get the Cache Name from the Response
+##### 2. Get the Cache Name from the Response
 
 Vertex AI will return a response containing the `name` of the cached content. This name is the identifier for your cached data.
 
@@ -873,7 +1177,7 @@ Vertex AI will return a response containing the `name` of the cached content. Th
 }
 ```
 
-#### 3. Use the Cached Content
+##### 3. Use the Cached Content
 
 Use the `name` from the response as `cachedContent` or `cached_content` in subsequent API calls to reuse the cached information. This is passed in the body of your request to `/chat/completions`.
 
@@ -1299,8 +1603,6 @@ litellm.vertex_location = "us-central1 # Your Location
 | gemini-2.5-pro   | `completion('gemini-2.5-pro', messages)`, `completion('vertex_ai/gemini-2.5-pro', messages)` |
 | gemini-2.5-flash-preview-09-2025   | `completion('gemini-2.5-flash-preview-09-2025', messages)`, `completion('vertex_ai/gemini-2.5-flash-preview-09-2025', messages)` |
 | gemini-2.5-flash-lite-preview-09-2025   | `completion('gemini-2.5-flash-lite-preview-09-2025', messages)`, `completion('vertex_ai/gemini-2.5-flash-lite-preview-09-2025', messages)` |
-| gemini-flash-latest   | `completion('gemini-flash-latest', messages)`, `completion('vertex_ai/gemini-flash-latest', messages)` |
-| gemini-flash-lite-latest   | `completion('gemini-flash-lite-latest', messages)`, `completion('vertex_ai/gemini-flash-lite-latest', messages)` |
 
 ## Fine-tuned Models
 
@@ -2812,3 +3114,101 @@ Once that's done, when you deploy the new container in the Google Cloud Run serv
 
 
 s/o @[Darien Kindlund](https://www.linkedin.com/in/kindlund/) for this tutorial
+
+## **Rerank API**
+
+Vertex AI supports reranking through the Discovery Engine API, providing semantic ranking capabilities for document retrieval.
+
+### Setup
+
+Set your Google Cloud project ID:
+
+```bash
+export VERTEXAI_PROJECT="your-project-id"
+```
+
+### Usage
+
+```python
+from litellm import rerank
+
+# Using the latest model (recommended)
+response = rerank(
+    model="vertex_ai/semantic-ranker-default@latest",
+    query="What is Google Gemini?",
+    documents=[
+        "Gemini is a cutting edge large language model created by Google.",
+        "The Gemini zodiac symbol often depicts two figures standing side-by-side.",
+        "Gemini is a constellation that can be seen in the night sky."
+    ],
+    top_n=2,
+    return_documents=True  # Set to False for ID-only responses
+)
+
+# Using specific model versions
+response_v003 = rerank(
+    model="vertex_ai/semantic-ranker-default-003",
+    query="What is Google Gemini?",
+    documents=documents,
+    top_n=2
+)
+
+print(response.results)
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `model` | string | Model name (e.g., `vertex_ai/semantic-ranker-default@latest`) |
+| `query` | string | Search query |
+| `documents` | list | Documents to rank |
+| `top_n` | int | Number of top results to return |
+| `return_documents` | bool | Return full content (True) or IDs only (False) |
+
+### Supported Models
+
+- `semantic-ranker-default@latest`
+- `semantic-ranker-fast@latest` 
+- `semantic-ranker-default-003`
+- `semantic-ranker-default-002`
+
+For detailed model specifications, see the [Google Cloud ranking API documentation](https://cloud.google.com/generative-ai-app-builder/docs/ranking#rank_or_rerank_a_set_of_records_according_to_a_query).
+
+### Proxy Usage
+
+Add to your `config.yaml`:
+
+```yaml
+model_list:
+  - model_name: semantic-ranker-default@latest
+    litellm_params:
+      model: vertex_ai/semantic-ranker-default@latest
+      vertex_ai_project: "your-project-id"
+      vertex_ai_location: "us-central1"
+      vertex_ai_credentials: "path/to/service-account.json" 
+```
+
+Start the proxy:
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+Test with curl:
+
+```bash
+curl http://0.0.0.0:4000/rerank \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "semantic-ranker-default@latest",
+    "query": "What is Google Gemini?",
+    "documents": [
+      "Gemini is a cutting edge large language model created by Google.",
+      "The Gemini zodiac symbol often depicts two figures standing side-by-side.",
+      "Gemini is a constellation that can be seen in the night sky."
+    ],
+    "top_n": 2
+  }'
+```

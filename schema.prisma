@@ -25,6 +25,7 @@ model LiteLLM_BudgetTable {
   organization LiteLLM_OrganizationTable[] // multiple orgs can have the same budget
   keys LiteLLM_VerificationToken[] // multiple keys can have the same budget
   end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
+  tags LiteLLM_TagTable[] // multiple tags can have the same budget
   team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
   organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization 
 }
@@ -156,6 +157,7 @@ model LiteLLM_ObjectPermissionTable {
   object_permission_id  String         @id @default(uuid())
   mcp_servers           String[]       @default([])
   mcp_access_groups     String[]       @default([])
+  mcp_tool_permissions  Json?          // Tool-level permissions for MCP servers. Format: {"server_id": ["tool_name_1", "tool_name_2"]}
   vector_stores         String[]       @default([])
   teams                 LiteLLM_TeamTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -178,6 +180,8 @@ model LiteLLM_MCPServerTable {
   updated_by   String?
   mcp_info     Json?          @default("{}")
   mcp_access_groups String[]
+  allowed_tools String[]      @default([])
+  extra_headers String[]    @default([])
   // Health check status
   status       String?        @default("unknown")
   last_health_check DateTime?
@@ -240,6 +244,20 @@ model LiteLLM_EndUserTable {
   budget_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   blocked Boolean @default(false)
+}
+
+// Track tags with budgets and spend
+model LiteLLM_TagTable {
+  tag_name String @id
+  description String?
+  models String[]
+  model_info Json? // maps model_id to model_name
+  spend Float @default(0.0)
+  budget_id String?
+  litellm_budget_table LiteLLM_BudgetTable? @relation(fields: [budget_id], references: [budget_id])
+  created_at DateTime @default(now()) @map("created_at")
+  created_by String?
+  updated_at DateTime @default(now()) @updatedAt @map("updated_at")
 }
 
 // store proxy config.yaml
@@ -552,4 +570,14 @@ model LiteLLM_HealthCheckTable {
   @@index([model_name])
   @@index([checked_at])
   @@index([status])
+}
+
+// Search Tools table for storing search tool configurations
+model LiteLLM_SearchToolsTable {
+  search_tool_id String @id @default(uuid())
+  search_tool_name String @unique
+  litellm_params Json
+  search_tool_info Json?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 }

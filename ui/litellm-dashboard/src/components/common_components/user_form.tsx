@@ -1,6 +1,6 @@
 import React from "react";
 import { Select, TextInput } from "@tremor/react";
-import { Form, Radio, Select as AntSelect } from "antd";
+import { Form, Select as AntSelect } from "antd";
 import TeamDropdown from "./team_dropdown";
 import { getPossibleUserRoles } from "../networking";
 import TextArea from "antd/es/input/TextArea";
@@ -13,17 +13,11 @@ interface UserFormProps {
   accessToken?: string;
 }
 
-const UserForm: React.FC<UserFormProps> = ({
-  form,
-  teams,
-  possibleUIRoles,
-  setPossibleUIRoles,
-  accessToken
-}) => {
+const UserForm: React.FC<UserFormProps> = ({ form, teams, possibleUIRoles, setPossibleUIRoles, accessToken }) => {
   React.useEffect(() => {
     // Fetch roles if they're not available and we have a setter
     if (!possibleUIRoles && setPossibleUIRoles && accessToken) {
-      getPossibleUserRoles(accessToken).then(roles => {
+      getPossibleUserRoles(accessToken).then((roles) => {
         setPossibleUIRoles(roles);
       });
     }
@@ -31,33 +25,23 @@ const UserForm: React.FC<UserFormProps> = ({
 
   return (
     <>
-      <Form.Item
-        label="User Email"
-        name="user_email"
-        rules={[{ required: true, message: "Please input user email" }]}
-      >
+      <Form.Item label="User Email" name="user_email" rules={[{ required: true, message: "Please input user email" }]}>
         <TextInput placeholder="" />
       </Form.Item>
-      
-      <Form.Item 
-        label="User Role" 
-        name="user_role"
-        rules={[{ required: true, message: "Please select a role" }]}
-      >
+
+      <Form.Item label="User Role" name="user_role" rules={[{ required: true, message: "Please select a role" }]}>
         <Select>
           {possibleUIRoles &&
-            Object.entries(possibleUIRoles).map(
-              ([role, { ui_label, description }]) => (
-                <AntSelect.Option key={role} value={role} title={ui_label}>
-                  <div className="flex">
-                    {ui_label}{" "}
-                    <p className="ml-2" style={{ color: "gray", fontSize: "12px" }}>
-                      {description}
-                    </p>
-                  </div>
-                </AntSelect.Option>
-              )
-            )}
+            Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
+              <AntSelect.Option key={role} value={role} title={ui_label}>
+                <div className="flex">
+                  {ui_label}{" "}
+                  <p className="ml-2" style={{ color: "gray", fontSize: "12px" }}>
+                    {description}
+                  </p>
+                </div>
+              </AntSelect.Option>
+            ))}
         </Select>
       </Form.Item>
 
@@ -72,4 +56,4 @@ const UserForm: React.FC<UserFormProps> = ({
   );
 };
 
-export default UserForm; 
+export default UserForm;

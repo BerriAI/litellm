@@ -1,68 +1,61 @@
-"use client"
-import React, { useEffect, useState, useCallback, useRef } from "react"
-import { ColumnDef, Row } from "@tanstack/react-table"
-import { DataTable } from "./view_logs/table"
-import { Select, SelectItem } from "@tremor/react"
-import { Button } from "@tremor/react"
-import KeyInfoView from "./templates/key_info_view"
-import { Tooltip } from "antd"
-import { Team, KeyResponse } from "./key_team_helpers/key_list"
-import FilterComponent from "./molecules/filter"
-import { FilterOption } from "./molecules/filter"
-import { keyListCall, Organization, userListCall } from "./networking"
-import { createTeamSearchFunction } from "./key_team_helpers/team_search_fn"
-import { createOrgSearchFunction } from "./key_team_helpers/organization_search_fn"
-import { useFilterLogic } from "./key_team_helpers/filter_logic"
-import { Setter } from "@/types"
-import { updateExistingKeys } from "@/utils/dataUtils"
-import { debounce } from "lodash"
-import { defaultPageSize } from "./constants"
-import { fetchAllTeams } from "./key_team_helpers/filter_helpers"
-import { fetchAllOrganizations } from "./key_team_helpers/filter_helpers"
-import { flexRender, getCoreRowModel, getSortedRowModel, SortingState, useReactTable } from "@tanstack/react-table"
-import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell, Icon } from "@tremor/react"
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline"
-import { Badge, Text } from "@tremor/react"
-import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key"
-import { formatNumberWithCommas } from "@/utils/dataUtils"
+"use client";
+import React, { useEffect, useState } from "react";
+import { ColumnDef } from "@tanstack/react-table";
+import { Select, SelectItem } from "@tremor/react";
+import { Button } from "@tremor/react";
+import KeyInfoView from "./templates/key_info_view";
+import { Tooltip } from "antd";
+import { Team, KeyResponse } from "./key_team_helpers/key_list";
+import FilterComponent from "./molecules/filter";
+import { FilterOption } from "./molecules/filter";
+import { Organization, userListCall } from "./networking";
+import { useFilterLogic } from "./key_team_helpers/filter_logic";
+import { Setter } from "@/types";
+import { updateExistingKeys } from "@/utils/dataUtils";
+import { flexRender, getCoreRowModel, getSortedRowModel, SortingState, useReactTable } from "@tanstack/react-table";
+import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell, Icon } from "@tremor/react";
+import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
+import { Badge, Text } from "@tremor/react";
+import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface AllKeysTableProps {
-  keys: KeyResponse[]
-  setKeys: (keys: KeyResponse[] | ((prev: KeyResponse[]) => KeyResponse[])) => void
-  isLoading?: boolean
+  keys: KeyResponse[];
+  setKeys: (keys: KeyResponse[] | ((prev: KeyResponse[]) => KeyResponse[])) => void;
+  isLoading?: boolean;
   pagination: {
-    currentPage: number
-    totalPages: number
-    totalCount: number
-  }
-  onPageChange: (page: number) => void
-  pageSize?: number
-  teams: Team[] | null
-  selectedTeam: Team | null
-  setSelectedTeam: (team: Team | null) => void
-  selectedKeyAlias: string | null
-  setSelectedKeyAlias: Setter<string | null>
-  accessToken: string | null
-  userID: string | null
-  userRole: string | null
-  organizations: Organization[] | null
-  setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>
-  refresh?: () => void
-  onSortChange?: (sortBy: string, sortOrder: "asc" | "desc") => void
+    currentPage: number;
+    totalPages: number;
+    totalCount: number;
+  };
+  onPageChange: (page: number) => void;
+  pageSize?: number;
+  teams: Team[] | null;
+  selectedTeam: Team | null;
+  setSelectedTeam: (team: Team | null) => void;
+  selectedKeyAlias: string | null;
+  setSelectedKeyAlias: Setter<string | null>;
+  accessToken: string | null;
+  userID: string | null;
+  userRole: string | null;
+  organizations: Organization[] | null;
+  setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
+  refresh?: () => void;
+  onSortChange?: (sortBy: string, sortOrder: "asc" | "desc") => void;
   currentSort?: {
-    sortBy: string
-    sortOrder: "asc" | "desc"
-  }
-  premiumUser: boolean
-  setAccessToken?: (token: string) => void
+    sortBy: string;
+    sortOrder: "asc" | "desc";
+  };
+  premiumUser: boolean;
+  setAccessToken?: (token: string) => void;
 }
 
 // Define columns similar to our logs table
 
 interface UserResponse {
-  user_id: string
-  user_email: string
-  user_role: string
+  user_id: string;
+  user_email: string;
+  user_role: string;
 }
 
 const TeamFilter = ({
@@ -70,14 +63,14 @@ const TeamFilter = ({
   selectedTeam,
   setSelectedTeam,
 }: {
-  teams: Team[] | null
-  selectedTeam: Team | null
-  setSelectedTeam: (team: Team | null) => void
+  teams: Team[] | null;
+  selectedTeam: Team | null;
+  setSelectedTeam: (team: Team | null) => void;
 }) => {
   const handleTeamChange = (value: string) => {
-    const team = teams?.find((t) => t.team_id === value)
-    setSelectedTeam(team || null)
-  }
+    const team = teams?.find((t) => t.team_id === value);
+    setSelectedTeam(team || null);
+  };
 
   return (
     <div className="mb-4">
@@ -99,8 +92,8 @@ const TeamFilter = ({
         </Select>
       </div>
     </div>
-  )
-}
+  );
+};
 
 /**
  * AllKeysTable – a new table for keys that mimics the table styling used in view_logs.
@@ -130,8 +123,8 @@ export function AllKeysTable({
   premiumUser,
   setAccessToken,
 }: AllKeysTableProps) {
-  const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null)
-  const [userList, setUserList] = useState<UserResponse[]>([])
+  const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
+  const [userList, setUserList] = useState<UserResponse[]>([]);
   const [sorting, setSorting] = React.useState<SortingState>(() => {
     if (currentSort) {
       return [
@@ -139,16 +132,16 @@ export function AllKeysTable({
           id: currentSort.sortBy,
           desc: currentSort.sortOrder === "desc",
         },
-      ]
+      ];
     }
     return [
       {
         id: "created_at",
         desc: true,
       },
-    ]
-  })
-  const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({})
+    ];
+  });
+  const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   // Use the filter logic hook
 
@@ -158,34 +151,34 @@ export function AllKeysTable({
       teams,
       organizations,
       accessToken,
-    })
+    });
 
   useEffect(() => {
     if (accessToken) {
-      const user_IDs = keys.map((key) => key.user_id).filter((id) => id !== null)
+      const user_IDs = keys.map((key) => key.user_id).filter((id) => id !== null);
       const fetchUserList = async () => {
-        const userListData = await userListCall(accessToken, user_IDs, 1, 100)
-        setUserList(userListData.users)
-      }
-      fetchUserList()
+        const userListData = await userListCall(accessToken, user_IDs, 1, 100);
+        setUserList(userListData.users);
+      };
+      fetchUserList();
     }
-  }, [accessToken, keys])
+  }, [accessToken, keys]);
 
   // Add a useEffect to call refresh when a key is created
   useEffect(() => {
     if (refresh) {
       const handleStorageChange = () => {
-        refresh()
-      }
+        refresh();
+      };
 
       // Listen for storage events that might indicate a key was created
-      window.addEventListener("storage", handleStorageChange)
+      window.addEventListener("storage", handleStorageChange);
 
       return () => {
-        window.removeEventListener("storage", handleStorageChange)
-      }
+        window.removeEventListener("storage", handleStorageChange);
+      };
     }
-  }, [refresh])
+  }, [refresh]);
 
   const columns: ColumnDef<KeyResponse>[] = [
     {
@@ -222,8 +215,10 @@ export function AllKeysTable({
       accessorKey: "key_alias",
       header: "Key Alias",
       cell: (info) => {
-        const value = info.getValue() as string
-        return <Tooltip title={value}>{value ? (value.length > 20 ? `${value.slice(0, 20)}...` : value) : "-"}</Tooltip>
+        const value = info.getValue() as string;
+        return (
+          <Tooltip title={value}>{value ? (value.length > 20 ? `${value.slice(0, 20)}...` : value) : "-"}</Tooltip>
+        );
       },
     },
     {
@@ -237,9 +232,9 @@ export function AllKeysTable({
       accessorKey: "team_id",
       header: "Team Alias",
       cell: ({ row, getValue }) => {
-        const teamId = getValue() as string
-        const team = teams?.find((t) => t.team_id === teamId)
-        return team?.team_alias || "Unknown"
+        const teamId = getValue() as string;
+        const team = teams?.find((t) => t.team_id === teamId);
+        return team?.team_alias || "Unknown";
       },
     },
     {
@@ -263,15 +258,15 @@ export function AllKeysTable({
       accessorKey: "user_id",
       header: "User Email",
       cell: (info) => {
-        const userId = info.getValue() as string
-        const user = userList.find((u) => u.user_id === userId)
+        const userId = info.getValue() as string;
+        const user = userList.find((u) => u.user_id === userId);
         return user?.user_email ? (
           <Tooltip title={user?.user_email}>
             <span>{user?.user_email.slice(0, 20)}...</span>
           </Tooltip>
         ) : (
           "-"
-        )
+        );
       },
     },
     {
@@ -279,15 +274,15 @@ export function AllKeysTable({
       accessorKey: "user_id",
       header: "User ID",
       cell: (info) => {
-        const userId = info.getValue() as string | null
+        const userId = info.getValue() as string | null;
         if (userId && userId.length > 15) {
           return (
             <Tooltip title={userId}>
               <span>{userId.slice(0, 7)}...</span>
             </Tooltip>
-          )
+          );
         }
-        return userId ? userId : "-"
+        return userId ? userId : "-";
       },
     },
     {
@@ -295,8 +290,8 @@ export function AllKeysTable({
       accessorKey: "created_at",
       header: "Created At",
       cell: (info) => {
-        const value = info.getValue()
-        return value ? new Date(value as string).toLocaleDateString() : "-"
+        const value = info.getValue();
+        return value ? new Date(value as string).toLocaleDateString() : "-";
       },
     },
     {
@@ -304,15 +299,15 @@ export function AllKeysTable({
       accessorKey: "created_by",
       header: "Created By",
       cell: (info) => {
-        const value = info.getValue() as string | null
+        const value = info.getValue() as string | null;
         if (value && value.length > 15) {
           return (
             <Tooltip title={value}>
               <span>{value.slice(0, 7)}...</span>
             </Tooltip>
-          )
+          );
         }
-        return value
+        return value;
       },
     },
     {
@@ -320,8 +315,8 @@ export function AllKeysTable({
       accessorKey: "updated_at",
       header: "Updated At",
       cell: (info) => {
-        const value = info.getValue()
-        return value ? new Date(value as string).toLocaleDateString() : "Never"
+        const value = info.getValue();
+        return value ? new Date(value as string).toLocaleDateString() : "Never";
       },
     },
     {
@@ -329,8 +324,8 @@ export function AllKeysTable({
       accessorKey: "expires",
       header: "Expires",
       cell: (info) => {
-        const value = info.getValue()
-        return value ? new Date(value as string).toLocaleDateString() : "Never"
+        const value = info.getValue();
+        return value ? new Date(value as string).toLocaleDateString() : "Never";
       },
     },
     {
@@ -344,11 +339,11 @@ export function AllKeysTable({
       accessorKey: "max_budget",
       header: "Budget (USD)",
       cell: (info) => {
-        const maxBudget = info.getValue() as number | null
+        const maxBudget = info.getValue() as number | null;
         if (maxBudget === null) {
-          return "Unlimited"
+          return "Unlimited";
         }
-        return `$${formatNumberWithCommas(maxBudget)}`
+        return `$${formatNumberWithCommas(maxBudget)}`;
       },
     },
     {
@@ -356,8 +351,8 @@ export function AllKeysTable({
       accessorKey: "budget_reset_at",
       header: "Budget Reset",
       cell: (info) => {
-        const value = info.getValue()
-        return value ? new Date(value as string).toLocaleString() : "Never"
+        const value = info.getValue();
+        return value ? new Date(value as string).toLocaleString() : "Never";
       },
     },
     {
@@ -365,7 +360,7 @@ export function AllKeysTable({
       accessorKey: "models",
       header: "Models",
       cell: (info) => {
-        const models = info.getValue() as string[]
+        const models = info.getValue() as string[];
         return (
           <div className="flex flex-col py-2">
             {Array.isArray(models) ? (
@@ -387,7 +382,7 @@ export function AllKeysTable({
                               setExpandedAccordions((prev) => ({
                                 ...prev,
                                 [info.row.id]: !prev[info.row.id],
-                              }))
+                              }));
                             }}
                           />
                         </div>
@@ -441,23 +436,23 @@ export function AllKeysTable({
               </div>
             ) : null}
           </div>
-        )
+        );
       },
     },
     {
       id: "rate_limits",
       header: "Rate Limits",
       cell: ({ row }) => {
-        const key = row.original
+        const key = row.original;
         return (
           <div>
             <div>TPM: {key.tpm_limit !== null ? key.tpm_limit : "Unlimited"}</div>
             <div>RPM: {key.rpm_limit !== null ? key.rpm_limit : "Unlimited"}</div>
           </div>
-        )
+        );
       },
     },
-  ]
+  ];
 
   const filterOptions: FilterOption[] = [
     {
@@ -465,18 +460,18 @@ export function AllKeysTable({
       label: "Team ID",
       isSearchable: true,
       searchFn: async (searchText: string) => {
-        if (!allTeams || allTeams.length === 0) return []
+        if (!allTeams || allTeams.length === 0) return [];
 
         const filteredTeams = allTeams.filter(
           (team) =>
             team.team_id.toLowerCase().includes(searchText.toLowerCase()) ||
             (team.team_alias && team.team_alias.toLowerCase().includes(searchText.toLowerCase())),
-        )
+        );
 
         return filteredTeams.map((team) => ({
           label: `${team.team_alias || team.team_id} (${team.team_id})`,
           value: team.team_id,
-        }))
+        }));
       },
     },
     {
@@ -484,18 +479,18 @@ export function AllKeysTable({
       label: "Organization ID",
       isSearchable: true,
       searchFn: async (searchText: string) => {
-        if (!allOrganizations || allOrganizations.length === 0) return []
+        if (!allOrganizations || allOrganizations.length === 0) return [];
 
         const filteredOrgs = allOrganizations.filter(
           (org) => org.organization_id?.toLowerCase().includes(searchText.toLowerCase()) ?? false,
-        )
+        );
 
         return filteredOrgs
           .filter((org) => org.organization_id !== null && org.organization_id !== undefined)
           .map((org) => ({
             label: `${org.organization_id || "Unknown"} (${org.organization_id})`,
             value: org.organization_id as string,
-          }))
+          }));
       },
     },
     {
@@ -504,15 +499,15 @@ export function AllKeysTable({
       isSearchable: true,
       searchFn: async (searchText) => {
         const filteredKeyAliases = allKeyAliases.filter((key) => {
-          return key.toLowerCase().includes(searchText.toLowerCase())
-        })
+          return key.toLowerCase().includes(searchText.toLowerCase());
+        });
 
         return filteredKeyAliases.map((key) => {
           return {
             label: key,
             value: key,
-          }
-        })
+          };
+        });
       },
     },
     {
@@ -525,9 +520,9 @@ export function AllKeysTable({
       label: "Key Hash",
       isSearchable: false,
     },
-  ]
+  ];
 
-  console.log(`keys: ${JSON.stringify(keys)}`)
+  console.log(`keys: ${JSON.stringify(keys)}`);
 
   const table = useReactTable({
     data: filteredKeys,
@@ -536,27 +531,27 @@ export function AllKeysTable({
       sorting,
     },
     onSortingChange: (updaterOrValue) => {
-      const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue
-      console.log(`newSorting: ${JSON.stringify(newSorting)}`)
-      setSorting(newSorting)
+      const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
+      console.log(`newSorting: ${JSON.stringify(newSorting)}`);
+      setSorting(newSorting);
       if (newSorting && newSorting.length > 0) {
-        const sortState = newSorting[0]
-        const sortBy = sortState.id
-        const sortOrder = sortState.desc ? "desc" : "asc"
-        console.log(`sortBy: ${sortBy}, sortOrder: ${sortOrder}`)
+        const sortState = newSorting[0];
+        const sortBy = sortState.id;
+        const sortOrder = sortState.desc ? "desc" : "asc";
+        console.log(`sortBy: ${sortBy}, sortOrder: ${sortOrder}`);
         handleFilterChange({
           ...filters,
           "Sort By": sortBy,
           "Sort Order": sortOrder,
-        })
-        onSortChange?.(sortBy, sortOrder)
+        });
+        onSortChange?.(sortBy, sortOrder);
       }
     },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     enableSorting: true,
     manualSorting: false,
-  })
+  });
 
   // Update local sorting state when currentSort prop changes
   React.useEffect(() => {
@@ -566,9 +561,9 @@ export function AllKeysTable({
           id: currentSort.sortBy,
           desc: currentSort.sortOrder === "desc",
         },
-      ])
+      ]);
     }
-  }, [currentSort])
+  }, [currentSort]);
 
   return (
     <div className="w-full h-full overflow-hidden">
@@ -581,16 +576,16 @@ export function AllKeysTable({
             setKeys((keys) =>
               keys.map((key) => {
                 if (key.token === updatedKeyData.token) {
-                  return updateExistingKeys(key, updatedKeyData)
+                  return updateExistingKeys(key, updatedKeyData);
                 }
-                return key
+                return key;
               }),
-            )
-            if (refresh) refresh() // Minimal fix: refresh the full key list after an update
+            );
+            if (refresh) refresh(); // Minimal fix: refresh the full key list after an update
           }}
           onDelete={() => {
-            setKeys((keys) => keys.filter((key) => key.token !== selectedKeyId))
-            if (refresh) refresh() // Minimal fix: refresh the full key list after a delete
+            setKeys((keys) => keys.filter((key) => key.token !== selectedKeyId));
+            if (refresh) refresh(); // Minimal fix: refresh the full key list after a delete
           }}
           accessToken={accessToken}
           userID={userID}
@@ -726,5 +721,5 @@ export function AllKeysTable({
         </div>
       )}
     </div>
-  )
+  );
 }

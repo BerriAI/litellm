@@ -1,50 +1,23 @@
 model_list:
-  - model_name: bedrock/batch-anthropic.claude-3-5-sonnet-20240620-v1:0
+  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
     litellm_params:
       model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
-      #########################################################
-      ########## batch specific params ########################
-      s3_bucket_name: litellm-proxy
-      s3_region_name: us-west-2
-      s3_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-      s3_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-      aws_batch_role_arn: arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV
-    model_info: 
-      mode: batch
-  - model_name: anthropic/*
+      aws_region_name: us-east-1
+      custom_llm_provider: bedrock
+  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
     litellm_params:
-      model: anthropic/*
-      api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: openai/*
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_region_name: us-west-2
+      custom_llm_provider: bedrock
+    
+
+# like MCPs/vector stores
+search_tools:
+  - search_tool_name: litellm-search
     litellm_params:
-      model: openai/*
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: gemini/*
+      search_provider: perplexity
+      api_key: os.environ/PERPLEXITYAI_API_KEY
+  - search_tool_name: exa-search
     litellm_params:
-      model: gemini/*
-      api_key: os.environ/GEMINI_API_KEY
-
-
-guardrails:
-  - guardrail_name: lakera
-    litellm_params:
-      guardrail: lakera_v2
-      mode: pre_call
-      api_key: os.environ/LAKERA_API_KEY
-      default_on: false
-      project_id: project-9770817088
-      breakdown: true
-      payload: true
-      dev_info: true
-
-litellm_settings:
-  callbacks: ["datadog"]
-  datadog_params:
-    turn_off_message_logging: true
-  datadog_llm_observability_params:
-    turn_off_message_logging: true
-
-  cache: True
-  cache_params:
-    type: redis
-    redis_startup_nodes: [{"host": "127.0.0.1", "port": "7000"}, {"host": "127.0.0.1", "port": "7001"}, {"host": "127.0.0.1", "port": "7002"}, {"host": "127.0.0.1", "port": "7003"}] 
+      search_provider: exa_ai
+      api_key: os.environ/EXA_API_KEY

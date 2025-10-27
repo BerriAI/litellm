@@ -1,12 +1,4 @@
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    Optional,
-    Union,
-    cast,
-    get_type_hints,
-)
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -127,13 +119,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         2. Create a ResponseReasoningItem object with the item data
         3. Convert it back to dict with exclude_none=True to filter None values
         """
-        verbose_logger.debug(f"Handling reasoning item: {item}")
         if item.get("type") == "reasoning":
             try:
                 # Ensure required fields are present for ResponseReasoningItem
                 item_data = dict(item)
-                if "id" not in item_data:
-                    item_data["id"] = f"reasoning_{hash(str(item_data))}"
                 if "summary" not in item_data:
                     item_data["summary"] = (
                         item_data.get("reasoning_content", "")[:100] + "..."
@@ -170,6 +159,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> ResponsesAPIResponse:
         """No transform applied since outputs are in OpenAI spec already"""
         try:
+            logging_obj.post_call(
+                original_response=raw_response.text,
+                additional_args={"complete_input_dict": {}},
+            )
             raw_response_json = raw_response.json()
             raw_response_json["created_at"] = _safe_convert_created_field(
                 raw_response_json["created_at"]
@@ -178,7 +171,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             raise OpenAIError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
-        return ResponsesAPIResponse(**raw_response_json)
+        try:
+            return ResponsesAPIResponse(**raw_response_json)
+        except Exception:
+            verbose_logger.debug(
+                f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct"
+            )
+            return ResponsesAPIResponse.model_construct(**raw_response_json)
 
     def validate_environment(
         self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
@@ -280,6 +279,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE: MCPCallArgumentsDoneEvent,
             ResponsesAPIStreamEvents.MCP_CALL_COMPLETED: MCPCallCompletedEvent,
             ResponsesAPIStreamEvents.MCP_CALL_FAILED: MCPCallFailedEvent,
+            ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE: ImageGenerationPartialImageEvent,
             ResponsesAPIStreamEvents.ERROR: ErrorEvent,
         }
 

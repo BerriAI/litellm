@@ -30,6 +30,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     Choices,
+    GuardrailStatus,
     ModelResponse,
     ModelResponseStream,
 )
@@ -329,14 +330,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         guardrail_response = metadata.get("_model_armor_response", {})
 
         # Determine status – default to "success" but prefer the explicit value if present.
-        guardrail_status: Literal["success", "failure", "blocked"] = metadata.get(
+        guardrail_status: GuardrailStatus = metadata.get(
             "_model_armor_status", "success"
         )  # type: ignore
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
             request_data=request_data,
-            guardrail_status=guardrail_status,  # type: ignore
+            guardrail_status=guardrail_status,
             duration=duration,
             start_time=start_time,
             end_time=end_time,
@@ -359,6 +360,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Union[Exception, str, dict, None]:
         """Pre-call hook to sanitize user prompts."""

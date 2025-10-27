@@ -4,18 +4,9 @@ import {
   Title,
   Text,
   Grid,
-  Col,
-  Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
-  TableBody,
-  TableCell,
   BarChart,
-  DonutChart,
   Metric,
   Subtitle,
-  Button,
   Tab,
   TabGroup,
   TabList,
@@ -23,7 +14,6 @@ import {
   TabPanels,
 } from "@tremor/react";
 import { Select, Tooltip } from "antd";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
 import AdvancedDatePicker from "./shared/advanced_date_picker";
 import PerUserUsage from "./per_user_usage";
@@ -70,10 +60,7 @@ interface UserAgentActivityProps {
   userRole: string | null;
 }
 
-const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
-  accessToken,
-  userRole,
-}) => {
+const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, userRole }) => {
   // Maximum number of categories to show in charts to prevent color palette overflow
   const MAX_CATEGORIES = 10;
 
@@ -89,18 +76,18 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   });
 
   const [userAgentFilter, setUserAgentFilter] = useState<string>("");
-  
+
   // Tag filtering state
   const [availableTags, setAvailableTags] = useState<string[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagsLoading, setTagsLoading] = useState(false);
-  
+
   // Separate loading states for each endpoint
   const [dauLoading, setDauLoading] = useState(false);
   const [wauLoading, setWauLoading] = useState(false);
   const [mauLoading, setMauLoading] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
-  
+
   const [isDateChanging, setIsDateChanging] = useState(false);
 
   // Use today's date as the end date for all API calls
@@ -129,7 +116,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         accessToken,
         today,
         userAgentFilter || undefined,
-        selectedTags.length > 0 ? selectedTags : undefined
+        selectedTags.length > 0 ? selectedTags : undefined,
       );
       setDauData(data);
     } catch (error) {
@@ -148,7 +135,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         accessToken,
         today,
         userAgentFilter || undefined,
-        selectedTags.length > 0 ? selectedTags : undefined
+        selectedTags.length > 0 ? selectedTags : undefined,
       );
       setWauData(data);
     } catch (error) {
@@ -167,7 +154,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         accessToken,
         today,
         userAgentFilter || undefined,
-        selectedTags.length > 0 ? selectedTags : undefined
+        selectedTags.length > 0 ? selectedTags : undefined,
       );
       setMauData(data);
     } catch (error) {
@@ -183,10 +170,10 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     setSummaryLoading(true);
     try {
       const summary = await userAgentSummaryCall(
-        accessToken, 
-        dateValue.from, 
+        accessToken,
+        dateValue.from,
         dateValue.to,
-        selectedTags.length > 0 ? selectedTags : undefined
+        selectedTags.length > 0 ? selectedTags : undefined,
       );
       setSummaryData(summary);
     } catch (error) {
@@ -252,15 +239,16 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     return userAgent;
   };
 
-
-
   // Get all user agents for each chart type based on their specific data
   const getAllTagsForData = (data: TagActiveUsersResponse[]) => {
     // Aggregate total active users per tag
-    const tagTotals = data.reduce((acc, item) => {
-      acc[item.tag] = (acc[item.tag] || 0) + item.active_users;
-      return acc;
-    }, {} as Record<string, number>);
+    const tagTotals = data.reduce(
+      (acc, item) => {
+        acc[item.tag] = (acc[item.tag] || 0) + item.active_users;
+        return acc;
+      },
+      {} as Record<string, number>,
+    );
 
     // Sort by total active users and return all tags
     return Object.entries(tagTotals)
@@ -276,122 +264,122 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   const generateDailyChartData = () => {
     const chartData: any[] = [];
     const endDate = new Date();
-    
+
     // Generate all 7 days
     for (let i = 6; i >= 0; i--) {
       const date = new Date(endDate);
       date.setDate(date.getDate() - i);
-      const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD format
-      
+      const dateStr = date.toISOString().split("T")[0]; // YYYY-MM-DD format
+
       const dayEntry: any = { date: dateStr };
-      
+
       // Initialize all user agents to 0
-      allDauTags.forEach(tag => {
+      allDauTags.forEach((tag) => {
         const userAgent = extractUserAgent(tag);
         dayEntry[userAgent] = 0;
       });
-      
+
       chartData.push(dayEntry);
     }
-    
+
     // Fill in actual data
-    dauData.results.forEach(item => {
+    dauData.results.forEach((item) => {
       const userAgent = extractUserAgent(item.tag);
-      const dayEntry = chartData.find(d => d.date === item.date);
+      const dayEntry = chartData.find((d) => d.date === item.date);
       if (dayEntry) {
         dayEntry[userAgent] = item.active_users;
       }
     });
-    
+
     return chartData;
   };
-  
+
   const dailyChartData = generateDailyChartData();
 
   // Prepare weekly chart data (WAU) - always show all 7 weeks
   const generateWeeklyChartData = () => {
     const chartData: any[] = [];
-    
+
     // Generate all 7 weeks (Week 1 through Week 7)
     for (let weekNum = 1; weekNum <= 7; weekNum++) {
       const weekEntry: any = { week: `Week ${weekNum}` };
-      
+
       // Initialize all user agents to 0
-      allWauTags.forEach(tag => {
+      allWauTags.forEach((tag) => {
         const userAgent = extractUserAgent(tag);
         weekEntry[userAgent] = 0;
       });
-      
+
       chartData.push(weekEntry);
     }
-    
+
     // Fill in actual data
-    wauData.results.forEach(item => {
+    wauData.results.forEach((item) => {
       const userAgent = extractUserAgent(item.tag);
       // Extract week number from the date field (e.g., "Week 1 (Jul 27)" -> "Week 1")
       const weekMatch = item.date.match(/Week (\d+)/);
       if (weekMatch) {
         const weekLabel = `Week ${weekMatch[1]}`;
-        const weekEntry = chartData.find(d => d.week === weekLabel);
+        const weekEntry = chartData.find((d) => d.week === weekLabel);
         if (weekEntry) {
           weekEntry[userAgent] = item.active_users;
         }
       }
     });
-    
+
     return chartData;
   };
-  
+
   const weeklyChartData = generateWeeklyChartData();
 
   // Prepare monthly chart data (MAU) - always show all 7 months
   const generateMonthlyChartData = () => {
     const chartData: any[] = [];
-    
+
     // Generate all 7 months (Month 1 through Month 7)
     for (let monthNum = 1; monthNum <= 7; monthNum++) {
       const monthEntry: any = { month: `Month ${monthNum}` };
-      
+
       // Initialize all user agents to 0
-      allMauTags.forEach(tag => {
+      allMauTags.forEach((tag) => {
         const userAgent = extractUserAgent(tag);
         monthEntry[userAgent] = 0;
       });
-      
+
       chartData.push(monthEntry);
     }
-    
+
     // Fill in actual data
-    mauData.results.forEach(item => {
+    mauData.results.forEach((item) => {
       const userAgent = extractUserAgent(item.tag);
       // Extract month number from the date field (e.g., "Month 1 (Jul)" -> "Month 1")
       const monthMatch = item.date.match(/Month (\d+)/);
       if (monthMatch) {
         const monthLabel = `Month ${monthMatch[1]}`;
-        const monthEntry = chartData.find(d => d.month === monthLabel);
+        const monthEntry = chartData.find((d) => d.month === monthLabel);
         if (monthEntry) {
           monthEntry[userAgent] = item.active_users;
         }
       }
     });
-    
+
     return chartData;
   };
-  
+
   const monthlyChartData = generateMonthlyChartData();
 
   // Format numbers with K, M abbreviations
   const formatAbbreviatedNumber = (value: number, decimalPlaces: number = 0): string => {
     if (value >= 100000000) {
-      return (value / 1000000).toFixed(decimalPlaces) + 'M';
+      return (value / 1000000).toFixed(decimalPlaces) + "M";
     } else if (value >= 10000000) {
-      return (value / 1000000).toFixed(decimalPlaces) + 'M';
+      return (value / 1000000).toFixed(decimalPlaces) + "M";
     } else if (value >= 1000000) {
-      return (value / 1000000).toFixed(decimalPlaces) + 'M';
+      return (value / 1000000).toFixed(decimalPlaces) + "M";
     } else if (value >= 10000) {
-      return (value / 1000).toFixed(decimalPlaces) + 'K';
+      return (value / 1000).toFixed(decimalPlaces) + "K";
     } else if (value >= 1000) {
-      return (value / 1000).toFixed(decimalPlaces) + 'K';
+      return (value / 1000).toFixed(decimalPlaces) + "K";
     } else {
       return value.toFixed(decimalPlaces);
     }
@@ -407,8 +395,8 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
               <Title>Summary by User Agent</Title>
               <Subtitle>Performance metrics for different user agents</Subtitle>
             </div>
-            
-                        {/* User Agent Filter */}
+
+            {/* User Agent Filter */}
             <div className="w-96">
               <Text className="text-sm font-medium block mb-2">Filter by User Agents</Text>
               <Select
@@ -436,12 +424,9 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
               </Select>
             </div>
           </div>
-          
+
           {/* Date Range Picker within Summary */}
-          <AdvancedDatePicker
-            value={dateValue}
-            onValueChange={handleDateChange}
-          />
+          <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
 
           {/* Top 4 User Agents Cards */}
           {summaryLoading ? (
@@ -454,9 +439,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                 return (
                   <Card key={index}>
                     <Tooltip title={userAgent} placement="top">
-                      <Title className="truncate">
-                        {displayName}
-                      </Title>
+                      <Title className="truncate">{displayName}</Title>
                     </Tooltip>
                     <div className="mt-4 space-y-3">
                       <div>
@@ -507,7 +490,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
             <Tab>DAU/WAU/MAU</Tab>
             <Tab>Per User Usage (Last 30 Days)</Tab>
           </TabList>
-          
+
           <TabPanels>
             {/* DAU/WAU/MAU Tab Panel */}
             <TabPanel>
@@ -522,7 +505,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                   <Tab>WAU</Tab>
                   <Tab>MAU</Tab>
                 </TabList>
-                
+
                 <TabPanels>
                   <TabPanel>
                     <div className="mb-4">
@@ -542,7 +525,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                       />
                     )}
                   </TabPanel>
-                  
+
                   <TabPanel>
                     <div className="mb-4">
                       <Title className="text-lg">Weekly Active Users - Last 7 Weeks</Title>
@@ -561,7 +544,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                       />
                     )}
                   </TabPanel>
-                  
+
                   <TabPanel>
                     <div className="mb-4">
                       <Title className="text-lg">Monthly Active Users - Last 7 Months</Title>
@@ -583,7 +566,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                 </TabPanels>
               </TabGroup>
             </TabPanel>
-            
+
             {/* Per User Usage Tab Panel */}
             <TabPanel>
               <PerUserUsage

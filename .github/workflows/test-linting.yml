@@ -11,6 +11,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        clean: true
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -19,6 +22,11 @@ jobs:
 
     - name: Install Poetry
       uses: snok/install-poetry@v1
+
+    - name: Clean Python cache
+      run: |
+        find . -type d -name "__pycache__" -exec rm -rf {} + || true
+        find . -name "*.pyc" -delete || true
 
     - name: Install dependencies
       run: |
@@ -31,6 +39,15 @@ jobs:
         poetry run black .
         cd ..
 
+    - name: Debug - Check file state
+      run: |
+        echo "Current branch:"
+        git branch --show-current
+        echo "Last 3 commits:"
+        git log --oneline -3
+        echo "File content around line 43:"
+        head -50 litellm/litellm_core_utils/custom_logger_registry.py | tail -10
+        
     - name: Run Ruff linting
       run: |
         cd litellm
@@ -44,7 +61,7 @@ jobs:
     - name: Run MyPy type checking
       run: |
         cd litellm
-        poetry run mypy . --ignore-missing-imports
+        poetry run mypy . 
         cd ..
 
     - name: Check for circular imports

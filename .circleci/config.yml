@@ -51,6 +51,33 @@ jobs:
           command: |
             python -m pytest tests/windows_tests/test_litellm_on_windows.py -v
     
+  mypy_linting:
+    docker:
+      - image: cimg/python:3.12
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: medium
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip uninstall fastuuid -y
+            pip install "mypy==1.18.2"
+      - run:
+          name: MyPy Type Checking
+          command: |
+            cd litellm
+            # Use the same approach as GitHub Actions, explicitly exclude fastuuid to avoid segfaults
+            python -m mypy .
+            cd ..
+          no_output_timeout: 10m
   local_testing:
     docker:
       - image: cimg/python:3.12
@@ -140,13 +167,6 @@ jobs:
             python -m pip install black
             python -m black .
             cd ..
-      - run:
-          name: Linting Testing
-          command: |
-            cd litellm
-            # Use the same simple approach that works in GitHub Actions
-            python -m mypy . --ignore-missing-imports --show-traceback
-            cd ..
 
       # Run pytest and generate JUnit XML report
       - run:
@@ -154,7 +174,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache" -n 4
+            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache" -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -464,7 +484,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -x -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -597,6 +617,24 @@ jobs:
             sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
             rm dockerize-linux-amd64-v0.6.1.tar.gz
       - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=circle_test \
+              -p 5432:5432 \
+              postgres:14
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - run:
+          name: Set DATABASE_URL environment variable
+          command: |
+            echo 'export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/circle_test"' >> $BASH_ENV
+            source $BASH_ENV
+      - run:
           name: Run Security Scans
           command: |
             chmod +x ci_cd/security_scans.sh
@@ -638,18 +676,16 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
-      - run:
-          name: Install PostgreSQL
-          command: |
-            sudo apt-get update
-            sudo apt-get install postgresql postgresql-contrib
-            echo 'export PATH=/usr/lib/postgresql/*/bin:$PATH' >> $BASH_ENV
       - setup_google_dns
       - run:
           name: Show git commit hash
           command: |
             echo "Git commit hash: $CIRCLE_SHA1"
-
+      - run:
+          name: Install PostgreSQL
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y postgresql-14 postgresql-contrib-14
       - restore_cache:
           keys:
             - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
@@ -810,7 +846,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1005,6 +1041,92 @@ jobs:
           paths:
             - llm_responses_api_coverage.xml
             - llm_responses_api_coverage
+  ocr_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.22.0"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/ocr_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml ocr_coverage.xml
+            mv .coverage ocr_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - ocr_coverage.xml
+            - ocr_coverage
+  search_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.22.0"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/search_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml search_coverage.xml
+            mv .coverage search_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - search_coverage.xml
+            - search_coverage
   litellm_mapped_tests:
     docker:
       - image: cimg/python:3.11
@@ -1042,7 +1164,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
+            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1180,6 +1302,7 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
+            pip install pytest-mock
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1339,6 +1462,49 @@ jobs:
           paths:
             - logging_coverage.xml
             - logging_coverage
+  audio_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.22.0"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/audio_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml audio_coverage.xml
+            mv .coverage audio_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - audio_coverage.xml
+            - audio_coverage
   installing_litellm_on_python:
     docker:
       - image: circleci/python:3.8
@@ -2337,6 +2503,25 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "assemblyai==0.37.0"
       - run:
+          name: Install dockerize
+          command: |
+            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=circle_test \
+              -p 5432:5432 \
+              postgres:14
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
       - run:
@@ -2346,10 +2531,11 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=$CLEAN_STORE_MODEL_IN_DB_DATABASE_URL \
+              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e STORE_MODEL_IN_DB="True" \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/store_model_db_config.yaml:/app/config.yaml \
               my-app:latest \
@@ -2379,7 +2565,16 @@ jobs:
             python -m pytest -vv tests/store_model_in_db_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout:
             120m
-            # Clean up first container
+      - run:
+          name: Stop and remove containers
+          command: |
+            docker stop my-app || true
+            docker rm my-app || true
+            docker stop postgres-db || true
+            docker rm postgres-db || true
+          when: always
+      - store_test_results:
+          path: test-results
       
   proxy_build_from_pip_tests:
     # Change from docker to machine executor
@@ -2567,6 +2762,8 @@ jobs:
               -e GEMINI_API_KEY=$GEMINI_API_KEY \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
               -e ASSEMBLYAI_API_KEY=$ASSEMBLYAI_API_KEY \
+              -e AZURE_API_KEY=$AZURE_API_KEY \
+              -e AZURE_API_BASE=$AZURE_API_BASE \
               -e USE_DDTRACE=True \
               -e DD_API_KEY=$DD_API_KEY \
               -e DD_SITE=$DD_SITE \
@@ -2673,7 +2870,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage llm_responses_api_coverage mcp_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage
+            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3071,6 +3268,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - mypy_linting:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - local_testing:
           filters:
             branches:
@@ -3215,6 +3418,18 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - ocr_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - search_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - litellm_mapped_enterprise_tests:
           filters:
             branches:
@@ -3257,6 +3472,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - audio_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - upload-coverage:
           requires:
             - llm_translation_testing
@@ -3264,6 +3485,8 @@ workflows:
             - google_generate_content_endpoint_testing
             - guardrails_testing
             - llm_responses_api_testing
+            - ocr_testing
+            - search_testing
             - litellm_mapped_tests
             - litellm_mapped_enterprise_tests
             - batches_testing
@@ -3271,6 +3494,7 @@ workflows:
             - pass_through_unit_testing
             - image_gen_testing
             - logging_testing
+            - audio_testing
             - litellm_router_testing
             - litellm_router_unit_testing
             - caching_unit_tests
@@ -3317,6 +3541,7 @@ workflows:
                 - main
       - publish_to_pypi:
           requires:
+            - mypy_linting
             - local_testing
             - build_and_test
             - e2e_openai_endpoints
@@ -3325,6 +3550,8 @@ workflows:
             - mcp_testing
             - google_generate_content_endpoint_testing
             - llm_responses_api_testing
+            - ocr_testing
+            - search_testing
             - litellm_mapped_tests
             - litellm_mapped_enterprise_tests
             - batches_testing
@@ -3332,6 +3559,7 @@ workflows:
             - pass_through_unit_testing
             - image_gen_testing
             - logging_testing
+            - audio_testing
             - litellm_router_testing
             - litellm_router_unit_testing
             - caching_unit_tests

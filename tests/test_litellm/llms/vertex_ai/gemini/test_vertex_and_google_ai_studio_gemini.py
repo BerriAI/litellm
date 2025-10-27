@@ -444,12 +444,14 @@ def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
 
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
-    tools = v._map_function(value=[{"code_execution": {}}])
+    optional_params = {}
+    tools = v._map_function(value=[{"code_execution": {}}], optional_params=optional_params)
     assert len(tools) == 1
     assert tools[0]["code_execution"] == {}
     print(tools)
 
-    new_tools = v._map_function(value=[{"codeExecution": {}}])
+    new_optional_params = {}
+    new_tools = v._map_function(value=[{"codeExecution": {}}], optional_params=new_optional_params)
     assert len(new_tools) == 1
     print("new_tools", new_tools)
     assert new_tools[0]["code_execution"] == {}
@@ -465,6 +467,7 @@ def test_vertex_ai_map_tool_with_anyof():
     Ensure if anyof is present, only the anyof field and its contents are kept - otherwise VertexAI will throw an error - https://github.com/BerriAI/litellm/issues/11164
     """
     v = VertexGeminiConfig()
+    optional_params = {}
     value = [
         {
             "type": "function",
@@ -488,7 +491,7 @@ def test_vertex_ai_map_tool_with_anyof():
             },
         }
     ]
-    tools = v._map_function(value=value)
+    tools = v._map_function(value=value, optional_params=optional_params)
 
     assert tools[0]["function_declarations"][0]["parameters"]["properties"][
         "base_branch"
@@ -496,6 +499,7 @@ def test_vertex_ai_map_tool_with_anyof():
         "anyOf": [{"type": "string", "nullable": True, "title": "Base Branch"}]
     }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
 
+    new_optional_params = {}
     new_value = [
         {
             "type": "function",
@@ -518,7 +522,7 @@ def test_vertex_ai_map_tool_with_anyof():
             },
         }
     ]
-    new_tools = v._map_function(value=new_value)
+    new_tools = v._map_function(value=new_value, optional_params=new_optional_params)
 
     assert new_tools[0]["function_declarations"][0]["parameters"]["properties"][
         "base_branch"
@@ -1056,3 +1060,369 @@ def test_vertex_ai_code_line_length():
     
     # Verify it contains the expected UUID format
     assert 'uuid.uuid4().hex[:28]' in id_line, f"Line should contain shortened UUID format: {id_line}"
+
+
+def test_vertex_ai_map_google_maps_tool_simple():
+    """
+    Test googleMaps tool transformation without location data.
+    
+    Input:
+        value=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}]
+        optional_params={}
+    
+    Expected Output:
+        tools=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}]
+        optional_params={} (unchanged)
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+    
+    tools = v._map_function(
+        value=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}],
+        optional_params=optional_params
+    )
+    
+    assert len(tools) == 1
+    assert "googleMaps" in tools[0]
+    assert tools[0]["googleMaps"]["enableWidget"] == "ENABLE_WIDGET"
+    assert "toolConfig" not in optional_params
+
+
+def test_vertex_ai_map_google_maps_tool_with_location():
+    """
+    Test googleMaps tool transformation with location data.
+    Verifies latitude/longitude/languageCode are extracted to toolConfig.retrievalConfig.
+    
+    Input:
+        value=[{
+            "googleMaps": {
+                "enableWidget": "ENABLE_WIDGET",
+                "latitude": 37.7749,
+                "longitude": -122.4194,
+                "languageCode": "en_US"
+            }
+        }]
+        optional_params={}
+    
+    Expected Output:
+        tools=[{
+            "googleMaps": {"enableWidget": "ENABLE_WIDGET"}
+        }]
+        optional_params={
+            "toolConfig": {
+                "retrievalConfig": {
+                    "latLng": {
+                        "latitude": 37.7749,
+                        "longitude": -122.4194
+                    },
+                    "languageCode": "en_US"
+                }
+            }
+        }
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+    
+    tools = v._map_function(
+        value=[{
+            "googleMaps": {
+                "enableWidget": "ENABLE_WIDGET",
+                "latitude": 37.7749,
+                "longitude": -122.4194,
+                "languageCode": "en_US"
+            }
+        }],
+        optional_params=optional_params
+    )
+    
+    assert len(tools) == 1
+    assert "googleMaps" in tools[0]
+    
+    google_maps_tool = tools[0]["googleMaps"]
+    assert google_maps_tool["enableWidget"] == "ENABLE_WIDGET"
+    assert "latitude" not in google_maps_tool
+    assert "longitude" not in google_maps_tool
+    assert "languageCode" not in google_maps_tool
+    
+    assert "toolConfig" in optional_params
+    assert "retrievalConfig" in optional_params["toolConfig"]
+    
+    retrieval_config = optional_params["toolConfig"]["retrievalConfig"]
+    assert retrieval_config["latLng"]["latitude"] == 37.7749
+    assert retrieval_config["latLng"]["longitude"] == -122.4194
+    assert retrieval_config["languageCode"] == "en_US"
+
+def test_vertex_ai_penalty_parameters_validation():
+    """
+    Test that penalty parameters are properly validated for different Gemini models.
+    
+    This test ensures that:
+    1. Models that don't support penalty parameters (like preview models) filter them out
+    2. Models that support penalty parameters include them in the request
+    3. Appropriate warnings are logged for unsupported models
+    """
+    v = VertexGeminiConfig()
+
+    # Test cases: (model_name, should_support_penalty_params)
+    test_cases = [
+        ("gemini-2.5-pro-preview-06-05", False),  # Preview model - should not support
+    ]
+
+    for model, should_support in test_cases:
+        # Test _supports_penalty_parameters method
+        assert v._supports_penalty_parameters(model) == should_support, \
+            f"Model {model} penalty support should be {should_support}"
+
+        # Test get_supported_openai_params method
+        supported_params = v.get_supported_openai_params(model)
+        has_penalty_params = "frequency_penalty" in supported_params and "presence_penalty" in supported_params
+        assert has_penalty_params == should_support, \
+            f"Model {model} should {'include' if should_support else 'exclude'} penalty params in supported list"
+
+    # Test parameter mapping for unsupported model
+    model = "gemini-2.5-pro-preview-06-05"
+    non_default_params = {
+        "temperature": 0.7,
+        "frequency_penalty": 0.5,
+        "presence_penalty": 0.3,
+        "max_tokens": 100
+    }
+
+    optional_params = {}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False
+    )
+
+    # Penalty parameters should be filtered out for unsupported models
+    assert "frequency_penalty" not in result, "frequency_penalty should be filtered out for unsupported model"
+    assert "presence_penalty" not in result, "presence_penalty should be filtered out for unsupported model"
+
+    # Other parameters should still be included
+    assert "temperature" in result, "temperature should still be included"
+    assert "max_output_tokens" in result, "max_output_tokens should still be included"
+    assert result["temperature"] == 0.7
+    assert result["max_output_tokens"] == 100
+
+
+def test_vertex_ai_annotation_streaming_events():
+    """
+    Test that annotation events are properly emitted during streaming for Vertex AI Gemini.
+    
+    This test verifies:
+    1. Grounding metadata is converted to annotations in streaming chunks
+    2. Annotations are included in the delta of streaming chunks
+    3. Multiple annotations are handled correctly
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+    from litellm.types.llms.openai import ChatCompletionAnnotation
+
+    litellm_logging = MagicMock()
+
+    # Simulate a streaming chunk with grounding metadata (as Gemini sends it)
+    chunk_with_annotations = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": "The weather in San Francisco today is clear."}]
+                },
+                "groundingMetadata": {
+                    "webSearchQueries": ["weather San Francisco today"],
+                    "searchEntryPoint": {
+                        "renderedContent": '<div>Search results</div>'
+                    },
+                    "groundingChunks": [
+                        {
+                            "web": {
+                                "uri": "https://www.google.com/search?q=weather+in+San+Francisco,+CA",
+                                "title": "Weather information for San Francisco, CA",
+                                "domain": "google.com",
+                            }
+                        }
+                    ],
+                    "groundingSupports": [
+                        {
+                            "segment": {
+                                "startIndex": 0,
+                                "endIndex": 50,
+                                "text": "The weather in San Francisco today is clear.",
+                            },
+                            "groundingChunkIndices": [0],
+                            "confidenceScores": [0.95],
+                        }
+                    ],
+                },
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 15,
+            "totalTokenCount": 25,
+        },
+    }
+
+    # Create iterator and parse chunk
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
+    )
+    streaming_chunk = iterator.chunk_parser(chunk_with_annotations)
+
+    # Verify the chunk was parsed correctly
+    assert streaming_chunk.choices is not None
+    assert len(streaming_chunk.choices) == 1
+    
+    # Check that annotations are present in the delta
+    delta = streaming_chunk.choices[0].delta
+    assert hasattr(delta, "annotations")
+    assert delta.annotations is not None
+    assert len(delta.annotations) > 0
+
+    # Verify annotation structure
+    annotation = delta.annotations[0]
+    assert isinstance(annotation, dict)  # ChatCompletionAnnotation is a TypedDict
+    assert annotation["type"] == "url_citation"
+    assert annotation["url_citation"]["start_index"] == 0
+    assert annotation["url_citation"]["end_index"] == 50
+    assert "google.com" in annotation["url_citation"]["url"]
+    assert "Weather information" in annotation["url_citation"]["title"]
+
+
+def test_vertex_ai_annotation_conversion():
+    """
+    Test the conversion of Vertex AI grounding metadata to OpenAI annotations.
+    
+    This test verifies the _convert_grounding_metadata_to_annotations method
+    correctly transforms grounding metadata into the expected format.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # Sample grounding metadata as returned by Vertex AI
+    grounding_metadata = {
+        "webSearchQueries": ["weather San Francisco", "current time San Francisco"],
+        "searchEntryPoint": {
+            "renderedContent": '<div>Search interface</div>'
+        },
+        "groundingChunks": [
+            {
+                "web": {
+                    "uri": "https://www.google.com/search?q=weather+in+San+Francisco,+CA",
+                    "title": "Weather information for San Francisco, CA",
+                    "domain": "google.com",
+                }
+            },
+            {
+                "web": {
+                    "uri": "https://www.google.com/search?q=time+in+San+Francisco,+CA",
+                    "title": "Current time in San Francisco, CA",
+                    "domain": "google.com",
+                }
+            }
+        ],
+        "groundingSupports": [
+            {
+                "segment": {
+                    "startIndex": 0,
+                    "endIndex": 30,
+                    "text": "The weather in San Francisco",
+                },
+                "groundingChunkIndices": [0],
+                "confidenceScores": [0.95],
+            },
+            {
+                "segment": {
+                    "startIndex": 32,
+                    "endIndex": 60,
+                    "text": "is currently 72°F",
+                },
+                "groundingChunkIndices": [0],
+                "confidenceScores": [0.88],
+            },
+            {
+                "segment": {
+                    "startIndex": 62,
+                    "endIndex": 85,
+                    "text": "and the time is 2:30 PM",
+                },
+                "groundingChunkIndices": [1],
+                "confidenceScores": [0.92],
+            }
+        ],
+    }
+
+    # Convert grounding metadata to annotations
+    content_text = "The weather in San Francisco is currently 72°F and the time is 2:30 PM"
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+        [grounding_metadata], content_text
+    )
+
+    # Verify annotations were created
+    assert len(annotations) == 3  # One for each grounding support
+
+    # Check first annotation (weather)
+    weather_annotation = annotations[0]
+    assert weather_annotation["type"] == "url_citation"
+    assert weather_annotation["url_citation"]["start_index"] == 0
+    assert weather_annotation["url_citation"]["end_index"] == 30
+    assert "google.com" in weather_annotation["url_citation"]["url"]
+    assert "Weather information" in weather_annotation["url_citation"]["title"]
+
+    # Check second annotation (weather continuation)
+    weather_cont_annotation = annotations[1]
+    assert weather_cont_annotation["type"] == "url_citation"
+    assert weather_cont_annotation["url_citation"]["start_index"] == 32
+    assert weather_cont_annotation["url_citation"]["end_index"] == 60
+    assert "google.com" in weather_cont_annotation["url_citation"]["url"]
+    assert "Weather information" in weather_cont_annotation["url_citation"]["title"]
+
+    # Check third annotation (time)
+    time_annotation = annotations[2]
+    assert time_annotation["type"] == "url_citation"
+    assert time_annotation["url_citation"]["start_index"] == 62
+    assert time_annotation["url_citation"]["end_index"] == 85
+    assert "google.com" in time_annotation["url_citation"]["url"]
+    assert "Current time" in time_annotation["url_citation"]["title"]
+
+
+def test_vertex_ai_annotation_empty_grounding_metadata():
+    """
+    Test handling of empty or missing grounding metadata.
+    
+    This test ensures the annotation conversion handles edge cases gracefully.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # Test with empty grounding metadata
+    empty_metadata = {}
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+        [empty_metadata], "test content"
+    )
+    assert len(annotations) == 0
+
+    # Test with missing groundingSupports
+    metadata_no_supports = {
+        "webSearchQueries": ["test query"],
+        "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Test"}}],
+    }
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+        [metadata_no_supports], "test content"
+    )
+    assert len(annotations) == 0
+
+    # Test with empty groundingSupports
+    metadata_empty_supports = {
+        "webSearchQueries": ["test query"],
+        "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Test"}}],
+        "groundingSupports": [],
+    }
+    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+        [metadata_empty_supports], "test content"
+    )
+    assert len(annotations) == 0

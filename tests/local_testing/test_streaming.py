@@ -243,7 +243,7 @@ tools_schema = [
 def test_completion_azure_stream_special_char():
     litellm.set_verbose = True
     messages = [{"role": "user", "content": "hi. respond with the <xml> tag only"}]
-    response = completion(model="azure/chatgpt-v-3", messages=messages, stream=True)
+    response = completion(model="azure/gpt-4.1-mini", messages=messages, stream=True)
     response_str = ""
     for part in response:
         response_str += part.choices[0].delta.content or ""
@@ -451,7 +451,7 @@ def test_completion_azure_stream():
             },
         ]
         response = completion(
-            model="azure/chatgpt-v-3", messages=messages, stream=True, max_tokens=50
+            model="azure/gpt-4.1-mini", messages=messages, stream=True, max_tokens=50
         )
         complete_response = ""
         # Add any assertions here to check the response
@@ -589,7 +589,7 @@ def test_completion_azure_function_calling_stream():
         user_message = "What is the current weather in Boston?"
         messages = [{"content": user_message, "role": "user"}]
         response = completion(
-            model="azure/chatgpt-functioncalling",
+            model="azure/gpt-4.1-mini",
             messages=messages,
             stream=True,
             tools=tools_schema,
@@ -1101,7 +1101,7 @@ def test_vertex_ai_stream(provider):
     litellm.vertex_project = "pathrise-convert-1606954137718"
     import random
 
-    test_models = ["gemini-1.5-pro"]
+    test_models = ["gemini-2.5-flash-lite"]
     for model in test_models:
         try:
             print("making request", model)
@@ -1952,10 +1952,9 @@ def test_openai_chat_completion_complete_response_call():
     "model",
     [
         "gpt-3.5-turbo",
-        "azure/chatgpt-v-3",
+        "azure/gpt-4.1-mini",
         "claude-3-haiku-20240307",
         "o1",
-        "azure/fake-o1-mini",
     ],
 )
 @pytest.mark.parametrize(
@@ -2752,13 +2751,13 @@ def test_azure_streaming_and_function_calling():
     messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
     try:
         response = completion(
-            model="azure/gpt-4-nov-release",
+            model="azure/gpt-4.1-mini",
             tools=tools,
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_FRANCE_API_BASE"),
-            api_key=os.getenv("AZURE_FRANCE_API_KEY"),
+            api_base=os.getenv("AZURE_API_BASE"),
+            api_key=os.getenv("AZURE_API_KEY"),
             api_version="2024-02-15-preview",
         )
         # Add any assertions here to check the response
@@ -2823,13 +2822,13 @@ async def test_azure_astreaming_and_function_calling():
     try:
         litellm.set_verbose = True
         response = await litellm.acompletion(
-            model="azure/gpt-4-nov-release",
+            model="azure/gpt-4.1-mini",
             tools=tools,
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_FRANCE_API_BASE"),
-            api_key=os.getenv("AZURE_FRANCE_API_KEY"),
+            api_base=os.getenv("AZURE_API_BASE"),
+            api_key=os.getenv("AZURE_API_KEY"),
             api_version="2024-02-15-preview",
             caching=True,
         )
@@ -2854,13 +2853,13 @@ async def test_azure_astreaming_and_function_calling():
         ## CACHING TEST
         print("\n\nCACHING TESTS\n\n")
         response = await litellm.acompletion(
-            model="azure/gpt-4-nov-release",
+            model="azure/gpt-4.1-mini",
             tools=tools,
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_FRANCE_API_BASE"),
-            api_key=os.getenv("AZURE_FRANCE_API_KEY"),
+            api_base=os.getenv("AZURE_API_BASE"),
+            api_key=os.getenv("AZURE_API_KEY"),
             api_version="2024-02-15-preview",
             caching=True,
         )

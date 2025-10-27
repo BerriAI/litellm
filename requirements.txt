@@ -43,7 +43,7 @@ sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==44.0.1
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.2.22 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.2.29 # for proxy extras - e.g. prisma migrations
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.1 # for env
 tiktoken==0.8.0 # for calculating usage
@@ -54,7 +54,7 @@ rich==13.7.1 # for litellm proxy cli
 jinja2==3.1.6 # for prompt templates
 aiohttp==3.12.14 # for network calls
 aioboto3==13.4.0 # for async sagemaker calls
-tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
+tenacity==8.5.0  # for retrying requests, when litellm.num_retries set
 pydantic==2.10.2 # proxy + openai req.
 jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API

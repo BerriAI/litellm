@@ -273,7 +273,7 @@ echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
 source .env
 
 # Start
-docker-compose up
+docker compose up
 ```
 
 
@@ -347,6 +347,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [Nebius AI Studio](https://docs.litellm.ai/docs/providers/nebius)                             | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 | ✅                                                                             |                                                                         |
 | [Heroku](https://docs.litellm.ai/docs/providers/heroku)                             | ✅                                                       | ✅                                                                               |                                                                                    |                                                                                  |                                                                              |                                                                         |
 | [OVHCloud AI Endpoints](https://docs.litellm.ai/docs/providers/ovhcloud)                             | ✅                                                       | ✅                                                                               |                                                                                    |                                                                                  |                                                                              |                                                                         |
+| [CometAPI](https://docs.litellm.ai/docs/providers/cometapi)                               | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 | ✅                                                                             | ✅                                                                       |
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
 

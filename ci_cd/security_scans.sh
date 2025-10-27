@@ -66,18 +66,79 @@ run_grype_scans() {
     echo "Scanning locally built LiteLLM image for high-severity vulnerabilities..."
     echo "Using locally built image: litellm:latest"
     
-    # Run grype scan and check for vulnerabilities with CVSS >= 4.0
+    # Allowlist of CVEs to be ignored in failure threshold/reporting
+    # - CVE-2025-8869: Not applicable on Python >=3.13 (PEP 706 implemented); pip fallback unused; no OS-level fix
+    # - GHSA-4xh5-x5gv-qwph: GitHub Security Advisory alias for CVE-2025-8869
+    ALLOWED_CVES=(
+        "CVE-2025-8869"
+        "GHSA-4xh5-x5gv-qwph"
+        "CVE-2025-8291" # no fix available as of Oct 11, 2025
+    )
+
+    # Build JSON array of allowlisted CVE IDs for jq
+    ALLOWED_IDS_JSON=$(printf '%s\n' "${ALLOWED_CVES[@]}" | jq -R . | jq -s .)
+
     echo "Checking for vulnerabilities with CVSS score >= 4.0..."
-    HIGH_SEVERITY_COUNT=$(grype litellm:latest -o json | jq -r '.matches[] | select(.vulnerability.cvss[]?.metrics.baseScore >= 4.0) | .vulnerability.id' | wc -l)
+    echo "Allowlisted CVEs (ignored in threshold): ${ALLOWED_CVES[*]}"
+    echo ""
+    
+    # Show all high-severity vulnerabilities for transparency
+    TOTAL_HIGH_SEVERITY=$(grype litellm:latest -o json | jq -r '
+        .matches[]
+        | select(.vulnerability.cvss[]?.metrics.baseScore >= 4.0)
+        | .vulnerability.id' | wc -l)
+    
+    if [ "$TOTAL_HIGH_SEVERITY" -gt 0 ]; then
+        echo "Total vulnerabilities found with CVSS >= 4.0: $TOTAL_HIGH_SEVERITY"
+        echo ""
+        echo "All high-severity vulnerabilities (including allowlisted):"
+        grype litellm:latest -o json | jq --argjson allow "$ALLOWED_IDS_JSON" -r '
+        ["Package", "Version", "Vulnerability ID", "CVSS Score", "Allowlisted"],
+        (.matches[]
+          | select(.vulnerability.cvss[]?.metrics.baseScore >= 4.0)
+          | [.artifact.name, .artifact.version, .vulnerability.id, .vulnerability.cvss[0].metrics.baseScore, (if (.vulnerability.id as $id | $allow | index($id)) then "YES" else "NO" end)])
+        | @tsv' | column -t -s $'\t'
+        echo ""
+    fi
+
+    HIGH_SEVERITY_COUNT=$(grype litellm:latest -o json | jq --argjson allow "$ALLOWED_IDS_JSON" -r '
+        .matches[]
+        | select(.vulnerability.cvss[]?.metrics.baseScore >= 4.0)
+        | select((.vulnerability.id as $id | $allow | index($id) | not))
+        | .vulnerability.id' | wc -l)
     
     if [ "$HIGH_SEVERITY_COUNT" -gt 0 ]; then
-        echo "ERROR: Found $HIGH_SEVERITY_COUNT vulnerabilities with CVSS score >= 4.0 in litellm:latest"
+        echo ""
+        echo "=========================================="
+        echo "ERROR: Security Scan Failed"
+        echo "=========================================="
+        echo "Found $HIGH_SEVERITY_COUNT non-allowlisted vulnerabilities with CVSS score >= 4.0 in litellm:latest"
+        echo ""
+        echo "These vulnerabilities are NOT in the allowlist and must be addressed."
+        echo "Current allowlisted CVEs: ${ALLOWED_CVES[*]}"
+        echo ""
         echo "Detailed vulnerability report:"
-        grype litellm:latest -o json | jq -r '
+        echo ""
+        grype litellm:latest -o json | jq --argjson allow "$ALLOWED_IDS_JSON" -r '
         ["Package", "Version", "Vulnerability ID", "CVSS Score", "Severity", "Fix Version", "Description"],
-        (.matches[] | select(.vulnerability.cvss[]?.metrics.baseScore >= 4.0) |
-        [.artifact.name, .artifact.version, .vulnerability.id, .vulnerability.cvss[0].metrics.baseScore, .vulnerability.severity, (.vulnerability.fix.versions[0] // "No fix available"), .vulnerability.description]) |
-        @tsv' | column -t -s $'\t'
+        (.matches[]
+          | select(.vulnerability.cvss[]?.metrics.baseScore >= 4.0)
+          | select((.vulnerability.id as $id | $allow | index($id) | not))
+          | [.artifact.name, .artifact.version, .vulnerability.id, .vulnerability.cvss[0].metrics.baseScore, .vulnerability.severity, (.vulnerability.fix.versions[0] // "No fix available"), .vulnerability.description])
+        | @tsv' | column -t -s $'\t'
+        echo ""
+        echo "=========================================="
+        echo "Action Required:"
+        echo "=========================================="
+        echo "1. If a fix is available, update the package to the fixed version"
+        echo "2. If the vulnerability is not applicable or has no fix:"
+        echo "   - Add the CVE/GHSA ID to ALLOWED_CVES array in ci_cd/security_scans.sh"
+        echo "   - Add a comment explaining why it's safe to ignore"
+        echo ""
+        echo "Note: Some vulnerabilities may have multiple IDs (CVE-XXXX and GHSA-XXXX)."
+        echo "Add all relevant IDs to the allowlist if they refer to the same issue."
+        echo "=========================================="
+        echo ""
         exit 1
     else
         echo "No high-severity vulnerabilities (CVSS >= 4.0) found in litellm:latest"

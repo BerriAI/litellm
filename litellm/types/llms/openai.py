@@ -43,9 +43,7 @@ from openai.types.responses.response import (
 
 # Handle OpenAI SDK version compatibility for Text type
 try:
-    from openai.types.responses.response_create_params import (
-        Text as ResponseText,  # type: ignore
-    )
+    from openai.types.responses.response_create_params import ( Text as ResponseText ) # type: ignore[attr-defined] # fmt: skip # isort: skip
 except (ImportError, AttributeError):
     # Fall back to the concrete config type available in all SDK versions
     from openai.types.responses.response_text_config_param import (
@@ -676,7 +674,7 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
 
 class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total=False):
     cache_control: ChatCompletionCachedContent
-    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]]
+    thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]]
 
 
 class ChatCompletionToolMessage(TypedDict):
@@ -989,6 +987,9 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     prompt_cache_key: Optional[str]
     stream_options: Optional[dict]
     top_logprobs: Optional[int]
+    partial_images: Optional[
+        int
+    ]  # Number of partial images to generate (1-3) for streaming image generation
 
 
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
@@ -1030,7 +1031,19 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     total_tokens: int
     """The total number of tokens used."""
 
+    cost: Optional[float] = None
+    """The cost of the request."""
+
     model_config = {"extra": "allow"}
+
+
+ResponsesAPIStatus = Literal[
+    "completed", "failed", "in_progress", "cancelled", "queued", "incomplete"
+]
+"""
+The status of the response generation.
+One of: completed, failed, in_progress, cancelled, queued, or incomplete.
+"""
 
 
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
@@ -1046,11 +1059,13 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
         List[Union[ResponseOutputItem, Dict]],
         List[Union[GenericResponseOutputItem, OutputFunctionToolCall]],
     ]
-    parallel_tool_calls: bool
+    parallel_tool_calls: Optional[bool] = None
     temperature: Optional[float] = None
-    tool_choice: ToolChoice
-    tools: Union[List[Tool], List[ResponseFunctionToolCall], List[Dict[str, Any]]]
-    top_p: Optional[float]
+    tool_choice: Optional[ToolChoice] = None
+    tools: Optional[
+        Union[List[Tool], List[ResponseFunctionToolCall], List[Dict[str, Any]]]
+    ] = None
+    top_p: Optional[float] = None
     max_output_tokens: Optional[int] = None
     previous_response_id: Optional[str] = None
     reasoning: Optional[Reasoning] = None
@@ -1123,6 +1138,9 @@ class ResponsesAPIStreamEvents(str, Enum):
     MCP_CALL_COMPLETED = "response.mcp_call.completed"
     MCP_CALL_FAILED = "response.mcp_call.failed"
 
+    # Image generation events
+    IMAGE_GENERATION_PARTIAL_IMAGE = "image_generation.partial_image"
+
     # Error event
     ERROR = "error"
 
@@ -1170,13 +1188,27 @@ class ReasoningSummaryTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
 class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     output_index: int
-    item: Optional[dict]
+    item: Optional[BaseLiteLLMOpenAIResponseObject]
 
 
 class OutputItemDoneEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
     output_index: int
-    item: dict
+    sequence_number: int = 1
+    item: BaseLiteLLMOpenAIResponseObject
+
+
+class OpenAIChatCompletionLogprobsContentTopLogprobs(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+
+
+class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
+    bytes: List
+    logprob: Required[float]
+    token: Required[str]
+    top_logprobs: List[OpenAIChatCompletionLogprobsContentTopLogprobs]
 
 
 class ContentPartAddedEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1184,7 +1216,31 @@ class ContentPartAddedEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     content_index: int
-    part: dict
+    part: BaseLiteLLMOpenAIResponseObject
+
+
+class ContentPartDonePartOutputText(BaseLiteLLMOpenAIResponseObject):
+    type: Literal["output_text"]
+    text: str
+    annotations: List[BaseLiteLLMOpenAIResponseObject]
+    logprobs: Optional[List[OpenAIChatCompletionLogprobsContent]]
+
+
+class ContentPartDonePartRefusal(BaseLiteLLMOpenAIResponseObject):
+    type: Literal["refusal"]
+    refusal: str
+
+
+class ContentPartDonePartReasoningText(BaseLiteLLMOpenAIResponseObject):
+    type: Literal["reasoning_text"]
+    reasoning: str
+
+
+PART_UNION_TYPES = Union[
+    ContentPartDonePartOutputText,
+    ContentPartDonePartRefusal,
+    ContentPartDonePartReasoningText,
+]
 
 
 class ContentPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1192,7 +1248,7 @@ class ContentPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     content_index: int
-    part: dict
+    part: PART_UNION_TYPES
 
 
 class OutputTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1308,7 +1364,7 @@ class MCPListToolsFailedEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
 
 
-# MCP Call Events  
+# MCP Call Events
 class MCPCallInProgressEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS]
     sequence_number: int
@@ -1346,11 +1402,24 @@ class MCPCallFailedEvent(BaseLiteLLMOpenAIResponseObject):
     output_index: int
 
 
-class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
-    type: Literal[ResponsesAPIStreamEvents.ERROR]
-    code: Optional[str]
+class ImageGenerationPartialImageEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE]
+    partial_image_index: int
+    b64_json: str
+
+
+class ErrorEventError(BaseLiteLLMOpenAIResponseObject):
+    """Nested error object within ErrorEvent"""
+    type: str  # e.g., 'invalid_request_error'
+    code: str  # e.g., 'context_length_exceeded'
     message: str
     param: Optional[str]
+
+
+class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.ERROR]
+    sequence_number: int
+    error: ErrorEventError
 
 
 class GenericEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1394,8 +1463,10 @@ ResponsesAPIStreamingResponse = Annotated[
         MCPCallArgumentsDoneEvent,
         MCPCallCompletedEvent,
         MCPCallFailedEvent,
+        ImageGenerationPartialImageEvent,
         ErrorEvent,
         GenericEvent,
+        BaseLiteLLMOpenAIResponseObject,
     ],
     Discriminator("type"),
 ]
@@ -1714,19 +1785,6 @@ class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
 
-class OpenAIChatCompletionLogprobsContentTopLogprobs(TypedDict, total=False):
-    bytes: List
-    logprob: Required[float]
-    token: Required[str]
-
-
-class OpenAIChatCompletionLogprobsContent(TypedDict, total=False):
-    bytes: List
-    logprob: Required[float]
-    token: Required[str]
-    top_logprobs: List[OpenAIChatCompletionLogprobsContentTopLogprobs]
-
-
 class OpenAIChatCompletionLogprobs(TypedDict, total=False):
     content: List[OpenAIChatCompletionLogprobsContent]
     refusal: List[OpenAIChatCompletionLogprobsContent]
@@ -1789,3 +1847,88 @@ class OpenAIMcpServerTool(TypedDict, total=False):
     require_approval: str
     allowed_tools: Optional[List[str]]
     headers: Optional[Dict[str, str]]
+
+
+# Video Generation Types
+class CreateVideoRequest(TypedDict, total=False):
+    """
+    CreateVideoRequest for OpenAI video generation API
+    
+    Required Params:
+        prompt: str - Text prompt that describes the video to generate
+    
+    Optional Params:
+        input_reference: Optional[str] - Optional image reference that guides generation
+        model: Optional[str] - The video generation model to use (defaults to sora-2)
+        seconds: Optional[str] - Clip duration in seconds (defaults to 4 seconds)
+        size: Optional[str] - Output resolution formatted as width x height (defaults to 720x1280)
+        user: Optional[str] - A unique identifier representing your end-user
+        extra_headers: Optional[Dict[str, str]] - Additional headers
+        extra_body: Optional[Dict[str, str]] - Additional body parameters
+        timeout: Optional[float] - Request timeout
+    """
+    prompt: Required[str]
+    input_reference: Optional[str]
+    model: Optional[str]
+    seconds: Optional[str]
+    size: Optional[str]
+    user: Optional[str]
+    extra_headers: Optional[Dict[str, str]]
+    extra_body: Optional[Dict[str, str]]
+    timeout: Optional[float]
+
+
+class OpenAIVideoObject(BaseModel):
+    """OpenAI Video Object representing a video generation job."""
+    id: str
+    """Unique identifier for the video job."""
+    
+    object: Literal["video"]
+    """The object type, which is always 'video'."""
+    
+    status: str
+    """Current lifecycle status of the video job."""
+    
+    created_at: int
+    """Unix timestamp (seconds) for when the job was created."""
+    
+    completed_at: Optional[int] = None
+    """Unix timestamp (seconds) for when the job completed, if finished."""
+    
+    expires_at: Optional[int] = None
+    """Unix timestamp (seconds) for when the downloadable assets expire, if set."""
+    
+    error: Optional[Dict[str, Any]] = None
+    """Error payload that explains why generation failed, if applicable."""
+    
+    progress: Optional[int] = None
+    """Approximate completion percentage for the generation task."""
+    
+    remixed_from_video_id: Optional[str] = None
+    """Identifier of the source video if this video is a remix."""
+    
+    seconds: Optional[str] = None
+    """Duration of the generated clip in seconds."""
+    
+    size: Optional[str] = None
+    """The resolution of the generated video."""
+    
+    model: Optional[str] = None
+    """The video generation model that produced the job."""
+    
+    _hidden_params: Dict[str, Any] = {}
+
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def json(self, **kwargs):  # type: ignore
+        try:
+            return self.model_dump(**kwargs)
+        except Exception:
+            return self.dict()

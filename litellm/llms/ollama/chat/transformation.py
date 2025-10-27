@@ -184,9 +184,12 @@ class OllamaChatConfig(BaseConfig):
             ):
                 if value.get("json_schema") and value["json_schema"].get("schema"):
                     optional_params["format"] = value["json_schema"]["schema"]
-            ### FUNCTION CALLING LOGIC ###
             if param == "reasoning_effort" and value is not None:
-                optional_params["think"] = True
+                if model.startswith("gpt-oss"):
+                    optional_params["think"] = value
+                else:
+                    optional_params["think"] = value in {"low", "medium", "high"}
+            ### FUNCTION CALLING LOGIC ###
             if param == "tools":
                 ## CHECK IF MODEL SUPPORTS TOOL CALLING ##
                 try:
@@ -281,6 +284,7 @@ class OllamaChatConfig(BaseConfig):
         stream = optional_params.pop("stream", False)
         format = optional_params.pop("format", None)
         keep_alive = optional_params.pop("keep_alive", None)
+        think = optional_params.pop("think", None)
         function_name = optional_params.pop("function_name", None)
         litellm_params["function_name"] = function_name
         tools = optional_params.pop("tools", None)
@@ -344,6 +348,8 @@ class OllamaChatConfig(BaseConfig):
             data["tools"] = tools
         if keep_alive is not None:
             data["keep_alive"] = keep_alive
+        if think is not None:
+            data["think"] = think
 
         return data
 

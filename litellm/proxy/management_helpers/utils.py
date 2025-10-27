@@ -1,6 +1,5 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
-from litellm._uuid import uuid
 from datetime import datetime
 from functools import wraps
 from typing import Optional, Tuple
@@ -9,11 +8,14 @@ from fastapi import HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
+    BudgetNewRequest,
     DeleteCustomerRequest,
     DeleteTeamRequest,
     DeleteUserRequest,
     KeyRequest,
+    LiteLLM_BudgetTable,
     LiteLLM_TeamMembership,
     LiteLLM_UserTable,
     ManagementEndpointLoggingPayload,
@@ -36,7 +38,7 @@ def get_new_internal_user_defaults(
     user_info = litellm.default_internal_user_params or {}
 
     returned_dict: SSOUserDefinedValues = {
-        "models": user_info.get("models", None),
+        "models": user_info.get("models") or [],
         "max_budget": user_info.get("max_budget", litellm.max_internal_user_budget),
         "budget_duration": user_info.get(
             "budget_duration", litellm.internal_user_budget_duration
@@ -51,6 +53,89 @@ def get_new_internal_user_defaults(
         if v is not None:
             non_null_dict[k] = v
     return non_null_dict
+
+
+async def handle_budget_for_entity(
+    data,
+    existing_budget_id: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    litellm_proxy_admin_name: str,
+) -> Optional[str]:
+    """
+    Common helper to handle budget creation/updates for entities (organizations, tags, etc).
+    
+    This function:
+    1. Creates a new budget if budget_id is None but budget fields are provided
+    2. Updates an existing budget if budget fields are provided and budget_id exists
+    3. Returns the budget_id to use (existing or newly created)
+    
+    Args:
+        data: The request object (e.g., TagNewRequest, NewOrganizationRequest, etc.) containing budget fields
+        existing_budget_id: The existing budget_id if updating an entity, None if creating new
+        user_api_key_dict: User authentication info
+        prisma_client: Database client
+        litellm_proxy_admin_name: Admin name for audit trail
+        
+    Returns:
+        Optional[str]: The budget_id to use, or None if no budget was created/updated
+    """
+    from litellm.proxy.management_endpoints.budget_management_endpoints import (
+        update_budget,
+    )
+
+    # Get all budget field names
+    budget_params = LiteLLM_BudgetTable.model_fields.keys()
+
+    # Extract budget fields from data
+    _json_data = data.model_dump(exclude_none=True) if hasattr(data, "model_dump") else data
+    _budget_data = {k: v for k, v in _json_data.items() if k in budget_params}
+
+    # Check if budget_id is explicitly provided in the data
+    data_budget_id = getattr(data, "budget_id", None)
+
+    # Case 1: Creating new entity - no existing budget_id
+    if existing_budget_id is None:
+        if data_budget_id is not None:
+            # Use the provided budget_id
+            return data_budget_id
+        elif _budget_data:
+            # Create a new budget with the provided fields
+            budget_row = LiteLLM_BudgetTable(**_budget_data)
+            new_budget_data = prisma_client.jsonify_object(
+                budget_row.model_dump(exclude_none=True)
+            )
+
+            _budget = await prisma_client.db.litellm_budgettable.create(
+                data={
+                    **new_budget_data,  # type: ignore
+                    "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                }
+            )  # type: ignore
+
+            return _budget.budget_id
+        else:
+            # No budget fields provided, no budget to create
+            return None
+
+    # Case 2: Updating existing entity - has existing budget_id
+    else:
+        # If budget fields are provided, update the existing budget
+        if _budget_data:
+            await update_budget(
+                budget_obj=BudgetNewRequest(
+                    budget_id=existing_budget_id, **_budget_data
+                ),
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        # If a different budget_id is explicitly provided, use that instead
+        if data_budget_id is not None and data_budget_id != existing_budget_id:
+            return data_budget_id
+
+        # Otherwise, keep using the existing budget_id
+        return existing_budget_id
 
 
 async def add_new_member(

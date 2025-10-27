@@ -27,6 +27,11 @@ else:
 
 
 class OpenAIImageEditConfig(BaseImageEditConfig):
+    """
+    Base configuration for OpenAI image edit API.
+    Used for models like gpt-image-1 that support multiple images.
+    """
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         All OpenAI Image Edits params are supported
@@ -57,6 +62,20 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         """No mapping applied since inputs are in OpenAI spec already"""
         return dict(image_edit_optional_params)
 
+    def _add_image_to_files(
+        self,
+        files_list: List[Tuple[str, Any]],
+        image: Any,
+        field_name: str,
+    ) -> None:
+        """Add an image to the files list with appropriate content type"""
+        image_content_type = ImageEditRequestUtils.get_image_content_type(image)
+
+        if isinstance(image, BufferedReader):
+            files_list.append((field_name, (image.name, image, image_content_type)))
+        else:
+            files_list.append((field_name, ("image.png", image, image_content_type)))
+
     def transform_image_edit_request(
         self,
         model: str,
@@ -67,9 +86,10 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         headers: dict,
     ) -> Tuple[Dict, RequestFiles]:
         """
-        No transform applied since inputs are in OpenAI spec already
+        Transform image edit request to OpenAI API format.
 
-        This handles buffered readers as images to be sent as multipart/form-data for OpenAI
+        Handles multipart/form-data for images. Uses "image[]" field name
+        to support multiple images (e.g., for gpt-image-1).
         """
         request = ImageEditRequestParams(
             model=model,
@@ -91,21 +111,17 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
 
         # Handle image parameter
         if _image_list is not None:
-            image_list = [_image_list] if not isinstance(_image_list, list) else _image_list
+            image_list = (
+                [_image_list] if not isinstance(_image_list, list) else _image_list
+            )
+
             for _image in image_list:
                 if _image is not None:
-                    image_content_type: str = ImageEditRequestUtils.get_image_content_type(
-                        _image
+                    self._add_image_to_files(
+                        files_list=files_list,
+                        image=_image,
+                        field_name="image[]",
                     )
-                    if isinstance(_image, BufferedReader):
-                        files_list.append(
-                            ("image", (_image.name, _image, image_content_type))
-                        )
-                    else:
-                        files_list.append(
-                            ("image", ("image.png", _image, image_content_type))
-                        )
-
         # Handle mask parameter if provided
         if _mask is not None:
             # Handle case where mask can be a list (extract first mask)
@@ -120,6 +136,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                     files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
                 else:
                     files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
+
         return data_without_files, files_list
 
     def transform_image_edit_response(

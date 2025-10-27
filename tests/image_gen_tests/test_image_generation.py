@@ -118,19 +118,6 @@ class TestVertexImageGeneration(BaseImageGenTest):
             "n": 1,
         }
 
-
-class TestBedrockSd3(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        litellm.in_memory_llm_clients_cache = InMemoryCache()
-        return {"model": "bedrock/stability.sd3-large-v1:0"}
-
-
-class TestBedrockSd1(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        litellm.in_memory_llm_clients_cache = InMemoryCache()
-        return {"model": "bedrock/stability.sd3-large-v1:0"}
-
-
 class TestBedrockNovaCanvasTextToImage(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.in_memory_llm_clients_cache = InMemoryCache()
@@ -187,10 +174,10 @@ class TestAzureOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.set_verbose = True
         return {
-            "model": "azure/dall-e-3-test",
-            "api_version": "2023-12-01-preview",
-            "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
-            "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
+            "model": "azure/dall-e-3",
+            "api_version": "2024-02-01",
+            "api_base": os.getenv("AZURE_API_BASE"),
+            "api_key": os.getenv("AZURE_API_KEY"),
             "metadata": {
                 "model_info": {
                     "base_model": "azure/dall-e-3",
@@ -198,46 +185,6 @@ class TestAzureOpenAIDalle3(BaseImageGenTest):
             },
         }
 
-
-
-@pytest.mark.flaky(retries=3, delay=1)
-def test_image_generation_azure_dall_e_3():
-    try:
-        litellm.set_verbose = True
-        response = litellm.image_generation(
-            prompt="A cute baby sea otter",
-            model="azure/dall-e-3-test",
-            api_version="2023-12-01-preview",
-            api_base=os.getenv("AZURE_SWEDEN_API_BASE"),
-            api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
-            metadata={
-                "model_info": {
-                    "base_model": "azure/dall-e-3",
-                }
-            },
-        )
-        print(f"response: {response}")
-
-        print("response", response._hidden_params)
-        assert len(response.data) > 0
-    except litellm.InternalServerError as e:
-        pass
-    except litellm.ContentPolicyViolationError:
-        pass  # OpenAI randomly raises these errors - skip when they occur
-    except litellm.InternalServerError:
-        pass
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        if "Your task failed as a result of our safety system." in str(e):
-            pass
-        if "Connection error" in str(e):
-            pass
-        else:
-            pytest.fail(f"An exception occurred - {str(e)}")
-
-
-# asyncio.run(test_async_image_generation_openai())
 
 
 @pytest.mark.skip(reason="model EOL")

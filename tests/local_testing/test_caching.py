@@ -325,7 +325,7 @@ def test_caching_with_models_v2():
     litellm.set_verbose = True
     response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
     response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-    response3 = completion(model="azure/chatgpt-v-3", messages=messages, caching=True)
+    response3 = completion(model="gpt-4.1-nano", messages=messages, caching=True)
     print(f"response1: {response1}")
     print(f"response2: {response2}")
     print(f"response3: {response3}")
@@ -527,7 +527,7 @@ def test_embedding_caching_azure():
     print(api_key)
     print(api_base)
     embedding1 = embedding(
-        model="azure/azure-embedding-model",
+        model="azure/text-embedding-ada-002",
         input=["good morning from litellm", "this is another item"],
         api_key=api_key,
         api_base=api_base,
@@ -540,7 +540,7 @@ def test_embedding_caching_azure():
     time.sleep(1)
     start_time = time.time()
     embedding2 = embedding(
-        model="azure/azure-embedding-model",
+        model="azure/text-embedding-ada-002",
         input=["good morning from litellm", "this is another item"],
         api_key=api_key,
         api_base=api_base,
@@ -595,10 +595,10 @@ async def test_embedding_caching_azure_individual_items():
     ]
 
     embedding_val_1 = await aembedding(
-        model="azure/azure-embedding-model", input=embedding_1, caching=True
+        model="text-embedding-ada-002", input=embedding_1, caching=True
     )
     embedding_val_2 = await aembedding(
-        model="azure/azure-embedding-model", input=embedding_2, caching=True
+        model="text-embedding-ada-002", input=embedding_2, caching=True
     )
     print(f"embedding_val_2._hidden_params: {embedding_val_2._hidden_params}")
     assert embedding_val_2._hidden_params["cache_hit"] == True
@@ -633,11 +633,11 @@ async def test_embedding_caching_azure_individual_items_reordered():
     ]
 
     embedding_val_1 = await aembedding(
-        model="azure/azure-embedding-model", input=embedding_1, caching=True
+        model="text-embedding-ada-002", input=embedding_1, caching=True
     )
     print("embedding val 1", embedding_val_1)
     embedding_val_2 = await aembedding(
-        model="azure/azure-embedding-model", input=embedding_2, caching=True
+        model="text-embedding-ada-002", input=embedding_2, caching=True
     )
     print("embedding val 2", embedding_val_2)
     print(f"embedding_val_2._hidden_params: {embedding_val_2._hidden_params}")
@@ -667,7 +667,7 @@ async def test_embedding_caching_base_64():
     ]
 
     embedding_val_1 = await aembedding(
-        model="azure/azure-embedding-model",
+        model="text-embedding-ada-002",
         input=inputs,
         caching=True,
         encoding_format="base64",
@@ -675,7 +675,7 @@ async def test_embedding_caching_base_64():
     await asyncio.sleep(5)
     print("\n\nCALL2\n\n")
     embedding_val_2 = await aembedding(
-        model="azure/azure-embedding-model",
+        model="text-embedding-ada-002",
         input=inputs,
         caching=True,
         encoding_format="base64",
@@ -718,7 +718,7 @@ async def test_embedding_caching_redis_ttl():
 
         # Call the embedding method
         embedding_val_1 = await litellm.aembedding(
-            model="azure/azure-embedding-model",
+            model="text-embedding-ada-002",
             input=inputs,
             encoding_format="base64",
         )
@@ -1226,7 +1226,7 @@ async def test_s3_cache_stream_azure(sync_mode):
 
         if sync_mode:
             response1 = litellm.completion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1239,7 +1239,7 @@ async def test_s3_cache_stream_azure(sync_mode):
             print(response_1_content)
         else:
             response1 = await litellm.acompletion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1259,7 +1259,7 @@ async def test_s3_cache_stream_azure(sync_mode):
 
         if sync_mode:
             response2 = litellm.completion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1272,7 +1272,7 @@ async def test_s3_cache_stream_azure(sync_mode):
             print(response_2_content)
         else:
             response2 = await litellm.acompletion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1335,7 +1335,7 @@ async def test_s3_cache_acompletion_azure():
         print("s3 Cache: test for caching, streaming + completion")
 
         response1 = await litellm.acompletion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-mini",
             messages=messages,
             max_tokens=40,
             temperature=1,
@@ -1345,7 +1345,7 @@ async def test_s3_cache_acompletion_azure():
         time.sleep(2)
 
         response2 = await litellm.acompletion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-mini",
             messages=messages,
             max_tokens=40,
             temperature=1,
@@ -1627,7 +1627,7 @@ def test_get_cache_key():
 
         embedding_cache_key = cache_instance.get_cache_key(
             **{
-                "model": "azure/azure-embedding-model",
+                "model": "azure/text-embedding-ada-002",
                 "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
                 "api_key": "",
                 "api_version": "2023-07-01-preview",
@@ -1642,19 +1642,19 @@ def test_get_cache_key():
         print(embedding_cache_key)
 
         embedding_cache_key_str = (
-            "model: azure/azure-embedding-modelinput: ['hi who is ishaan']"
+            "model: azure/text-embedding-ada-002input: ['hi who is ishaan']"
         )
         hash_object = hashlib.sha256(embedding_cache_key_str.encode())
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
         assert (
             embedding_cache_key == hash_hex
-        ), f"{embedding_cache_key} != 'model: azure/azure-embedding-modelinput: ['hi who is ishaan']'. The same kwargs should have the same cache key across runs"
+        ), f"{embedding_cache_key} != 'model: azure/text-embedding-ada-002input: ['hi who is ishaan']'. The same kwargs should have the same cache key across runs"
 
         # Proxy - embedding cache, test if embedding key, gets model_group and not model
         embedding_cache_key_2 = cache_instance.get_cache_key(
             **{
-                "model": "azure/azure-embedding-model",
+                "model": "azure/text-embedding-ada-002",
                 "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
                 "api_key": "",
                 "api_version": "2023-07-01-preview",
@@ -1689,7 +1689,7 @@ def test_get_cache_key():
                         "content-length": "80",
                     },
                     "model_group": "EMBEDDING_MODEL_GROUP",
-                    "deployment": "azure/azure-embedding-model-ModelID-azure/azure-embedding-modelhttps://openai-gpt-4-test-v-1.openai.azure.com/2023-07-01-preview",
+                    "deployment": "azure/text-embedding-ada-002-ModelID-azure/text-embedding-ada-002https://openai-gpt-4-test-v-1.openai.azure.com/2023-07-01-preview",
                 },
                 "model_info": {
                     "mode": "embedding",
@@ -2765,3 +2765,56 @@ def test_caching_thinking_args_hit():  # test in memory cache
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_cache_key_in_hidden_params_acompletion():
+    """
+    Test that cache_key is present in _hidden_params on cache hits for acompletion.
+    
+    Validates fix for missing x-litellm-cache-key header on proxy cache hits.
+    """
+    litellm.cache = Cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+        password=os.environ["REDIS_PASSWORD"],
+    )
+    
+    unique_content = f"test cache key hidden params {uuid.uuid4()}"
+    messages = [{"role": "user", "content": unique_content}]
+    
+    # First call - cache miss
+    response1 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        mock_response="test response",
+        caching=True,
+    )
+    
+    print(f"Response 1 _hidden_params: {response1._hidden_params}")
+    assert response1._hidden_params.get("cache_hit") is not True
+    
+    await asyncio.sleep(0.5)
+    
+    # Second call - cache hit
+    response2 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        mock_response="test response",
+        caching=True,
+    )
+    
+    print(f"Response 2 _hidden_params: {response2._hidden_params}")
+    
+    # Verify cache hit occurred
+    assert response2._hidden_params.get("cache_hit") is True
+    
+    # Verify cache_key is present in _hidden_params
+    assert "cache_key" in response2._hidden_params
+    assert response2._hidden_params["cache_key"] is not None
+    
+    # Verify both responses have same ID (cache hit)
+    assert response1.id == response2.id
+    
+    litellm.cache = None
