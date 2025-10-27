@@ -101,6 +101,7 @@ general_settings:
   disable_retry_on_max_parallel_request_limit_error: boolean  # turn off retries when max parallel request limit is reached
   disable_reset_budget: boolean  # turn off reset budget scheduled task
   disable_adding_master_key_hash_to_db: boolean  # turn off storing master key hash in db, for spend tracking
+  disable_responses_id_security: boolean  # turn off response ID security checks that prevent users from accessing other users' responses
   enable_jwt_auth: boolean  # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
   enforce_user_param: boolean  # requires all openai endpoint requests to have a 'user' param
   allowed_routes: ["route1", "route2"]  # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
@@ -197,6 +198,7 @@ router_settings:
 | disable_retry_on_max_parallel_request_limit_error | boolean | If true, turns off retries when max parallel request limit is reached |
 | disable_reset_budget | boolean | If true, turns off reset budget scheduled task |
 | disable_adding_master_key_hash_to_db | boolean | If true, turns off storing master key hash in db |
+| disable_responses_id_security | boolean | If true, disables response ID security checks that prevent users from accessing response IDs from other users. When false (default), response IDs are encrypted with user information to ensure users can only access their own responses. Applies to /v1/responses endpoints |
 | enable_jwt_auth | boolean | allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims. [Doc on JWT Tokens](token_auth) |
 | enforce_user_param | boolean | If true, requires all OpenAI endpoint requests to have a 'user' param. [Doc on call hooks](call_hooks)|
 | allowed_routes | array of strings | List of allowed proxy API routes a user can access [Doc on controlling allowed routes](enterprise#control-available-public-private-routes)|
@@ -440,6 +442,10 @@ router_settings:
 | DAYS_IN_A_MONTH | Days in a month for calculation purposes. Default is 28
 | DAYS_IN_A_WEEK | Days in a week for calculation purposes. Default is 7
 | DAYS_IN_A_YEAR | Days in a year for calculation purposes. Default is 365
+| DYNAMOAI_API_KEY | API key for DynamoAI Guardrails service
+| DYNAMOAI_API_BASE | Base URL for DynamoAI API. Default is https://api.dynamo.ai
+| DYNAMOAI_MODEL_ID | Model ID for DynamoAI tracking/logging purposes
+| DYNAMOAI_POLICY_IDS | Comma-separated list of DynamoAI policy IDs to apply
 | DD_BASE_URL | Base URL for Datadog integration
 | DATADOG_BASE_URL | (Alternative to DD_BASE_URL) Base URL for Datadog integration
 | _DATADOG_BASE_URL | (Alternative to DD_BASE_URL) Base URL for Datadog integration
@@ -585,6 +591,8 @@ router_settings:
 | HUGGINGFACE_API_KEY | API key for Hugging Face API
 | HUMANLOOP_PROMPT_CACHE_TTL_SECONDS | Time-to-live in seconds for cached prompts in Humanloop. Default is 60
 | IAM_TOKEN_DB_AUTH | IAM token for database authentication
+| IBM_GUARDRAILS_API_BASE | Base URL for IBM Guardrails API
+| IBM_GUARDRAILS_AUTH_TOKEN | Authorization bearer token for IBM Guardrails API
 | INITIAL_RETRY_DELAY | Initial delay in seconds for retrying requests. Default is 0.5
 | JITTER | Jitter factor for retry delay calculations. Default is 0.75
 | JSON_LOGS | Enable JSON formatted logging

@@ -18,6 +18,7 @@ import {
   ToolOutlined,
   TagsOutlined,
   BgColorsOutlined,
+  SearchOutlined,
 } from "@ant-design/icons";
 import { all_admin_roles, rolesWithWriteAccess, internalUserRoles, isAdminRole } from "../utils/roles";
 import UsageIndicator from "./usage_indicator";
@@ -110,6 +111,7 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
       icon: <ToolOutlined style={{ fontSize: "18px" }} />,
       children: [
         { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined style={{ fontSize: "18px" }} /> },
+        { key: "28", page: "search-tools", label: "Search Tools", icon: <SearchOutlined style={{ fontSize: "18px" }} /> },
         {
           key: "21",
           page: "vector-stores",

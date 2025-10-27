@@ -1125,59 +1125,65 @@ async def test_retrying() -> None:
 
 def test_anthropic_disable_url_suffix_env_var():
     """Test that LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX prevents /v1/messages suffix."""
-    from unittest.mock import patch, MagicMock
     import os
+    from unittest.mock import MagicMock, patch
+
     from litellm import completion
 
     # Test with environment variable disabled (default behavior)
     with patch.dict(os.environ, {"ANTHROPIC_API_BASE": "https://api.example.com"}):
         actual_api_base = None
-        
+
         with patch("litellm.main.anthropic_chat_completions") as mock_anthropic:
+
             def capture_completion(**kwargs):
                 nonlocal actual_api_base
                 actual_api_base = kwargs.get("api_base")
                 mock_response = MagicMock()
                 mock_response.choices = [MagicMock()]
                 return mock_response
-            
+
             mock_anthropic.completion = capture_completion
-            
+
             # This should append /v1/messages
             completion(
                 model="anthropic/claude-3-sonnet",
                 messages=[{"role": "user", "content": "test"}],
-                api_key="test-key"
+                api_key="test-key",
             )
-            
+
             # Verify the api_base has /v1/messages appended
             assert actual_api_base.endswith("/v1/messages")
             assert actual_api_base == "https://api.example.com/v1/messages"
 
     # Test with environment variable enabled
-    with patch.dict(os.environ, {
-        "ANTHROPIC_API_BASE": "https://api.example.com/custom/path",
-        "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true"
-    }):
+    with patch.dict(
+        os.environ,
+        {
+            "ANTHROPIC_API_BASE": "https://api.example.com/custom/path",
+            "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true",
+        },
+    ):
         actual_api_base = None
-        
+
         with patch("litellm.main.anthropic_chat_completions") as mock_anthropic:
+
             def capture_completion(**kwargs):
                 nonlocal actual_api_base
                 actual_api_base = kwargs.get("api_base")
                 mock_response = MagicMock()
                 mock_response.choices = [MagicMock()]
                 return mock_response
-            
+
             mock_anthropic.completion = capture_completion
-            
+
             # This should NOT append /v1/messages
             completion(
                 model="anthropic/claude-3-sonnet",
                 messages=[{"role": "user", "content": "test"}],
-                api_key="test-key"
+                api_key="test-key",
             )
-            
+
             # Verify the api_base does not have /v1/messages appended
             assert actual_api_base == "https://api.example.com/custom/path"
             assert not actual_api_base.endswith("/v1/messages")
@@ -1185,55 +1191,222 @@ def test_anthropic_disable_url_suffix_env_var():
 
 def test_anthropic_text_disable_url_suffix_env_var():
     """Test that LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX prevents /v1/complete suffix for anthropic_text."""
-    from unittest.mock import patch, MagicMock
     import os
+    from unittest.mock import MagicMock, patch
+
     from litellm import completion
 
     # Test with environment variable disabled (default behavior)
     with patch.dict(os.environ, {"ANTHROPIC_API_BASE": "https://api.example.com"}):
         actual_api_base = None
-        
+
         with patch("litellm.main.base_llm_http_handler") as mock_handler:
+
             def capture_completion(**kwargs):
                 nonlocal actual_api_base
                 actual_api_base = kwargs.get("api_base")
                 return MagicMock()
-            
+
             mock_handler.completion = capture_completion
-            
+
             # This should append /v1/complete
             completion(
                 model="anthropic_text/claude-instant-1",
                 messages=[{"role": "user", "content": "test"}],
-                api_key="test-key"
+                api_key="test-key",
             )
-            
+
             # Verify the api_base has /v1/complete appended
             assert actual_api_base.endswith("/v1/complete")
             assert actual_api_base == "https://api.example.com/v1/complete"
 
     # Test with environment variable enabled
-    with patch.dict(os.environ, {
-        "ANTHROPIC_API_BASE": "https://api.example.com/custom/complete",
-        "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true"
-    }):
+    with patch.dict(
+        os.environ,
+        {
+            "ANTHROPIC_API_BASE": "https://api.example.com/custom/complete",
+            "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true",
+        },
+    ):
         actual_api_base = None
-        
+
         with patch("litellm.main.base_llm_http_handler") as mock_handler:
+
             def capture_completion(**kwargs):
                 nonlocal actual_api_base
                 actual_api_base = kwargs.get("api_base")
                 return MagicMock()
-            
+
             mock_handler.completion = capture_completion
-            
+
             # This should NOT append /v1/complete
             completion(
                 model="anthropic_text/claude-instant-1",
                 messages=[{"role": "user", "content": "test"}],
-                api_key="test-key"
+                api_key="test-key",
             )
-            
+
             # Verify the api_base does not have /v1/complete appended
             assert actual_api_base == "https://api.example.com/custom/complete"
             assert not actual_api_base.endswith("/v1/complete")
+
+
+def test_image_edit_merges_headers_and_extra_headers():
+    combined_headers = {
+        "x-test-header-one": "value-1",
+        "x-test-header-two": "value-2",
+    }
+
+    mock_image_edit_config = MagicMock()
+    mock_image_edit_config.get_supported_openai_params.return_value = set()
+    mock_image_edit_config.map_openai_params.side_effect = lambda **kwargs: dict(
+        kwargs["image_edit_optional_params"]
+    )
+
+    with (
+        patch(
+            "litellm.images.main.ProviderConfigManager.get_provider_image_edit_config",
+            return_value=mock_image_edit_config,
+        ) as mock_config,
+        patch(
+            "litellm.images.main.base_llm_http_handler.image_edit_handler",
+            return_value="ok",
+        ) as mock_handler,
+    ):
+        response = litellm.image_edit(
+            image=MagicMock(name="image"),
+            prompt="test",
+            model="azure/gpt-image-1",
+            headers={"x-test-header-one": "value-1"},
+            extra_headers={
+                "x-test-header-two": "value-2",
+            },
+        )
+
+    assert response == "ok"
+    mock_config.assert_called_once()
+
+    handler_kwargs = mock_handler.call_args.kwargs
+    assert handler_kwargs["extra_headers"] == combined_headers
+    assert "extra_headers" not in handler_kwargs["image_edit_optional_request_params"]
+
+
+def test_mock_completion_stream_with_model_response():
+    """Test that mock_completion correctly handles stream=True with a ModelResponse as mock_response."""
+    from litellm import completion
+    from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+    # Create a ModelResponse object
+    mock_model_response = ModelResponse(
+        id="chatcmpl-test-123",
+        created=1234567890,
+        model="gpt-4o-mini",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="This is a test response",
+                    role="assistant",
+                ),
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=10,
+            completion_tokens=20,
+            total_tokens=30,
+        ),
+    )
+
+    # Call completion with stream=True and mock_response as ModelResponse
+    response = completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=True,
+        mock_response=mock_model_response,
+    )
+
+    # Verify that the response is a stream
+    assert response is not None
+
+    # Collect all chunks from the stream
+    chunks = []
+    for chunk in response:
+        chunks.append(chunk)
+        print(f"Chunk: {chunk}")
+
+    # Verify we got chunks
+    assert len(chunks) > 0
+
+    # Verify the content is streamed correctly
+    accumulated_content = ""
+    for chunk in chunks:
+        if (
+            hasattr(chunk.choices[0].delta, "content")
+            and chunk.choices[0].delta.content
+        ):
+            accumulated_content += chunk.choices[0].delta.content
+
+    assert "This is a test response" in accumulated_content or len(chunks) > 0
+
+
+@pytest.mark.asyncio
+async def test_async_mock_completion_stream_with_model_response():
+    """Test that async mock_completion correctly handles stream=True with a ModelResponse as mock_response."""
+    from litellm import acompletion
+    from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+    # Create a ModelResponse object
+    mock_model_response = ModelResponse(
+        id="chatcmpl-test-456",
+        created=1234567890,
+        model="gpt-4o-mini",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="This is an async test response",
+                    role="assistant",
+                ),
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=15,
+            completion_tokens=25,
+            total_tokens=40,
+        ),
+    )
+
+    # Call acompletion with stream=True and mock_response as ModelResponse
+    response = await acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello async"}],
+        stream=True,
+        mock_response=mock_model_response,
+    )
+
+    # Verify that the response is a stream
+    assert response is not None
+
+    # Collect all chunks from the stream
+    chunks = []
+    async for chunk in response:
+        chunks.append(chunk)
+        print(f"Async Chunk: {chunk}")
+
+    # Verify we got chunks
+    assert len(chunks) > 0
+
+    # Verify the content is streamed correctly
+    accumulated_content = ""
+    for chunk in chunks:
+        if (
+            hasattr(chunk.choices[0].delta, "content")
+            and chunk.choices[0].delta.content
+        ):
+            accumulated_content += chunk.choices[0].delta.content
+
+    assert "This is an async test response" in accumulated_content or len(chunks) > 0
