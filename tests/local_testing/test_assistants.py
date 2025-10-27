@@ -39,8 +39,8 @@ V0 Scope:
 
 def _add_azure_related_dynamic_params(data: dict) -> dict:
     data["api_version"] = "2024-02-15-preview"
-    data["api_base"] = os.getenv("AZURE_ASSISTANTS_API_BASE")
-    data["api_key"] = os.getenv("AZURE_ASSISTANTS_API_KEY")
+    data["api_base"] = os.getenv("AZURE_API_BASE")
+    data["api_key"] = os.getenv("AZURE_API_KEY")
     return data
 
 

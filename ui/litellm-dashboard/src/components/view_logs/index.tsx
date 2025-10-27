@@ -22,7 +22,7 @@ import FilterComponent from "../molecules/filter";
 import { FilterOption } from "../molecules/filter";
 import { useLogFilterLogic } from "./log_filter_logic";
 import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
-import { Tab, TabGroup, TabList, TabPanels, TabPanel, Text, Switch } from "@tremor/react";
+import { Tab, TabGroup, TabList, TabPanels, TabPanel, Switch } from "@tremor/react";
 import AuditLogs from "./audit_logs";
 import { getTimeRangeDisplay } from "./logs_utils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";

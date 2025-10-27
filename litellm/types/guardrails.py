@@ -8,6 +8,12 @@ from typing_extensions import Required, TypedDict
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
+    GraySwanGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
+    IBMGuardrailsBaseConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -35,6 +41,7 @@ class SupportedGuardrailIntegrations(Enum):
     PANGEA = "pangea"
     LASSO = "lasso"
     PILLAR = "pillar"
+    GRAYSWAN = "grayswan"
     PANW_PRISMA_AIRS = "panw_prisma_airs"
     AZURE_PROMPT_SHIELD = "azure/prompt_shield"
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
@@ -44,6 +51,7 @@ class SupportedGuardrailIntegrations(Enum):
     TOOL_PERMISSION = "tool_permission"
     JAVELIN = "javelin"
     ENKRYPTAI = "enkryptai"
+    IBM_GUARDRAILS = "ibm_guardrails"
     POINTGUARDAI = "pointguard_ai"
 
 
@@ -353,6 +361,9 @@ class LassoGuardrailConfigModel(BaseModel):
     lasso_conversation_id: Optional[str] = Field(
         default=None, description="Conversation ID for the Lasso guardrail"
     )
+    mask: Optional[bool] = Field(
+        default=False, description="Enable content masking using Lasso classifix API"
+    )
 
 
 class PillarGuardrailConfigModel(BaseModel):
@@ -361,6 +372,22 @@ class PillarGuardrailConfigModel(BaseModel):
     on_flagged_action: Optional[str] = Field(
         default="monitor",
         description="Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
+    )
+    async_mode: Optional[bool] = Field(
+        default=None,
+        description="Set to True to request asynchronous analysis (sets `plr_async` header). Defaults to provider behaviour when omitted.",
+    )
+    persist_session: Optional[bool] = Field(
+        default=None,
+        description="Controls Pillar session persistence (sets `plr_persist` header). Set to False to disable persistence.",
+    )
+    include_scanners: Optional[bool] = Field(
+        default=True,
+        description="Include scanner category summaries in responses (sets `plr_scanners` header).",
+    )
+    include_evidence: Optional[bool] = Field(
+        default=True,
+        description="Include detailed evidence payloads in responses (sets `plr_evidence` header).",
     )
 
 
@@ -530,12 +557,14 @@ class LitellmParams(
     LakeraV2GuardrailConfigModel,
     LassoGuardrailConfigModel,
     PillarGuardrailConfigModel,
+    GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,
     ToolPermissionGuardrailConfigModel,
     JavelinGuardrailConfigModel,
     PointGuardAIGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
+    IBMGuardrailsBaseConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(

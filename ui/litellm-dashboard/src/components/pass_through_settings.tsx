@@ -1,33 +1,8 @@
 import React, { useState, useEffect } from "react";
-import {
-  Badge,
-  Metric,
-  Text,
-  Grid,
-  Button,
-  TextInput,
-  Select as Select2,
-  SelectItem,
-  Col,
-  Accordion,
-  AccordionBody,
-  AccordionHeader,
-  AccordionList,
-  Icon,
-  Title,
-} from "@tremor/react";
-import {
-  getCallbacksCall,
-  setCallbacksCall,
-  getGeneralSettingsCall,
-  deletePassThroughEndpointsCall,
-  getPassThroughEndpointsCall,
-  serviceHealthCheck,
-  updateConfigFieldSetting,
-  deleteConfigFieldSetting,
-} from "./networking";
-import { Modal, Form, Input, Select, Button as Button2, message, InputNumber, Tooltip } from "antd";
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import { Text, Button, Icon, Title } from "@tremor/react";
+import { deletePassThroughEndpointsCall, getPassThroughEndpointsCall } from "./networking";
+import { Badge, Tooltip } from "antd";
+import { PencilAltIcon, TrashIcon, InformationCircleIcon } from "@heroicons/react/outline";
 import AddPassThroughEndpoint from "./add_pass_through";
 import PassThroughInfoView from "./pass_through_info";
 import { DataTable } from "./view_logs/table";
@@ -40,6 +15,7 @@ interface GeneralSettingsPageProps {
   userRole: string | null;
   userID: string | null;
   modelData: any;
+  premiumUser?: boolean;
 }
 
 interface routingStrategyArgs {
@@ -62,6 +38,7 @@ export interface passThroughItem {
   headers: object;
   include_subpath?: boolean;
   cost_per_request?: number;
+  auth?: boolean;
 }
 
 // Password field component for headers
@@ -79,7 +56,7 @@ const PasswordField: React.FC<{ value: object }> = ({ value }) => {
   );
 };
 
-const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID, modelData }) => {
+const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID, modelData, premiumUser }) => {
   const [generalSettings, setGeneralSettings] = useState<passThroughItem[]>([]);
   const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -170,6 +147,18 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
       cell: (info: any) => <Text>{info.getValue()}</Text>,
     },
     {
+      header: () => (
+        <div className="flex items-center gap-1">
+          <span>Authentication</span>
+          <Tooltip title="LiteLLM Virtual Key required to call endpoint">
+            <InformationCircleIcon className="w-4 h-4 text-gray-400 cursor-help" />
+          </Tooltip>
+        </div>
+      ),
+      accessorKey: "auth",
+      cell: (info: any) => <Badge color={info.getValue() ? "green" : "gray"}>{info.getValue() ? "Yes" : "No"}</Badge>,
+    },
+    {
       header: "Headers",
       accessorKey: "headers",
       cell: (info: any) => <PasswordField value={info.getValue() || {}} />,
@@ -217,6 +206,7 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
         onClose={() => setSelectedEndpointId(null)}
         accessToken={accessToken}
         isAdmin={userRole === "Admin" || userRole === "admin"}
+        premiumUser={premiumUser}
         onEndpointUpdated={handleEndpointUpdated}
       />
     );
@@ -233,6 +223,7 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, 
         accessToken={accessToken}
         setPassThroughItems={setGeneralSettings}
         passThroughItems={generalSettings}
+        premiumUser={premiumUser}
       />
 
       <DataTable

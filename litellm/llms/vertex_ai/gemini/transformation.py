@@ -263,7 +263,6 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 elif (
                     _message_content is not None
                     and isinstance(_message_content, str)
-                    and len(_message_content) > 0
                 ):
                     _part = PartType(text=_message_content)
                     user_content.append(_part)
@@ -302,26 +301,27 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     )
                 if thinking_blocks is not None:
                     for block in thinking_blocks:
-                        block_thinking_str = block.get("thinking")
-                        block_signature = block.get("signature")
-                        if (
-                            block_thinking_str is not None
-                            and block_signature is not None
-                        ):
-                            try:
-                                assistant_content.append(
-                                    PartType(
-                                        thoughtSignature=block_signature,
-                                        **json.loads(block_thinking_str),
+                        if block["type"] == "thinking":
+                            block_thinking_str = block.get("thinking")
+                            block_signature = block.get("signature")
+                            if (
+                                block_thinking_str is not None
+                                and block_signature is not None
+                            ):
+                                try:
+                                    assistant_content.append(
+                                        PartType(
+                                            thoughtSignature=block_signature,
+                                            **json.loads(block_thinking_str),
+                                        )
                                     )
-                                )
-                            except Exception:
-                                assistant_content.append(
-                                    PartType(
-                                        thoughtSignature=block_signature,
-                                        text=block_thinking_str,
+                                except Exception:
+                                    assistant_content.append(
+                                        PartType(
+                                            thoughtSignature=block_signature,
+                                            text=block_thinking_str,
+                                        )
                                     )
-                                )
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts = []
                     for element in _message_content:
@@ -334,9 +334,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 elif (
                     _message_content is not None
                     and isinstance(_message_content, str)
-                    and _message_content
                 ):
-                    assistant_text = _message_content  # either string or none
+                    assistant_text = _message_content
                     assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
                 ## HANDLE ASSISTANT FUNCTION CALL

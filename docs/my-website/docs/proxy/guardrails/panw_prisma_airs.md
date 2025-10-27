@@ -11,10 +11,13 @@ LiteLLM supports PANW Prisma AIRS (AI Runtime Security) guardrails via the [Pris
 - ✅ **Real-time prompt injection detection**
 - ✅ **Malicious content filtering** 
 - ✅ **Data loss prevention (DLP)**
+- ✅ **Sensitive content masking** - Automatically mask PII, credit cards, SSNs instead of blocking
 - ✅ **Comprehensive threat detection** for AI models and datasets
 - ✅ **Model-agnostic protection** across public and private models
 - ✅ **Synchronous scanning** with immediate response
 - ✅ **Configurable security profiles**
+- ✅ **Streaming support** - Real-time masking for streaming responses
+- ✅ **Fail-closed security** - Blocks requests if PANW API is unavailable (maximum security)
 
 ## Quick Start
 
@@ -42,9 +45,9 @@ guardrails:
     litellm_params:
       guardrail: panw_prisma_airs
       mode: "pre_call"                    # Run before LLM call
-      api_key: os.environ/AIRS_API_KEY    # Your PANW API key
-      profile_name: os.environ/AIRS_API_PROFILE_NAME  # Security profile from Strata Cloud Manager
-      api_base: "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request"  # Optional
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY    # Your Prisma AIRS API key
+      profile_name: os.environ/PANW_PRISMA_AIRS_PROFILE_NAME  # Security profile from Strata Cloud Manager
+      api_base: "https://service.api.aisecurity.paloaltonetworks.com"  
 ```
 
 #### Supported values for `mode`
@@ -56,8 +59,8 @@ guardrails:
 ### 3. Start LiteLLM Gateway
 
 ```bash title="Set environment variables"
-export AIRS_API_KEY="your-panw-api-key"
-export AIRS_API_PROFILE_NAME="your-security-profile"
+export PANW_PRISMA_AIRS_API_KEY="your-panw-api-key"
+export PANW_PRISMA_AIRS_PROFILE_NAME="your-security-profile"
 export OPENAI_API_KEY="sk-proj-..."
 ```
 
@@ -197,16 +200,16 @@ Expected successful response:
 |-----------|----------|-------------|---------|
 | `api_key` | Yes | Your PANW Prisma AIRS API key from Strata Cloud Manager | - |
 | `profile_name` | Yes | Security profile name configured in Strata Cloud Manager | - |
-| `api_base` | No | Custom API endpoint | `https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request` |
+| `api_base` | No | Custom API base URL (without /v1/scan/sync/request path) | `https://service.api.aisecurity.paloaltonetworks.com` |
 | `mode` | No | When to run the guardrail | `pre_call` |
 
 ## Environment Variables
 
 ```bash
-export AIRS_API_KEY="your-panw-api-key"
-export AIRS_API_PROFILE_NAME="your-security-profile"
-# Optional custom endpoint
-export PANW_API_ENDPOINT="https://custom-endpoint.com/v1/scan/sync/request"
+export PANW_PRISMA_AIRS_API_KEY="your-panw-api-key"
+export PANW_PRISMA_AIRS_PROFILE_NAME="your-security-profile"
+# Optional custom base URL (without /v1/scan/sync/request path)
+export PANW_PRISMA_AIRS_API_BASE="https://custom-endpoint.com"
 ```
 
 ## Advanced Configuration
@@ -221,15 +224,123 @@ guardrails:
     litellm_params:
       guardrail: panw_prisma_airs
       mode: "pre_call"
-      api_key: os.environ/AIRS_API_KEY
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
       profile_name: "strict-policy"       # High security profile
       
   - guardrail_name: "panw-permissive-security"  
     litellm_params:
       guardrail: panw_prisma_airs
       mode: "post_call"
-      api_key: os.environ/AIRS_API_KEY
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
       profile_name: "permissive-policy"   # Lower security profile
+```
+
+### Content Masking
+
+PANW Prisma AIRS can automatically mask sensitive content (PII, credit cards, SSNs, etc.) instead of blocking requests. This allows your application to continue functioning while protecting sensitive data.
+
+#### How It Works
+
+1. **Detection**: PANW scans content and identifies sensitive data
+2. **Masking**: Sensitive data is replaced with placeholders (e.g., `XXXXXXXXXX` or `{PHONE}`)
+3. **Pass-through**: Masked content is sent to the LLM or returned to the user
+
+#### Configuration Options
+
+```yaml
+guardrails:
+  - guardrail_name: "panw-with-masking"
+    litellm_params:
+      guardrail: panw_prisma_airs
+      mode: "post_call"                      # Scan both input and output
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
+      profile_name: "default"
+      mask_request_content: true             # Mask sensitive data in prompts
+      mask_response_content: true            # Mask sensitive data in responses
+```
+
+**Masking Parameters:**
+
+- `mask_request_content: true` - When PANW detects sensitive data in prompts, mask it instead of blocking
+- `mask_response_content: true` - When PANW detects sensitive data in responses, mask it instead of blocking  
+- `mask_on_block: true` - Backwards compatible flag that enables both request and response masking
+
+:::warning Important: Masking is Controlled by PANW Security Profile
+The **actual masking behavior** (what content gets masked and how) is controlled by your **PANW Prisma AIRS security profile** configured in Strata Cloud Manager. The LiteLLM config settings (`mask_request_content`, `mask_response_content`) only control whether to:
+- **Apply the masked content** returned by PANW and allow the request to continue, OR
+- **Block the request** entirely when sensitive data is detected
+
+LiteLLM does not alter or configure your PANW security profile. To change what content gets masked, update your profile settings in Strata Cloud Manager.
+:::
+
+:::info Security Posture
+The guardrail is **fail-closed** by default - if the PANW API is unavailable, requests are blocked to ensure no unscanned content reaches your LLM. This provides maximum security.
+:::
+
+#### Example: Masking Credit Card Numbers
+
+<Tabs>
+<TabItem label="Without Masking" value="no-mask">
+
+**Request:**
+```json
+{
+  "messages": [
+    {"role": "user", "content": "My credit card is 4929-3813-3266-4295"}
+  ]
+}
+```
+
+**Response:** ❌ **Blocked with 400 error**
+
+</TabItem>
+<TabItem label="With Masking" value="with-mask">
+
+**Request:**
+```json
+{
+  "messages": [
+    {"role": "user", "content": "My credit card is 4929-3813-3266-4295"}
+  ]
+}
+```
+
+**Masked prompt sent to LLM:**
+```json
+{
+  "messages": [
+    {"role": "user", "content": "My credit card is XXXXXXXXXXXXXXXXXX"}
+  ]
+}
+```
+
+**Response:** ✅ **Allowed with masked content**
+
+</TabItem>
+</Tabs>
+
+#### Masking Capabilities
+
+The guardrail masks sensitive content in:
+
+- ✅ **Chat messages** - User prompts and assistant responses
+- ✅ **Streaming responses** - Real-time masking of streamed content
+- ✅ **Multi-choice responses** - All choices in the response
+- ✅ **Tool/function calls** - Arguments passed to tools and functions
+- ✅ **Content lists** - Mixed content types (text, images, etc.)
+
+#### Complete Example
+
+```yaml
+guardrails:
+  - guardrail_name: "panw-production-security"
+    litellm_params:
+      guardrail: panw_prisma_airs
+      mode: "post_call"                      # Scan input and output
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
+      profile_name: "production-profile"
+      mask_request_content: true             # Mask sensitive prompts
+      mask_response_content: true            # Mask sensitive responses
 ```
 
 ## Use Cases
@@ -245,7 +356,7 @@ From [official Prisma AIRS documentation](https://docs.paloaltonetworks.com/ai-r
 ## Next Steps
 
 - Configure your security policies in [Strata Cloud Manager](https://apps.paloaltonetworks.com/)
-- Review the [Prisma AIRS API documentation](https://pan.dev/prisma-airs/api/airuntimesecurity/scan-sync-request/) for advanced features
+- Review the [Prisma AIRS API documentation](https://pan.dev/airs/) for advanced features
 - Set up monitoring and alerting for threat detections in your PANW dashboard
 - Consider implementing both pre_call and post_call guardrails for comprehensive protection
 - Monitor detection events and tune your security profiles based on your application needs

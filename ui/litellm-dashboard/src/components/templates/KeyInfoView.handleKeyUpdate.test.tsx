@@ -1,4 +1,3 @@
-// KeyInfoView.premium-guard.test.tsx
 import React from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";

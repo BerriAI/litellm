@@ -36,6 +36,8 @@ async def apply_guardrail(
     if active_guardrail is None:
         raise Exception(f"Guardrail {request.guardrail_name} not found")
 
-    return await active_guardrail.apply_guardrail(
+    response_text = await active_guardrail.apply_guardrail(
         text=request.text, language=request.language, entities=request.entities
     )
+
+    return ApplyGuardrailResponse(response_text=response_text)
