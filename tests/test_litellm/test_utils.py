@@ -579,6 +579,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "responses",
                         "ocr",
                         "search",
+                        "vector_store",
                     ],
                 },
                 "output_cost_per_audio_token": {"type": "number"},
@@ -591,8 +592,18 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
+                "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
+                "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
+                    "type": "number"
+                },
+                "output_cost_per_image_above_512_and_512_pixels": {"type": "number"},
+                "output_cost_per_image_above_512_and_512_pixels_and_premium_image": {
+                    "type": "number"
+                },
+                "output_cost_per_image_premium_image": {"type": "number"},
                 "output_cost_per_token_batches": {"type": "number"},
                 "output_cost_per_reasoning_token": {"type": "number"},
+                "output_cost_per_video_per_second": {"type": "number"},
                 "output_db_cost_per_token": {"type": "number"},
                 "output_dbu_cost_per_token": {"type": "number"},
                 "output_vector_size": {"type": "number"},
@@ -667,6 +678,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "items": {
                         "type": "string",
                         "enum": ["text", "image", "audio", "code", "video"],
+                    },
+                },
+                "supported_resolutions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
                     },
                 },
                 "supports_native_streaming": {"type": "boolean"},
@@ -2439,7 +2456,7 @@ class TestGetValidModelsWithCLI:
 
     def test_get_valid_models_with_cli_pattern(self):
         """Test get_valid_models with litellm_proxy provider and CLI token pattern"""
-        
+
         # Mock the HTTP request that get_valid_models makes to the proxy
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -2448,19 +2465,21 @@ class TestGetValidModelsWithCLI:
                 {"id": "gpt-3.5-turbo", "object": "model"},
                 {"id": "gpt-4", "object": "model"},
                 {"id": "litellm_proxy/gemini/gemini-2.5-flash", "object": "model"},
-                {"id": "claude-3-sonnet", "object": "model"}
+                {"id": "claude-3-sonnet", "object": "model"},
             ]
         }
 
-        with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_get:
+        with patch.object(
+            litellm.module_level_client, "get", return_value=mock_response
+        ) as mock_get:
             # Test the exact pattern used in cli_token_usage.py
             result = litellm.get_valid_models(
                 check_provider_endpoint=True,
                 custom_llm_provider="litellm_proxy",
                 api_key="sk-test-cli-key-123",
-                api_base="http://localhost:4000/"
+                api_base="http://localhost:4000/",
             )
-            
+
             # Verify the function returns a list of model names
             assert isinstance(result, list)
             assert len(result) == 4
@@ -2470,7 +2489,7 @@ class TestGetValidModelsWithCLI:
             # Note: This model already had the prefix, so it gets double-prefixed
             assert "litellm_proxy/litellm_proxy/gemini/gemini-2.5-flash" in result
             assert "litellm_proxy/claude-3-sonnet" in result
-            
+
             # Verify the HTTP request was made with correct parameters
             mock_get.assert_called_once()
             _, call_kwargs = mock_get.call_args

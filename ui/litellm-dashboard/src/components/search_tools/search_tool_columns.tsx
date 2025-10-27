@@ -2,7 +2,6 @@ import { ColumnDef } from "@tanstack/react-table";
 import { SearchTool } from "./types";
 import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
-import { Tooltip } from "antd";
 
 export const searchToolColumns = (
   onView: (searchToolId: string) => void,

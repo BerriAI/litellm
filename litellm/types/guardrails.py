@@ -11,6 +11,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
 from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
     GraySwanGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
+    IBMGuardrailsBaseConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -48,6 +51,7 @@ class SupportedGuardrailIntegrations(Enum):
     TOOL_PERMISSION = "tool_permission"
     JAVELIN = "javelin"
     ENKRYPTAI = "enkryptai"
+    IBM_GUARDRAILS = "ibm_guardrails"
 
 
 class Role(Enum):
@@ -356,6 +360,9 @@ class LassoGuardrailConfigModel(BaseModel):
     lasso_conversation_id: Optional[str] = Field(
         default=None, description="Conversation ID for the Lasso guardrail"
     )
+    mask: Optional[bool] = Field(
+        default=False, description="Enable content masking using Lasso classifix API"
+    )
 
 
 class PillarGuardrailConfigModel(BaseModel):
@@ -529,6 +536,7 @@ class LitellmParams(
     JavelinGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
+    IBMGuardrailsBaseConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
