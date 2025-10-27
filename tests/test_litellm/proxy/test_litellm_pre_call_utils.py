@@ -1119,3 +1119,24 @@ def test_add_internal_user_from_user_mapping_no_header_or_mapping_returns_unchan
     )
     assert result is user_api_key_dict
     assert user_api_key_dict.user_id is None
+
+
+def test_get_sanitized_user_information_from_key_includes_guardrails_metadata():
+    """
+    Test that get_sanitized_user_information_from_key includes guardrails field from key metadata in the returned payload
+    """
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key-hash",
+        key_alias="test-alias",
+        user_id="test-user",
+        metadata={"guardrails": ["presidio", "aporia"], "other_field": "value"},
+    )
+
+    result = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict=user_api_key_dict
+    )
+
+    assert result["user_api_key_auth_metadata"] is not None
+    assert "guardrails" in result["user_api_key_auth_metadata"]
+    assert result["user_api_key_auth_metadata"]["guardrails"] == ["presidio", "aporia"]
+    assert result["user_api_key_auth_metadata"]["other_field"] == "value"
