@@ -138,6 +138,22 @@ def add_missing_spend_metadata_to_litellm_metadata(
     return litellm_metadata
 
 
+def get_metadata_variable_name_from_kwargs(
+    kwargs: dict,
+) -> str:
+    """
+    Helper to return what the "metadata" field should be called in the request data
+
+    - New endpoints return `litellm_metadata`
+    - Old endpoints return `metadata`
+
+    Context:
+    - LiteLLM used `metadata` as an internal field for storing metadata
+    - OpenAI then started using this field for their metadata
+    - LiteLLM is now moving to using `litellm_metadata` for our metadata
+    """
+    return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+    
 def get_litellm_metadata_from_kwargs(kwargs: dict):
     """
     Helper to get litellm metadata from all litellm request kwargs
