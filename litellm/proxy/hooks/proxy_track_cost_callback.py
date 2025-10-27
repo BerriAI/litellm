@@ -186,10 +186,6 @@ class _ProxyDBLogger(CustomLogger):
                         response_cost=response_cost,
                         max_budget=end_user_max_budget,
                     )
-                else:
-                    raise Exception(
-                        "User API key and team id and user id missing from custom callback."
-                    )
             else:
                 if kwargs["stream"] is not True or (
                     kwargs["stream"] is True and "complete_streaming_response" in kwargs
