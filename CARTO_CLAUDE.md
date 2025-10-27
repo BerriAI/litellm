@@ -75,20 +75,25 @@ CARTO uses an automated workflow to sync with upstream LiteLLM stable releases.
 Every 8 hours, the `carto-upstream-sync.yml` workflow:
 
 1. **Detects** new upstream stable releases (e.g., `v1.78.5-stable`)
-   - Skips nightlies and release candidates
-   - Only looks for `-stable` tagged releases
-   - Uses detection script: `.github/scripts/detect_stable_release.py`
+   - Uses `gh CLI` to fetch releases from BerriAI/litellm
+   - Skips nightlies, pre-releases, and release candidates
+   - Only processes `-stable` tagged releases
+   - All detection logic in bash (no Python dependencies)
 
-2. **Creates branch and merges** the stable tag
-   - Attempts merge from upstream stable tag
+2. **Syncs main branch** with upstream
+   - Merges `BerriAI/litellm:main` → `CartoDB/litellm:main`
+   - Pushes updated main branch automatically
+
+3. **Creates PR** from main to carto/main
+   - PR: `CartoDB/litellm:main` → `CartoDB/litellm:carto/main`
    - Detects if conflicts exist
    - Creates detailed PR with resolution guidelines
-   - Labels PR appropriately (`clean-merge` or `conflicts`)
+   - Labels PR appropriately (`upstream-sync`, `automated`)
 
-3. **Provides comprehensive PR** with:
+4. **Provides comprehensive PR** with:
    - Link to upstream changes and release notes
-   - Summary of files changed
-   - Merge status (clean or conflicts)
+   - Branch flow diagram
+   - Summary of commits and files changed
    - Detailed conflict resolution guidelines
    - Testing checklist
    - Step-by-step resolution instructions
@@ -254,10 +259,9 @@ These modifications exist in `carto/main` but NOT in upstream. Be careful to pre
 ### 1. Custom GitHub Workflows
 
 **Added:**
-- `.github/workflows/carto-upstream-sync.yml` - Automated upstream sync (runs every 8 hours)
+- `.github/workflows/carto-upstream-sync.yml` - Automated upstream sync (runs every 8 hours, all bash)
 - `.github/workflows/carto_ghcr_deploy.yaml` - CI/CD for CARTO Docker images
 - `.github/workflows/carto_release.yaml` - Automated release creation
-- `.github/scripts/detect_stable_release.py` - Script to detect new stable upstream releases
 
 **Disabled/Modified:**
 - `.github/workflows/ghcr_deploy.yml` → `.github/workflows/ghcr_deploy.yml.txt` (disabled)
@@ -425,12 +429,12 @@ git commit
 **Solution:**
 
 ```bash
-# Check if tag exists locally and might be hiding new release
+# Check if tag exists locally
 git fetch upstream --tags
 git tag -l "*-stable" | sort -V | tail -5
 
-# Check the detection script manually:
-python .github/scripts/detect_stable_release.py
+# Check latest upstream releases manually:
+gh release list --repo BerriAI/litellm --limit 10 | grep stable
 
 # Verify pyproject.toml version
 grep '^version = ' pyproject.toml
