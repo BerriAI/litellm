@@ -263,19 +263,40 @@ class AsyncSAPStreamIterator:
 class GenAIHubOrchestration(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
-        self._access_token_data: dict = {}
         self.token_creator = None
-        self.base_url = ""
-        self.resource_group = ""
+        self._base_url = None
+        self._resource_group = None
+
+    def run_env_setup(self) -> None:
+        try:
+            self.token_creator, self._base_url, self._resource_group = get_token_creator()
+        except ValueError as err:
+            raise GenAIHubOrchestrationError(status_code=400, message=err.args[0])
+
 
     @property
     def headers(self) -> Dict[str, str]:
+        if self.token_creator is None:
+            self.run_env_setup()
         access_token = self.token_creator()
         return {
             "Authorization": access_token,
             "AI-Resource-Group": self.resource_group,
             "Content-Type": "application/json",
         }
+
+    @property
+    def base_url(self) -> str:
+        if self._base_url is None:
+            self.run_env_setup()
+        return self._base_url
+
+
+    @property
+    def resource_group(self) -> str:
+        if self._resource_group is None:
+            self.run_env_setup()
+        return self._resource_group
 
     @cached_property
     def deployment_url(self) -> str:
@@ -299,10 +320,6 @@ class GenAIHubOrchestration(BaseLLM):
     def validate_environment(
         self, endpoint_type: Literal["chat_completions", "embeddings"]
     ) -> Tuple[str, Dict[str, str]]:
-        try:
-            self.token_creator, self.base_url, self.resource_group = get_token_creator()
-        except ValueError as err:
-            raise GenAIHubOrchestrationError(status_code=400, message=err.args[0])
         api_base = (
             f"{self.deployment_url}/v2/completion"
             if endpoint_type == "chat_completions"
