@@ -495,6 +495,11 @@ def _transform_request_body(
         # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
+
+        # Add any extra body params passed to the request body
+        extra_body = optional_params.get("extra_body", {})
+        if extra_body is not None:
+            data = {**extra_body, **data}
     except Exception as e:
         raise e
 
