@@ -323,6 +323,12 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/vector_stores",
         "/vector_stores/{vector_store_id}/search",
         "/v1/vector_stores/{vector_store_id}/search",
+        # search
+        "/search",
+        "/v1/search",
+        # OCR
+        "/ocr",
+        "/v1/ocr",
     ]
 
     mapped_pass_through_routes = [
@@ -811,6 +817,7 @@ class GenerateKeyRequest(KeyRequestBase):
         default=None,
         description="How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True",
     )
+    organization_id: Optional[str] = None
 
 
 class GenerateKeyResponse(KeyRequestBase):
@@ -819,6 +826,7 @@ class GenerateKeyResponse(KeyRequestBase):
     expires: Optional[datetime] = None
     user_id: Optional[str] = None
     token_id: Optional[str] = None
+    organization_id: Optional[str] = None
     litellm_budget_table: Optional[Any] = None
     token: Optional[str] = None
     created_by: Optional[str] = None
@@ -1285,6 +1293,13 @@ class NewTeamRequest(TeamBase):
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     allowed_passthrough_routes: Optional[list] = None
     model_rpm_limit: Optional[Dict[str, int]] = None
+    rpm_limit_type: Optional[
+        Literal["guaranteed_throughput", "best_effort_throughput"]
+    ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
+    tpm_limit_type: Optional[
+        Literal["guaranteed_throughput", "best_effort_throughput"]
+    ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
+
     model_tpm_limit: Optional[Dict[str, int]] = None
     team_member_budget: Optional[float] = (
         None  # allow user to set a budget for all team members
@@ -1555,6 +1570,8 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
     models: List = []
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
+    model_rpm_limit: Optional[Dict[str, int]] = None
+    model_tpm_limit: Optional[Dict[str, int]] = None
 
     #########################################################
     # Object Permission - MCP, Vector Stores etc.
@@ -1619,6 +1636,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
     cost_per_request: float = Field(
         default=0.0,
         description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
+    )
+    auth: bool = Field(
+        default=False,
+        description="Whether authentication is required for the pass-through endpoint. If True, requests to the endpoint will require a valid LiteLLM API key.",
     )
 
 
@@ -1889,6 +1910,12 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_rpm_limit: Optional[int] = None
     end_user_max_budget: Optional[float] = None
 
+    # Organization Params
+    organization_max_budget: Optional[float] = None
+    organization_tpm_limit: Optional[int] = None
+    organization_rpm_limit: Optional[int] = None
+    organization_metadata: Optional[dict] = None
+
     # Time stamps
     last_refreshed_at: Optional[float] = None  # last time joint view was pulled from db
 
@@ -1903,6 +1930,9 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
                     kwargs[attr_name] = value
             if key == "end_user_id" and value is not None and isinstance(value, int):
                 kwargs[key] = str(value)
+
+        if kwargs.get("organization_id") is not None:
+            kwargs["org_id"] = kwargs.pop("organization_id")
         # Initialize the superclass
         super().__init__(**kwargs)
 
@@ -2049,6 +2079,20 @@ class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
     models: Optional[List[str]] = None
     updated_by: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    model_tpm_limit: Optional[Dict[str, int]] = None
+    model_rpm_limit: Optional[Dict[str, int]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def set_model_info(cls, values):
+        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+            if values.get(field) is not None:
+                # add to metadata
+                if values.get("metadata") is None:
+                    values.update({"metadata": {}})
+                values["metadata"][field] = values.get(field)
+                values.pop(field)
+        return values
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
@@ -3484,3 +3528,19 @@ class EnterpriseLicenseData(TypedDict, total=False):
     allowed_features: List[str]
     max_users: int
     max_teams: int
+
+
+class LiteLLM_ManagedVectorStoresTable(LiteLLMPydanticObjectBase):
+    vector_store_id: str
+    custom_llm_provider: str
+    vector_store_name: Optional[str]
+    vector_store_description: Optional[str]
+    vector_store_metadata: Optional[Dict[str, Any]]
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
+    litellm_credential_name: Optional[str]
+    litellm_params: Optional[Dict[str, Any]]
+
+
+class ResponseLiteLLM_ManagedVectorStore(TypedDict, total=False):
+    vector_store: LiteLLM_ManagedVectorStoresTable

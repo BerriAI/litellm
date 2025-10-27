@@ -29,11 +29,10 @@ class EnterpriseCustomGuardrailHelper:
         if event_hook is None or not isinstance(event_hook, Mode):
             return None
 
-        metadata: dict = data.get("litellm_metadata") or data.get("metadata", {})
         proxy_server_request = data.get("proxy_server_request", {})
 
         request_tags = StandardLoggingPayloadSetup._get_request_tags(
-            metadata=metadata,
+            litellm_params=data,
             proxy_server_request=proxy_server_request,
         )
 
