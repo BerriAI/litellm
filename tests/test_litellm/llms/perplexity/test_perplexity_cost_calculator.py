@@ -17,7 +17,8 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
-from litellm.cost_calculator import completion_cost, cost_per_token
+from litellm import ModelResponse
+from litellm.cost_calculator import completion_cost, cost_per_token, response_cost_calculator
 from litellm.llms.perplexity.cost_calculator import cost_per_token as perplexity_cost_per_token
 from litellm.types.utils import Usage, PromptTokensDetailsWrapper
 from litellm.utils import get_model_info

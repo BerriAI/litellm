@@ -7,7 +7,7 @@ from Perplexity API responses.
 
 import os
 import sys
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
