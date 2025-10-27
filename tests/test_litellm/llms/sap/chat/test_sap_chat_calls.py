@@ -71,7 +71,6 @@ def fake_deployment_url():
 @pytest.mark.asyncio
 async def test_sap_chat(
     respx_mock,
-    monkeypatch,
     sap_api_response,
     fake_token_creator,
     fake_deployment_url,
@@ -107,7 +106,6 @@ async def test_sap_chat(
 @pytest.mark.asyncio
 async def test_sap_streaming(
     respx_mock,
-    monkeypatch,
     sap_api_stream_response,
     fake_token_creator,
     fake_deployment_url,
