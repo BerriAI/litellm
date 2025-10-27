@@ -32,6 +32,7 @@ const sidebars = {
       items: [
         "proxy/guardrails/quick_start",
         ...[
+          "adding_provider/adding_guardrail_support",
           "proxy/guardrails/aim_security",
           "proxy/guardrails/aporia_api",
           "proxy/guardrails/azure_content_guardrail",
@@ -713,7 +714,6 @@ const sidebars = {
           items: [
             "adding_provider/directory_structure",
             "adding_provider/new_rerank_provider",
-            "adding_provider/adding_guardrail_support"],
         },
         "extras/contributing",
         "contributing",
