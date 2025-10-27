@@ -46,7 +46,8 @@ class IBMGuardrailDetector(CustomGuardrail):
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
+            llm_provider=httpxSpecialProvider.GuardrailCallback,
+            params={"ssl_verify": verify_ssl}
         )
 
         # Set API configuration
