@@ -89,7 +89,7 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       key: "api_base",
       label: "API Base",
       type: "select",
-      options: ["https://api.openai.com/v1", "https://eu.api.openai.com"],
+      options: ["https://api.openai.com/v1", "https://eu.api.openai.com", "https://us.api.openai.com"],
       defaultValue: "https://api.openai.com/v1",
     },
     {
