@@ -14,6 +14,9 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+)
 import asyncio
 
 if TYPE_CHECKING:
@@ -109,14 +112,13 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
     """
     litellm_params = model_call_details.get("litellm_params", {})
     
-    # Check both 'metadata' and 'litellm_metadata' for headers
+    # Get the appropriate metadata field based on what's present in litellm_params
     # Responses API uses 'litellm_metadata', completion API uses 'metadata'
-    # We need to check headers from BOTH since metadata might exist without headers
-    metadata_headers = litellm_params.get("metadata", {}).get("headers", {}) if isinstance(litellm_params.get("metadata"), dict) else {}
-    litellm_metadata_headers = litellm_params.get("litellm_metadata", {}).get("headers", {}) if isinstance(litellm_params.get("litellm_metadata"), dict) else {}
+    metadata_field = get_metadata_variable_name_from_kwargs(litellm_params)
+    metadata = litellm_params.get(metadata_field, {})
     
-    # Merge headers from both sources (litellm_metadata takes precedence)
-    request_headers = {**metadata_headers, **litellm_metadata_headers}
+    # Get headers from the metadata
+    request_headers = metadata.get("headers", {}) if isinstance(metadata, dict) else {}
 
     possible_request_headers = [
         "litellm-enable-message-redaction",  # old header. maintain backwards compatibility
