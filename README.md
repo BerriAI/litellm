@@ -250,6 +250,110 @@ response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
 print(response)
 ```
 
+## 🍎 macOS & Apple Silicon Optimizations
+
+LiteLLM now includes **automatic platform-aware optimizations** for macOS and Apple Silicon (M1/M2/M3/M4) systems! These optimizations provide:
+
+### ⚡ Performance Enhancements
+
+- **Automatic Apple Silicon Detection**: Platform-aware defaults optimize worker count, connection pooling, and resource allocation
+- **Hardware-Accelerated SSL/TLS**: Prioritizes ChaCha20-Poly1305 cipher (hardware-accelerated on ARM)
+- **Optimized Event Loop**: uvloop with ARM64-specific optimizations for async operations
+- **Intelligent Connection Pooling**: Platform-specific defaults (256 connections on Apple Silicon vs unlimited on other platforms)
+- **Efficient Resource Management**: Shorter keepalive timeouts (60s) and optimized DNS caching (10min) for better resource utilization
+
+### 📋 Quick Start for macOS
+
+```bash
+# Install with full proxy features
+pip install 'litellm[proxy]'
+
+# Verify Apple Silicon detection
+python -c "import platform; print(f'Architecture: {platform.machine()}')"
+# Expected on Apple Silicon: arm64
+
+# Start proxy with macOS-optimized config
+litellm --config litellm/proxy/example_config_yaml/macos_optimized_config.yaml
+```
+
+### 🔧 macOS-Specific Configuration
+
+For detailed setup instructions, see **[VIBECODER.md](VIBECODER.md)** which includes:
+- Step-by-step installation for macOS
+- VS Code integration and debugging setup
+- Performance tuning and benchmarking
+- Troubleshooting common macOS issues
+
+Example optimized configuration:
+
+```yaml
+# litellm/proxy/example_config_yaml/macos_optimized_config.yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Local Ollama (great for Apple Silicon!)
+  - model_name: local-llama
+    litellm_params:
+      model: ollama/llama2
+      api_base: http://localhost:11434
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: disk
+    disk_cache_dir: ~/.litellm/cache
+```
+
+### 🚀 Platform-Aware Defaults
+
+The following defaults are **automatically optimized** when running on Apple Silicon:
+
+| Setting | Apple Silicon | Other Platforms | Environment Variable |
+|---------|--------------|-----------------|---------------------|
+| Workers | P-core count (2-8) | 1-4 | `DEFAULT_NUM_WORKERS_LITELLM_PROXY` |
+| Connection Pool | 256 | Unlimited (0) | `AIOHTTP_CONNECTOR_LIMIT` |
+| Keepalive Timeout | 60s | 120s | `AIOHTTP_KEEPALIVE_TIMEOUT` |
+| DNS Cache TTL | 600s (10min) | 300s (5min) | `AIOHTTP_TTL_DNS_CACHE` |
+
+You can override any of these by setting the corresponding environment variable.
+
+### 🛠️ Recommended Tools for macOS
+
+```bash
+# Install Ollama for local models (optimized for Apple Silicon)
+brew install ollama
+
+# Install Redis for caching (optional)
+brew install redis
+brew services start redis
+
+# Install PostgreSQL for production (optional)
+brew install postgresql@15
+brew services start postgresql@15
+```
+
+### 📊 Verification
+
+Check that optimizations are active:
+
+```bash
+# Start proxy and look for Apple Silicon detection message
+litellm --config config.yaml
+
+# Expected output:
+# ✓ Apple Silicon detected - using uvloop with ARM64 optimizations
+# Platform: darwin (arm64)
+# Recommended workers: 4
+# Connection pool: 256
+```
+
+For complete deployment instructions, testing procedures, and VS Code integration, see **[VIBECODER.md](VIBECODER.md)**.
+
+---
+
 ## Proxy Key Management ([Docs](https://docs.litellm.ai/docs/proxy/virtual_keys))
 
 Connect the proxy with a Postgres DB to create proxy keys

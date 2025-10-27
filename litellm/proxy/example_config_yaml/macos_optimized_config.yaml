@@ -1,0 +1,120 @@
+# LiteLLM Proxy Configuration - Optimized for macOS/Apple Silicon
+#
+# This configuration file provides optimized settings for running LiteLLM on macOS,
+# particularly on Apple Silicon (M1, M2, M3, M4) processors.
+#
+# Usage:
+#   litellm --config macos_optimized_config.yaml
+#
+# All settings are optional and will fall back to platform-aware defaults if not specified.
+
+model_list:
+  # Example models - replace with your actual API keys and models
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+      # Connection pooling handled automatically by platform-aware defaults
+
+  - model_name: claude-3-opus
+    litellm_params:
+      model: anthropic/claude-3-opus-20240229
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: gemini-pro
+    litellm_params:
+      model: gemini/gemini-pro
+      api_key: os.environ/GEMINI_API_KEY
+
+  # Local Ollama instance (great for Apple Silicon!)
+  - model_name: local-llama
+    litellm_params:
+      model: ollama/llama2
+      api_base: http://localhost:11434
+
+litellm_settings:
+  # Caching Configuration
+  # Disk cache works well on Apple Silicon's fast SSD
+  cache: true
+  cache_params:
+    type: disk
+    # Store cache in home directory for easy access
+    disk_cache_dir: ~/.litellm/cache
+    ttl: 3600  # 1 hour cache
+
+  # Success/Failure Callbacks
+  # Add your monitoring here
+  # success_callback: ["langfuse"]
+  # failure_callback: ["langfuse"]
+
+  # Request timeout (in seconds)
+  request_timeout: 600
+
+  # Number of retries for failed requests
+  num_retries: 2
+
+  # Telemetry (opt-out if desired)
+  # telemetry: false
+
+general_settings:
+  # Master key for admin access
+  # master_key: os.environ/LITELLM_MASTER_KEY
+
+  # Database configuration (optional)
+  # For Apple Silicon, SQLite works great for development
+  # database_url: sqlite:///./litellm.db
+
+  # For production, use PostgreSQL
+  # database_url: postgresql://user:password@localhost/litellm
+
+  # Alert configuration (optional)
+  # alerting: ["slack"]
+  # alerting_threshold: 300
+
+# Environment Variables for macOS Optimization
+# Set these in your shell or .env file:
+#
+# # Apple Silicon Optimizations (automatically detected)
+# # These are now handled by platform_utils.py, but can be overridden:
+#
+# # Worker Configuration
+# export DEFAULT_NUM_WORKERS_LITELLM_PROXY=4  # Recommended for Apple Silicon
+#
+# # Connection Pool Settings
+# export AIOHTTP_CONNECTOR_LIMIT=256          # More aggressive pooling
+# export AIOHTTP_KEEPALIVE_TIMEOUT=60         # Shorter keepalive
+# export AIOHTTP_TTL_DNS_CACHE=600           # Longer DNS cache (10 min)
+#
+# # SSL/TLS Optimization
+# # ChaCha20 is hardware-accelerated on Apple Silicon
+# export LITELLM_SSL_CIPHERS="TLS_CHACHA20_POLY1305_SHA256:TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256"
+#
+# # Performance Tuning
+# export PYTHONOPTIMIZE=2                     # Enable Python optimizations
+# export PYTHONDONTWRITEBYTECODE=1           # Skip .pyc files
+#
+# # Database Pool (if using PostgreSQL)
+# export DATABASE_POOL_SIZE=15               # Optimal for Apple Silicon
+#
+# # Logging
+# export LITELLM_LOG=INFO                    # Set log level
+
+# macOS-Specific Tips:
+#
+# 1. Use Ollama for local models - it's optimized for Apple Silicon
+#    Installation: brew install ollama
+#
+# 2. Enable firewall rules if needed:
+#    System Settings > Network > Firewall > Allow LiteLLM
+#
+# 3. For best performance, ensure you're running native ARM64 Python:
+#    python -c "import platform; print(platform.machine())"
+#    # Should output: arm64
+#
+# 4. Monitor resource usage:
+#    Activity Monitor > Network, CPU tabs
+#
+# 5. Use homebrew for dependencies:
+#    brew install python@3.11 poetry redis
+#
+# 6. For VS Code integration, see VIBECODER.md

@@ -1,6 +1,13 @@
 import os
 from typing import List, Literal
 
+from litellm.platform_utils import (
+    get_optimal_worker_count,
+    get_optimal_connection_pool_limit,
+    get_optimal_keepalive_timeout,
+    get_optimal_dns_cache_ttl,
+)
+
 AZURE_DEFAULT_RESPONSES_API_VERSION = str(
     os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview")
 )
@@ -15,7 +22,7 @@ DEFAULT_SQS_FLUSH_INTERVAL_SECONDS = int(
     os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
 )
 DEFAULT_NUM_WORKERS_LITELLM_PROXY = int(
-    os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
+    os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", get_optimal_worker_count())
 )
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
 DEFAULT_SQS_BATCH_SIZE = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
@@ -88,10 +95,16 @@ MAX_TOKEN_TRIMMING_ATTEMPTS = int(
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
-# Aiohttp connection pooling constants
-AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 0))
-AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
-AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
+# Aiohttp connection pooling constants (platform-aware defaults)
+AIOHTTP_CONNECTOR_LIMIT = int(
+    os.getenv("AIOHTTP_CONNECTOR_LIMIT", get_optimal_connection_pool_limit())
+)
+AIOHTTP_KEEPALIVE_TIMEOUT = int(
+    os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", get_optimal_keepalive_timeout())
+)
+AIOHTTP_TTL_DNS_CACHE = int(
+    os.getenv("AIOHTTP_TTL_DNS_CACHE", get_optimal_dns_cache_ttl())
+)
 
 # WebSocket constants
 # Default to None (unlimited) to match OpenAI's official agents SDK behavior

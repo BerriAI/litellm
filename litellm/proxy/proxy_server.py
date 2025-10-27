@@ -614,6 +614,24 @@ async def proxy_startup_event(app: FastAPI):
     import json
 
     init_verbose_loggers()
+
+    ## LOG PLATFORM INFORMATION ##
+    try:
+        from litellm.platform_utils import log_platform_optimization_info, get_platform_info
+
+        verbose_proxy_logger.info("=" * 50)
+        verbose_proxy_logger.info("Platform Configuration")
+        verbose_proxy_logger.info("=" * 50)
+        log_platform_optimization_info(logger=verbose_proxy_logger)
+
+        # Also log connection pool settings
+        verbose_proxy_logger.info(f"Connection pool limit: {AIOHTTP_CONNECTOR_LIMIT}")
+        verbose_proxy_logger.info(f"Keepalive timeout: {AIOHTTP_KEEPALIVE_TIMEOUT}s")
+        verbose_proxy_logger.info(f"DNS cache TTL: {AIOHTTP_TTL_DNS_CACHE}s")
+        verbose_proxy_logger.info("=" * 50)
+    except Exception as e:
+        verbose_proxy_logger.debug(f"Could not log platform info: {e}")
+
     ## CHECK PREMIUM USER
     verbose_proxy_logger.debug(
         "litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(

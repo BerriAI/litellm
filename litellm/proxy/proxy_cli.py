@@ -305,6 +305,21 @@ class ProxyInitializationHelpers:
         """Helper function to determine the event loop type based on platform"""
         if sys.platform in ("win32", "cygwin", "cli"):
             return None  # Let uvicorn choose the default loop on Windows
+
+        # Import platform utilities for Apple Silicon detection
+        try:
+            from litellm.platform_utils import is_apple_silicon
+            import platform
+
+            if is_apple_silicon():
+                print("✓ Apple Silicon detected - using uvloop with ARM64 optimizations")
+            elif sys.platform == "darwin":
+                print(f"✓ macOS detected ({platform.machine()}) - using uvloop")
+            else:
+                print(f"✓ Using uvloop on {sys.platform}")
+        except Exception:
+            pass  # Silently fall back if platform_utils not available
+
         return "uvloop"
 
 
