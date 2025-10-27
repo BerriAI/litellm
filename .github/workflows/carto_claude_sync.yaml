@@ -1,0 +1,133 @@
+name: CARTO Claude Code Upstream Sync
+
+on:
+  schedule:
+    # Run nightly at 3 AM UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:  # Allow manual triggering
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  claude-sync:
+    name: Claude Code Upstream Sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: carto/main
+          fetch-depth: 0
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/BerriAI/litellm.git || true
+          git fetch upstream --tags
+
+      - name: Run Claude Code Sync
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are helping maintain CARTO's fork of LiteLLM. Your task is to check for new upstream stable releases and sync them.
+
+            ## Context
+            - Current branch: carto/main
+            - Upstream repo: BerriAI/litellm (already added as remote 'upstream')
+            - We only sync releases tagged with `-stable` suffix (e.g., v1.78.5-stable)
+            - Skip nightlies and release candidates
+
+            ## Your Task
+
+            1. **Check for new stable releases:**
+               - Run: `python .github/scripts/detect_stable_release.py`
+               - If no new release found, stop here and report "No new stable release available"
+
+            2. **If new release found, create a sync PR:**
+               - Read the new version from the script output
+               - Create a new branch: `automated-sync/<version>`
+               - Merge the upstream stable tag into this branch: `git merge <version>`
+
+            3. **Handle the merge:**
+               - **If NO conflicts:**
+                 - Update `pyproject.toml` version to match upstream (remove 'v' prefix and '-stable' suffix)
+                 - Commit changes
+                 - Run tests: `make lint && make test-unit`
+                 - If tests pass: Create PR with label "automated-sync,ready"
+                 - If tests fail: Fix issues if possible, or create PR with label "automated-sync,needs-review"
+
+               - **If conflicts exist:**
+                 - Analyze conflicts carefully
+                 - For `.github/workflows/*`: ALWAYS keep CARTO versions (carto_*.yaml), discard upstream versions
+                 - For `Dockerfile`, `Makefile`: Preserve CARTO modifications (look for "# CARTO:" comments)
+                 - For `pyproject.toml`: Accept upstream version number
+                 - Resolve conflicts following these rules
+                 - Commit resolved conflicts
+                 - Run tests and create PR
+
+            4. **Create the PR:**
+               - Title: "🤖 chore: sync upstream <version>"
+               - Body should include:
+                 - Link to upstream changes: `https://github.com/BerriAI/litellm/compare/v<current>...<new_version>`
+                 - Summary of what was merged
+                 - Whether conflicts were encountered and how they were resolved
+                 - Test results
+                 - Recommendation: "Ready to merge" or "Needs review"
+
+            5. **Important Guidelines:**
+               - NEVER merge the `main` branch - only merge specific `-stable` tags
+               - Preserve all CARTO-specific workflows (carto_*.yaml)
+               - Be cautious with conflicts - when in doubt, ask for review
+               - Always run tests before marking as ready
+               - Read CARTO_CLAUDE.md for detailed sync instructions
+
+            ## Available Resources
+            - `.github/scripts/detect_stable_release.py` - Detection script
+            - `CARTO_CLAUDE.md` - Detailed sync documentation
+            - `docs/CARTO_RELEASE_PROCESS.md` - Release process docs
+
+          allowedTools: |
+            Read
+            Write
+            Edit
+            Bash(git:*)
+            Bash(gh:*)
+            Bash(python:*)
+            Bash(make:*)
+            Bash(poetry:*)
+            Grep
+            Glob
+
+          max_iterations: 30
+          create_pr: false  # Claude will create the PR manually with proper labels
+
+      - name: Notify on Slack (if configured)
+        if: always() && vars.SLACK_WEBHOOK_URL != ''
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            MESSAGE="✅ Claude Code upstream sync completed successfully"
+          else
+            MESSAGE="⚠️ Claude Code upstream sync encountered issues"
+          fi
+
+          curl -X POST "${{ vars.SLACK_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+          {
+            "text": "$MESSAGE",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*CARTO LiteLLM Upstream Sync*\n\n$MESSAGE\n\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>"
+                }
+              }
+            ]
+          }
+          EOF
