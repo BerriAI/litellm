@@ -1,6 +1,7 @@
 # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
+import os
 import sys
 from datetime import datetime, timedelta
 from typing import (
@@ -1225,8 +1226,8 @@ class PrometheusLogger(CustomLogger):
 
         try:
             _tags = StandardLoggingPayloadSetup._get_request_tags(
-                request_data.get("metadata", {}),
-                request_data.get("proxy_server_request", {}),
+                litellm_params=request_data,
+                proxy_server_request=request_data.get("proxy_server_request", {}),
             )
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
@@ -1288,7 +1289,8 @@ class PrometheusLogger(CustomLogger):
                 status_code="200",
                 route=user_api_key_dict.request_route,
                 tags=StandardLoggingPayloadSetup._get_request_tags(
-                    data.get("metadata", {}), data.get("proxy_server_request", {})
+                    litellm_params=data,
+                    proxy_server_request=data.get("proxy_server_request", {}),
                 ),
             )
             _labels = prometheus_label_factory(
@@ -2211,7 +2213,14 @@ class PrometheusLogger(CustomLogger):
             )
 
         # Create metrics ASGI app
-        metrics_app = make_asgi_app()
+        if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
+            from prometheus_client import CollectorRegistry, multiprocess
+
+            registry = CollectorRegistry()
+            multiprocess.MultiProcessCollector(registry)
+            metrics_app = make_asgi_app(registry)
+        else:
+            metrics_app = make_asgi_app()
 
         # Mount the metrics app to the app
         app.mount("/metrics", metrics_app)
@@ -2354,7 +2363,6 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
     }
     """
 
-    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
     from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
 
     configured_tags = litellm.custom_prometheus_tags
@@ -2362,7 +2370,6 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
         return {}
 
     result: Dict[str, str] = {}
-    pattern_router = PatternMatchRouter()
 
     for configured_tag in configured_tags:
         label_name = _sanitize_prometheus_label_name(f"tag_{configured_tag}")

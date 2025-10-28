@@ -5,7 +5,8 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 import asyncio
 import os
 import sys
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -21,10 +22,27 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.utils import ModelResponse, Usage
 
+class TimeController:
+    def __init__(self):
+        self._current = datetime.utcnow()
+
+    def now(self) -> datetime:
+        return self._current
+
+    def advance(self, seconds: float) -> None:
+        self._current += timedelta(seconds=seconds)
+
+
+@pytest.fixture
+def time_controller(monkeypatch):
+    controller = TimeController()
+    monkeypatch.setattr(time, "time", lambda: controller.now().timestamp())
+    return controller
+
 
 @pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
-async def test_sliding_window_rate_limit_v3(monkeypatch):
+async def test_sliding_window_rate_limit_v3(monkeypatch, time_controller):
     """
     Test the sliding window rate limiting functionality
     """
@@ -34,7 +52,8 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=3)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(local_cache)
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
     )
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
@@ -103,7 +122,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
     assert "Rate limit exceeded" in str(exc_info.value.detail)
 
     # Wait for window to expire (2 seconds)
-    await asyncio.sleep(3)
+    time_controller.advance(3)
 
     print("WAITED 3 seconds")
 
@@ -116,7 +135,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rate_limiter_script_return_values_v3(monkeypatch):
+async def test_rate_limiter_script_return_values_v3(monkeypatch, time_controller):
     """
     Test that the rate limiter script returns both counter and window values correctly
     """
@@ -126,7 +145,8 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch):
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=3)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(local_cache)
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
     )
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
@@ -199,7 +219,7 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch):
     assert new_counter_value == 2, "Counter should be 2 after second request"
 
     # Wait for window to expire
-    await asyncio.sleep(3)
+    time_controller.advance(3)
 
     # Make request after window expiry
     await parallel_request_handler.async_pre_call_hook(
@@ -226,7 +246,7 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch):
 )
 @pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
-async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
+async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object, time_controller):
     """
     Test normal router call with parallel request limiter v3 for TPM rate limiting
     """
@@ -276,7 +296,8 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
         )
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(local_cache)
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
     )
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
@@ -359,7 +380,8 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
         },
         mock_response="hello",
     )
-    await asyncio.sleep(1)  # success is done in a separate thread
+    await asyncio.sleep(0)
+    time_controller.advance(1)
 
     # Verify the token count is tracked
     counter_value = await local_cache.async_get_cache(key=counter_key)
@@ -383,7 +405,7 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
         )
 
     # Wait for window to expire
-    await asyncio.sleep(3)
+    time_controller.advance(3)
 
     # Make request after window expiry
     await parallel_request_handler.async_pre_call_hook(
@@ -955,6 +977,93 @@ async def test_team_member_rate_limits_v3():
 
 
 @pytest.mark.asyncio
+async def test_dynamic_rate_limiting_v3():
+    """
+    Test that dynamic rate limiting only enforces limits when model has failures.
+    
+    When rpm_limit_type is set to "dynamic":
+    - If model has no failures, rate limits should NOT be enforced (allow exceeding)
+    - If model has failures above threshold, rate limits SHOULD be enforced
+    """
+    _api_key = "sk-12345"
+    _api_key_hash = hash_token(_api_key)
+    model = "gpt-3.5-turbo"
+    
+    # Set a low RPM limit to make testing easier
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key_hash,
+        rpm_limit=2,
+        metadata={"rpm_limit_type": "dynamic"},
+    )
+    
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    
+    # Mock should_rate_limit to track if limits are enforced
+    captured_descriptors = []
+    
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        captured_descriptors.clear()
+        captured_descriptors.extend(descriptors)
+        return {"overall_code": "OK", "statuses": []}
+    
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+    
+    # Test 1: No failures - rate limits should NOT be enforced (rpm_limit should be None)
+    async def mock_check_no_failures(*args, **kwargs):
+        return False
+    
+    parallel_request_handler._check_model_has_recent_failures = mock_check_no_failures
+    
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": model},
+        call_type="",
+    )
+    
+    # Find the API key descriptor
+    api_key_descriptor = None
+    for descriptor in captured_descriptors:
+        if descriptor["key"] == "api_key":
+            api_key_descriptor = descriptor
+            break
+    
+    assert api_key_descriptor is not None, "API key descriptor should be present"
+    assert (
+        api_key_descriptor["rate_limit"]["requests_per_unit"] is None
+    ), "RPM limit should be None when dynamic mode and no failures"
+    
+    # Test 2: With failures - rate limits SHOULD be enforced (rpm_limit should be set)
+    async def mock_check_with_failures(*args, **kwargs):
+        return True
+    
+    parallel_request_handler._check_model_has_recent_failures = mock_check_with_failures
+    captured_descriptors.clear()
+    
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": model},
+        call_type="",
+    )
+    
+    # Find the API key descriptor again
+    api_key_descriptor = None
+    for descriptor in captured_descriptors:
+        if descriptor["key"] == "api_key":
+            api_key_descriptor = descriptor
+            break
+    
+    assert api_key_descriptor is not None, "API key descriptor should be present"
+    assert (
+        api_key_descriptor["rate_limit"]["requests_per_unit"] == 2
+    ), "RPM limit should be enforced when dynamic mode and failures detected"
+
+
+@pytest.mark.asyncio
 async def test_async_increment_tokens_with_ttl_preservation():
     """
     Test TTL preservation functionality for token increment operations.
@@ -1007,9 +1116,13 @@ async def test_async_increment_tokens_with_ttl_preservation():
     except Exception as e:
         pytest.skip(f"Redis connection failed: {str(e)}")
     
-    # Test keys
-    test_key_with_ttl = "test_ttl_preservation:with_ttl"
-    test_key_without_ttl = "test_ttl_preservation:without_ttl"
+    # Verify the TTL preservation script is registered
+    if parallel_request_handler.token_increment_script is None:
+        pytest.skip("Token increment script not available - Redis Lua scripting may not be supported")
+    
+    # Test keys - use hash tags to ensure they map to same Redis cluster slot
+    test_key_with_ttl = "{test_ttl}:with_ttl"
+    test_key_without_ttl = "{test_ttl}:without_ttl"
     
     try:
         # Clean up any existing test keys
@@ -1039,12 +1152,15 @@ async def test_async_increment_tokens_with_ttl_preservation():
             pipeline_operations=pipeline_operations_first
         )
         
+        # Small delay to ensure Redis has processed the commands
+        await asyncio.sleep(0.1)
+        
         # Verify keys exist and check initial TTL
         ttl_after_first = await redis_cache.async_get_ttl(test_key_with_ttl)
         value_after_first_with_ttl = await redis_cache.async_get_cache(test_key_with_ttl)
         value_after_first_without_ttl = await redis_cache.async_get_cache(test_key_without_ttl)
         
-        assert value_after_first_with_ttl == 10.0, "First increment should set value to 10.0"
+        assert value_after_first_with_ttl == 10.0, f"First increment should set value to 10.0, got {value_after_first_with_ttl}"
         assert value_after_first_without_ttl == 5.0, "First increment should set value to 5.0"
         assert ttl_after_first is not None and ttl_after_first > 0, "Key with TTL should have positive TTL after first increment"
         assert ttl_after_first <= 60, "TTL should not exceed the set value"
@@ -1074,6 +1190,9 @@ async def test_async_increment_tokens_with_ttl_preservation():
         await parallel_request_handler.async_increment_tokens_with_ttl_preservation(
             pipeline_operations=pipeline_operations_second
         )
+        
+        # Small delay to ensure Redis has processed the commands
+        await asyncio.sleep(0.1)
         
         # Verify TTL preservation and value updates
         ttl_after_second = await redis_cache.async_get_ttl(test_key_with_ttl)
