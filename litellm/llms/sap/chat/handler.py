@@ -269,7 +269,7 @@ class GenAIHubOrchestration(BaseLLM):
 
     def run_env_setup(self) -> None:
         try:
-            self.token_creator, self._base_url, self._resource_group = get_token_creator()
+            self.token_creator, self._base_url, self._resource_group = get_token_creator() # type: ignore
         except ValueError as err:
             raise GenAIHubOrchestrationError(status_code=400, message=err.args[0])
 
@@ -278,7 +278,7 @@ class GenAIHubOrchestration(BaseLLM):
     def headers(self) -> Dict[str, str]:
         if self.token_creator is None:
             self.run_env_setup()
-        access_token = self.token_creator()
+        access_token = self.token_creator() # type: ignore
         return {
             "Authorization": access_token,
             "AI-Resource-Group": self.resource_group,
@@ -289,14 +289,14 @@ class GenAIHubOrchestration(BaseLLM):
     def base_url(self) -> str:
         if self._base_url is None:
             self.run_env_setup()
-        return self._base_url
+        return self._base_url # type: ignore
 
 
     @property
     def resource_group(self) -> str:
         if self._resource_group is None:
             self.run_env_setup()
-        return self._resource_group
+        return self._resource_group # type: ignore
 
     @cached_property
     def deployment_url(self) -> str:

@@ -1,7 +1,6 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
-import json
 from typing import List, Optional, Union, Dict
 
 from litellm.types.utils import ModelResponse
@@ -125,9 +124,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 template.append(validate_dict(message, SAPMessage))
 
         tools_ = optional_params.pop("tools", [])
-        tools = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
-        if tools != []:
-            tools = {"tools": tools}
+        tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
+        if tools_ != []:
+            tools = {"tools": tools_}
         else:
             tools = {}
 
