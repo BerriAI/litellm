@@ -10,10 +10,15 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.guardrails.guardrail_endpoints import GUARDRAIL_REGISTRY
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
+    ApplyGuardrailRequest,
+    ApplyGuardrailResponse,
     BedrockGuardrailConfigModel,
     Guardrail,
     GuardrailEventHooks,
@@ -1056,3 +1061,26 @@ async def get_provider_specific_params():
             provider_params[guardrail_name] = fields
 
     return provider_params
+
+@router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
+async def apply_guardrail(
+    request: ApplyGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Mask PII from a given text, requires a guardrail to be added to litellm.
+    """
+    active_guardrail: Optional[
+        CustomGuardrail
+    ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+        guardrail_name=request.guardrail_name
+    )
+    if active_guardrail is None:
+        raise Exception(f"Guardrail {request.guardrail_name} not found")
+
+    response_text = await active_guardrail.apply_guardrail(
+        text=request.text, language=request.language, entities=request.entities
+    )
+
+    return ApplyGuardrailResponse(response_text=response_text)
+
