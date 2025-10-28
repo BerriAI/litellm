@@ -246,6 +246,8 @@ class FireworksAIConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        if not model.startswith("accounts/") and "#" not in model:
+            model = f"accounts/fireworks/models/{model}"
         messages = self._transform_messages_helper(
             messages=messages, model=model, litellm_params=litellm_params
         )
