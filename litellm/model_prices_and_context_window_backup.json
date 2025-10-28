@@ -3385,7 +3385,7 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/microsoft/",
         "supports_reasoning": true,
         "supports_tool_choice": true
-    },    
+    },
     "azure_ai/cohere-rerank-v3-english": {
         "input_cost_per_query": 0.002,
         "input_cost_per_token": 0.0,
@@ -7753,7 +7753,7 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
-    },    
+    },
     "dolphin": {
         "input_cost_per_token": 5e-07,
         "litellm_provider": "nlp_cloud",
@@ -7847,7 +7847,7 @@
         "input_cost_per_query": 5e-03,
         "litellm_provider": "perplexity",
         "mode": "search"
-    },    
+    },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",
@@ -17733,24 +17733,24 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159
     },
-    "openrouter/anthropic/claude-sonnet-4.5": {
-        "input_cost_per_image": 0.0048,
-        "input_cost_per_token": 3e-06,
-        "input_cost_per_token_above_200k_tokens": 6e-06,
-        "output_cost_per_token_above_200k_tokens": 2.25e-05,
+    "openrouter/anthropic/claude-haiku-4.5": {
+        "cache_creation_input_token_cost": 1.25e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 1e-06,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 1000000,
-        "max_tokens": 1000000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 200000,
+        "max_tokens": 200000,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 5e-06,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 346
     },
     "openrouter/bytedance/ui-tars-1.5-7b": {
         "input_cost_per_token": 1e-07,
@@ -19166,7 +19166,7 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
-    }, 
+    },
     "qwen.qwen3-32b-v1:0": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "bedrock_converse",
@@ -19178,7 +19178,7 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
-    },           
+    },
     "recraft/recraftv2": {
         "litellm_provider": "recraft",
         "mode": "image_generation",
