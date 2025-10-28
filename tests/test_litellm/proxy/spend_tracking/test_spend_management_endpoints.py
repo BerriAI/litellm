@@ -71,6 +71,14 @@ def disable_budget_sync(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def reset_router_callbacks():
+    """Ensure router budget callbacks from previous tests do not leak state."""
+    litellm.logging_callback_manager._reset_all_callbacks()
+    yield
+    litellm.logging_callback_manager._reset_all_callbacks()
+
+
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
     # Mock data for the test

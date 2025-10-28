@@ -188,6 +188,8 @@ async def test_handle_async_request_uses_env_proxy(monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", proxy_url)
     monkeypatch.setenv("https_proxy", proxy_url)
     monkeypatch.delenv("DISABLE_AIOHTTP_TRUST_ENV", raising=False)
+    monkeypatch.setattr("urllib.request.getproxies", lambda: {"http": proxy_url, "https": proxy_url})
+    monkeypatch.setattr("urllib.request.proxy_bypass", lambda host: False)
 
     captured = {}
 

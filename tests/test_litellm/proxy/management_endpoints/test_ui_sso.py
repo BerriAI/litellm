@@ -125,16 +125,14 @@ def test_get_microsoft_callback_response():
         "surname": "User",
     }
 
-    future = asyncio.Future()
-    future.set_result(mock_response)
-
     with patch.dict(
         os.environ,
         {"MICROSOFT_CLIENT_SECRET": "mock_secret", "MICROSOFT_TENANT": "mock_tenant"},
     ):
+        mock_verify = AsyncMock(return_value=mock_response)
         with patch(
             "fastapi_sso.sso.microsoft.MicrosoftSSO.verify_and_process",
-            return_value=future,
+            new=mock_verify,
         ):
             # Act
             result = asyncio.run(
@@ -166,15 +164,14 @@ def test_get_microsoft_callback_response_raw_sso_response():
         "surname": "User",
     }
 
-    future = asyncio.Future()
-    future.set_result(mock_response)
     with patch.dict(
         os.environ,
         {"MICROSOFT_CLIENT_SECRET": "mock_secret", "MICROSOFT_TENANT": "mock_tenant"},
     ):
+        mock_verify = AsyncMock(return_value=mock_response)
         with patch(
             "fastapi_sso.sso.microsoft.MicrosoftSSO.verify_and_process",
-            return_value=future,
+            new=mock_verify,
         ):
             # Act
             result = asyncio.run(
@@ -207,12 +204,10 @@ def test_get_google_callback_response():
         "family_name": "User",
     }
 
-    future = asyncio.Future()
-    future.set_result(mock_response)
-
     with patch.dict(os.environ, {"GOOGLE_CLIENT_SECRET": "mock_secret"}):
+        mock_verify = AsyncMock(return_value=mock_response)
         with patch(
-            "fastapi_sso.sso.google.GoogleSSO.verify_and_process", return_value=future
+            "fastapi_sso.sso.google.GoogleSSO.verify_and_process", new=mock_verify
         ):
             # Act
             result = asyncio.run(
@@ -2072,4 +2067,3 @@ class TestPKCEFunctionality:
                 assert "code_challenge=" in updated_location
                 assert "code_challenge_method=S256" in updated_location
                 assert f"state={test_state}" in updated_location
-
