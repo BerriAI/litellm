@@ -1203,8 +1203,8 @@ def _add_guardrails_from_key_or_team_metadata(
     """
     from litellm.proxy.utils import _premium_user_check
 
-    # Initialize guardrails list
-    combined_guardrails: Set[str] = set()
+    # Initialize guardrails set (avoiding duplicates)
+    combined_guardrails = set()
     
     # Add key-level guardrails first
     if key_metadata and "guardrails" in key_metadata:
@@ -1212,15 +1212,13 @@ def _add_guardrails_from_key_or_team_metadata(
             _premium_user_check()
             combined_guardrails.update(key_metadata["guardrails"])
     
-    # Append team-level guardrails (avoid duplicates)
+    # Add team-level guardrails (set automatically handles duplicates)
     if team_metadata and "guardrails" in team_metadata:
         if isinstance(team_metadata["guardrails"], list) and len(team_metadata["guardrails"]) > 0:
             _premium_user_check()
-            for guardrail in team_metadata["guardrails"]:
-                if guardrail not in combined_guardrails:
-                    combined_guardrails.update(guardrail)
+            combined_guardrails.update(team_metadata["guardrails"])
     
-    # Set combined guardrails in metadata
+    # Set combined guardrails in metadata as list
     if combined_guardrails:
         data[metadata_variable_name]["guardrails"] = list(combined_guardrails)
 

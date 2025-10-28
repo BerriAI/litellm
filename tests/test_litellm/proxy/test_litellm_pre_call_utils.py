@@ -1205,6 +1205,11 @@ async def test_request_guardrails_do_not_override_key_guardrails():
     request_mock.client = MagicMock()
     request_mock.client.host = "127.0.0.1"
 
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={"guardrails": ["key-guardrail-1"]},
+        team_metadata={},
+    )
     
     # Test case: Request with empty guardrails should not result in empty guardrails
     data_with_empty = {
