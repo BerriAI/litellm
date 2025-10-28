@@ -22,6 +22,7 @@ from typing import (
     overload,
 )
 
+from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME, MAX_TEAM_LIST_LIMIT
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -32,6 +33,7 @@ from litellm.proxy._types import (
     SpendLogsPayload,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CallTypes
 
 try:
     import backoff
@@ -79,6 +81,9 @@ from litellm.proxy.db.create_views import (
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+    UnifiedLLMGuardrails,
+)
 from litellm.proxy.hooks import PROXY_HOOKS, get_proxy_hook
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
@@ -93,7 +98,7 @@ from litellm.types.mcp import (
     MCPPreCallRequestObject,
     MCPPreCallResponseObject,
 )
-from litellm.types.utils import CallTypes, LLMResponseTypes, LoggedLiteLLMParams
+from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -103,6 +108,9 @@ if TYPE_CHECKING:
     Span = Union[_Span, Any]
 else:
     Span = Any
+
+
+unified_guardrail = UnifiedLLMGuardrails()
 
 
 def print_verbose(print_statement):
@@ -391,7 +399,7 @@ class ProxyLogging:
         for callback in litellm.callbacks:
             if isinstance(callback, str):
                 callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                    callback,
+                    cast(_custom_logger_compatible_callbacks_literal, callback),
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
                 )
@@ -783,6 +791,74 @@ class ProxyLogging:
                 raise HTTPException(status_code=400, detail={"error": response})
         return data
 
+    async def _process_guardrail_callback(
+        self,
+        callback: CustomGuardrail,
+        data: dict,
+        user_api_key_dict: Optional[UserAPIKeyAuth],
+        call_type: Literal[
+            "completion",
+            "text_completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+            "pass_through_endpoint",
+            "rerank",
+            "mcp_call",
+            "anthropic_messages",
+        ],
+    ) -> Optional[dict]:
+        """
+        Process a guardrail callback during pre-call hook.
+
+        Args:
+            callback: The CustomGuardrail callback to process
+            data: The request data dictionary
+            user_api_key_dict: User API key authentication details
+            call_type: The type of API call being made
+
+        Returns:
+            Updated data dictionary if guardrail passes, None if guardrail should be skipped
+        """
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        # Determine the event type based on call type
+        event_type = GuardrailEventHooks.pre_call
+        if call_type == "mcp_call":
+            event_type = GuardrailEventHooks.pre_mcp_call
+
+        # Check if the guardrail should run for this request
+        if callback.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return None
+
+        # Execute the appropriate guardrail hook
+        if "apply_guardrail" in type(callback).__dict__:
+            # Use unified guardrail for callbacks with apply_guardrail method
+            data["guardrail_to_apply"] = callback
+            response = await unified_guardrail.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,  # type: ignore
+                cache=self.call_details["user_api_key_cache"],
+                data=data,  # type: ignore
+                call_type=call_type,  # type: ignore
+            )
+        else:
+            # Use the callback's own async_pre_call_hook method
+            response = await callback.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,  # type: ignore
+                cache=self.call_details["user_api_key_cache"],
+                data=data,  # type: ignore
+                call_type=call_type,  # type: ignore
+            )
+
+        # Process the response if one was returned
+        if response is not None:
+            data = await self.process_pre_call_hook_response(
+                response=response, data=data, call_type=call_type
+            )
+
+        return data
+
     # The actual implementation of the function
     @overload
     async def pre_call_hook(
@@ -799,6 +875,7 @@ class ProxyLogging:
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> None:
         pass
@@ -818,6 +895,7 @@ class ProxyLogging:
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> dict:
         pass
@@ -836,6 +914,7 @@ class ProxyLogging:
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[dict]:
         """
@@ -902,33 +981,20 @@ class ProxyLogging:
                 _callback = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        callback
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback  # type: ignore
                 if _callback is not None and isinstance(_callback, CustomGuardrail):
-                    from litellm.types.guardrails import GuardrailEventHooks
-
-                    event_type = GuardrailEventHooks.pre_call
-                    if call_type == "mcp_call":
-                        event_type = GuardrailEventHooks.pre_mcp_call
-
-                    if (
-                        _callback.should_run_guardrail(data=data, event_type=event_type)
-                        is not True
-                    ):
-                        continue
-
-                    response = await _callback.async_pre_call_hook(
+                    result = await self._process_guardrail_callback(
+                        callback=_callback,
+                        data=data,
                         user_api_key_dict=user_api_key_dict,
-                        cache=self.call_details["user_api_key_cache"],
-                        data=data,  # type: ignore
                         call_type=call_type,
                     )
-                    if response is not None:
-                        data = await self.process_pre_call_hook_response(
-                            response=response, data=data, call_type=call_type
-                        )
+                    if result is None:
+                        continue
+                    data = result
 
                 elif (
                     _callback is not None
@@ -1241,7 +1307,7 @@ class ProxyLogging:
                 _callback: Optional[CustomLogger] = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        callback
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback  # type: ignore
@@ -1404,7 +1470,7 @@ class ProxyLogging:
                 _callback: Optional[CustomLogger] = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        callback
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback  # type: ignore
@@ -1419,6 +1485,7 @@ class ProxyLogging:
 
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
+
                 if (
                     callback.should_run_guardrail(
                         data=data, event_type=GuardrailEventHooks.post_call
@@ -1427,11 +1494,19 @@ class ProxyLogging:
                 ):
                     continue
 
-                await callback.async_post_call_success_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    data=data,
-                    response=response,
-                )
+                if "apply_guardrail" in type(callback).__dict__:
+                    data["guardrail_to_apply"] = callback
+                    response = await unified_guardrail.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
+                    )
+                else:
+                    response = await callback.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
+                    )
 
             ############ Handle CustomLogger ###############################
             #################################################################
@@ -1486,7 +1561,7 @@ class ProxyLogging:
                             continue
                     if isinstance(callback, str):
                         _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                            callback
+                            cast(_custom_logger_compatible_callbacks_literal, callback)
                         )
                     else:
                         _callback = callback  # type: ignore
@@ -1526,7 +1601,7 @@ class ProxyLogging:
             _callback: Optional[CustomLogger] = None
             if isinstance(callback, str):
                 _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                    callback
+                    cast(_custom_logger_compatible_callbacks_literal, callback)
                 )
             else:
                 _callback = callback  # type: ignore
@@ -2153,12 +2228,18 @@ class PrismaClient:
                             b.tpm_limit AS litellm_budget_table_tpm_limit,
                             b.rpm_limit AS litellm_budget_table_rpm_limit,
                             b.model_max_budget as litellm_budget_table_model_max_budget,
-                            b.soft_budget as litellm_budget_table_soft_budget
+                            b.soft_budget as litellm_budget_table_soft_budget,
+                            o.metadata as organization_metadata,
+                            b2.max_budget as organization_max_budget,
+                            b2.tpm_limit as organization_tpm_limit,
+                            b2.rpm_limit as organization_rpm_limit
                         FROM "LiteLLM_VerificationToken" AS v
                         LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
                         LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id
                         LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
                         LEFT JOIN "LiteLLM_BudgetTable" AS b ON v.budget_id = b.budget_id
+                        LEFT JOIN "LiteLLM_OrganizationTable" AS o ON v.organization_id = o.organization_id
+                        LEFT JOIN "LiteLLM_BudgetTable" AS b2 ON o.budget_id = b2.budget_id
                         WHERE v.token = '{token}'
                     """
 
@@ -3623,8 +3704,14 @@ def join_paths(base_path: str, route: str) -> str:
     if not route:
         return base_path
 
-    # Join with single slash
-    return f"{base_path}/{route}"
+    # Check if base_path already ends with the route to avoid duplication
+    if base_path.endswith(f"/{route}"):
+        final_path = base_path
+    else:
+        # Join with single slash
+        final_path = f"{base_path}/{route}"
+
+    return final_path
 
 
 def get_custom_url(request_base_url: str, route: Optional[str] = None) -> str:

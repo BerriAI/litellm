@@ -35,11 +35,13 @@ import { MCPServers } from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
 import VectorStoreManagement from "@/components/vector_store_management";
 import UIThemeSettings from "@/components/ui_theme_settings";
+import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
 import useFeatureFlags from "@/hooks/useFeatureFlags";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldTeams from "@/components/OldTeams";
+import { SearchTools } from "@/components/search_tools";
 
 function getCookie(name: string) {
   // Safer cookie read + decoding; handles '=' inside values
@@ -426,6 +428,8 @@ export default function CreateKeyPage() {
                   />
                 ) : page == "ui-theme" ? (
                   <UIThemeSettings userID={userID} userRole={userRole} accessToken={accessToken} />
+                ) : page == "cost-tracking-settings" ? (
+                  <CostTrackingSettings userID={userID} userRole={userRole} accessToken={accessToken} />
                 ) : page == "model-hub-table" ? (
                   <ModelHubTable
                     accessToken={accessToken}
@@ -447,6 +451,7 @@ export default function CreateKeyPage() {
                     userRole={userRole}
                     accessToken={accessToken}
                     modelData={modelData}
+                    premiumUser={premiumUser}
                   />
                 ) : page == "logs" ? (
                   <SpendLogsTable
@@ -459,6 +464,8 @@ export default function CreateKeyPage() {
                   />
                 ) : page == "mcp-servers" ? (
                   <MCPServers accessToken={accessToken} userRole={userRole} userID={userID} />
+                ) : page == "search-tools" ? (
+                  <SearchTools accessToken={accessToken} userRole={userRole} userID={userID} />
                 ) : page == "tag-management" ? (
                   <TagManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                 ) : page == "vector-stores" ? (

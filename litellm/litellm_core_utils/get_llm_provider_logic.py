@@ -279,6 +279,7 @@ def get_llm_provider(  # noqa: PLR0915
             or "ft:gpt-3.5-turbo" in model
             or "ft:gpt-4" in model  # catches ft:gpt-4-0613, ft:gpt-4o
             or model in litellm.openai_image_generation_models
+            or model in litellm.openai_video_generation_models
         ):
             custom_llm_provider = "openai"
         elif model in litellm.open_ai_text_completion_models:
@@ -383,6 +384,8 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "ovhcloud"
         elif model.startswith("lemonade/"):
             custom_llm_provider = "lemonade"
+        elif model.startswith("clarifai/"):
+            custom_llm_provider = "clarifai"
         elif model.startswith("sap/"):
             custom_llm_provider = "sap"
         if not custom_llm_provider:
@@ -794,6 +797,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.LemonadeChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "clarifai":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.ClarifaiConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
 

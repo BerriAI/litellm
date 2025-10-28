@@ -46,6 +46,8 @@ from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAnnotation,
+    ChatCompletionAnnotationURLCitation,
     ChatCompletionResponseMessage,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -215,6 +217,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
+    
+    def _supports_penalty_parameters(self, model: str) -> bool:
+        unsupported_models = ["gemini-2.5-pro-preview-06-05"]
+
+        for pattern in unsupported_models:
+            if model in pattern:
+                return False
+
+        return True
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = [
@@ -229,8 +240,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "response_format",
             "n",
             "stop",
-            "frequency_penalty",
-            "presence_penalty",
             "extra_headers",
             "seed",
             "logprobs",
@@ -239,6 +248,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "parallel_tool_calls",
             "web_search_options",
         ]
+        
+        # Add penalty parameters only for non-preview models
+        if self._supports_penalty_parameters(model):
+            supported_params.extend(["frequency_penalty", "presence_penalty"])
+        
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
@@ -679,9 +693,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     value=value, optional_params=optional_params
                 )
             elif param == "frequency_penalty":
-                optional_params["frequency_penalty"] = value
+                if self._supports_penalty_parameters(model):
+                    optional_params["frequency_penalty"] = value
             elif param == "presence_penalty":
-                optional_params["presence_penalty"] = value
+                if self._supports_penalty_parameters(model):
+                    optional_params["presence_penalty"] = value
             elif param == "logprobs":
                 optional_params["responseLogprobs"] = value
             elif param == "top_logprobs":
@@ -1284,6 +1300,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         from litellm.types.utils import Delta, StreamingChoices
 
+        annotations = chat_completion_message.get("annotations")  # type: ignore
         # create a streaming choice object
         choice = StreamingChoices(
             finish_reason=VertexGeminiConfig._check_finish_reason(
@@ -1296,6 +1313,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 tool_calls=tools,
                 images=image_response,
                 function_call=functions,
+                annotations=annotations,  # type: ignore
             ),
             logprobs=chat_completion_logprobs,
             enhancements=None,
@@ -1344,7 +1362,63 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
 
     @staticmethod
-    def _process_candidates(
+    def _convert_grounding_metadata_to_annotations(
+        grounding_metadata: List[dict],
+        content_text: Optional[str],
+    ) -> List[ChatCompletionAnnotation]:
+        """
+        Convert Vertex AI grounding metadata to OpenAI-style annotations.
+        """
+
+        annotations: List[ChatCompletionAnnotation] = []
+
+        
+        for metadata in grounding_metadata:
+            # Extract groundingSupports - these map text segments to sources
+            grounding_supports = metadata.get("groundingSupports", [])
+            grounding_chunks = metadata.get("groundingChunks", [])
+
+            # Build a map of chunk indices to web URIs
+            chunk_to_uri_map: Dict[int, Dict[str, str]] = {}
+            for idx, chunk in enumerate(grounding_chunks):
+                if "web" in chunk:
+                    web_data = chunk["web"]
+                    chunk_to_uri_map[idx] = {
+                        "url": web_data.get("uri", ""),
+                        "title": web_data.get("title", ""),
+                    }
+
+            # Process each grounding support to create annotations
+            for support in grounding_supports:
+                segment = support.get("segment", {})
+                start_index = segment.get("startIndex")
+                end_index = segment.get("endIndex")
+                
+                # Get the chunk indices for this support
+                chunk_indices = support.get("groundingChunkIndices", [])
+                
+                if start_index is not None and end_index is not None and chunk_indices:
+                    # Use the first chunk's URL for the annotation
+                    first_chunk_idx = chunk_indices[0]
+                    if first_chunk_idx in chunk_to_uri_map:
+                        uri_info = chunk_to_uri_map[first_chunk_idx]
+                        
+                        url_citation: ChatCompletionAnnotationURLCitation = {
+                            "start_index": start_index,
+                            "end_index": end_index,
+                            "url": uri_info["url"],
+                            "title": uri_info["title"],
+                        }
+                        
+                        annotation: ChatCompletionAnnotation = {
+                            "type": "url_citation",
+                            "url_citation": url_citation,
+                        }
+                        annotations.append(annotation)
+        return annotations
+
+    @staticmethod
+    def _process_candidates(  # noqa: PLR0915
         _candidates: List[Candidates],
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict,
@@ -1432,6 +1506,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
                 if reasoning_content is not None:
                     chat_completion_message["reasoning_content"] = reasoning_content
+
+                if candidate_grounding_metadata:
+                    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+                        grounding_metadata=candidate_grounding_metadata,
+                        content_text=content,
+                    )
+                    if annotations:
+                        chat_completion_message["annotations"] = annotations  # type: ignore
                 (
                     functions,
                     tools,
