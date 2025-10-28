@@ -28,6 +28,7 @@ from litellm.types.files import (
     get_file_type_from_extension,
     is_gemini_1_5_accepted_file_type,
 )
+from litellm.types.utils import LlmProviders
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -358,6 +359,17 @@ def _transform_request_body(
         )  # type: ignore
         config_fields = GenerationConfig.__annotations__.keys()
 
+        # If the LiteLLM client sends Gemini-supported parameter "labels", add it
+        # as "labels" field to the request sent to the Gemini backend.
+        labels: Optional[dict[str, str]] = optional_params.pop("labels", None)
+        # If the LiteLLM client sends OpenAI-supported parameter "metadata", add it
+        # as "labels" field to the request sent to the Gemini backend.
+        if labels is None and "metadata" in litellm_params:
+            metadata = litellm_params["metadata"]
+            if "requester_metadata" in metadata:
+                rm = metadata["requester_metadata"]
+                labels = {k: v for k, v in rm.items() if type(v) is str}
+
         filtered_params = {
             k: v for k, v in optional_params.items() if k in config_fields
         }
@@ -378,6 +390,9 @@ def _transform_request_body(
             data["generationConfig"] = generation_config
         if cached_content is not None:
             data["cachedContent"] = cached_content
+        # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
+        if labels and custom_llm_provider != LlmProviders.GEMINI:
+            data["labels"] = labels
     except Exception as e:
         raise e
 
@@ -513,3 +528,5 @@ def _transform_system_message(
         return SystemInstructions(parts=system_content_blocks), messages
 
     return None, messages
+
+
