@@ -56,6 +56,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         api_endpoint: Optional[str] = None,
         **kwargs,
     ):
+        # Set supported event hooks if not already provided
+        if "event_hook" not in kwargs:
+            kwargs["event_hook"] = [
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.during_call,
+                GuardrailEventHooks.post_call,
+            ]
+        
         # Initialize parent classes first
         super().__init__(**kwargs)
         VertexBase.__init__(self)
