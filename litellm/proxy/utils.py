@@ -941,7 +941,7 @@ class ProxyLogging:
                 ):
                     result = await self._process_guardrail_callback(
                         callback=_callback,
-                        data=data,
+                        data=data,  # type: ignore
                         user_api_key_dict=user_api_key_dict,
                         call_type=call_type,
                     )
