@@ -369,12 +369,13 @@ def test_map_openai_params_style(azure_tts_config: AzureAVATextToSpeechConfig):
     """
     Test passing through Azure style parameter
     """
-    optional_params = {"style": "cheerful"}
+    optional_params = {}
     
     mapped_voice, mapped_params = azure_tts_config.map_openai_params(
         model="azure-tts",
         optional_params=optional_params,
-        drop_params=False
+        drop_params=False,
+        kwargs={"style": "cheerful"}
     )
     
     assert mapped_params["style"] == "cheerful"
@@ -384,16 +385,17 @@ def test_map_openai_params_style_and_role(azure_tts_config: AzureAVATextToSpeech
     """
     Test passing through Azure style, styledegree, and role parameters
     """
-    optional_params = {
-        "style": "cheerful",
-        "styledegree": "2",
-        "role": "SeniorFemale"
-    }
+    optional_params = {}
     
     mapped_voice, mapped_params = azure_tts_config.map_openai_params(
         model="azure-tts",
         optional_params=optional_params,
-        drop_params=False
+        drop_params=False,
+        kwargs={
+            "style": "cheerful",
+            "styledegree": "2",
+            "role": "SeniorFemale"
+        }
     )
     
     assert mapped_params["style"] == "cheerful"
@@ -405,12 +407,13 @@ def test_map_openai_params_lang(azure_tts_config: AzureAVATextToSpeechConfig):
     """
     Test passing through Azure lang parameter for multilingual voices
     """
-    optional_params = {"lang": "es-ES"}
+    optional_params = {}
     
     mapped_voice, mapped_params = azure_tts_config.map_openai_params(
         model="azure-tts",
         optional_params=optional_params,
-        drop_params=False
+        drop_params=False,
+        kwargs={"lang": "es-ES"}
     )
     
     assert mapped_params["lang"] == "es-ES"

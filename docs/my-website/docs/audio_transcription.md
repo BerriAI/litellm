@@ -7,12 +7,13 @@ import TabItem from '@theme/TabItem';
 
 | Feature | Supported | Notes | 
 |-------|-------|-------|
-| Cost Tracking | ✅ |  |
-| Logging | ✅ | works across all integrations |
+| Cost Tracking | ✅ | Works with all supported models |
+| Logging | ✅ | Works across all integrations |
 | End-user Tracking | ✅ | |
-| Fallbacks | ✅ | between supported models |
-| Loadbalancing | ✅ | between supported models |
-| Support llm providers | `openai`, `azure`, `vertex_ai`, `gemini`, `deepgram`, `groq`, `fireworks_ai` | |
+| Fallbacks | ✅ | Works between supported models |
+| Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to output transcribed text (non-streaming only) |
+| Supported Providers | `openai`, `azure`, `vertex_ai`, `gemini`, `deepgram`, `groq`, `fireworks_ai` | |
 
 ## Quick Start
 

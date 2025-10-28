@@ -279,3 +279,89 @@ async def test_redaction_with_streaming_response():
         "logged standard logging payload for streaming with coroutine handling",
         json.dumps(standard_logging_payload, indent=2),
     )
+
+
+@pytest.mark.asyncio
+async def test_disable_redaction_header_responses_api():
+    """
+    Test that LiteLLM-Disable-Message-Redaction header works for Responses API.
+    
+    This test verifies the fix for the issue where the header wasn't respected
+    because Responses API uses 'litellm_metadata' instead of 'metadata'.
+    """
+    litellm.turn_off_message_logging = True
+    test_custom_logger = TestCustomLogger()
+    litellm.callbacks = [test_custom_logger]
+    
+    # Mock a ResponsesAPIResponse-style response
+    mock_response = {
+        "output": [{"text": "This is a test response"}],
+        "model": "gpt-3.5-turbo",
+        "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10}
+    }
+    
+    # Pass the header via litellm_metadata (as the proxy does for Responses API)
+    response = await litellm.aresponses(
+        model="gpt-3.5-turbo",
+        input="hi",
+        mock_response=mock_response,
+        litellm_metadata={
+            "headers": {
+                "litellm-disable-message-redaction": "true"
+            }
+        }
+    )
+
+    await asyncio.sleep(1)
+    standard_logging_payload = test_custom_logger.logged_standard_logging_payload
+    assert standard_logging_payload is not None
+    
+    # Verify that messages are NOT redacted because the header was set
+    print(
+        "logged standard logging payload for ResponsesAPI with disable header",
+        json.dumps(standard_logging_payload, indent=2, default=str),
+    )
+    
+    # The content should NOT be redacted
+    assert standard_logging_payload["response"] != {"text": "redacted-by-litellm"}
+    assert standard_logging_payload["messages"][0]["content"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_redaction_with_metadata_completion_api():
+    """
+    Test redaction behavior with metadata field for Completion API.
+    
+    This test verifies that get_metadata_variable_name_from_kwargs properly
+    selects the appropriate metadata field for header detection.
+    """
+    litellm.turn_off_message_logging = True
+    test_custom_logger = TestCustomLogger()
+    litellm.callbacks = [test_custom_logger]
+    
+    # When metadata is passed, the system uses get_metadata_variable_name_from_kwargs
+    # to determine which field to check
+    response = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hello",
+        metadata={
+            "headers": {
+                "litellm-disable-message-redaction": "true"
+            }
+        }
+    )
+
+    await asyncio.sleep(1)
+    standard_logging_payload = test_custom_logger.logged_standard_logging_payload
+    assert standard_logging_payload is not None
+    
+    print(
+        "logged standard logging payload for Completion API with metadata",
+        json.dumps(standard_logging_payload, indent=2),
+    )
+    
+    # Verify the helper function works correctly - with get_metadata_variable_name_from_kwargs,
+    # the system checks the appropriate field for headers
+    assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
+    assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"

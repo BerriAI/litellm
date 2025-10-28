@@ -20,6 +20,10 @@ context_window_test_cases = [
     ),
     ("Your prompt is longer than the model's context length of 2048.", True),
     ("AWS Bedrock Error: The request payload size has exceed context limit.", True),
+    (
+        "Input tokens exceed the configured limit of 272000 tokens. Your messages resulted in 509178 tokens. Please reduce the length of the messages.",
+        True,
+    ),
     ("input length and `max_tokens` exceed context limit", True),
     # Test case insensitivity
     ("ERROR: THIS MODEL'S MAXIMUM CONTEXT LENGTH IS 1024.", True),

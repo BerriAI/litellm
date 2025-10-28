@@ -32,17 +32,20 @@ const sidebars = {
       items: [
         "proxy/guardrails/quick_start",
         ...[
+          "adding_provider/adding_guardrail_support",
           "proxy/guardrails/aim_security",
           "proxy/guardrails/aporia_api",
           "proxy/guardrails/azure_content_guardrail",
           "proxy/guardrails/bedrock",
           "proxy/guardrails/enkryptai",
+          "proxy/guardrails/ibm_guardrails",
           "proxy/guardrails/grayswan",
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
           "proxy/guardrails/model_armor",
           "proxy/guardrails/noma_security",
+          "proxy/guardrails/dynamoai",
           "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pillar_security",
@@ -338,6 +341,7 @@ const sidebars = {
             "image_variations",
           ]
         },
+        "videos",
         {
           type: "category",
           label: "/mcp - Model Context Protocol",
@@ -372,6 +376,7 @@ const sidebars = {
               items: [
                 "pass_through/vertex_ai",
                 "pass_through/vertex_ai_live_websocket",
+                "pass_through/vertex_ai_search_datastores",
               ]
             },
             "pass_through/vllm",
@@ -398,6 +403,7 @@ const sidebars = {
           type: "category",
           label: "/vector_stores",
           items: [
+            "vector_stores/create",
             "vector_stores/search",
           ]
         },
@@ -448,6 +454,7 @@ const sidebars = {
             "providers/azure_ocr",
             "providers/azure_ai_speech",
             "providers/azure_ai_img",
+            "providers/azure_ai_vector_stores",
           ]
         },
         {
@@ -479,6 +486,8 @@ const sidebars = {
           items: [
             "providers/bedrock",
             "providers/bedrock_embedding",
+            "providers/bedrock_image_gen",
+            "providers/bedrock_rerank",
             "providers/bedrock_agents",
             "providers/bedrock_batches",
             "providers/bedrock_vector_store",
@@ -704,7 +713,7 @@ const sidebars = {
           label: "Adding Providers",
           items: [
             "adding_provider/directory_structure",
-            "adding_provider/new_rerank_provider"],
+            "adding_provider/new_rerank_provider",
         },
         "extras/contributing",
         "contributing",

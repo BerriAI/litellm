@@ -13,6 +13,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 
 router = APIRouter(
     tags=["mcp"],
@@ -90,19 +91,18 @@ async def authorize(
         global_mcp_server_manager,
     )
 
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(client_id)
+    if mcp_server_name:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+    else:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(client_id)
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     if mcp_server.auth_type != "oauth2":
         raise HTTPException(status_code=400, detail="MCP server is not OAuth2")
-    if mcp_server.client_id is None:
-        raise HTTPException(status_code=400, detail="MCP server client id is not set")
     if mcp_server.authorization_url is None:
         raise HTTPException(
             status_code=400, detail="MCP server authorization url is not set"
         )
-    if mcp_server.scopes is None:
-        raise HTTPException(status_code=400, detail="MCP server scopes is not set")
 
     # Parse it to remove any existing query
     parsed = urlparse(redirect_uri)
@@ -117,15 +117,17 @@ async def authorize(
         code_challenge_method=code_challenge_method,
         client_redirect_uri=redirect_uri,
     )
-
     # Build params for upstream OAuth provider
     params = {
-        "client_id": mcp_server.client_id,
+        "client_id": client_id if client_id else mcp_server.client_id,
         "redirect_uri": f"{request_base_url}/callback",
-        "scope": scope or " ".join(mcp_server.scopes),
         "state": encoded_state,
         "response_type": response_type or "code",
     }
+    if scope:
+        params["scope"] = scope
+    elif mcp_server.scopes:
+        params["scope"] = " ".join(mcp_server.scopes)
 
     # Forward PKCE parameters if present
     if code_challenge:
@@ -136,6 +138,7 @@ async def authorize(
     return RedirectResponse(f"{mcp_server.authorization_url}?{urlencode(params)}")
 
 
+@router.post("/{mcp_server_name}/token")
 @router.post("/token")
 async def token_endpoint(
     request: Request,
@@ -143,8 +146,9 @@ async def token_endpoint(
     code: str = Form(None),
     redirect_uri: str = Form(None),
     client_id: str = Form(...),
-    client_secret: str = Form(...),
+    client_secret: Optional[str] = Form(None),
     code_verifier: str = Form(None),
+    mcp_server_name: Optional[str] = None,
 ):
     """
     Accept the authorization code from client and exchange it for OAuth token.
@@ -159,7 +163,11 @@ async def token_endpoint(
         global_mcp_server_manager,
     )
 
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(client_id)
+    if mcp_server_name:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+    else:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(client_id)
+
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
 
@@ -174,8 +182,8 @@ async def token_endpoint(
     # Build token request data
     token_data = {
         "grant_type": "authorization_code",
-        "client_id": mcp_server.client_id,
-        "client_secret": mcp_server.client_secret,
+        "client_id": client_id if client_id else mcp_server.client_id,
+        "client_secret": client_secret if client_secret else mcp_server.client_secret,
         "code": code,
         "redirect_uri": f"{proxy_base_url}/callback",
     }
@@ -266,10 +274,22 @@ async def oauth_authorization_server_mcp(
     request: Request, mcp_server_name: Optional[str] = None
 ):
     request_base_url = str(request.base_url).rstrip("/")
+
+    authorization_endpoint = (
+        f"{request_base_url}/{mcp_server_name}/authorize"
+        if mcp_server_name
+        else f"{request_base_url}/authorize"
+    )
+    token_endpoint = (
+        f"{request_base_url}/{mcp_server_name}/token"
+        if mcp_server_name
+        else f"{request_base_url}/token"
+    )
+
     return {
         "issuer": request_base_url,  # point to your proxy
-        "authorization_endpoint": f"{request_base_url}/authorize",
-        "token_endpoint": f"{request_base_url}/token",
+        "authorization_endpoint": authorization_endpoint,
+        "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
         "code_challenge_methods_supported": ["S256"],
@@ -296,11 +316,64 @@ async def oauth_authorization_server_root(
 @router.post("/{mcp_server_name}/register")
 @router.post("/register")
 async def register_client(request: Request, mcp_server_name: Optional[str] = None):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
     request_base_url = str(request.base_url).rstrip("/")
 
-    # return fixed GitHub client credentials
-    return {
+    request_data = await _read_request_body(request=request)
+    data: dict = {**request_data}
+
+    dummy_return = {
         "client_id": mcp_server_name or "dummy_client",
         "client_secret": "dummy",
-        "redirect_uris": [f"{request_base_url}/mcp/callback"],
+        "redirect_uris": [f"{request_base_url}/callback"],
     }
+    if not mcp_server_name:
+        return dummy_return
+
+    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+    if mcp_server is None:
+        return dummy_return
+
+    if mcp_server.client_id and mcp_server.client_secret:
+        return {
+            "client_id": mcp_server.client_id,
+            "client_secret": mcp_server.client_secret,
+            "redirect_uris": [f"{request_base_url}/callback"],
+        }
+
+    if mcp_server.authorization_url is None:
+        raise HTTPException(
+            status_code=400, detail="MCP server authorization url is not set"
+        )
+
+    if mcp_server.registration_url is None:
+        return dummy_return
+
+    register_data = {
+        "client_name": data.get("client_name", ""),
+        "redirect_uris": [f"{request_base_url}/callback"],
+        "grant_types": data.get("grant_types", []),
+        "response_types": data.get("response_types", []),
+        "token_endpoint_auth_method": data.get("token_endpoint_auth_method", ""),
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    async_client = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.Oauth2Register
+    )
+    response = await async_client.post(
+        mcp_server.registration_url,
+        headers=headers,
+        json=register_data,
+    )
+    response.raise_for_status()
+
+    token_response = response.json()
+
+    return JSONResponse(token_response)

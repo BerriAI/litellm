@@ -8,7 +8,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 
 import json
 import os
-from typing import Any, Optional, Union, cast
+from typing import Any, Optional, Tuple, Union, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -498,26 +498,26 @@ BEDROCK_STREAMING_ACTIONS = {"invoke-with-response-stream", "converse-stream"}
 def _extract_model_from_bedrock_endpoint(endpoint: str) -> str:
     """
     Extract model name from Bedrock endpoint path.
-    
+
     Handles model names with slashes (e.g., aws/anthropic/bedrock-claude-3-5-sonnet-v1)
     by finding the action in the endpoint and extracting everything between "model" and the action.
-    
+
     Args:
         endpoint: The endpoint path (e.g., "/model/aws/anthropic/model-name/invoke")
-        
+
     Returns:
         The extracted model name (e.g., "aws/anthropic/model-name")
-        
+
     Raises:
         ValueError: If model cannot be extracted from endpoint
     """
     try:
         endpoint_parts = endpoint.split("/")
-        
+
         if "application-inference-profile" in endpoint:
             # Format: model/application-inference-profile/{profile-id}/{action}
             return "/".join(endpoint_parts[1:3])
-        
+
         # Format: model/{modelId}/{action}
         # Find the index of the action in the endpoint parts
         action_index = None
@@ -525,14 +525,14 @@ def _extract_model_from_bedrock_endpoint(endpoint: str) -> str:
             if part in BEDROCK_ENDPOINT_ACTIONS:
                 action_index = idx
                 break
-        
+
         if action_index is not None and action_index > 1:
             # Join all parts between "model" and the action
             return "/".join(endpoint_parts[1:action_index])
-        
+
         # Fallback to taking everything after "model" if no action found
         return "/".join(endpoint_parts[1:])
-        
+
     except Exception as e:
         raise ValueError(
             f"Model missing from endpoint. Expected format: /model/{{modelId}}/{{action}}. Got: {endpoint}"
@@ -545,107 +545,86 @@ async def handle_bedrock_passthrough_router_model(
     request: Request,
     request_body: dict,
     llm_router: litellm.Router,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj,
+    general_settings: dict,
+    proxy_config,
+    select_data_generator,
+    user_model: Optional[str],
+    user_temperature: Optional[float],
+    user_request_timeout: Optional[float],
+    user_max_tokens: Optional[int],
+    user_api_base: Optional[str],
+    version: Optional[str],
 ) -> Union[Response, StreamingResponse]:
     """
     Handle Bedrock passthrough for router models (models defined in config.yaml).
-    
-    This helper delegates to llm_router.allm_passthrough_route for proper credential
-    and configuration management from the router.
-    
+
+    Uses the same common processing path as non-router models to ensure
+    metadata and hooks are properly initialized.
+
     Args:
         model: The router model name (e.g., "aws/anthropic/bedrock-claude-3-5-sonnet-v1")
         endpoint: The Bedrock endpoint path (e.g., "/model/{modelId}/invoke")
         request: The FastAPI request object
         request_body: The parsed request body
         llm_router: The LiteLLM router instance
-        
+        user_api_key_dict: The user API key authentication dictionary
+        (additional args for common processing)
+
     Returns:
         Response or StreamingResponse depending on endpoint type
     """
+    from fastapi import Response as FastAPIResponse
+
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
     # Detect streaming based on endpoint
     is_streaming = any(action in endpoint for action in BEDROCK_STREAMING_ACTIONS)
-    
+
     verbose_proxy_logger.debug(
         f"Bedrock router passthrough: model='{model}', endpoint='{endpoint}', streaming={is_streaming}"
     )
-    
-    # Call router passthrough
-    try:
-        result = await llm_router.allm_passthrough_route(
-            model=model,
-            method=request.method,
-            endpoint=endpoint,
-            request_query_params=request.query_params,
-            request_headers=dict(request.headers),
-            stream=is_streaming,
-            content=None,
-            data=None,
-            files=None,
-            json=(
-                request_body
-                if request.headers.get("content-type") == "application/json"
-                else None
-            ),
-            params=None,
-            headers=None,
-            cookies=None,
-        )
-    except httpx.HTTPStatusError as e:
-        # Handle HTTP errors from the provider by converting to HTTPException
-        error_body = await e.response.aread()
-        error_text = error_body.decode("utf-8")
-        
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail={"error": error_text},
-        )
-    except Exception as e:
-        from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-        # If it's a BaseLLMException (from non-HTTP errors), convert to HTTPException
-        if isinstance(e, BaseLLMException):
-            raise HTTPException(
-                status_code=e.status_code,
-                detail={"error": e.message},
-            )
-        # Re-raise any other exceptions
-        raise e
-    
-    # Handle streaming response
-    if is_streaming:
-        import inspect
-        
-        if inspect.isasyncgen(result):
-            # AsyncGenerator case
-            return StreamingResponse(
-                content=result,
-                status_code=200,
-                headers={"content-type": "application/vnd.amazon.eventstream"},
-            )
-        else:
-            # httpx.Response case
-            result = cast(httpx.Response, result)
-            return StreamingResponse(
-                content=result.aiter_bytes(),
-                status_code=result.status_code,
-                headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                    headers=result.headers,
-                    custom_headers=None,
-                ),
-            )
-    
-    # Handle non-streaming response
-    result = cast(httpx.Response, result)
-    content = await result.aread()
-    
-    return Response(
-        content=content,
-        status_code=result.status_code,
-        headers=HttpPassThroughEndpointHelpers.get_response_headers(
-            headers=result.headers,
-            custom_headers=None,
-        ),
-    )
+    # Use the common processing path (same as non-router models)
+    # This ensures all metadata, hooks, and logging are properly initialized
+    data: Dict[str, Any] = {}
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+
+    data["model"] = model
+    data["method"] = request.method
+    data["endpoint"] = endpoint
+    data["data"] = request_body
+    data["custom_llm_provider"] = "bedrock"
+
+    # Use the common passthrough processing to handle metadata and hooks
+    # This also handles all response formatting (streaming/non-streaming) and exceptions
+    try:
+        result = await base_llm_response_processor.base_passthrough_process_llm_request(
+            request=request,
+            fastapi_response=FastAPIResponse(),
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+        return result
+    except Exception as e:
+        # Use common exception handling
+        raise await base_llm_response_processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
 
 async def handle_bedrock_count_tokens(
@@ -726,9 +705,9 @@ async def bedrock_llm_proxy_route(
 ):
     """
     Handles Bedrock LLM API calls.
-    
+
     Supports both direct Bedrock models and router models from config.yaml.
-    
+
     Endpoints:
     - /model/{modelId}/invoke
     - /model/{modelId}/invoke-with-response-stream
@@ -778,6 +757,7 @@ async def bedrock_llm_proxy_route(
     )
 
     # If router model, use dedicated router passthrough handler
+    # This uses the same common processing path as non-router models
     if is_router_model and llm_router:
         return await handle_bedrock_passthrough_router_model(
             model=model,
@@ -785,16 +765,27 @@ async def bedrock_llm_proxy_route(
             request=request,
             request_body=request_body,
             llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
         )
 
     # Fall back to existing implementation for direct Bedrock models
     verbose_proxy_logger.debug(
         f"Bedrock passthrough: Using direct Bedrock model '{model}' for endpoint '{endpoint}'"
     )
-    
+
     data: Dict[str, Any] = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
-    
+
     data["method"] = request.method
     data["endpoint"] = endpoint
     data["data"] = request_body
@@ -1170,18 +1161,177 @@ def get_vertex_pass_through_handler(
         raise ValueError(f"Invalid call type: {call_type}")
 
 
+def _override_vertex_params_from_router_credentials(
+    router_credentials: Optional[Any],
+    vertex_project: Optional[str],
+    vertex_location: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Override vertex_project and vertex_location with values from router_credentials if available.
+
+    Args:
+        router_credentials: Optional vector store credentials from registry (LiteLLM_ManagedVectorStore)
+        vertex_project: Current vertex project ID (from URL)
+        vertex_location: Current vertex location (from URL)
+
+    Returns:
+        Tuple of (vertex_project, vertex_location) with overridden values if applicable
+    """
+    if router_credentials is None:
+        return vertex_project, vertex_location
+
+    verbose_proxy_logger.debug(
+        "Using vector store credentials to override vertex project and location"
+    )
+
+    litellm_params = router_credentials.get("litellm_params", {})
+    if not litellm_params:
+        verbose_proxy_logger.warning(
+            "Vector store credentials found but litellm_params is empty"
+        )
+        return vertex_project, vertex_location
+
+    # Extract vertex_project and vertex_location from litellm_params
+    vector_store_project = litellm_params.get("vertex_project")
+    vector_store_location = litellm_params.get("vertex_location")
+
+    if vector_store_project:
+        verbose_proxy_logger.debug(
+            "Overriding vertex_project from URL (%s) with vector store value: %s",
+            vertex_project,
+            vector_store_project,
+        )
+        vertex_project = vector_store_project
+    else:
+        verbose_proxy_logger.warning(
+            "Vector store credentials found but missing vertex_project in litellm_params"
+        )
+
+    if vector_store_location:
+        verbose_proxy_logger.debug(
+            "Overriding vertex_location from URL (%s) with vector store value: %s",
+            vertex_location,
+            vector_store_location,
+        )
+        vertex_location = vector_store_location
+    else:
+        verbose_proxy_logger.warning(
+            "Vector store credentials found but missing vertex_location in litellm_params"
+        )
+
+    return vertex_project, vertex_location
+
+
+async def _prepare_vertex_auth_headers(
+    request: Request,
+    vertex_credentials: Optional[Any],
+    router_credentials: Optional[Any],
+    vertex_project: Optional[str],
+    vertex_location: Optional[str],
+    base_target_url: Optional[str],
+    get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
+) -> Tuple[dict, Optional[str], bool, Optional[str], Optional[str]]:
+    """
+    Prepare authentication headers for Vertex AI pass-through requests.
+
+    Args:
+        request: FastAPI request object
+        vertex_credentials: Vertex AI credentials from config
+        router_credentials: Optional vector store credentials from registry
+        vertex_project: Vertex project ID
+        vertex_location: Vertex location
+        base_target_url: Base URL for the Vertex AI service
+        get_vertex_pass_through_handler: Handler for the specific Vertex AI service
+
+    Returns:
+        Tuple containing:
+            - headers: dict - Authentication headers to use
+            - base_target_url: Optional[str] - Updated base target URL
+            - headers_passed_through: bool - Whether headers were passed through from request
+            - vertex_project: Optional[str] - Updated vertex project ID
+            - vertex_location: Optional[str] - Updated vertex location
+    """
+    vertex_llm_base = VertexBase()
+    headers_passed_through = False
+
+    # Use headers from the incoming request if no vertex credentials are found
+    if (
+        vertex_credentials is None or vertex_credentials.vertex_project is None
+    ) and router_credentials is None:
+        headers = dict(request.headers) or {}
+        headers_passed_through = True
+        verbose_proxy_logger.debug(
+            "default_vertex_config  not set, incoming request headers %s", headers
+        )
+        headers.pop("content-length", None)
+        headers.pop("host", None)
+    else:
+        if router_credentials is not None:
+            vertex_credentials_str = None
+        elif vertex_credentials is not None:
+            vertex_project = vertex_credentials.vertex_project
+            vertex_location = vertex_credentials.vertex_location
+            vertex_credentials_str = vertex_credentials.vertex_credentials
+        else:
+            raise ValueError("No vertex credentials found")
+
+        _auth_header, vertex_project = await vertex_llm_base._ensure_access_token_async(
+            credentials=vertex_credentials_str,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai_beta",
+        )
+
+        auth_header, _ = vertex_llm_base._get_token_and_url(
+            model="",
+            auth_header=_auth_header,
+            gemini_api_key=None,
+            vertex_credentials=vertex_credentials_str,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            stream=False,
+            custom_llm_provider="vertex_ai_beta",
+            api_base="",
+        )
+
+        headers = {
+            "Authorization": f"Bearer {auth_header}",
+        }
+
+        if base_target_url is not None:
+            base_target_url = get_vertex_pass_through_handler.update_base_target_url_with_credential_location(
+                base_target_url, vertex_location
+            )
+
+    return (
+        headers,
+        base_target_url,
+        headers_passed_through,
+        vertex_project,
+        vertex_location,
+    )
+
+
 async def _base_vertex_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    router_credentials: Optional[Any] = None,
 ):
     """
     Base function for Vertex AI passthrough routes.
     Handles common logic for all Vertex AI services.
 
     Default base_target_url is `https://{vertex_location}-aiplatform.googleapis.com/`
+
+    Args:
+        endpoint: The endpoint path
+        request: FastAPI request object
+        fastapi_response: FastAPI response object
+        get_vertex_pass_through_handler: Handler for the specific Vertex AI service
+        user_api_key_dict: User API key authentication dict
+        router_credentials: Optional vector store credentials from registry (LiteLLM_ManagedVectorStore)
     """
     from litellm.llms.vertex_ai.common_utils import (
         construct_target_url,
@@ -1207,6 +1357,14 @@ async def _base_vertex_proxy_route(
 
     vertex_project: Optional[str] = get_vertex_project_id_from_url(endpoint)
     vertex_location: Optional[str] = get_vertex_location_from_url(endpoint)
+
+    # Override with vector store credentials if available
+    vertex_project, vertex_location = _override_vertex_params_from_router_credentials(
+        router_credentials=router_credentials,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+    )
+
     vertex_credentials = passthrough_endpoint_router.get_vertex_credentials(
         project_id=vertex_project,
         location=vertex_location,
@@ -1216,46 +1374,22 @@ async def _base_vertex_proxy_route(
         vertex_location
     )
 
-    headers_passed_through = False
-    # Use headers from the incoming request if no vertex credentials are found
-    if vertex_credentials is None or vertex_credentials.vertex_project is None:
-        headers = dict(request.headers) or {}
-        headers_passed_through = True
-        verbose_proxy_logger.debug(
-            "default_vertex_config  not set, incoming request headers %s", headers
-        )
-        headers.pop("content-length", None)
-        headers.pop("host", None)
-    else:
-        vertex_project = vertex_credentials.vertex_project
-        vertex_location = vertex_credentials.vertex_location
-        vertex_credentials_str = vertex_credentials.vertex_credentials
-
-        _auth_header, vertex_project = await vertex_llm_base._ensure_access_token_async(
-            credentials=vertex_credentials_str,
-            project_id=vertex_project,
-            custom_llm_provider="vertex_ai_beta",
-        )
-
-        auth_header, _ = vertex_llm_base._get_token_and_url(
-            model="",
-            auth_header=_auth_header,
-            gemini_api_key=None,
-            vertex_credentials=vertex_credentials_str,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            stream=False,
-            custom_llm_provider="vertex_ai_beta",
-            api_base="",
-        )
-
-        headers = {
-            "Authorization": f"Bearer {auth_header}",
-        }
-
-        base_target_url = get_vertex_pass_through_handler.update_base_target_url_with_credential_location(
-            base_target_url, vertex_location
-        )
+    # Prepare authentication headers
+    (
+        headers,
+        base_target_url,
+        headers_passed_through,
+        vertex_project,
+        vertex_location,
+    ) = await _prepare_vertex_auth_headers(  # type: ignore
+        request=request,
+        vertex_credentials=vertex_credentials,
+        router_credentials=router_credentials,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        base_target_url=base_target_url,
+        get_vertex_pass_through_handler=get_vertex_pass_through_handler,
+    )
 
     if base_target_url is None:
         base_target_url = get_vertex_base_url(vertex_location)
@@ -1323,6 +1457,36 @@ async def vertex_discovery_proxy_route(
 
     Target url: `https://discoveryengine.googleapis.com`
     """
+    import re
+
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+
+    # Extract vector store ID from endpoint if present (e.g., dataStores/test-litellm-app_1761094730750)
+    vector_store_credentials: Optional[LiteLLM_ManagedVectorStore] = None
+    vector_store_id_match = re.search(r"dataStores/([^/]+)", endpoint)
+
+    if vector_store_id_match:
+        vector_store_id = vector_store_id_match.group(1)
+        verbose_proxy_logger.debug(
+            "Extracted vector store ID from endpoint: %s", vector_store_id
+        )
+
+        # Retrieve vector store credentials from the registry
+        vector_store_credentials = (
+            passthrough_endpoint_router.get_vector_store_credentials(
+                vector_store_id=vector_store_id
+            )
+        )
+
+        if vector_store_credentials:
+            verbose_proxy_logger.debug(
+                "Found vector store credentials for ID: %s", vector_store_id
+            )
+        else:
+            verbose_proxy_logger.warning(
+                "Vector store ID %s found in endpoint but no credentials found in registry",
+                vector_store_id,
+            )
 
     discovery_handler = get_vertex_pass_through_handler(call_type="discovery")
     return await _base_vertex_proxy_route(
@@ -1330,6 +1494,7 @@ async def vertex_discovery_proxy_route(
         request=request,
         fastapi_response=fastapi_response,
         get_vertex_pass_through_handler=discovery_handler,
+        router_credentials=vector_store_credentials,
     )
 
 
