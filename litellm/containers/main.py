@@ -1,39 +1,38 @@
 import asyncio
 import contextvars
-from functools import partial
-from typing import Any, Coroutine, Literal, Optional, Union, overload, Dict, List
-
 import json
+from functools import partial
+from typing import Any, Coroutine, Dict, List, Literal, Optional, Union, overload
+
 import litellm
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
+from litellm.containers.utils import ContainerRequestUtils
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
+from litellm.main import base_llm_http_handler
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
     ContainerListOptionalRequestParams,
+    ContainerListResponse,
     ContainerObject,
     DeleteContainerResult,
-    ContainerListResponse,
 )
-from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
-from litellm.utils import client, ProviderConfigManager
-from litellm.types.utils import CallTypes
 from litellm.types.router import GenericLiteLLMParams
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.containers.utils import ContainerRequestUtils
-from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
-from litellm.main import base_llm_http_handler
+from litellm.types.utils import CallTypes
+from litellm.utils import ProviderConfigManager, client
 
 # Default model for container operations - can be any provider that supports containers
 DEFAULT_CONTAINER_ENDPOINT_MODEL = "openai/gpt-4"
 
 __all__ = [
-    "create_container",
     "acreate_container",
-    "list_containers",
-    "alist_containers",
-    "retrieve_container",
-    "aretrieve_container",
-    "delete_container",
     "adelete_container",
+    "alist_containers",
+    "aretrieve_container",
+    "create_container",
+    "delete_container",
+    "list_containers",
+    "retrieve_container",
 ]
 
 ##### Container Create #######################
@@ -52,8 +51,7 @@ async def acreate_container(
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> ContainerObject:
-    """
-    Asynchronously calls the `create_container` function with the given arguments and keyword arguments.
+    """Asynchronously calls the `create_container` function with the given arguments and keyword arguments.
 
     Parameters:
     - `name` (str): Name of the container to create
@@ -147,7 +145,7 @@ def create_container(
 
 
 @client
-def create_container(  # noqa: PLR0915
+def create_container(
     name: str,
     expires_after: Optional[Dict[str, Any]] = None,
     file_ids: Optional[List[str]] = None,
@@ -163,8 +161,7 @@ def create_container(  # noqa: PLR0915
     ContainerObject,
     Coroutine[Any, Any, ContainerObject],
 ]:
-    """
-    Create a container using the OpenAI Container API.
+    """Create a container using the OpenAI Container API.
 
     Currently supports OpenAI
 
@@ -182,11 +179,11 @@ def create_container(  # noqa: PLR0915
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
-        mock_response = kwargs.get("mock_response", None)
+        mock_response = kwargs.get("mock_response")
         if mock_response is not None:
             if isinstance(mock_response, str):
                 mock_response = json.loads(mock_response)
@@ -244,7 +241,7 @@ def create_container(  # noqa: PLR0915
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
         )
-        
+
     except Exception as e:
         raise litellm.exception_type(
             model="",
@@ -270,8 +267,7 @@ async def alist_containers(
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> ContainerListResponse:
-    """
-    Asynchronously list containers.
+    """Asynchronously list containers.
 
     Parameters:
     - `after` (Optional[str]): A cursor for pagination
@@ -364,7 +360,7 @@ def list_containers(
 
 
 @client
-def list_containers(  # noqa: PLR0915
+def list_containers(
     after: Optional[str] = None,
     limit: Optional[int] = None,
     order: Optional[str] = None,
@@ -380,15 +376,14 @@ def list_containers(  # noqa: PLR0915
     ContainerListResponse,
     Coroutine[Any, Any, ContainerListResponse],
 ]:
-    """
-    List containers using the OpenAI Container API.
+    """List containers using the OpenAI Container API.
 
     Currently supports OpenAI
     """
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
 
         # get llm provider logic
@@ -458,8 +453,7 @@ async def aretrieve_container(
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> ContainerObject:
-    """
-    Asynchronously retrieve a container.
+    """Asynchronously retrieve a container.
 
     Parameters:
     - `container_id` (str): The ID of the container to retrieve
@@ -544,7 +538,7 @@ def retrieve_container(
 
 
 @client
-def retrieve_container(  # noqa: PLR0915
+def retrieve_container(
     container_id: str,
     timeout=600,  # default to 10 minutes
     custom_llm_provider: Literal["openai"] = "openai",
@@ -558,15 +552,14 @@ def retrieve_container(  # noqa: PLR0915
     ContainerObject,
     Coroutine[Any, Any, ContainerObject],
 ]:
-    """
-    Retrieve a container using the OpenAI Container API.
+    """Retrieve a container using the OpenAI Container API.
 
     Currently supports OpenAI
     """
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
 
         # get llm provider logic
@@ -628,8 +621,7 @@ async def adelete_container(
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> DeleteContainerResult:
-    """
-    Asynchronously delete a container.
+    """Asynchronously delete a container.
 
     Parameters:
     - `container_id` (str): The ID of the container to delete
@@ -714,7 +706,7 @@ def delete_container(
 
 
 @client
-def delete_container(  # noqa: PLR0915
+def delete_container(
     container_id: str,
     timeout=600,  # default to 10 minutes
     custom_llm_provider: Literal["openai"] = "openai",
@@ -728,15 +720,14 @@ def delete_container(  # noqa: PLR0915
     DeleteContainerResult,
     Coroutine[Any, Any, DeleteContainerResult],
 ]:
-    """
-    Delete a container using the OpenAI Container API.
+    """Delete a container using the OpenAI Container API.
 
     Currently supports OpenAI
     """
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
 
         # get llm provider logic

@@ -2,23 +2,23 @@
 
 from .main import (
     acreate_container,
-    create_container,
-    alist_containers,
-    list_containers,
-    aretrieve_container,
-    retrieve_container,
     adelete_container,
+    alist_containers,
+    aretrieve_container,
+    create_container,
     delete_container,
+    list_containers,
+    retrieve_container,
 )
 
 __all__ = [
     "acreate_container",
-    "create_container",
-    "alist_containers",
-    "list_containers",
-    "aretrieve_container",
-    "retrieve_container",
     "adelete_container",
+    "alist_containers",
+    "aretrieve_container",
+    "create_container",
     "delete_container",
+    "list_containers",
+    "retrieve_container",
 ]
 

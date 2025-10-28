@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -12,9 +12,13 @@ from litellm.types.router import GenericLiteLLMParams
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.types.containers.main import (
-        ContainerObject as _ContainerObject,
-        DeleteContainerResult as _DeleteContainerResult,
         ContainerListResponse as _ContainerListResponse,
+    )
+    from litellm.types.containers.main import (
+        ContainerObject as _ContainerObject,
+    )
+    from litellm.types.containers.main import (
+        DeleteContainerResult as _DeleteContainerResult,
     )
 
     from ..chat.transformation import BaseLLMException as _BaseLLMException

@@ -1,22 +1,22 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import httpx
 
+import litellm
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
+    ContainerListResponse,
     ContainerObject,
     DeleteContainerResult,
-    ContainerListResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.secret_managers.main import get_secret_str
-import litellm
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    from ...base_llm.containers.transformation import BaseContainerConfig as _BaseContainerConfig
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
+    from ...base_llm.containers.transformation import BaseContainerConfig as _BaseContainerConfig
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     BaseContainerConfig = _BaseContainerConfig
@@ -66,7 +66,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         headers.update(
             {
                 "Authorization": f"Bearer {api_key}",
-            }
+            },
         )
         return headers
 
@@ -100,7 +100,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         # Create the request data
         request_dict = {
             "name": name,
-            **container_create_optional_request_params
+            **container_create_optional_request_params,
         }
 
         return request_dict
@@ -231,7 +231,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         return delete_result
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers],
     ) -> BaseLLMException:
         from ...base_llm.chat.transformation import BaseLLMException
 
