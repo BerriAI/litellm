@@ -522,6 +522,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         If `self.mask_request_content` or `self.mask_response_content` is set to `True`, then use the output from the guardrail to mask the request or response content.
         """
+        
+        #The blocked content should be prioritized over the configuration parameters.
 
         # if user opted into masking, return False. since we'll use the masked output from the guardrail
         if self.mask_request_content or self.mask_response_content:
@@ -587,6 +589,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     if grounding_filter.get("action") == "BLOCKED":
                         return True
 
+        #If the content is not blocked then will pass the masked content from guardrail into LLM call
+
+        # if user opted into masking, return False. since we'll use the masked output from the guardrail
+        if self.mask_request_content or self.mask_response_content:
+            return False
+
+        # if no intervention, return False
+        if response.get("action") != "GUARDRAIL_INTERVENED":
+            return False
+
+        
         # If we got here, intervention occurred but no BLOCKED actions found
         # This means all actions were ANONYMIZED or NONE, so don't raise exception
         return False
