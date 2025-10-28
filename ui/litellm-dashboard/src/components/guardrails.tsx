@@ -6,6 +6,7 @@ import AddGuardrailForm from "./guardrails/add_guardrail_form";
 import GuardrailTable from "./guardrails/guardrail_table";
 import { isAdminRole } from "@/utils/roles";
 import GuardrailInfoView from "./guardrails/guardrail_info";
+import GuardrailTestPlayground from "./guardrails/GuardrailTestPlayground";
 import NotificationsManager from "./molecules/notifications_manager";
 
 interface GuardrailsPanelProps {
@@ -37,6 +38,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   const [isDeleting, setIsDeleting] = useState(false);
   const [guardrailToDelete, setGuardrailToDelete] = useState<{ id: string; name: string } | null>(null);
   const [selectedGuardrailId, setSelectedGuardrailId] = useState<string | null>(null);
+  const [isTestPlaygroundVisible, setIsTestPlaygroundVisible] = useState(false);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -104,13 +106,31 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      <div className="flex justify-between items-center mb-4">
-        <Button onClick={handleAddGuardrail} disabled={!accessToken}>
-          + Add New Guardrail
-        </Button>
-      </div>
+      {isTestPlaygroundVisible ? (
+        <GuardrailTestPlayground
+          guardrailsList={guardrailsList}
+          isLoading={isLoading}
+          accessToken={accessToken}
+          onClose={() => setIsTestPlaygroundVisible(false)}
+        />
+      ) : (
+        <>
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex gap-2">
+              <Button onClick={handleAddGuardrail} disabled={!accessToken}>
+                + Add New Guardrail
+              </Button>
+              <Button 
+                onClick={() => setIsTestPlaygroundVisible(true)} 
+                disabled={!accessToken || guardrailsList.length === 0}
+                variant="secondary"
+              >
+                Test Guardrails
+              </Button>
+            </div>
+          </div>
 
-      {selectedGuardrailId ? (
+          {selectedGuardrailId ? (
         <GuardrailInfoView
           guardrailId={selectedGuardrailId}
           onClose={() => setSelectedGuardrailId(null)}
@@ -136,19 +156,21 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
         onSuccess={handleSuccess}
       />
 
-      {guardrailToDelete && (
-        <Modal
-          title="Delete Guardrail"
-          open={guardrailToDelete !== null}
-          onOk={handleDeleteConfirm}
-          onCancel={handleDeleteCancel}
-          confirmLoading={isDeleting}
-          okText="Delete"
-          okButtonProps={{ danger: true }}
-        >
-          <p>Are you sure you want to delete guardrail: {guardrailToDelete.name} ?</p>
-          <p>This action cannot be undone.</p>
-        </Modal>
+          {guardrailToDelete && (
+            <Modal
+              title="Delete Guardrail"
+              open={guardrailToDelete !== null}
+              onOk={handleDeleteConfirm}
+              onCancel={handleDeleteCancel}
+              confirmLoading={isDeleting}
+              okText="Delete"
+              okButtonProps={{ danger: true }}
+            >
+              <p>Are you sure you want to delete guardrail: {guardrailToDelete.name} ?</p>
+              <p>This action cannot be undone.</p>
+            </Modal>
+          )}
+        </>
       )}
     </div>
   );
