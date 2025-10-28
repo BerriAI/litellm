@@ -153,6 +153,7 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
 
+
 class ImageFetchError(BadRequestError):
     def __init__(
         self,
@@ -911,6 +912,20 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         if self.original_exception:
             _message += f" Original exception: {type(self.original_exception).__name__}: {str(self.original_exception)}"
         return _message
+
+    def __repr__(self):
+        return self.__str__()
+
+
+class GuardrailInterventionNormalStringError(
+    Exception
+):  # custom exception to raise when a guardrail intervenes, but we want to return a normal string to the user
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(self.message)
+
+    def __str__(self):
+        return self.message
 
     def __repr__(self):
         return self.__str__()
