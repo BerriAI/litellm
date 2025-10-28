@@ -351,12 +351,6 @@ class StandardBuiltInToolCostTracking:
                 and usage.prompt_tokens_details.web_search_requests is not None
             ):
                 return True
-            elif (
-                hasattr(usage, "num_sources_used")
-                and usage.num_sources_used is not None
-                and usage.server_tool_use.web_search_requests is not None
-            ):
-                return True
 
         return False
 
