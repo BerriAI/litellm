@@ -301,17 +301,45 @@ class AsyncHTTPHandler:
             if timeout is None:
                 timeout = self.timeout
 
+            # ============================================================================
+            # MEMORY LEAK FIX — Prevent httpx DeprecationWarning
+            # ============================================================================
+            # Problem:
+            #   httpx shows a DeprecationWarning when you pass bytes/str to `data=`.
+            #   It wants you to use `content=` instead.
+            #
+            # Impact:
+            #   The warning leaks memory. Preventing the warning fixes the leak.
+            #
+            # Fix:
+            #   Move bytes/str from `data=` to `content=` before calling build_request.
+            #   Keep dicts in `data=` (that's still correct).
+            # ============================================================================
+            
+            request_data = None
+            request_content = content
+            
+            # Route data parameter to the correct httpx parameter based on type
+            if data is not None:
+                if isinstance(data, (bytes, str)):
+                    # Bytes/strings belong in content= (only if not already provided)
+                    if content is None:
+                        request_content = data
+                else:
+                    # dict/Mapping stays in data= parameter
+                    request_data = data
+                
             req = self.client.build_request(
                 "POST",
                 url,
-                data=data,  # type: ignore
+                data=request_data,
                 json=json,
                 params=params,
                 headers=headers,
                 timeout=timeout,
                 files=files,
-                content=content,
-            )
+                content=request_content,
+            )        
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
