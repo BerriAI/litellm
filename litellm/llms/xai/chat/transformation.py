@@ -1,10 +1,9 @@
-from typing import Any, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     strip_name_from_messages,
