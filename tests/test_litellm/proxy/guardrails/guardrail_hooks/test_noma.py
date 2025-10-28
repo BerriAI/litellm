@@ -731,7 +731,7 @@ class TestBackgroundProcessing:
     ):
         """Test post-call success hook in monitor mode"""
         from litellm.types.utils import Choices, Message
-        
+
         # Update event hook to post_call
         monitor_mode_guardrail.event_hook = "post_call"
 
@@ -762,6 +762,104 @@ class TestBackgroundProcessing:
 
             assert result == response
             mock_create_background.assert_called_once()
+
+
+class TestNomaApplyGuardrail:
+    """
+    Test the apply_guardrail method for Noma guardrails
+    """
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_success(self):
+        """
+        Test that apply_guardrail returns text when content is allowed
+        """
+        guardrail = NomaGuardrail(
+            api_key="test-api-key",
+            api_base="https://api.test.noma.security/",
+            application_id="test-app",
+            monitor_mode=False,
+            block_failures=True,
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"verdict": True}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ):
+            result = await guardrail.apply_guardrail(
+                text="This is a safe test message"
+            )
+
+            assert result == "This is a safe test message"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_blocked(self):
+        """
+        Test that apply_guardrail raises exception when content is blocked
+        """
+        guardrail = NomaGuardrail(
+            api_key="test-api-key",
+            api_base="https://api.test.noma.security/",
+            application_id="test-app",
+            monitor_mode=False,
+            block_failures=True,
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "verdict": False,
+            "originalResponse": {
+                "prompt": {"contentDetector": {"result": True, "confidence": 0.9}}
+            },
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ):
+            with pytest.raises(Exception) as exc_info:
+                await guardrail.apply_guardrail(text="This is blocked content")
+
+            assert "Content blocked by Noma guardrail" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_with_anonymization(self):
+        """
+        Test that apply_guardrail returns anonymized text when anonymize_input is enabled
+        """
+        guardrail = NomaGuardrail(
+            api_key="test-api-key",
+            api_base="https://api.test.noma.security/",
+            application_id="test-app",
+            anonymize_input=True,
+            monitor_mode=False,
+            block_failures=True,
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "verdict": True,
+            "originalResponse": {
+                "prompt": {
+                    "anonymizedContent": {
+                        "anonymized": "My email is ******* and phone is *******"
+                    }
+                }
+            },
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ):
+            result = await guardrail.apply_guardrail(
+                text="My email is test@example.com and phone is 123-456-7890"
+            )
+
+            assert result == "My email is ******* and phone is *******"
 
 
 class TestIntegration:

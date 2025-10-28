@@ -6430,6 +6430,68 @@ export const updateGuardrailCall = async (
   }
 };
 
+export const applyGuardrail = async (
+  accessToken: string,
+  guardrailName: string,
+  text: string,
+  language?: string | null,
+  entities?: string[] | null,
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/apply_guardrail` : `/guardrails/apply_guardrail`;
+
+    const requestBody: Record<string, any> = {
+      guardrail_name: guardrailName,
+      text: text,
+    };
+
+    if (language) {
+      requestBody.language = language;
+    }
+
+    if (entities && entities.length > 0) {
+      requestBody.entities = entities;
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      let errorMessage = "Failed to apply guardrail";
+      
+      try {
+        const errorJson = JSON.parse(errorData);
+        if (errorJson.error?.message) {
+          errorMessage = errorJson.error.message;
+        } else if (errorJson.detail) {
+          errorMessage = errorJson.detail;
+        } else if (errorJson.message) {
+          errorMessage = errorJson.message;
+        }
+      } catch (e) {
+        errorMessage = errorData || errorMessage;
+      }
+      
+      handleError(errorData);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Apply guardrail response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to apply guardrail:", error);
+    throw error;
+  }
+};
+
 export const getSSOSettings = async (accessToken: string) => {
   try {
     // Construct base URL
