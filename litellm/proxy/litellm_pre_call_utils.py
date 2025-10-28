@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 from fastapi import Request
 from starlette.datastructures import Headers
@@ -1191,6 +1191,8 @@ def _add_guardrails_from_key_or_team_metadata(
 ) -> None:
     """
     Helper add guardrails from key or team metadata to request data
+    
+    Key guardrails are set first, then team guardrails are appended (without duplicates).
 
     Args:
         key_metadata: The key metadata dictionary to check for guardrails
@@ -1201,14 +1203,26 @@ def _add_guardrails_from_key_or_team_metadata(
     """
     from litellm.proxy.utils import _premium_user_check
 
-    for _management_object_metadata in [key_metadata, team_metadata]:
-        if _management_object_metadata and "guardrails" in _management_object_metadata:
-            if len(_management_object_metadata["guardrails"]) > 0:
-                _premium_user_check()
-
-            data[metadata_variable_name]["guardrails"] = _management_object_metadata[
-                "guardrails"
-            ]
+    # Initialize guardrails list
+    combined_guardrails: Set[str] = set()
+    
+    # Add key-level guardrails first
+    if key_metadata and "guardrails" in key_metadata:
+        if isinstance(key_metadata["guardrails"], list) and len(key_metadata["guardrails"]) > 0:
+            _premium_user_check()
+            combined_guardrails.update(key_metadata["guardrails"])
+    
+    # Append team-level guardrails (avoid duplicates)
+    if team_metadata and "guardrails" in team_metadata:
+        if isinstance(team_metadata["guardrails"], list) and len(team_metadata["guardrails"]) > 0:
+            _premium_user_check()
+            for guardrail in team_metadata["guardrails"]:
+                if guardrail not in combined_guardrails:
+                    combined_guardrails.update(guardrail)
+    
+    # Set combined guardrails in metadata
+    if combined_guardrails:
+        data[metadata_variable_name]["guardrails"] = list(combined_guardrails)
 
 
 def move_guardrails_to_metadata(
