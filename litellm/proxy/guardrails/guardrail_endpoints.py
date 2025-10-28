@@ -1068,19 +1068,29 @@ async def apply_guardrail(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Mask PII from a given text, requires a guardrail to be added to litellm.
+    Apply a guardrail to text input and return the processed result.
+    
+    This endpoint allows testing guardrails by applying them to custom text inputs.
     """
-    active_guardrail: Optional[
-        CustomGuardrail
-    ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
-        guardrail_name=request.guardrail_name
-    )
-    if active_guardrail is None:
-        raise Exception(f"Guardrail {request.guardrail_name} not found")
+    from litellm.proxy.utils import handle_exception_on_proxy
+    
+    try:
+        active_guardrail: Optional[
+            CustomGuardrail
+        ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+            guardrail_name=request.guardrail_name
+        )
+        if active_guardrail is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Guardrail '{request.guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
+            )
 
-    response_text = await active_guardrail.apply_guardrail(
-        text=request.text, language=request.language, entities=request.entities
-    )
+        response_text = await active_guardrail.apply_guardrail(
+            text=request.text, language=request.language, entities=request.entities
+        )
 
-    return ApplyGuardrailResponse(response_text=response_text)
+        return ApplyGuardrailResponse(response_text=response_text)
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
 
