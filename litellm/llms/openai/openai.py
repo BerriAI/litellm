@@ -1331,7 +1331,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     ) -> ImageResponse:
         data = {}
         try:
-            model = model
             data = {"model": model, "prompt": prompt, **optional_params}
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):
