@@ -841,6 +841,10 @@ class OpenTelemetry(CustomLogger):
         )
         span.set_status(Status(StatusCode.ERROR))
         self.set_attributes(span, kwargs, response_obj)
+        
+        # Record exception information using OTEL standard method
+        self._record_exception_on_span(span=span, kwargs=kwargs)
+        
         span.end(end_time=self._to_ns(end_time))
 
         # Create span for guardrail information
@@ -848,6 +852,87 @@ class OpenTelemetry(CustomLogger):
 
         if parent_otel_span is not None:
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
+
+    def _record_exception_on_span(self, span: Span, kwargs: dict):
+        """
+        Record exception information on the span using OTEL standard methods.
+        
+        This extracts error information from StandardLoggingPayload and:
+        1. Uses span.record_exception() for the actual exception object (OTEL standard)
+        2. Sets structured error attributes from StandardLoggingPayloadErrorInformation
+        """
+        try:
+            from litellm.integrations._types.open_inference import ErrorAttributes
+
+            # Get the exception object if available
+            exception = kwargs.get("exception")
+            
+            # Record the exception using OTEL's standard method
+            if exception is not None:
+                span.record_exception(exception)
+            
+            # Get StandardLoggingPayload for structured error information
+            standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object"
+            )
+            
+            if standard_logging_payload is None:
+                return
+            
+            # Extract error_information from StandardLoggingPayload
+            error_information = standard_logging_payload.get("error_information")
+            
+            if error_information is None:
+                # Fallback to error_str if error_information is not available
+                error_str = standard_logging_payload.get("error_str")
+                if error_str:
+                    self.safe_set_attribute(
+                        span=span,
+                        key=ErrorAttributes.ERROR_MESSAGE,
+                        value=error_str,
+                    )
+                return
+            
+            # Set structured error attributes from StandardLoggingPayloadErrorInformation
+            if error_information.get("error_code"):
+                self.safe_set_attribute(
+                    span=span,
+                    key=ErrorAttributes.ERROR_CODE,
+                    value=error_information["error_code"],
+                )
+            
+            if error_information.get("error_class"):
+                self.safe_set_attribute(
+                    span=span,
+                    key=ErrorAttributes.ERROR_TYPE,
+                    value=error_information["error_class"],
+                )
+            
+            if error_information.get("error_message"):
+                self.safe_set_attribute(
+                    span=span,
+                    key=ErrorAttributes.ERROR_MESSAGE,
+                    value=error_information["error_message"],
+                )
+            
+            if error_information.get("llm_provider"):
+                self.safe_set_attribute(
+                    span=span,
+                    key=ErrorAttributes.ERROR_LLM_PROVIDER,
+                    value=error_information["llm_provider"],
+                )
+            
+            if error_information.get("traceback"):
+                self.safe_set_attribute(
+                    span=span,
+                    key=ErrorAttributes.ERROR_STACK_TRACE,
+                    value=error_information["traceback"],
+                )
+        
+        except Exception as e:
+            verbose_logger.exception(
+                "OpenTelemetry: Error recording exception on span: %s", str(e)
+            )
 
     def set_tools_attributes(self, span: Span, tools):
         import json

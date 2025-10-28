@@ -1106,6 +1106,7 @@
         "supports_vision": true
     },
     "azure/eu/gpt-4o-2024-08-06": {
+        "deprecation_date": "2026-02-27",
         "cache_read_input_token_cost": 1.375e-06,
         "input_cost_per_token": 2.75e-06,
         "litellm_provider": "azure",
@@ -1122,6 +1123,7 @@
         "supports_vision": true
     },
     "azure/eu/gpt-4o-2024-11-20": {
+        "deprecation_date": "2026-03-01",
         "cache_creation_input_token_cost": 1.38e-06,
         "input_cost_per_token": 2.75e-06,
         "litellm_provider": "azure",
@@ -1280,7 +1282,7 @@
     },
     "azure/global-standard/gpt-4o-2024-08-06": {
         "cache_read_input_token_cost": 1.25e-06,
-        "deprecation_date": "2025-08-20",
+        "deprecation_date": "2026-02-27",
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
@@ -1297,7 +1299,7 @@
     },
     "azure/global-standard/gpt-4o-2024-11-20": {
         "cache_read_input_token_cost": 1.25e-06,
-        "deprecation_date": "2025-12-20",
+        "deprecation_date": "2026-03-01",
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
@@ -1326,6 +1328,7 @@
         "supports_vision": true
     },
     "azure/global/gpt-4o-2024-08-06": {
+        "deprecation_date": "2026-02-27",
         "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
@@ -1342,6 +1345,7 @@
         "supports_vision": true
     },
     "azure/global/gpt-4o-2024-11-20": {
+        "deprecation_date": "2026-03-01",
         "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
@@ -1625,6 +1629,7 @@
         "supports_web_search": false
     },
     "azure/gpt-4.1-2025-04-14": {
+        "deprecation_date": "2026-11-04",
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
@@ -1691,6 +1696,7 @@
         "supports_web_search": false
     },
     "azure/gpt-4.1-mini-2025-04-14": {
+        "deprecation_date": "2026-11-04",
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 4e-07,
         "input_cost_per_token_batches": 2e-07,
@@ -1756,6 +1762,7 @@
         "supports_vision": true
     },
     "azure/gpt-4.1-nano-2025-04-14": {
+        "deprecation_date": "2026-11-04",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -1837,6 +1844,7 @@
         "supports_vision": true
     },
     "azure/gpt-4o-2024-08-06": {
+        "deprecation_date": "2026-02-27",
         "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
@@ -1853,6 +1861,7 @@
         "supports_vision": true
     },
     "azure/gpt-4o-2024-11-20": {
+        "deprecation_date": "2026-03-01",
         "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 2.75e-06,
         "litellm_provider": "azure",
@@ -2604,6 +2613,7 @@
         "supports_vision": true
     },
     "azure/o3-2025-04-16": {
+        "deprecation_date": "2026-04-16",
         "cache_read_input_token_cost": 2.5e-06,
         "input_cost_per_token": 1e-05,
         "litellm_provider": "azure",
@@ -2832,6 +2842,7 @@
         "output_cost_per_token": 0.0
     },
     "azure/text-embedding-3-small": {
+        "deprecation_date": "2026-04-30",
         "input_cost_per_token": 2e-08,
         "litellm_provider": "azure",
         "max_input_tokens": 8191,
@@ -2870,6 +2881,7 @@
         "mode": "audio_speech"
     },
     "azure/us/gpt-4o-2024-08-06": {
+        "deprecation_date": "2026-02-27",
         "cache_read_input_token_cost": 1.375e-06,
         "input_cost_per_token": 2.75e-06,
         "litellm_provider": "azure",
@@ -2886,6 +2898,7 @@
         "supports_vision": true
     },
     "azure/us/gpt-4o-2024-11-20": {
+        "deprecation_date": "2026-03-01",
         "cache_creation_input_token_cost": 1.38e-06,
         "input_cost_per_token": 2.75e-06,
         "litellm_provider": "azure",
@@ -3385,7 +3398,7 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/microsoft/",
         "supports_reasoning": true,
         "supports_tool_choice": true
-    },    
+    },
     "azure_ai/cohere-rerank-v3-english": {
         "input_cost_per_query": 0.002,
         "input_cost_per_token": 0.0,
@@ -4911,7 +4924,7 @@
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
-        "deprecation_date": "2026-02-01",
+        "deprecation_date": "2026-02-19",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "anthropic",
         "max_input_tokens": 200000,
@@ -4968,7 +4981,6 @@
         "cache_creation_input_token_cost": 3e-07,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-08,
-        "deprecation_date": "2025-03-01",
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "anthropic",
         "max_input_tokens": 200000,
@@ -4988,7 +5000,7 @@
         "cache_creation_input_token_cost": 1.875e-05,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 1.5e-06,
-        "deprecation_date": "2025-03-01",
+        "deprecation_date": "2026-05-01",
         "input_cost_per_token": 1.5e-05,
         "litellm_provider": "anthropic",
         "max_input_tokens": 200000,
@@ -5172,6 +5184,7 @@
         "cache_creation_input_token_cost_above_1hr": 3e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "input_cost_per_token": 1.5e-05,
+        "deprecation_date": "2026-08-05",
         "litellm_provider": "anthropic",
         "max_input_tokens": 200000,
         "max_output_tokens": 32000,
@@ -5199,6 +5212,7 @@
         "cache_creation_input_token_cost_above_1hr": 3e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "input_cost_per_token": 1.5e-05,
+        "deprecation_date": "2026-05-14",
         "litellm_provider": "anthropic",
         "max_input_tokens": 200000,
         "max_output_tokens": 32000,
@@ -5222,6 +5236,7 @@
         "tool_use_system_prompt_tokens": 159
     },
     "claude-sonnet-4-20250514": {
+        "deprecation_date": "2026-05-14",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -7753,7 +7768,7 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
-    },    
+    },
     "dolphin": {
         "input_cost_per_token": 5e-07,
         "litellm_provider": "nlp_cloud",
@@ -7847,7 +7862,7 @@
         "input_cost_per_query": 5e-03,
         "litellm_provider": "perplexity",
         "mode": "search"
-    },    
+    },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",
@@ -7993,6 +8008,7 @@
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 1.1e-06,
+        "deprecation_date": "2026-10-15",
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
@@ -12397,6 +12413,7 @@
         "supports_tool_choice": true
     },
     "gpt-3.5-turbo-1106": {
+        "deprecation_date": "2026-09-28",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 16385,
@@ -12466,6 +12483,7 @@
         "supports_tool_choice": true
     },
     "gpt-4-0125-preview": {
+        "deprecation_date": "2026-03-26",
         "input_cost_per_token": 1e-05,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -12506,6 +12524,7 @@
         "supports_tool_choice": true
     },
     "gpt-4-1106-preview": {
+        "deprecation_date": "2026-03-26",
         "input_cost_per_token": 1e-05,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -16563,6 +16582,7 @@
         "supports_vision": true
     },
     "o1-mini-2024-09-12": {
+        "deprecation_date": "2025-10-27",
         "cache_read_input_token_cost": 1.5e-06,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "openai",
@@ -17733,24 +17753,24 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159
     },
-    "openrouter/anthropic/claude-sonnet-4.5": {
-        "input_cost_per_image": 0.0048,
-        "input_cost_per_token": 3e-06,
-        "input_cost_per_token_above_200k_tokens": 6e-06,
-        "output_cost_per_token_above_200k_tokens": 2.25e-05,
+    "openrouter/anthropic/claude-haiku-4.5": {
+        "cache_creation_input_token_cost": 1.25e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 1e-06,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 1000000,
-        "max_tokens": 1000000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 200000,
+        "max_tokens": 200000,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 5e-06,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 346
     },
     "openrouter/bytedance/ui-tars-1.5-7b": {
         "input_cost_per_token": 1e-07,
@@ -19166,7 +19186,7 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
-    }, 
+    },
     "qwen.qwen3-32b-v1:0": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "bedrock_converse",
@@ -19178,7 +19198,7 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
-    },           
+    },
     "recraft/recraftv2": {
         "litellm_provider": "recraft",
         "mode": "image_generation",

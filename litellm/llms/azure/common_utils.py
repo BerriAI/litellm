@@ -759,4 +759,4 @@ class BaseAzureLLM(BaseOpenAILLM):
     def _is_azure_v1_api_version(api_version: Optional[str]) -> bool:
         if api_version is None:
             return False
-        return api_version == "preview" or api_version == "latest"
+        return api_version in {"preview", "latest", "v1"}
