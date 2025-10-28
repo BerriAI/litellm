@@ -216,7 +216,7 @@ class GraySwanGuardrail(CustomGuardrail):
 
         verbose_proxy_logger.debug("GraySwan Guardrail: post-call hook triggered")
 
-        response_dict = response.model_dump() if hasattr(response, "model_dump") else {}
+        response_dict = response.model_dump() if hasattr(response, "model_dump") else {}  # type: ignore[union-attr]
         response_messages = [
             msg if isinstance(msg, dict) else msg.model_dump()
             for choice in response_dict.get("choices", [])

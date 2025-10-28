@@ -4,6 +4,18 @@ import TabItem from '@theme/TabItem';
 
 # OpenAI - Text-to-speech
 
+## Overview
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Cost Tracking | ✅ | Works with all supported models |
+| Logging | ✅ | Works across all integrations |
+| End-user Tracking | ✅ | |
+| Fallbacks | ✅ | Works between supported models |
+| Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to input text |
+| Supported Models | tts-1, tts-1-hd, gpt-4o-mini-tts | |
+
 ## **LiteLLM Python SDK Usage**
 ### Quick Start 
 

@@ -287,6 +287,7 @@ async def asearch(
     Async: Search a vector store for relevant chunks based on a query and file attributes filter.
     """
     local_vars = locals()
+
     try:
         loop = asyncio.get_event_loop()
         kwargs["asearch"] = True
@@ -435,7 +436,7 @@ def search(
 
         # Pre Call logging
         litellm_logging_obj.update_environment_variables(
-            model=None,
+            model=api_type,
             optional_params={
                 "vector_store_id": vector_store_id,
                 "query": query,

@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES ####################
+### INIT VARIABLES ######################
 import threading
 import os
 from typing import (
@@ -105,7 +105,7 @@ if litellm_mode == "DEV":
 # Register async client cleanup to prevent resource leaks
 register_async_client_cleanup()
 ####################################################
-if set_verbose == True:
+if set_verbose:
     _turn_on_debug()
 ####################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
@@ -981,6 +981,9 @@ all_embedding_models = (
 ####### IMAGE GENERATION MODELS ###################
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
+####### VIDEO GENERATION MODELS ###################
+openai_video_generation_models = ["sora-2"]
+
 from .timeout import timeout
 from .cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
@@ -1139,6 +1142,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import
 from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
     AmazonInvokeNovaConfig,
 )
+from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
+    AmazonQwen3Config,
+)
 from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
     AmazonAnthropicConfig,
 )
@@ -1175,6 +1181,7 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
     AmazonTitanV2Config,
 )
 from .llms.cohere.chat.transformation import CohereChatConfig
+from .llms.cohere.chat.v2_transformation import CohereV2ChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
 from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
@@ -1207,7 +1214,6 @@ from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig,
 )
 
-from .llms.snowflake.chat.transformation import SnowflakeConfig
 from .llms.gradient_ai.chat.transformation import GradientAIConfig
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
@@ -1243,7 +1249,6 @@ from .llms.cerebras.chat import CerebrasConfig
 from .llms.baseten.chat import BasetenConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
-from .llms.ai21.chat.transformation import AI21ChatConfig
 from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
 from .llms.fireworks_ai.audio_transcription.transformation import (
@@ -1330,6 +1335,7 @@ from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .images.main import *
+from .videos.main import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
