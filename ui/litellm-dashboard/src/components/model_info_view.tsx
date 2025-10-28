@@ -73,7 +73,8 @@ export default function ModelInfoView({
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
-  const canEditModel = userRole === "Admin" || modelData?.model_info?.created_by === userID;
+  const canEditModel =
+    (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
   const isAdmin = userRole === "Admin";
   const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
 
@@ -429,10 +430,20 @@ export default function ModelInfoView({
                       Edit Auto Router
                     </TremorButton>
                   )}
-                  {canEditModel && !isEditing && (
-                    <TremorButton variant="secondary" onClick={() => setIsEditing(true)} className="flex items-center">
-                      Edit Model
-                    </TremorButton>
+                  {canEditModel ? (
+                    !isEditing && (
+                      <TremorButton
+                        variant="secondary"
+                        onClick={() => setIsEditing(true)}
+                        className="flex items-center"
+                      >
+                        Edit Model
+                      </TremorButton>
+                    )
+                  ) : (
+                    <Tooltip title="Only DB models can be edited. You must be an admin or the creator of the model to edit it.">
+                      <InfoCircleOutlined />
+                    </Tooltip>
                   )}
                 </div>
               </div>
