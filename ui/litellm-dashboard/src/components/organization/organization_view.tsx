@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect } from "react";
 import {
   Card,
   Title,
@@ -19,12 +19,11 @@ import {
   TableCell,
   Button as TremorButton,
   Icon,
-} from "@tremor/react"
-import NumericalInput from "../shared/numerical_input"
-import { Button, Form, Input, Select, message, Tooltip } from "antd"
-import { InfoCircleOutlined } from "@ant-design/icons"
-import { ArrowLeftIcon, PencilAltIcon, TrashIcon } from "@heroicons/react/outline"
-import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key"
+} from "@tremor/react";
+import NumericalInput from "../shared/numerical_input";
+import { Button, Form, Input, Select } from "antd";
+import { ArrowLeftIcon, PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import {
   Member,
   Organization,
@@ -33,24 +32,24 @@ import {
   organizationMemberUpdateCall,
   organizationMemberDeleteCall,
   organizationUpdateCall,
-} from "../networking"
-import UserSearchModal from "../common_components/user_search_modal"
-import MemberModal from "../team/edit_membership"
-import ObjectPermissionsView from "../object_permissions_view"
-import VectorStoreSelector from "../vector_store_management/VectorStoreSelector"
-import MCPServerSelector from "../mcp_server_management/MCPServerSelector"
-import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils"
-import { CheckIcon, CopyIcon } from "lucide-react"
-import NotificationsManager from "../molecules/notifications_manager"
+} from "../networking";
+import UserSearchModal from "../common_components/user_search_modal";
+import MemberModal from "../team/edit_membership";
+import ObjectPermissionsView from "../object_permissions_view";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface OrganizationInfoProps {
-  organizationId: string
-  onClose: () => void
-  accessToken: string | null
-  is_org_admin: boolean
-  is_proxy_admin: boolean
-  userModels: string[]
-  editOrg: boolean
+  organizationId: string;
+  onClose: () => void;
+  accessToken: string | null;
+  is_org_admin: boolean;
+  is_proxy_admin: boolean;
+  userModels: string[];
+  editOrg: boolean;
 }
 
 const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
@@ -62,96 +61,96 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   userModels,
   editOrg,
 }) => {
-  const [orgData, setOrgData] = useState<Organization | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [form] = Form.useForm()
-  const [isEditing, setIsEditing] = useState(false)
-  const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false)
-  const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false)
-  const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null)
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
-  const canEditOrg = is_org_admin || is_proxy_admin
+  const [orgData, setOrgData] = useState<Organization | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [form] = Form.useForm();
+  const [isEditing, setIsEditing] = useState(false);
+  const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
+  const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
+  const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+  const canEditOrg = is_org_admin || is_proxy_admin;
 
   const fetchOrgInfo = async () => {
     try {
-      setLoading(true)
-      if (!accessToken) return
-      const response = await organizationInfoCall(accessToken, organizationId)
-      setOrgData(response)
+      setLoading(true);
+      if (!accessToken) return;
+      const response = await organizationInfoCall(accessToken, organizationId);
+      setOrgData(response);
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to load organization information")
-      console.error("Error fetching organization info:", error)
+      NotificationsManager.fromBackend("Failed to load organization information");
+      console.error("Error fetching organization info:", error);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   useEffect(() => {
-    fetchOrgInfo()
-  }, [organizationId, accessToken])
+    fetchOrgInfo();
+  }, [organizationId, accessToken]);
 
   const handleMemberAdd = async (values: any) => {
     try {
       if (accessToken == null) {
-        return
+        return;
       }
 
       const member: Member = {
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
-      }
-      const response = await organizationMemberAddCall(accessToken, organizationId, member)
+      };
+      const response = await organizationMemberAddCall(accessToken, organizationId, member);
 
-      NotificationsManager.success("Organization member added successfully")
-      setIsAddMemberModalVisible(false)
-      form.resetFields()
-      fetchOrgInfo()
+      NotificationsManager.success("Organization member added successfully");
+      setIsAddMemberModalVisible(false);
+      form.resetFields();
+      fetchOrgInfo();
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to add organization member")
-      console.error("Error adding organization member:", error)
+      NotificationsManager.fromBackend("Failed to add organization member");
+      console.error("Error adding organization member:", error);
     }
-  }
+  };
 
   const handleMemberUpdate = async (values: any) => {
     try {
-      if (!accessToken) return
+      if (!accessToken) return;
 
       const member: Member = {
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
-      }
+      };
 
-      const response = await organizationMemberUpdateCall(accessToken, organizationId, member)
-      NotificationsManager.success("Organization member updated successfully")
-      setIsEditMemberModalVisible(false)
-      form.resetFields()
-      fetchOrgInfo()
+      const response = await organizationMemberUpdateCall(accessToken, organizationId, member);
+      NotificationsManager.success("Organization member updated successfully");
+      setIsEditMemberModalVisible(false);
+      form.resetFields();
+      fetchOrgInfo();
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to update organization member")
-      console.error("Error updating organization member:", error)
+      NotificationsManager.fromBackend("Failed to update organization member");
+      console.error("Error updating organization member:", error);
     }
-  }
+  };
 
   const handleMemberDelete = async (values: any) => {
     try {
-      if (!accessToken) return
+      if (!accessToken) return;
 
-      await organizationMemberDeleteCall(accessToken, organizationId, values.user_id)
-      NotificationsManager.success("Organization member deleted successfully")
-      setIsEditMemberModalVisible(false)
-      form.resetFields()
-      fetchOrgInfo()
+      await organizationMemberDeleteCall(accessToken, organizationId, values.user_id);
+      NotificationsManager.success("Organization member deleted successfully");
+      setIsEditMemberModalVisible(false);
+      form.resetFields();
+      fetchOrgInfo();
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to delete organization member")
-      console.error("Error deleting organization member:", error)
+      NotificationsManager.fromBackend("Failed to delete organization member");
+      console.error("Error deleting organization member:", error);
     }
-  }
+  };
 
   const handleOrgUpdate = async (values: any) => {
     try {
-      if (!accessToken) return
+      if (!accessToken) return;
 
       const updateData: any = {
         organization_id: organizationId,
@@ -164,57 +163,57 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           budget_duration: values.budget_duration,
         },
         metadata: values.metadata ? JSON.parse(values.metadata) : null,
-      }
+      };
 
       // Handle object_permission updates
       if (values.vector_stores !== undefined || values.mcp_servers_and_groups !== undefined) {
         updateData.object_permission = {
           ...orgData?.object_permission,
           vector_stores: values.vector_stores || [],
-        }
+        };
 
         if (values.mcp_servers_and_groups !== undefined) {
           const { servers, accessGroups } = values.mcp_servers_and_groups || {
             servers: [],
             accessGroups: [],
-          }
+          };
           if (servers && servers.length > 0) {
-            updateData.object_permission.mcp_servers = servers
+            updateData.object_permission.mcp_servers = servers;
           }
           if (accessGroups && accessGroups.length > 0) {
-            updateData.object_permission.mcp_access_groups = accessGroups
+            updateData.object_permission.mcp_access_groups = accessGroups;
           }
         }
       }
 
-      const response = await organizationUpdateCall(accessToken, updateData)
+      const response = await organizationUpdateCall(accessToken, updateData);
 
-      NotificationsManager.success("Organization settings updated successfully")
-      setIsEditing(false)
-      fetchOrgInfo()
+      NotificationsManager.success("Organization settings updated successfully");
+      setIsEditing(false);
+      fetchOrgInfo();
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to update organization settings")
-      console.error("Error updating organization:", error)
+      NotificationsManager.fromBackend("Failed to update organization settings");
+      console.error("Error updating organization:", error);
     }
-  }
+  };
 
   if (loading) {
-    return <div className="p-4">Loading...</div>
+    return <div className="p-4">Loading...</div>;
   }
 
   if (!orgData) {
-    return <div className="p-4">Organization not found</div>
+    return <div className="p-4">Organization not found</div>;
   }
 
   const copyToClipboard = async (text: string | null | undefined, key: string) => {
-    const success = await utilCopyToClipboard(text)
+    const success = await utilCopyToClipboard(text);
     if (success) {
-      setCopiedStates((prev) => ({ ...prev, [key]: true }))
+      setCopiedStates((prev) => ({ ...prev, [key]: true }));
       setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }))
-      }, 2000)
+        setCopiedStates((prev) => ({ ...prev, [key]: false }));
+      }, 2000);
     }
-  }
+  };
 
   return (
     <div className="w-full h-screen p-4 bg-white">
@@ -362,15 +361,15 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                                     role: member.user_role,
                                     user_email: member.user_email,
                                     user_id: member.user_id,
-                                  })
-                                  setIsEditMemberModalVisible(true)
+                                  });
+                                  setIsEditMemberModalVisible(true);
                                 }}
                               />
                               <Icon
                                 icon={TrashIcon}
                                 size="sm"
                                 onClick={() => {
-                                  handleMemberDelete(member)
+                                  handleMemberDelete(member);
                                 }}
                               />
                             </>
@@ -384,7 +383,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
               {canEditOrg && (
                 <TremorButton
                   onClick={() => {
-                    setIsAddMemberModalVisible(true)
+                    setIsAddMemberModalVisible(true);
                   }}
                 >
                   Add Member
@@ -593,7 +592,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         }}
       />
     </div>
-  )
-}
+  );
+};
 
-export default OrganizationInfoView
+export default OrganizationInfoView;

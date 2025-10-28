@@ -8,6 +8,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+
 from httpx._models import Headers, Response
 
 import litellm
@@ -277,3 +278,5 @@ class SagemakerConfig(BaseConfig):
             headers = {"Content-Type": "application/json", **headers}
 
         return headers
+
+

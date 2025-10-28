@@ -1,20 +1,20 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react'
-import { getProxyBaseUrl } from '@/components/networking'
+import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { getProxyBaseUrl } from "@/components/networking";
 
 interface ThemeContextType {
   logoUrl: string | null;
   setLogoUrl: (url: string | null) => void;
 }
 
-const ThemeContext = createContext<ThemeContextType | undefined>(undefined)
+const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export const useTheme = () => {
   const context = useContext(ThemeContext);
   if (!context) {
-    throw new Error('useTheme must be used within a ThemeProvider');
+    throw new Error("useTheme must be used within a ThemeProvider");
   }
   return context;
-}
+};
 
 interface ThemeProviderProps {
   children: ReactNode;
@@ -31,11 +31,11 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
     const loadLogoSettings = async () => {
       try {
         const proxyBaseUrl = getProxyBaseUrl();
-        const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_theme_settings` : '/get/ui_theme_settings';
+        const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_theme_settings` : "/get/ui_theme_settings";
         const response = await fetch(url, {
-          method: 'GET',
+          method: "GET",
           headers: {
-            'Content-Type': 'application/json',
+            "Content-Type": "application/json",
           },
         });
 
@@ -46,16 +46,12 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
           }
         }
       } catch (error) {
-        console.warn('Failed to load logo settings from backend:', error);
+        console.warn("Failed to load logo settings from backend:", error);
       }
     };
 
     loadLogoSettings();
   }, []);
 
-  return (
-    <ThemeContext.Provider value={{ logoUrl, setLogoUrl }}>
-      {children}
-    </ThemeContext.Provider>
-  );
+  return <ThemeContext.Provider value={{ logoUrl, setLogoUrl }}>{children}</ThemeContext.Provider>;
 };

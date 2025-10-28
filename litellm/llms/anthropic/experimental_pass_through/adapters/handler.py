@@ -133,7 +133,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         **kwargs,
     ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
         """Handle non-Anthropic models asynchronously using the adapter"""
-
         completion_kwargs = (
             LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
                 max_tokens=max_tokens,

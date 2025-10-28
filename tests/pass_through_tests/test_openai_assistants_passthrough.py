@@ -9,9 +9,12 @@ from openai import AssistantEventHandler
 
 client = openai.OpenAI(base_url="http://0.0.0.0:4000/openai", api_key="sk-1234")
 
+
 def test_pass_through_file_operations():
     # Create a temporary file
-    with tempfile.NamedTemporaryFile(mode='w+', suffix='.txt', delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(
+        mode="w+", suffix=".txt", delete=False
+    ) as temp_file:
         temp_file.write("This is a test file for the OpenAI Assistants API.")
         temp_file.flush()
 
@@ -25,6 +28,7 @@ def test_pass_through_file_operations():
         # delete the file
         delete_file = client.files.delete(file.id)
         print("file deleted", delete_file)
+
 
 def test_openai_assistants_e2e_operations():
     assistant = client.beta.assistants.create(
@@ -98,13 +102,13 @@ def test_openai_assistants_e2e_operations_stream():
         stream.until_done()
 
 
-
 def test_azure_openai_assistants_e2e_operations_stream():
     from openai import AzureOpenAI
+
     client = AzureOpenAI(
-        base_url="http://0.0.0.0:4000/azure-config-passthrough/openai", 
+        base_url="http://0.0.0.0:4000/azure-config-passthrough/openai",
         api_key="sk-1234",
-        api_version="2025-01-01-preview"
+        api_version="2025-01-01-preview",
     )
     assistant = client.beta.assistants.create(
         name="Math Tutor",

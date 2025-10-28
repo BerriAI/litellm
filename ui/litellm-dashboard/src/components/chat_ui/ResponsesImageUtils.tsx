@@ -6,7 +6,7 @@ export const convertImageToBase64 = (file: File): Promise<string> => {
     reader.onload = () => {
       const result = reader.result as string;
       // Extract just the base64 data (remove the data:image/...;base64, prefix)
-      const base64Data = result.split(',')[1];
+      const base64Data = result.split(",")[1];
       resolve(base64Data);
     };
     reader.onerror = reject;
@@ -16,11 +16,11 @@ export const convertImageToBase64 = (file: File): Promise<string> => {
 
 export const createMultimodalMessage = async (
   inputMessage: string,
-  file: File
+  file: File,
 ): Promise<{ role: string; content: MultimodalContent[] }> => {
   const base64Data = await convertImageToBase64(file);
-  const mimeType = file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
-  
+  const mimeType = file.type || (file.name.toLowerCase().endsWith(".pdf") ? "application/pdf" : "image/jpeg");
+
   return {
     role: "user",
     content: [
@@ -37,30 +37,30 @@ export const createDisplayMessage = (
   inputMessage: string,
   hasFile: boolean,
   filePreviewUrl?: string,
-  fileName?: string
+  fileName?: string,
 ): MessageType => {
   let attachmentText = "";
   if (hasFile && fileName) {
-    attachmentText = fileName.toLowerCase().endsWith('.pdf') ? "[PDF attached]" : "[Image attached]";
+    attachmentText = fileName.toLowerCase().endsWith(".pdf") ? "[PDF attached]" : "[Image attached]";
   }
-  
-  const displayMessage: MessageType = { 
-    role: "user", 
-    content: hasFile ? `${inputMessage} ${attachmentText}` : inputMessage 
+
+  const displayMessage: MessageType = {
+    role: "user",
+    content: hasFile ? `${inputMessage} ${attachmentText}` : inputMessage,
   };
-  
+
   if (hasFile && filePreviewUrl) {
     displayMessage.imagePreviewUrl = filePreviewUrl;
   }
-  
+
   return displayMessage;
 };
 
 export const shouldShowAttachedImage = (message: MessageType): boolean => {
   return (
-    message.role === "user" && 
-    typeof message.content === "string" && 
-    (message.content.includes("[Image attached]") || message.content.includes("[PDF attached]")) && 
+    message.role === "user" &&
+    typeof message.content === "string" &&
+    (message.content.includes("[Image attached]") || message.content.includes("[PDF attached]")) &&
     !!message.imagePreviewUrl
   );
 };

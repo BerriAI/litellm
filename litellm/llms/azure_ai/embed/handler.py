@@ -210,6 +210,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         client=None,
         aembedding=None,
         max_retries: Optional[int] = None,
+        shared_session=None,
     ) -> EmbeddingResponse:
         """
         - Separate image url from text
@@ -275,6 +276,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                     else None
                 ),
                 aembedding=aembedding,
+                shared_session=shared_session,
             )
 
             text_embedding_responses = response.data

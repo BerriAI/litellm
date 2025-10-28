@@ -1,262 +1,133 @@
-import json
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import httpx
 
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    convert_content_list_to_str,
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.utils import ModelResponse
+from litellm.types.llms.openai import (
+    AllMessageValues,
 )
-from litellm.llms.base_llm.base_model_iterator import FakeStreamResponseIterator
-from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import (
-    ChatCompletionToolCallChunk,
-    ChatCompletionUsageBlock,
-    Choices,
-    GenericStreamingChunk,
-    Message,
-    ModelResponse,
-    Usage,
-)
-from litellm.utils import token_counter
+from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-from ..common_utils import ClarifaiError
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    LoggingClass = LiteLLMLoggingObj
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
-    LoggingClass = Any
+    LiteLLMLoggingObj = Any
 
 
-class ClarifaiConfig(BaseConfig):
+class ClarifaiConfig(OpenAIGPTConfig):
     """
-    Reference: https://clarifai.com/meta/Llama-2/models/llama2-70b-chat
+    Configuration class for Clarifai chat completions.
+    Since Clarifai is OpenAI-compatible, we extend OpenAIGPTConfig.
     """
-
-    max_tokens: Optional[int] = None
-    temperature: Optional[int] = None
-    top_k: Optional[int] = None
-
-    def __init__(
-        self,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[int] = None,
-        top_k: Optional[int] = None,
-    ) -> None:
-        locals_ = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return super().get_config()
-
     def get_supported_openai_params(self, model: str) -> list:
+        """
+        Get the supported OpenAI params for the given model
+        """
         return [
-            "temperature",
             "max_tokens",
+            "max_completion_tokens",
+            "response_format",
+            "stream",
+            "temperature",
+            "top_p",
+            "tool_choice",
+            "tools",
+            "presence_penalty",
+            "frequency_penalty",
+            "stream_options",
         ]
-
-    def map_openai_params(
-        self,
-        non_default_params: dict,
-        optional_params: dict,
-        model: str,
-        drop_params: bool,
-    ) -> dict:
-        for param, value in non_default_params.items():
-            if param == "temperature":
-                optional_params["temperature"] = value
-            elif param == "max_tokens":
-                optional_params["max_tokens"] = value
-
-        return optional_params
-
-    def _completions_to_model(self, prompt: str, optional_params: dict) -> dict:
-        params = {}
-        if temperature := optional_params.get("temperature"):
-            params["temperature"] = temperature
-        if max_tokens := optional_params.get("max_tokens"):
-            params["max_tokens"] = max_tokens
-        return {
-            "inputs": [{"data": {"text": {"raw": prompt}}}],
-            "model": {"output_info": {"params": params}},
-        }
-
-    def _convert_model_to_url(self, model: str, api_base: str):
-        user_id, app_id, model_id = model.split(".")
-        return f"{api_base}/users/{user_id}/apps/{app_id}/models/{model_id}/outputs"
-
-    def transform_request(
-        self,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
-        prompt = " ".join(convert_content_list_to_str(message) for message in messages)
-
-        ## Load Config
-        config = self.get_config()
-        for k, v in config.items():
-            if k not in optional_params:
-                optional_params[k] = v
-
-        data = self._completions_to_model(
-            prompt=prompt, optional_params=optional_params
+    
+    @staticmethod
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+        return (
+            api_key
+            or get_secret_str("CLARIFAI_API_KEY")
         )
+        
+    @staticmethod
+    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+        return api_base or "https://api.clarifai.com/v2/ext/openai/v1"
+    
+    @staticmethod
+    def get_base_model(model: Optional[str] = None) -> Optional[str]:
+        if model:
+            user_id, app_id, model_id = model.split(".")
+            return f"https://clarifai.com/{user_id}/{app_id}/models/{model_id}"
+        return None
 
-        return data
-
-    def validate_environment(
+    def _get_openai_compatible_provider_info(
         self,
-        headers: dict,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> dict:
-        headers = {
-            "accept": "application/json",
-            "content-type": "application/json",
-        }
-
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        return headers
-
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
-        return ClarifaiError(message=error_message, status_code=status_code)
-
+        api_base: Optional[str],
+        api_key: Optional[str],
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Get API base and key for Clarifai provider.
+        """
+        api_base = api_base or "https://api.clarifai.com/v2/ext/openai/v1"
+        dynamic_api_key = api_key or get_secret_str("CLARIFAI_API_KEY") or ""
+        return api_base, dynamic_api_key
+    
+    def transform_request(self, model, messages, optional_params, litellm_params, headers):
+        model = self.get_base_model(model) or model
+        return super().transform_request(model, messages, optional_params, litellm_params, headers)
+    
     def transform_response(
         self,
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: LoggingClass,
+        logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: str,
+        encoding: Any,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
+        """
+        Transform the Clarifai response to a standard ModelResponse.
+        Since Clarifai is OpenAI-compatible, we use OpenAI response transformation.
+        """
+        ## Logging 
         logging_obj.post_call(
             input=messages,
             api_key=api_key,
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        ## RESPONSE OBJECT
+        ## Reponse
         try:
             completion_response = raw_response.json()
-        except httpx.HTTPStatusError as e:
-            raise ClarifaiError(
-                message=str(e),
+        except Exception as e:
+            raise OpenAIError(
                 status_code=raw_response.status_code,
-            )
-        except Exception as e:
-            raise ClarifaiError(
-                message=str(e),
-                status_code=422,
-            )
-        # print(completion_response)
-        try:
-            choices_list = []
-            for idx, item in enumerate(completion_response["outputs"]):
-                if len(item["data"]["text"]["raw"]) > 0:
-                    message_obj = Message(content=item["data"]["text"]["raw"])
-                else:
-                    message_obj = Message(content=None)
-                choice_obj = Choices(
-                    finish_reason="stop",
-                    index=idx + 1,  # check
-                    message=message_obj,
-                )
-                choices_list.append(choice_obj)
-            model_response.choices = choices_list  # type: ignore
+                message=f"Failed to parse Clarifai response: {str(e)}",
+                headers=raw_response.headers,
+            ) from e
+        
+        response = ModelResponse(**completion_response)
+        
+        if response.model is not None:
+            response.model = "clarifai/" + model
 
-        except Exception as e:
-            raise ClarifaiError(
-                message=str(e),
-                status_code=422,
-            )
+        return response
 
-        # Calculate Usage
-        prompt_tokens = token_counter(model=model, messages=messages)
-        completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content"))
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        """
+        Get the appropriate error class for Clarifai errors.
+        Since Clarifai is OpenAI-compatible, we use OpenAI error handling.
+        """
+        return OpenAIError(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
         )
-        model_response.model = model
-        setattr(
-            model_response,
-            "usage",
-            Usage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
-            ),
-        )
-        return model_response
-
-    def get_model_response_iterator(
-        self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
-        sync_stream: bool,
-        json_mode: Optional[bool] = False,
-    ) -> Any:
-        return ClarifaiModelResponseIterator(
-            model_response=streaming_response,
-            json_mode=json_mode,
-        )
-
-
-class ClarifaiModelResponseIterator(FakeStreamResponseIterator):
-    def __init__(
-        self,
-        model_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
-        json_mode: Optional[bool] = False,
-    ):
-        super().__init__(
-            model_response=model_response,
-            json_mode=json_mode,
-        )
-
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
-        try:
-            text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
-            is_finished = False
-            finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
-            provider_specific_fields = None
-
-            text = (
-                chunk.get("outputs", "")[0]
-                .get("data", "")
-                .get("text", "")
-                .get("raw", "")
-            )
-
-            index: int = 0
-
-            return GenericStreamingChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=is_finished,
-                finish_reason=finish_reason,
-                usage=usage,
-                index=index,
-                provider_specific_fields=provider_specific_fields,
-            )
-        except json.JSONDecodeError:
-            raise ValueError(f"Failed to decode JSON from chunk: {chunk}")

@@ -16,6 +16,7 @@ Use LiteLLM to call all your LLM APIs in the Anthropic `v1/messages` format.
 | Streaming | ✅ | |
 | Fallbacks | ✅ | between supported models |
 | Loadbalancing | ✅ | between supported models |
+| Guardrails | ✅ | |
 | Support llm providers | **All LiteLLM supported providers** | `openai`, `anthropic`, `bedrock`, `vertex_ai`, `gemini`, `azure`, `azure_ai`, etc. |
 
 ## Usage 

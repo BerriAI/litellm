@@ -1,6 +1,6 @@
 import React from "react";
 import { ColumnDef } from "@tanstack/react-table";
-import { Badge, Text } from "@tremor/react";
+import { Text } from "@tremor/react";
 import { EyeIcon, CogIcon } from "@heroicons/react/outline";
 import { Tag } from "antd";
 
@@ -55,9 +55,7 @@ export const publicModelHubColumns = (): ColumnDef<ModelGroupInfo>[] => [
     header: "Model Group",
     accessorKey: "model_group",
     enableSorting: true,
-    cell: ({ row }) => (
-      <Text className="font-medium">{row.original.model_group}</Text>
-    ),
+    cell: ({ row }) => <Text className="font-medium">{row.original.model_group}</Text>,
     size: 150,
   },
   {
@@ -78,15 +76,11 @@ export const publicModelHubColumns = (): ColumnDef<ModelGroupInfo>[] => [
             return "gray";
         }
       };
-      
+
       return (
         <div className="flex flex-wrap gap-1">
           {providers.map((provider) => (
-            <Tag
-              key={provider}
-              color={getProviderColor(provider)}
-              className="text-xs"
-            >
+            <Tag key={provider} color={getProviderColor(provider)} className="text-xs">
               {provider}
             </Tag>
           ))}
@@ -113,7 +107,7 @@ export const publicModelHubColumns = (): ColumnDef<ModelGroupInfo>[] => [
             return "🤖";
         }
       };
-      
+
       return (
         <div className="flex items-center space-x-2">
           <span>{getModeIcon(mode || "")}</span>
@@ -127,18 +121,14 @@ export const publicModelHubColumns = (): ColumnDef<ModelGroupInfo>[] => [
     header: "Max Input",
     accessorKey: "max_input_tokens",
     enableSorting: true,
-    cell: ({ row }) => (
-      <Text className="text-center">{formatTokens(row.original.max_input_tokens)}</Text>
-    ),
+    cell: ({ row }) => <Text className="text-center">{formatTokens(row.original.max_input_tokens)}</Text>,
     size: 100,
   },
   {
     header: "Max Output",
     accessorKey: "max_output_tokens",
     enableSorting: true,
-    cell: ({ row }) => (
-      <Text className="text-center">{formatTokens(row.original.max_output_tokens)}</Text>
-    ),
+    cell: ({ row }) => <Text className="text-center">{formatTokens(row.original.max_output_tokens)}</Text>,
     size: 100,
   },
   {
@@ -147,11 +137,7 @@ export const publicModelHubColumns = (): ColumnDef<ModelGroupInfo>[] => [
     enableSorting: true,
     cell: ({ row }) => {
       const cost = row.original.input_cost_per_token;
-      return (
-        <Text className="text-center">
-          {cost ? formatCost(cost) : "Free"}
-        </Text>
-      );
+      return <Text className="text-center">{cost ? formatCost(cost) : "Free"}</Text>;
     },
     size: 100,
   },
@@ -161,11 +147,7 @@ export const publicModelHubColumns = (): ColumnDef<ModelGroupInfo>[] => [
     enableSorting: true,
     cell: ({ row }) => {
       const cost = row.original.output_cost_per_token;
-      return (
-        <Text className="text-center">
-          {cost ? formatCost(cost) : "Free"}
-        </Text>
-      );
+      return <Text className="text-center">{cost ? formatCost(cost) : "Free"}</Text>;
     },
     size: 100,
   },
@@ -176,23 +158,23 @@ export const publicModelHubColumns = (): ColumnDef<ModelGroupInfo>[] => [
     cell: ({ row }) => {
       const model = row.original;
       const features = [];
-      
+
       if (model.supports_vision) {
         features.push(
           <div key="vision" className="flex items-center space-x-1" title="Vision">
             <EyeIcon className="w-4 h-4 text-blue-600" />
-          </div>
+          </div>,
         );
       }
-      
+
       if (model.supports_function_calling || model.supports_parallel_function_calling) {
         features.push(
           <div key="functions" className="flex items-center space-x-1" title="Functions">
             <CogIcon className="w-4 h-4 text-green-600" />
-          </div>
+          </div>,
         );
       }
-      
+
       return features.length > 0 ? (
         <div className="flex space-x-2">{features}</div>
       ) : (
@@ -207,12 +189,8 @@ export const publicModelHubColumns = (): ColumnDef<ModelGroupInfo>[] => [
     enableSorting: true,
     cell: ({ row }) => {
       const model = row.original;
-      return (
-        <Text className="text-xs text-gray-600">
-          {formatLimits(model.rpm, model.tpm)}
-        </Text>
-      );
+      return <Text className="text-xs text-gray-600">{formatLimits(model.rpm, model.tpm)}</Text>;
     },
     size: 150,
   },
-]; 
+];

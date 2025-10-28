@@ -25,7 +25,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   style,
   className,
   showLabel = true,
-  labelText = "Select Model"
+  labelText = "Select Model",
 }) => {
   const [selectedModel, setSelectedModel] = useState<string | undefined>(value);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
@@ -38,12 +38,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   useEffect(() => {
     if (!accessToken) return;
-    
+
     const loadModels = async () => {
       try {
         const uniqueModels = await fetchAvailableModels(accessToken);
         console.log("Fetched models for selector:", uniqueModels);
-        
+
         if (uniqueModels.length > 0) {
           setModelInfo(uniqueModels);
         }
@@ -56,7 +56,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   }, [accessToken]);
 
   const onModelChange = (value: string) => {
-    if (value === 'custom') {
+    if (value === "custom") {
       setShowCustomModelInput(true);
       setSelectedModel(undefined);
     } else {
@@ -73,7 +73,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     if (customModelTimeout.current) {
       clearTimeout(customModelTimeout.current);
     }
-    
+
     customModelTimeout.current = setTimeout(() => {
       setSelectedModel(value);
       if (onChange) {
@@ -94,17 +94,16 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         placeholder={placeholder}
         onChange={onModelChange}
         options={[
-          ...Array.from(new Set(modelInfo.map(option => option.model_group)))
-            .map((model_group, index) => ({
-              value: model_group,
-              label: model_group,
-              key: index
-            })),
-          { value: 'custom', label: 'Enter custom model', key: 'custom' }
+          ...Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group, index) => ({
+            value: model_group,
+            label: model_group,
+            key: index,
+          })),
+          { value: "custom", label: "Enter custom model", key: "custom" },
         ]}
         style={{ width: "100%", ...style }}
         showSearch={true}
-        className={`rounded-md ${className || ''}`}
+        className={`rounded-md ${className || ""}`}
         disabled={disabled}
       />
       {showCustomModelInput && (

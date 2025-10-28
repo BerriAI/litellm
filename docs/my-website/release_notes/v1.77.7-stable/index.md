@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.77.7-stable - Claude Sonnet 4.5"
+title: "v1.77.7-stable - 2.9x Lower Median Latency"
 slug: "v1-77-7"
 date: 2025-10-04T10:00:00
 authors:
@@ -15,7 +15,7 @@ authors:
     title: Backend Performance Engineer
     url: https://www.linkedin.com/in/alexsander-baptista/
     image_url: https://media.licdn.com/dms/image/v2/D5603AQGXnziu4kqNCQ/profile-displayphoto-crop_800_800/B56ZkxEcuOKEAI-/0/1757464874550?e=1762387200&v=beta&t=9SNXLsWhx8OnYPAMQ9fqAr02oevDYEAL2vMYg2f9ieg
-  - name: Achintya Srivastava
+  - name: Achintya Rajan
     title: Fullstack Engineer
     url: https://www.linkedin.com/in/achintya-rajan/
     image_url: https://media.licdn.com/dms/image/v2/D5603AQGdkEeyJTdljw/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1716271140869?e=1762387200&v=beta&t=9gOoLPeqR2E5z3KSX61EUj3HVZXmgo87vhVuSHeffjc
@@ -59,11 +59,74 @@ pip install litellm==1.77.7.rc.1
 ## Key Highlights
 
 - **Dynamic Rate Limiter v3** - Automatically maximizes throughput when capacity is available (< 80% saturation) by allowing lower-priority requests to use unused capacity, then switches to fair priority-based allocation under high load (≥ 80%) to prevent blocking
-- **Major Performance Improvements** - Router optimization reducing P99 latency by 62.5%, cache improvements from O(n*log(n)) to O(log(n))
+- **Major Performance Improvements** - 2.9x lower median latency at 1,000 concurrent users.
 - **Claude Sonnet 4.5** - Support for Anthropic's new Claude Sonnet 4.5 model family with 200K+ context and tiered pricing
 - **MCP Gateway Enhancements** - Fine-grained tool control, server permissions, and forwardable headers
 - **AMD Lemonade & Nvidia NIM** - New provider support for AMD Lemonade and Nvidia NIM Rerank
 - **GitLab Prompt Management** - GitLab-based prompt management integration
+
+### Performance - 2.9x Lower Median Latency
+
+<Image img={require('../../img/release_notes/perf_77_7.png')}  style={{ width: '800px', height: 'auto' }} />
+
+<br/>
+
+This update removes LiteLLM router inefficiencies, reducing complexity from O(M×N) to O(1). Previously, it built a new array and ran repeated checks like data["model"] in llm_router.get_model_ids(). Now, a direct ID-to-deployment map eliminates redundant allocations and scans.
+
+As a result, performance improved across all latency percentiles:
+
+- **Median latency:** 320 ms → **110 ms** (−65.6%)
+- **p95 latency:** 850 ms → **440 ms** (−48.2%)
+- **p99 latency:** 1,400 ms → **810 ms** (−42.1%)
+- **Average latency:** 864 ms → **310 ms** (−64%)
+
+
+#### Test Setup
+
+**Locust**
+
+- **Concurrent users:** 1,000
+- **Ramp-up:** 500
+
+**System Specs**
+
+- **CPU:** 4 vCPUs
+- **Memory:** 8 GB RAM
+- **LiteLLM Workers:** 4
+- **Instances**: 4
+
+**Configuration (config.yaml)**
+
+View the complete configuration: [gist.github.com/AlexsanderHamir/config.yaml](https://gist.github.com/AlexsanderHamir/53f7d554a5d2afcf2c4edb5b6be68ff4)
+
+**Load Script (no_cache_hits.py)**
+
+View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache_hits.py](https://gist.github.com/AlexsanderHamir/42c33d7a4dc7a57f56a78b560dee3a42)
+
+### MCP OAuth 2.0 Support
+
+<Image img={require('../../img/mcp_updates.jpg')} style={{ width: '800px', height: 'auto' }} />
+
+<br/>
+
+This release adds support for OAuth 2.0 Client Credentials for MCP servers. This is great for **Internal Dev Tools** use-cases, as it enables your users to call MCP servers, with their own credentials. E.g. Allowing your developers to call the Github MCP, with their own credentials.
+
+[Set it up today on Claude Code](../../docs/tutorials/claude_responses_api#connecting-mcp-servers)
+
+### Scheduled Key Rotations
+
+<Image img={require('../../img/release_notes/schedule_key_rotations.png')}  style={{ width: '800px', height: 'auto' }} />
+
+<br/>
+
+This release brings support for scheduling virtual key rotations on LiteLLM AI Gateway. 
+ 
+From this release you can enforce Virtual Keys to rotate on a schedule of your choice e.g every 15 days/30 days/60 days etc.
+ 
+This is great for Proxy Admins who need to enforce security policies for production workloads. 
+
+[Get Started](../../docs/proxy/virtual_keys#scheduled-key-rotations)
+
 
 ## New Models / Updated Models
 

@@ -1,12 +1,12 @@
-export const extractMCPToken = (url: string): { token: string | null, baseUrl: string } => {
+export const extractMCPToken = (url: string): { token: string | null; baseUrl: string } => {
   try {
-    const mcpIndex = url.indexOf('/mcp/');
+    const mcpIndex = url.indexOf("/mcp/");
     if (mcpIndex === -1) return { token: null, baseUrl: url };
 
-    const parts = url.split('/mcp/');
+    const parts = url.split("/mcp/");
     if (parts.length !== 2) return { token: null, baseUrl: url };
 
-    const baseUrl = parts[0] + '/mcp/';
+    const baseUrl = parts[0] + "/mcp/";
     const afterMcp = parts[1];
 
     // If there's no content after /mcp/, return null token
@@ -14,10 +14,10 @@ export const extractMCPToken = (url: string): { token: string | null, baseUrl: s
 
     return {
       token: afterMcp,
-      baseUrl: baseUrl
+      baseUrl: baseUrl,
     };
   } catch (error) {
-    console.error('Error parsing MCP URL:', error);
+    console.error("Error parsing MCP URL:", error);
     return { token: null, baseUrl: url };
   }
 };
@@ -25,14 +25,14 @@ export const extractMCPToken = (url: string): { token: string | null, baseUrl: s
 export const maskUrl = (url: string): string => {
   const { token, baseUrl } = extractMCPToken(url);
   if (!token) return url;
-  return baseUrl + '...';
+  return baseUrl + "...";
 };
 
-export const getMaskedAndFullUrl = (url: string): { maskedUrl: string, hasToken: boolean } => {
+export const getMaskedAndFullUrl = (url: string): { maskedUrl: string; hasToken: boolean } => {
   const { token } = extractMCPToken(url);
   return {
     maskedUrl: maskUrl(url),
-    hasToken: !!token
+    hasToken: !!token,
   };
 };
 
@@ -50,4 +50,4 @@ export const validateMCPServerName = (value: string) => {
   return value && value.includes("-")
     ? Promise.reject("Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
     : Promise.resolve();
-}; 
+};

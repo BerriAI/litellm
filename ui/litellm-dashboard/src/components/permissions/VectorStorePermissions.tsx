@@ -13,24 +13,23 @@ interface VectorStorePermissionsProps {
   accessToken?: string | null;
 }
 
-export function VectorStorePermissions({ 
-  vectorStores, 
-  accessToken 
-}: VectorStorePermissionsProps) {
+export function VectorStorePermissions({ vectorStores, accessToken }: VectorStorePermissionsProps) {
   const [vectorStoreDetails, setVectorStoreDetails] = useState<VectorStoreDetails[]>([]);
 
   // Fetch vector store details when component mounts
   useEffect(() => {
     const fetchVectorStores = async () => {
       if (!accessToken || vectorStores.length === 0) return;
-      
+
       try {
         const response = await vectorStoreListCall(accessToken);
         if (response.data) {
-          setVectorStoreDetails(response.data.map((store: any) => ({
-            vector_store_id: store.vector_store_id,
-            vector_store_name: store.vector_store_name
-          })));
+          setVectorStoreDetails(
+            response.data.map((store: any) => ({
+              vector_store_id: store.vector_store_id,
+              vector_store_name: store.vector_store_name,
+            })),
+          );
         }
       } catch (error) {
         console.error("Error fetching vector stores:", error);
@@ -42,7 +41,7 @@ export function VectorStorePermissions({
 
   // Function to get display name for vector store
   const getVectorStoreDisplayName = (storeId: string) => {
-    const storeDetail = vectorStoreDetails.find(store => store.vector_store_id === storeId);
+    const storeDetail = vectorStoreDetails.find((store) => store.vector_store_id === storeId);
     if (storeDetail) {
       return `${storeDetail.vector_store_name || storeDetail.vector_store_id} (${storeDetail.vector_store_id})`;
     }
@@ -58,7 +57,7 @@ export function VectorStorePermissions({
           {vectorStores.length}
         </Badge>
       </div>
-      
+
       {vectorStores.length > 0 ? (
         <div className="flex flex-wrap gap-2">
           {vectorStores.map((store, index) => (
@@ -80,4 +79,4 @@ export function VectorStorePermissions({
   );
 }
 
-export default VectorStorePermissions; 
+export default VectorStorePermissions;

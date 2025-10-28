@@ -1,0 +1,78 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.4, pytest-7.4.1, pluggy-1.2.0
+rootdir: /Users/krrishdholakia/Documents/litellm
+plugins: snapshot-0.9.0, cov-5.0.0, timeout-2.2.0, postgresql-7.0.1, respx-0.21.1, asyncio-0.21.1, langsmith-0.3.4, anyio-4.8.0, mock-3.11.1, Faker-25.9.2
+asyncio: mode=Mode.STRICT
+collected 1 item
+
+tests/llm_translation/test_gemini.py .                                   [100%]
+
+=============================== warnings summary ===============================
+tests/llm_translation/base_llm_unit_tests.py:481
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/base_llm_unit_tests.py:481: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=6, delay=1)
+
+tests/llm_translation/base_llm_unit_tests.py:523
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/base_llm_unit_tests.py:523: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=6, delay=1)
+
+tests/llm_translation/base_llm_unit_tests.py:601
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/base_llm_unit_tests.py:601: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=6, delay=1)
+
+tests/llm_translation/base_llm_unit_tests.py:641
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/base_llm_unit_tests.py:641: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=6, delay=1)
+
+tests/llm_translation/base_llm_unit_tests.py:650
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/base_llm_unit_tests.py:650: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=6, delay=1)
+
+tests/llm_translation/base_llm_unit_tests.py:694
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/base_llm_unit_tests.py:694: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=6, delay=1)
+
+tests/llm_translation/base_llm_unit_tests.py:745
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/base_llm_unit_tests.py:745: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=6, delay=1)
+
+tests/llm_translation/base_llm_unit_tests.py:783
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/base_llm_unit_tests.py:783: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=6, delay=1)
+
+tests/llm_translation/base_llm_unit_tests.py:859
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/base_llm_unit_tests.py:859: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=4, delay=2)
+
+tests/llm_translation/base_llm_unit_tests.py:955
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/base_llm_unit_tests.py:955: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=4, delay=1)
+
+tests/llm_translation/base_llm_unit_tests.py:1073
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/base_llm_unit_tests.py:1073: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=3, delay=1)
+
+tests/llm_translation/base_llm_unit_tests.py:1109
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/base_llm_unit_tests.py:1109: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=3, delay=1)
+
+tests/llm_translation/base_llm_unit_tests.py:1232
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/base_llm_unit_tests.py:1232: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=3, delay=1)
+
+tests/llm_translation/test_gemini.py:36
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/test_gemini.py:36: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=3, delay=2)
+
+tests/llm_translation/test_gemini.py:510
+  /Users/krrishdholakia/Documents/litellm/tests/llm_translation/test_gemini.py:510: PytestUnknownMarkWarning: Unknown pytest.mark.flaky - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.flaky(retries=3, delay=2)
+
+tests/llm_translation/test_gemini.py::test_gemini_image_generation_async
+  /Users/krrishdholakia/Library/Python/3.11/lib/python/site-packages/pydantic/main.py:463: UserWarning: Pydantic serializer warnings:
+    PydanticSerializationUnexpectedValue(Expected 10 fields but got 7: Expected `Message` - serialized value may not be as expected [input_value=Message(content="Here's t...er_specific_fields=None), input_type=Message])
+    PydanticSerializationUnexpectedValue(Expected `StreamingChoices` - serialized value may not be as expected [input_value=Choices(finish_reason='st...r_specific_fields=None)), input_type=Choices])
+    return self.__pydantic_serializer__.to_python(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 1 passed, 16 warnings in 5.86s ========================

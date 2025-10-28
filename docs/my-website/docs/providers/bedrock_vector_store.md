@@ -138,7 +138,14 @@ print(response.choices[0].message.content)
 </Tabs>
 
 
-Futher Reading Vector Stores:
+## Accessing Search Results
+
+See how to access vector store search results in your response:
+- [Accessing Search Results (Non-Streaming & Streaming)](../completion/knowledgebase#accessing-search-results-citations)
+
+## Further Reading
+
+Vector Stores:
 - [Always on Vector Stores](https://docs.litellm.ai/docs/completion/knowledgebase#always-on-for-a-model)
 - [Listing available vector stores on litellm proxy](https://docs.litellm.ai/docs/completion/knowledgebase#listing-available-vector-stores)
 - [How LiteLLM Vector Stores Work](https://docs.litellm.ai/docs/completion/knowledgebase#how-it-works)

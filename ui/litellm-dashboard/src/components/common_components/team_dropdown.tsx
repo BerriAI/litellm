@@ -21,13 +21,13 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({ teams, value, onChange, dis
       filterOption={(input, option) => {
         if (!option) return false;
         // Get team data from the option key
-        const team = teams?.find(t => t.team_id === option.key);
+        const team = teams?.find((t) => t.team_id === option.key);
         if (!team) return false;
-        
+
         const searchTerm = input.toLowerCase().trim();
-        const teamAlias = (team.team_alias || '').toLowerCase();
-        const teamId = (team.team_id || '').toLowerCase();
-        
+        const teamAlias = (team.team_alias || "").toLowerCase();
+        const teamId = (team.team_id || "").toLowerCase();
+
         // Search in both team alias and team ID
         return teamAlias.includes(searchTerm) || teamId.includes(searchTerm);
       }}
@@ -35,12 +35,11 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({ teams, value, onChange, dis
     >
       {teams?.map((team) => (
         <Select.Option key={team.team_id} value={team.team_id}>
-          <span className="font-medium">{team.team_alias}</span>{" "}
-          <span className="text-gray-500">({team.team_id})</span>
+          <span className="font-medium">{team.team_alias}</span> <span className="text-gray-500">({team.team_id})</span>
         </Select.Option>
       ))}
     </Select>
   );
 };
 
-export default TeamDropdown; 
+export default TeamDropdown;

@@ -21,4 +21,4 @@ export const ChartLoader: React.FC<ChartLoaderProps> = ({ isDateChanging = false
   </div>
 );
 
-export default ChartLoader; 
+export default ChartLoader;

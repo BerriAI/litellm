@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { Form, Select, Spin } from "antd";
 import { TextInput } from "@tremor/react";
-import { GuardrailProviders, guardrail_provider_map, populateGuardrailProviders, populateGuardrailProviderMap } from './guardrail_info_helpers';
+import {
+  guardrail_provider_map,
+  populateGuardrailProviders,
+  populateGuardrailProviderMap,
+} from "./guardrail_info_helpers";
 import { getGuardrailProviderSpecificParams } from "../networking";
 import NumericalInput from "../shared/numerical_input";
 
@@ -32,7 +36,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   selectedProvider,
   accessToken,
   providerParams: providerParamsProp = null,
-  value = null
+  value = null,
 }) => {
   const [loading, setLoading] = useState(false);
   const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(providerParamsProp);
@@ -48,15 +52,15 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
 
     const fetchProviderParams = async () => {
       if (!accessToken) return;
-      
+
       setLoading(true);
       setError(null);
-      
+
       try {
         const data = await getGuardrailProviderSpecificParams(accessToken);
         console.log("Provider params API response:", data);
         setProviderParams(data);
-        
+
         // Populate dynamic providers from API response
         populateGuardrailProviders(data);
         populateGuardrailProviderMap(data);
@@ -91,13 +95,13 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
 
   // Get the provider key matching the selected provider in the guardrail_provider_map
   const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
-  
+
   // Get parameters for the selected provider
   const providerFields = providerParams && providerParams[providerKey];
-  
+
   console.log("Provider key:", providerKey);
   console.log("Provider fields:", providerFields);
-  
+
   if (!providerFields || Object.keys(providerFields).length === 0) {
     return <div>No configuration fields available for this provider.</div>;
   }
@@ -113,12 +117,12 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
       if (fieldKey === "ui_friendly_name") {
         return null;
       }
-      
+
       // Skip optional_params - they are handled in a separate step
       if (fieldKey === "optional_params" && field.type === "nested" && field.fields) {
         return null;
       }
-      
+
       // Handle other nested fields (like azure/text_moderations optional_params)
       if (field.type === "nested" && field.fields) {
         return (
@@ -130,7 +134,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
           </div>
         );
       }
-      
+
       return (
         <Form.Item
           key={fullFieldKey}
@@ -140,10 +144,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
           rules={field.required ? [{ required: true, message: `${fieldKey} is required` }] : undefined}
         >
           {field.type === "select" && field.options ? (
-            <Select 
-              placeholder={field.description} 
-              defaultValue={fieldValue || field.default_value}
-            >
+            <Select placeholder={field.description} defaultValue={fieldValue || field.default_value}>
               {field.options.map((option) => (
                 <Select.Option key={option} value={option}>
                   {option}
@@ -151,11 +152,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
               ))}
             </Select>
           ) : field.type === "multiselect" && field.options ? (
-            <Select 
-              mode="multiple"
-              placeholder={field.description} 
-              defaultValue={fieldValue || field.default_value}
-            >
+            <Select mode="multiple" placeholder={field.description} defaultValue={fieldValue || field.default_value}>
               {field.options.map((option) => (
                 <Select.Option key={option} value={option}>
                   {option}
@@ -178,28 +175,16 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
               defaultValue={fieldValue !== undefined ? Number(fieldValue) : undefined}
             />
           ) : fieldKey.includes("password") || fieldKey.includes("secret") || fieldKey.includes("key") ? (
-            <TextInput
-              placeholder={field.description}
-              type="password"
-              defaultValue={fieldValue || ""}
-            />
+            <TextInput placeholder={field.description} type="password" defaultValue={fieldValue || ""} />
           ) : (
-            <TextInput
-              placeholder={field.description}
-              type="text"
-              defaultValue={fieldValue || ""}
-            />
+            <TextInput placeholder={field.description} type="text" defaultValue={fieldValue || ""} />
           )}
         </Form.Item>
       );
     });
   };
 
-  return (
-    <>
-      {renderFields(providerFields)}
-    </>
-  );
+  return <>{renderFields(providerFields)}</>;
 };
 
-export default GuardrailProviderFields; 
+export default GuardrailProviderFields;

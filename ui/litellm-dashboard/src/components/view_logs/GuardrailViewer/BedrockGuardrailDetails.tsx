@@ -40,18 +40,18 @@ export interface BedrockContentFilter {
 }
 
 export interface BedrockContextualGroundingFilter {
-  type?: string;       // "GROUNDING" | "RELEVANCE"
-  action?: string;     // "BLOCKED" | ...
+  type?: string; // "GROUNDING" | "RELEVANCE"
+  action?: string; // "BLOCKED" | ...
   detected?: boolean;
-  score?: number;      // model score
-  threshold?: number;  // configured threshold
+  score?: number; // model score
+  threshold?: number; // configured threshold
 }
 
 export interface BedrockPiiEntity {
-  type?: string;     // e.g., "ADDRESS", "EMAIL", etc.
-  match?: string;    // the matched text (may be masked)
+  type?: string; // e.g., "ADDRESS", "EMAIL", etc.
+  match?: string; // the matched text (may be masked)
   detected?: boolean;
-  action?: string;   // "BLOCKED" | "ANONYMIZED" | ...
+  action?: string; // "BLOCKED" | "ANONYMIZED" | ...
 }
 
 export interface BedrockRegexFinding {
@@ -63,10 +63,10 @@ export interface BedrockRegexFinding {
 }
 
 export interface BedrockTopic {
-  name?: string;     // topic list entry name
-  type?: string;     // "DENY" | "ALLOW" depending on list
+  name?: string; // topic list entry name
+  type?: string; // "DENY" | "ALLOW" depending on list
   detected?: boolean;
-  action?: string;   // "BLOCKED" | "NONE"
+  action?: string; // "BLOCKED" | "NONE"
 }
 
 export interface BedrockInvocationMetrics {
@@ -103,10 +103,7 @@ export interface BedrockGuardrailResponse {
 /** ====== UI helpers ====== */
 type ChipTone = "green" | "red" | "blue" | "slate" | "amber";
 
-const chip = (
-  text: React.ReactNode,
-  tone: ChipTone = "slate"
-) => {
+const chip = (text: React.ReactNode, tone: ChipTone = "slate") => {
   const map: Record<ChipTone, string> = {
     green: "bg-green-100 text-green-800",
     red: "bg-red-100 text-red-800",
@@ -127,13 +124,7 @@ interface SectionProps {
   children?: React.ReactNode;
 }
 
-const Section: React.FC<SectionProps> = ({
-                                           title,
-                                           count,
-                                           defaultOpen = true,
-                                           right,
-                                           children,
-                                         }) => {
+const Section: React.FC<SectionProps> = ({ title, count, defaultOpen = true, right, children }) => {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="border rounded-lg overflow-hidden">
@@ -142,7 +133,12 @@ const Section: React.FC<SectionProps> = ({
         onClick={() => setOpen((v) => !v)}
       >
         <div className="flex items-center">
-          <svg className={`w-5 h-5 mr-2 transition-transform ${open ? "transform rotate-90" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg
+            className={`w-5 h-5 mr-2 transition-transform ${open ? "transform rotate-90" : ""}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
           <h5 className="font-medium">
@@ -173,7 +169,6 @@ const Divider: React.FC = () => <div className="my-3 border-t" />;
 
 /** ====== Main component ====== */
 export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailResponse }> = ({ response }) => {
-
   if (!response) return null;
 
   const outputs: BedrockOutputContent[] = (response.outputs ?? response.output ?? []) as BedrockOutputContent[];
@@ -182,18 +177,16 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
 
   const coverageChips = (
     <div className="flex flex-wrap gap-2">
-      {response.guardrailCoverage?.textCharacters && (
+      {response.guardrailCoverage?.textCharacters &&
         chip(
           `text guarded ${response.guardrailCoverage.textCharacters.guarded ?? 0}/${response.guardrailCoverage.textCharacters.total ?? 0}`,
-          "blue"
-        )
-      )}
-      {response.guardrailCoverage?.images && (
+          "blue",
+        )}
+      {response.guardrailCoverage?.images &&
         chip(
           `images guarded ${response.guardrailCoverage.images.guarded ?? 0}/${response.guardrailCoverage.images.total ?? 0}`,
-          "blue"
-        )
-      )}
+          "blue",
+        )}
     </div>
   );
 
@@ -204,7 +197,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
           <span key={k} className="px-2 py-1 bg-slate-100 text-slate-800 rounded-md text-xs font-medium">
             {k}: {v}
           </span>
-        ) : null
+        ) : null,
       )}
     </div>
   );
@@ -215,9 +208,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
       <div className="border rounded-lg p-4">
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <KV label="Action:">
-              {chip(response.action ?? "N/A", actionTone)}
-            </KV>
+            <KV label="Action:">{chip(response.action ?? "N/A", actionTone)}</KV>
             {response.actionReason && <KV label="Action Reason:">{response.actionReason}</KV>}
             {response.blockedResponse && (
               <KV label="Blocked Response:">
@@ -320,24 +311,24 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                     <div className="overflow-x-auto">
                       <table className="min-w-full text-sm">
                         <thead>
-                        <tr className="text-left text-gray-600">
-                          <th className="py-1 pr-4">Type</th>
-                          <th className="py-1 pr-4">Action</th>
-                          <th className="py-1 pr-4">Detected</th>
-                          <th className="py-1 pr-4">Strength</th>
-                          <th className="py-1 pr-4">Confidence</th>
-                        </tr>
+                          <tr className="text-left text-gray-600">
+                            <th className="py-1 pr-4">Type</th>
+                            <th className="py-1 pr-4">Action</th>
+                            <th className="py-1 pr-4">Detected</th>
+                            <th className="py-1 pr-4">Strength</th>
+                            <th className="py-1 pr-4">Confidence</th>
+                          </tr>
                         </thead>
                         <tbody>
-                        {assess.contentPolicy.filters!.map((f, i) => (
-                          <tr key={i} className="border-t">
-                            <td className="py-1 pr-4">{f.type ?? "—"}</td>
-                            <td className="py-1 pr-4">{chip(f.action ?? "—", f.detected ? "red" : "slate")}</td>
-                            <td className="py-1 pr-4">{boolPill(f.detected)}</td>
-                            <td className="py-1 pr-4">{f.filterStrength ?? "—"}</td>
-                            <td className="py-1 pr-4">{f.confidence ?? "—"}</td>
-                          </tr>
-                        ))}
+                          {assess.contentPolicy.filters!.map((f, i) => (
+                            <tr key={i} className="border-t">
+                              <td className="py-1 pr-4">{f.type ?? "—"}</td>
+                              <td className="py-1 pr-4">{chip(f.action ?? "—", f.detected ? "red" : "slate")}</td>
+                              <td className="py-1 pr-4">{boolPill(f.detected)}</td>
+                              <td className="py-1 pr-4">{f.filterStrength ?? "—"}</td>
+                              <td className="py-1 pr-4">{f.confidence ?? "—"}</td>
+                            </tr>
+                          ))}
                         </tbody>
                       </table>
                     </div>
@@ -351,24 +342,24 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                     <div className="overflow-x-auto">
                       <table className="min-w-full text-sm">
                         <thead>
-                        <tr className="text-left text-gray-600">
-                          <th className="py-1 pr-4">Type</th>
-                          <th className="py-1 pr-4">Action</th>
-                          <th className="py-1 pr-4">Detected</th>
-                          <th className="py-1 pr-4">Score</th>
-                          <th className="py-1 pr-4">Threshold</th>
-                        </tr>
+                          <tr className="text-left text-gray-600">
+                            <th className="py-1 pr-4">Type</th>
+                            <th className="py-1 pr-4">Action</th>
+                            <th className="py-1 pr-4">Detected</th>
+                            <th className="py-1 pr-4">Score</th>
+                            <th className="py-1 pr-4">Threshold</th>
+                          </tr>
                         </thead>
                         <tbody>
-                        {assess.contextualGroundingPolicy.filters!.map((f, i) => (
-                          <tr key={i} className="border-t">
-                            <td className="py-1 pr-4">{f.type ?? "—"}</td>
-                            <td className="py-1 pr-4">{chip(f.action ?? "—", f.detected ? "red" : "slate")}</td>
-                            <td className="py-1 pr-4">{boolPill(f.detected)}</td>
-                            <td className="py-1 pr-4">{f.score ?? "—"}</td>
-                            <td className="py-1 pr-4">{f.threshold ?? "—"}</td>
-                          </tr>
-                        ))}
+                          {assess.contextualGroundingPolicy.filters!.map((f, i) => (
+                            <tr key={i} className="border-t">
+                              <td className="py-1 pr-4">{f.type ?? "—"}</td>
+                              <td className="py-1 pr-4">{chip(f.action ?? "—", f.detected ? "red" : "slate")}</td>
+                              <td className="py-1 pr-4">{boolPill(f.detected)}</td>
+                              <td className="py-1 pr-4">{f.score ?? "—"}</td>
+                              <td className="py-1 pr-4">{f.threshold ?? "—"}</td>
+                            </tr>
+                          ))}
                         </tbody>
                       </table>
                     </div>
@@ -399,7 +390,10 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                       <Section title="Custom Regexes" defaultOpen={false}>
                         <div className="space-y-2">
                           {assess.sensitiveInformationPolicy.regexes!.map((r, i) => (
-                            <div key={i} className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-2 bg-gray-50 rounded gap-1">
+                            <div
+                              key={i}
+                              className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-2 bg-gray-50 rounded gap-1"
+                            >
                               <div className="flex items-center gap-2">
                                 {chip(r.action ?? "N/A", r.detected ? "red" : "slate")}
                                 <span className="font-medium">{r.name ?? "regex"}</span>
@@ -449,14 +443,14 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                                 `text ${assess.invocationMetrics.guardrailCoverage.textCharacters.guarded ?? 0}/${
                                   assess.invocationMetrics.guardrailCoverage.textCharacters.total ?? 0
                                 }`,
-                                "blue"
+                                "blue",
                               )}
                             {assess.invocationMetrics.guardrailCoverage?.images &&
                               chip(
                                 `images ${assess.invocationMetrics.guardrailCoverage.images.guarded ?? 0}/${
                                   assess.invocationMetrics.guardrailCoverage.images.total ?? 0
                                 }`,
-                                "blue"
+                                "blue",
                               )}
                           </div>
                         </KV>
@@ -467,10 +461,13 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                             {assess.invocationMetrics.usage &&
                               Object.entries(assess.invocationMetrics.usage).map(([k, v]) =>
                                 typeof v === "number" ? (
-                                  <span key={k} className="px-2 py-1 bg-slate-100 text-slate-800 rounded-md text-xs font-medium">
+                                  <span
+                                    key={k}
+                                    className="px-2 py-1 bg-slate-100 text-slate-800 rounded-md text-xs font-medium"
+                                  >
                                     {k}: {v}
                                   </span>
-                                ) : null
+                                ) : null,
                               )}
                           </div>
                         </KV>

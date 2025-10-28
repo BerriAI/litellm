@@ -88,6 +88,7 @@ def get_docker_run_command(release_version):
 
 
 if __name__ == "__main__":
+    return
     csv_file = "load_test_stats.csv"  # Change this to the path of your CSV file
     markdown_table = interpret_results(csv_file)
 

@@ -54,12 +54,7 @@ async def allm_passthrough_route(
     cookies: Optional[CookieTypes] = None,
     client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     **kwargs,
-) -> Union[
-    httpx.Response,
-    Coroutine[Any, Any, httpx.Response],
-    Generator[Any, Any, Any],
-    AsyncGenerator[Any, Any],
-]:
+) -> Union[httpx.Response, AsyncGenerator[Any, Any]]:
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
@@ -111,23 +106,25 @@ async def allm_passthrough_route(
         func_with_context = partial(ctx.run, func)
         init_response = await loop.run_in_executor(None, func_with_context)
 
+        # Since allm_passthrough_route=True, we always get a coroutine from _async_passthrough_request
         if asyncio.iscoroutine(init_response):
             response = await init_response
 
-            try:
+            # Only call raise_for_status if it's a Response object (not a generator)
+            if isinstance(response, httpx.Response):
                 response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                error_text = await e.response.aread()
-                error_text_str = error_text.decode("utf-8")
-                raise Exception(error_text_str)
-
+            
+            return response
         else:
-            response = init_response
+            # This shouldn't happen when allm_passthrough_route=True, but handle it for type safety
+            raise Exception("Expected coroutine from async passthrough route")
 
-        return response
-
+    except httpx.HTTPStatusError as e:
+        # For HTTP errors, re-raise as-is to preserve the original error details
+        # The caller (e.g., proxy layer) can handle conversion to appropriate response format
+        raise e
     except Exception as e:
-        # For passthrough routes, we need to get the provider config to properly handle errors
+        # For other exceptions, use provider-specific error handling
         from litellm.types.utils import LlmProviders
         from litellm.utils import ProviderConfigManager
 
@@ -186,6 +183,7 @@ def llm_passthrough_route(
 ) -> Union[
     httpx.Response,
     Coroutine[Any, Any, httpx.Response],
+    Coroutine[Any, Any, Union[httpx.Response, AsyncGenerator[Any, Any]]],
     Generator[Any, Any, Any],
     AsyncGenerator[Any, Any],
 ]:
@@ -200,8 +198,10 @@ def llm_passthrough_route(
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
+    _is_async = allm_passthrough_route
+
     if client is None:
-        if allm_passthrough_route:
+        if _is_async:
             client = litellm.module_level_aclient
         else:
             client = litellm.module_level_client
@@ -242,12 +242,14 @@ def llm_passthrough_route(
         request_query_params=request_query_params,
         litellm_params=litellm_params_dict,
     )
-    
-    # need to encode the id of application-inference-profile for bedrock
+
+    # [TODO: Refactor to bedrockpassthroughconfig] need to encode the id of application-inference-profile for bedrock
     if custom_llm_provider == "bedrock" and "application-inference-profile" in endpoint:
-        encoded_url_str = CommonUtils.encode_bedrock_runtime_modelid_arn(str(updated_url))
+        encoded_url_str = CommonUtils.encode_bedrock_runtime_modelid_arn(
+            str(updated_url)
+        )
         updated_url = httpx.URL(encoded_url_str)
-    
+
     # Add or update query parameters
     provider_api_key = provider_config.get_api_key(api_key)
 
@@ -300,24 +302,40 @@ def llm_passthrough_route(
     # Update logging object with streaming status
     litellm_logging_obj.stream = is_streaming_request
 
+    ## LOGGING PRE-CALL
+    request_data = data if data else json
+    litellm_logging_obj.pre_call(
+        input=request_data,
+        api_key=provider_api_key,
+        additional_args={
+            "complete_input_dict": request_data,
+            "api_base": str(updated_url),
+            "headers": headers,
+        },
+    )
+
     try:
-        response = client.client.send(request=request, stream=is_streaming_request)
-        if asyncio.iscoroutine(response):
-            if is_streaming_request:
-                return _async_streaming(response, litellm_logging_obj, provider_config)
-            else:
-                return response
-        response.raise_for_status()
-
-        if (
-            hasattr(response, "iter_bytes") and is_streaming_request
-        ):  # yield the chunk, so we can store it in the logging object
-
-            return _sync_streaming(response, litellm_logging_obj, provider_config)
+        if _is_async:
+            # Return the coroutine to be awaited by the caller
+            return _async_passthrough_request(
+                client=client,
+                request=request,
+                is_streaming_request=is_streaming_request,
+                litellm_logging_obj=litellm_logging_obj,
+                provider_config=provider_config,
+            )
         else:
+            # Sync path - client.client.send returns Response directly
+            response: httpx.Response = client.client.send(request=request, stream=is_streaming_request)  # type: ignore
+            response.raise_for_status()
 
-            # For non-streaming responses, yield the entire response
-            return response
+            if (
+                hasattr(response, "iter_bytes") and is_streaming_request
+            ):  # yield the chunk, so we can store it in the logging object
+                return _sync_streaming(response, litellm_logging_obj, provider_config)
+            else:
+                # For non-streaming responses, yield the entire response
+                return response
     except Exception as e:
         if provider_config is None:
             raise e
@@ -325,6 +343,39 @@ def llm_passthrough_route(
             e=e,
             provider_config=provider_config,
         )
+
+
+async def _async_passthrough_request(
+    client: Union[HTTPHandler, AsyncHTTPHandler],
+    request: httpx.Request,
+    is_streaming_request: bool,
+    litellm_logging_obj: "LiteLLMLoggingObj",
+    provider_config: "BasePassthroughConfig",
+) -> Union[httpx.Response, AsyncGenerator[Any, Any]]:
+    """
+    Handle async passthrough requests.
+    Uses async client to send request and properly handles streaming.
+    """
+    # client.client.send returns a coroutine for async clients
+    response_result = client.client.send(request=request, stream=is_streaming_request)
+    
+    # Check if it's a coroutine and await it
+    if asyncio.iscoroutine(response_result):
+        if is_streaming_request:
+            # Pass the coroutine to _async_streaming which will await it
+            return _async_streaming(
+                response=response_result,
+                litellm_logging_obj=litellm_logging_obj,
+                provider_config=provider_config,
+            )
+        else:
+            response = await response_result
+            await response.aread()
+            response.raise_for_status()
+            return response
+    else:
+        # Fallback for sync-like behavior (shouldn't happen in async path)
+        raise Exception("Expected coroutine from async client")
 
 
 def _sync_streaming(

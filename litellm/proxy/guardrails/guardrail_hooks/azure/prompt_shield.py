@@ -135,37 +135,32 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             "Azure Prompt Shield: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
-        if call_type == "acompletion":
-            new_messages: Optional[List[AllMessageValues]] = data.get("messages")
-            if new_messages is None:
-                verbose_proxy_logger.warning(
-                    "Lakera AI: not running guardrail. No messages in data"
-                )
-                return data
-            user_prompt = self.get_user_prompt(new_messages)
+        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        if new_messages is None:
+            verbose_proxy_logger.warning(
+                "Lakera AI: not running guardrail. No messages in data"
+            )
+            return data
+        user_prompt = self.get_user_prompt(new_messages)
 
-            if user_prompt:
-                verbose_proxy_logger.debug(
-                    f"Azure Prompt Shield: User prompt: {user_prompt}"
+        if user_prompt:
+            verbose_proxy_logger.debug(
+                f"Azure Prompt Shield: User prompt: {user_prompt}"
+            )
+            azure_prompt_shield_response = await self.async_make_request(
+                user_prompt=user_prompt,
+            )
+            if azure_prompt_shield_response["userPromptAnalysis"].get("attackDetected"):
+                verbose_proxy_logger.warning("Azure Prompt Shield: Attack detected")
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Violated Azure Prompt Shield guardrail policy",
+                        "detection_message": f"Attack detected: {azure_prompt_shield_response['userPromptAnalysis']}",
+                    },
                 )
-                azure_prompt_shield_response = await self.async_make_request(
-                    user_prompt=user_prompt,
-                )
-                if azure_prompt_shield_response["userPromptAnalysis"].get(
-                    "attackDetected"
-                ):
-                    verbose_proxy_logger.warning("Azure Prompt Shield: Attack detected")
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": "Violated Azure Prompt Shield guardrail policy",
-                            "detection_message": f"Attack detected: {azure_prompt_shield_response['userPromptAnalysis']}",
-                        },
-                    )
-            else:
-                verbose_proxy_logger.warning(
-                    "Azure Prompt Shield: No user prompt found"
-                )
+        else:
+            verbose_proxy_logger.warning("Azure Prompt Shield: No user prompt found")
         return None
 
     @log_guardrail_information

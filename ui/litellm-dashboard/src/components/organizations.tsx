@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect } from "react";
 import {
   Table,
   TableHead,
@@ -18,42 +18,41 @@ import {
   Tab,
   TabPanels,
   TabPanel,
-} from "@tremor/react"
-import NumericalInput from "./shared/numerical_input"
-import { Input } from "antd"
-import { Modal, Form, Tooltip, Select as Select2 } from "antd"
-import { InfoCircleOutlined } from "@ant-design/icons"
-import { PencilAltIcon, TrashIcon, RefreshIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline"
-import { TextInput } from "@tremor/react"
-import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key"
-import { message } from "antd"
-import OrganizationInfoView from "./organization/organization_view"
-import { Organization, organizationListCall, organizationCreateCall, organizationDeleteCall } from "./networking"
-import VectorStoreSelector from "./vector_store_management/VectorStoreSelector"
-import MCPServerSelector from "./mcp_server_management/MCPServerSelector"
-import { formatNumberWithCommas } from "../utils/dataUtils"
-import NotificationsManager from "./molecules/notifications_manager"
+} from "@tremor/react";
+import NumericalInput from "./shared/numerical_input";
+import { Input } from "antd";
+import { Modal, Form, Tooltip, Select as Select2 } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { PencilAltIcon, TrashIcon, RefreshIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
+import { TextInput } from "@tremor/react";
+import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import OrganizationInfoView from "./organization/organization_view";
+import { Organization, organizationListCall, organizationCreateCall, organizationDeleteCall } from "./networking";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import { formatNumberWithCommas } from "../utils/dataUtils";
+import NotificationsManager from "./molecules/notifications_manager";
 
 interface OrganizationsTableProps {
-  organizations: Organization[]
-  userRole: string
-  userModels: string[]
-  accessToken: string | null
-  lastRefreshed?: string
-  handleRefreshClick?: () => void
-  currentOrg?: any
-  guardrailsList?: string[]
-  setOrganizations: (organizations: Organization[]) => void
-  premiumUser: boolean
+  organizations: Organization[];
+  userRole: string;
+  userModels: string[];
+  accessToken: string | null;
+  lastRefreshed?: string;
+  handleRefreshClick?: () => void;
+  currentOrg?: any;
+  guardrailsList?: string[];
+  setOrganizations: (organizations: Organization[]) => void;
+  premiumUser: boolean;
 }
 
 export const fetchOrganizations = async (
   accessToken: string,
   setOrganizations: (organizations: Organization[]) => void,
 ) => {
-  const organizations = await organizationListCall(accessToken)
-  setOrganizations(organizations)
-}
+  const organizations = await organizationListCall(accessToken);
+  setOrganizations(organizations);
+};
 
 const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   organizations,
@@ -67,53 +66,53 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   setOrganizations,
   premiumUser,
 }) => {
-  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null)
-  const [editOrg, setEditOrg] = useState(false)
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
-  const [orgToDelete, setOrgToDelete] = useState<string | null>(null)
-  const [isOrgModalVisible, setIsOrgModalVisible] = useState(false)
-  const [form] = Form.useForm()
-  const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({})
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+  const [editOrg, setEditOrg] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [orgToDelete, setOrgToDelete] = useState<string | null>(null);
+  const [isOrgModalVisible, setIsOrgModalVisible] = useState(false);
+  const [form] = Form.useForm();
+  const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (accessToken) {
-      fetchOrganizations(accessToken, setOrganizations)
+      fetchOrganizations(accessToken, setOrganizations);
     }
-  }, [accessToken])
+  }, [accessToken]);
 
   const handleDelete = (orgId: string | null) => {
-    if (!orgId) return
+    if (!orgId) return;
 
-    setOrgToDelete(orgId)
-    setIsDeleteModalOpen(true)
-  }
+    setOrgToDelete(orgId);
+    setIsDeleteModalOpen(true);
+  };
 
   const confirmDelete = async () => {
-    if (!orgToDelete || !accessToken) return
+    if (!orgToDelete || !accessToken) return;
 
     try {
-      await organizationDeleteCall(accessToken, orgToDelete)
-      NotificationsManager.success("Organization deleted successfully")
+      await organizationDeleteCall(accessToken, orgToDelete);
+      NotificationsManager.success("Organization deleted successfully");
 
-      setIsDeleteModalOpen(false)
-      setOrgToDelete(null)
+      setIsDeleteModalOpen(false);
+      setOrgToDelete(null);
       // Refresh organizations list
-      fetchOrganizations(accessToken, setOrganizations)
+      fetchOrganizations(accessToken, setOrganizations);
     } catch (error) {
-      console.error("Error deleting organization:", error)
+      console.error("Error deleting organization:", error);
     }
-  }
+  };
 
   const cancelDelete = () => {
-    setIsDeleteModalOpen(false)
-    setOrgToDelete(null)
-  }
+    setIsDeleteModalOpen(false);
+    setOrgToDelete(null);
+  };
 
   const handleCreate = async (values: any) => {
     try {
-      if (!accessToken) return
+      if (!accessToken) return;
 
-      console.log(`values in organizations new create call: ${JSON.stringify(values)}`)
+      console.log(`values in organizations new create call: ${JSON.stringify(values)}`);
 
       // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission
       if (
@@ -122,37 +121,37 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
           (values.allowed_mcp_servers_and_groups.servers?.length > 0 ||
             values.allowed_mcp_servers_and_groups.accessGroups?.length > 0))
       ) {
-        values.object_permission = {}
+        values.object_permission = {};
         if (values.allowed_vector_store_ids && values.allowed_vector_store_ids.length > 0) {
-          values.object_permission.vector_stores = values.allowed_vector_store_ids
-          delete values.allowed_vector_store_ids
+          values.object_permission.vector_stores = values.allowed_vector_store_ids;
+          delete values.allowed_vector_store_ids;
         }
         if (values.allowed_mcp_servers_and_groups) {
           if (values.allowed_mcp_servers_and_groups.servers?.length > 0) {
-            values.object_permission.mcp_servers = values.allowed_mcp_servers_and_groups.servers
+            values.object_permission.mcp_servers = values.allowed_mcp_servers_and_groups.servers;
           }
           if (values.allowed_mcp_servers_and_groups.accessGroups?.length > 0) {
-            values.object_permission.mcp_access_groups = values.allowed_mcp_servers_and_groups.accessGroups
+            values.object_permission.mcp_access_groups = values.allowed_mcp_servers_and_groups.accessGroups;
           }
-          delete values.allowed_mcp_servers_and_groups
+          delete values.allowed_mcp_servers_and_groups;
         }
       }
 
-      await organizationCreateCall(accessToken, values)
-      NotificationsManager.success("Organization created successfully")
-      setIsOrgModalVisible(false)
-      form.resetFields()
+      await organizationCreateCall(accessToken, values);
+      NotificationsManager.success("Organization created successfully");
+      setIsOrgModalVisible(false);
+      form.resetFields();
       // Refresh organizations list
-      fetchOrganizations(accessToken, setOrganizations)
+      fetchOrganizations(accessToken, setOrganizations);
     } catch (error) {
-      console.error("Error creating organization:", error)
+      console.error("Error creating organization:", error);
     }
-  }
+  };
 
   const handleCancel = () => {
-    setIsOrgModalVisible(false)
-    form.resetFields()
-  }
+    setIsOrgModalVisible(false);
+    form.resetFields();
+  };
 
   if (!premiumUser) {
     return (
@@ -165,7 +164,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
           .
         </Text>
       </div>
-    )
+    );
   }
 
   return (
@@ -181,8 +180,8 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
             <OrganizationInfoView
               organizationId={selectedOrgId}
               onClose={() => {
-                setSelectedOrgId(null)
-                setEditOrg(false)
+                setSelectedOrgId(null);
+                setEditOrg(false);
               }}
               accessToken={accessToken}
               is_org_admin={true} // You'll need to implement proper org admin check
@@ -293,7 +292,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                                                               ...prev,
                                                               [org.organization_id || ""]:
                                                                 !prev[org.organization_id || ""],
-                                                            }))
+                                                            }));
                                                           }}
                                                         />
                                                       </div>
@@ -375,8 +374,8 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                                               icon={PencilAltIcon}
                                               size="sm"
                                               onClick={() => {
-                                                setSelectedOrgId(org.organization_id)
-                                                setEditOrg(true)
+                                                setSelectedOrgId(org.organization_id);
+                                                setEditOrg(true);
                                               }}
                                             />
                                             <Icon
@@ -534,7 +533,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
         <></>
       )}
     </div>
-  )
-}
+  );
+};
 
-export default OrganizationsTable
+export default OrganizationsTable;

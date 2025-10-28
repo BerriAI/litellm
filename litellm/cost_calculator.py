@@ -42,6 +42,9 @@ from litellm.llms.fireworks_ai.cost_calculator import (
     cost_per_token as fireworks_ai_cost_per_token,
 )
 from litellm.llms.gemini.cost_calculator import cost_per_token as gemini_cost_per_token
+from litellm.llms.lemonade.cost_calculator import (
+    cost_per_token as lemonade_cost_per_token,
+)
 from litellm.llms.openai.cost_calculation import (
     cost_per_second as openai_cost_per_second,
 )
@@ -58,9 +61,6 @@ from litellm.llms.vertex_ai.cost_calculator import (
 )
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
-from litellm.llms.lemonade.cost_calculator import (
-    cost_per_token as lemonade_cost_per_token,
-)
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -153,6 +153,7 @@ def cost_per_token(  # noqa: PLR0915
     audio_transcription_file_duration: float = 0.0,  # for audio transcription calls - the file time in seconds
     ### SERVICE TIER ###
     service_tier: Optional[str] = None,  # for OpenAI service tier pricing
+    response: Optional[Any] = None,
 ) -> Tuple[float, float]:  # type: ignore
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -292,6 +293,12 @@ def cost_per_token(  # noqa: PLR0915
             model=model,
             custom_llm_provider=custom_llm_provider,
             billed_units=rerank_billed_units,
+        )
+    elif call_type == "ocr" or call_type == "aocr":
+        return ocr_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            response=response,
         )
     elif (
         call_type == "aretrieve_batch"
@@ -589,34 +596,75 @@ def _infer_call_type(
     return call_type
 
 
+def _apply_cost_discount(
+    base_cost: float,
+    custom_llm_provider: Optional[str],
+) -> Tuple[float, float, float]:
+    """
+    Apply provider-specific cost discount from module-level config.
+    
+    Args:
+        base_cost: The base cost before discount
+        custom_llm_provider: The LLM provider name
+        
+    Returns:
+        Tuple of (final_cost, discount_percent, discount_amount)
+    """
+    original_cost = base_cost
+    discount_percent = 0.0
+    discount_amount = 0.0
+    
+    if custom_llm_provider and custom_llm_provider in litellm.cost_discount_config:
+        discount_percent = litellm.cost_discount_config[custom_llm_provider]
+        discount_amount = original_cost * discount_percent
+        final_cost = original_cost - discount_amount
+        
+        verbose_logger.debug(
+            f"Applied {discount_percent*100}% discount to {custom_llm_provider}: "
+            f"${original_cost:.6f} -> ${final_cost:.6f} (saved ${discount_amount:.6f})"
+        )
+        
+        return final_cost, discount_percent, discount_amount
+    
+    return base_cost, discount_percent, discount_amount
+
+
 def _store_cost_breakdown_in_logging_obj(
     litellm_logging_obj: Optional[LitellmLoggingObject],
     prompt_tokens_cost_usd_dollar: float,
     completion_tokens_cost_usd_dollar: float,
     cost_for_built_in_tools_cost_usd_dollar: float,
     total_cost_usd_dollar: float,
+    original_cost: Optional[float] = None,
+    discount_percent: Optional[float] = None,
+    discount_amount: Optional[float] = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
     
     Args:
         litellm_logging_obj: The logging object to store breakdown in
-        call_type: Type of call (completion, etc.)
         prompt_tokens_cost_usd_dollar: Cost of input tokens
         completion_tokens_cost_usd_dollar: Cost of completion tokens (includes reasoning if applicable)
         cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
         total_cost_usd_dollar: Total cost of request
+        original_cost: Cost before discount
+        discount_percent: Discount percentage applied (0.05 = 5%)
+        discount_amount: Discount amount in USD
     """
     if (litellm_logging_obj is None):
         return
     
     try:
-        # Store the cost breakdown - reasoning cost is 0 since it's already included in completion cost
+        # Store the cost breakdown
         litellm_logging_obj.set_cost_breakdown(
             input_cost=prompt_tokens_cost_usd_dollar,
             output_cost=completion_tokens_cost_usd_dollar,
             total_cost=total_cost_usd_dollar,
-            cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools_cost_usd_dollar
+            cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools_cost_usd_dollar,
+            original_cost=original_cost,
+            discount_percent=discount_percent,
+            discount_amount=discount_amount,
         )
         
     except Exception as breakdown_error:
@@ -960,6 +1008,7 @@ def completion_cost(  # noqa: PLR0915
                     audio_transcription_file_duration=audio_transcription_file_duration,
                     rerank_billed_units=rerank_billed_units,
                     service_tier=service_tier,
+                    response=completion_response,
                 )
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
@@ -975,13 +1024,23 @@ def completion_cost(  # noqa: PLR0915
                 )
                 _final_cost += cost_for_built_in_tools
                 
+                # Apply discount from module-level config if configured
+                original_cost = _final_cost
+                _final_cost, discount_percent, discount_amount = _apply_cost_discount(
+                    base_cost=_final_cost,
+                    custom_llm_provider=custom_llm_provider,
+                )
+                
                 # Store cost breakdown in logging object if available
                 _store_cost_breakdown_in_logging_obj(
                     litellm_logging_obj=litellm_logging_obj,
                     prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
                     completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
                     cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
-                    total_cost_usd_dollar=_final_cost
+                    total_cost_usd_dollar=_final_cost,
+                    original_cost=original_cost,
+                    discount_percent=discount_percent,
+                    discount_amount=discount_amount,
                 )
                 
                 return _final_cost
@@ -1105,6 +1164,52 @@ def response_cost_calculator(
         return response_cost
     except Exception as e:
         raise e
+
+
+def ocr_cost(
+    model: str,
+    custom_llm_provider: Optional[str],
+    response: Optional[Any] = None,
+) -> Tuple[float, float]:
+    """
+    Args:
+        model: str - model name
+        custom_llm_provider: Optional[str] - custom LLM provider
+        response: Optional[Any] - response object
+
+    Returns:
+        Tuple[float, float]: cost of OCR processing
+
+        (Parent function requires a tuple, so we return a tuple. Cost is only in the first element.)
+    """
+    from litellm.llms.base_llm.ocr.transformation import OCRResponse
+
+    #########################################################
+    # validate it's an OCR response
+    #########################################################
+    if response is None or not isinstance(response, OCRResponse):
+        raise ValueError(f"response must be of type OCRResponse got type={type(response)}")
+    
+    if response.usage_info is None:
+        raise ValueError("OCR response usage_info is None")
+    
+    pages_processed = response.usage_info.pages_processed
+    if pages_processed is None:
+        raise ValueError("OCR response pages_processed is None")
+    
+    try:
+        model_info: Optional[ModelInfo] = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+    except Exception:
+        model_info = None
+
+    ocr_cost_per_page: float = 0.0
+    if model_info is not None:
+        ocr_cost_per_page = model_info.get("ocr_cost_per_page") or 0.0
+    
+    total_ocr_processing_cost: float = ocr_cost_per_page * pages_processed
+    return total_ocr_processing_cost, 0.0
 
 
 def rerank_cost(

@@ -361,6 +361,7 @@ def test_process_anthropic_headers_with_no_matching_headers():
 def test_anthropic_tool_use(tool_type, tool_config, message_content):
     """Test Anthropic tool use with computer use and web fetch tools."""
     from litellm import completion
+
     litellm._turn_on_debug()
 
     tools = [tool_config]
@@ -1518,3 +1519,126 @@ def test_anthropic_streaming():
             role_set_count += 1
 
     assert role_set_count == 1
+
+
+def test_anthropic_via_responses_api():
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    response = litellm.responses(
+        model="anthropic/claude-sonnet-4-5",
+        input="Who won the World Cup in 2022?",
+        max_output_tokens=100,
+        stream=True,
+    )
+
+    assert response is not None
+
+    # Expected event sequence
+    expected_events = [
+        ResponsesAPIStreamEvents.RESPONSE_CREATED,
+        ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+        ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,  # Can occur multiple times
+        ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+        ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+    ]
+
+    events_seen = []
+    text_delta_count = 0
+
+    for chunk in response:
+        print(f"chunk: {chunk}")
+
+        # Each chunk should have a type attribute
+        assert hasattr(chunk, "type"), f"Chunk missing 'type' attribute: {chunk}"
+
+        event_type = chunk.type
+
+        # Track events seen
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA:
+            text_delta_count += 1
+            if ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA not in events_seen:
+                events_seen.append(event_type)
+        else:
+            events_seen.append(event_type)
+
+        # Assert specific structures for each event type
+        if event_type == ResponsesAPIStreamEvents.RESPONSE_CREATED:
+            assert chunk.type == ResponsesAPIStreamEvents.RESPONSE_CREATED
+            assert hasattr(chunk, "response")
+            assert chunk.response.status == "in_progress"
+            assert hasattr(chunk.response, "id")
+            assert hasattr(chunk.response, "model")
+
+        elif event_type == ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS:
+            assert chunk.type == ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS
+            assert hasattr(chunk, "response")
+            assert chunk.response.status == "in_progress"
+
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
+            assert chunk.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "item")
+            assert chunk.item.type == "message"
+            assert chunk.item.role == "assistant"
+
+        elif event_type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED:
+            assert chunk.type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
+            assert hasattr(chunk, "item_id")
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "content_index")
+            assert hasattr(chunk, "part")
+            assert chunk.part.type == "output_text"
+
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA:
+            assert chunk.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+            assert hasattr(chunk, "item_id")
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "content_index")
+            assert hasattr(chunk, "delta")
+            assert isinstance(chunk.delta, str)
+
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+            assert chunk.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE
+            assert hasattr(chunk, "item_id")
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "content_index")
+            assert hasattr(chunk, "text")
+
+        elif event_type == ResponsesAPIStreamEvents.CONTENT_PART_DONE:
+            assert chunk.type == ResponsesAPIStreamEvents.CONTENT_PART_DONE
+            assert hasattr(chunk, "item_id")
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "content_index")
+            assert hasattr(chunk, "part")
+            assert chunk.part.type == "output_text"
+
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            assert chunk.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "item")
+            assert chunk.item.status == "completed"
+
+        elif event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+            assert chunk.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+            assert hasattr(chunk, "response")
+            assert chunk.response.status == "completed"
+            assert hasattr(chunk.response, "usage")
+            assert hasattr(chunk.response, "output")
+
+    # Assert we saw all expected events
+    print(f"Events seen: {events_seen}")
+    assert (
+        events_seen == expected_events
+    ), f"Event sequence mismatch. Expected: {expected_events}, Got: {events_seen}"
+
+    # Assert we saw at least one text delta
+    assert (
+        text_delta_count > 0
+    ), f"Expected at least one response.output_text.delta event, got {text_delta_count}"
+
+    print(f"✓ All {len(events_seen)} events matched expected structure")
+    print(f"✓ Received {text_delta_count} text delta chunks")

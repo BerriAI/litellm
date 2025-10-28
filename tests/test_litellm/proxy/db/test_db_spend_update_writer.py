@@ -135,3 +135,127 @@ async def test_update_daily_spend_with_null_entity_id():
     assert create_data["api_requests"] == 1
     assert create_data["successful_requests"] == 1
     assert create_data["failed_requests"] == 0
+
+
+# Tag Spend Tracking Tests
+
+
+@pytest.mark.asyncio
+async def test_update_tag_db_with_valid_tags():
+    """
+    Test that _update_tag_db correctly processes valid tags and adds them to the spend update queue.
+    """
+    from litellm.proxy._types import Litellm_EntityType, SpendUpdateQueueItem
+
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    response_cost = 0.05
+    request_tags = '["prod-tag", "test-tag"]'
+
+    writer.spend_update_queue.add_update = AsyncMock()
+
+    await writer._update_tag_db(
+        response_cost=response_cost,
+        request_tags=request_tags,
+        prisma_client=mock_prisma,
+    )
+
+    assert writer.spend_update_queue.add_update.call_count == 2
+
+    first_call_args = writer.spend_update_queue.add_update.call_args_list[0][1]
+    assert first_call_args["update"]["entity_type"] == Litellm_EntityType.TAG
+    assert first_call_args["update"]["entity_id"] == "prod-tag"
+    assert first_call_args["update"]["response_cost"] == response_cost
+
+    second_call_args = writer.spend_update_queue.add_update.call_args_list[1][1]
+    assert second_call_args["update"]["entity_type"] == Litellm_EntityType.TAG
+    assert second_call_args["update"]["entity_id"] == "test-tag"
+    assert second_call_args["update"]["response_cost"] == response_cost
+
+
+@pytest.mark.asyncio
+async def test_update_tag_db_with_list_input():
+    """
+    Test that _update_tag_db correctly handles tags passed as a list instead of JSON string.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    response_cost = 0.1
+    request_tags = ["tag1", "tag2", "tag3"]
+
+    writer.spend_update_queue.add_update = AsyncMock()
+
+    await writer._update_tag_db(
+        response_cost=response_cost,
+        request_tags=request_tags,
+        prisma_client=mock_prisma,
+    )
+
+    assert writer.spend_update_queue.add_update.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_update_tag_db_with_no_tags():
+    """
+    Test that _update_tag_db handles None and empty tags gracefully.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    response_cost = 0.05
+
+    writer.spend_update_queue.add_update = AsyncMock()
+
+    await writer._update_tag_db(
+        response_cost=response_cost,
+        request_tags=None,
+        prisma_client=mock_prisma,
+    )
+    assert writer.spend_update_queue.add_update.call_count == 0
+
+    await writer._update_tag_db(
+        response_cost=response_cost,
+        request_tags=[],
+        prisma_client=mock_prisma,
+    )
+    assert writer.spend_update_queue.add_update.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_update_tag_db_with_invalid_json():
+    """
+    Test that _update_tag_db handles invalid JSON gracefully.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    response_cost = 0.05
+    request_tags = '{"invalid": json}'
+
+    writer.spend_update_queue.add_update = AsyncMock()
+
+    await writer._update_tag_db(
+        response_cost=response_cost,
+        request_tags=request_tags,
+        prisma_client=mock_prisma,
+    )
+
+    assert writer.spend_update_queue.add_update.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_update_tag_db_without_prisma_client():
+    """
+    Test that _update_tag_db returns early when prisma_client is None.
+    """
+    writer = DBSpendUpdateWriter()
+    response_cost = 0.05
+    request_tags = '["tag1"]'
+
+    writer.spend_update_queue.add_update = AsyncMock()
+
+    await writer._update_tag_db(
+        response_cost=response_cost,
+        request_tags=request_tags,
+        prisma_client=None,
+    )
+
+    assert writer.spend_update_queue.add_update.call_count == 0

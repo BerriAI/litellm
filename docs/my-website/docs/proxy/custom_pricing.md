@@ -2,23 +2,27 @@ import Image from '@theme/IdealImage';
 
 # Custom LLM Pricing
 
-Use this to register custom pricing for models. 
+## Overview
 
-There's 2 ways to track cost: 
-- cost per token
-- cost per second
+LiteLLM provides flexible cost tracking and pricing customization for all LLM providers:
+
+- **Custom Pricing** - Override default model costs or set pricing for custom models
+- **Cost Per Token** - Track costs based on input/output tokens (most common)
+- **Cost Per Second** - Track costs based on runtime (e.g., Sagemaker)
+- **Provider Discounts** - Apply percentage-based discounts to specific providers
+- **Base Model Mapping** - Ensure accurate cost tracking for Azure deployments
 
 By default, the response cost is accessible in the logging object via `kwargs["response_cost"]` on success (sync + async). [**Learn More**](../observability/custom_callback.md)
 
 :::info
 
-LiteLLM already has pricing for any model in our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). 
+LiteLLM already has pricing for 100+ models in our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). 
 
 :::
 
 ## Cost Per Second (e.g. Sagemaker)
 
-### Usage with LiteLLM Proxy Server
+#### Usage with LiteLLM Proxy Server
 
 **Step 1: Add pricing to config.yaml**
 ```yaml
@@ -47,7 +51,7 @@ litellm /path/to/config.yaml
 
 ## Cost Per Token (e.g. Azure)
 
-### Usage with LiteLLM Proxy Server
+#### Usage with LiteLLM Proxy Server
 
 ```yaml
 model_list:
@@ -61,6 +65,58 @@ model_list:
       input_cost_per_token: 0.000421 # 👈 ONLY to track cost per token
       output_cost_per_token: 0.000520 # 👈 ONLY to track cost per token
 ```
+
+## Provider-Specific Cost Discounts
+
+Apply percentage-based discounts to specific providers (e.g., negotiated enterprise pricing).
+
+#### Usage with LiteLLM Proxy Server
+
+**Step 1: Add discount config to config.yaml**
+
+```yaml
+# Apply 5% discount to all Vertex AI and Gemini costs
+cost_discount_config:
+  vertex_ai: 0.05  # 5% discount
+  gemini: 0.05     # 5% discount
+  openrouter: 0.05 # 5% discount
+  # openai: 0.10   # 10% discount (example)
+```
+
+**Step 2: Start proxy**
+
+```bash
+litellm /path/to/config.yaml
+```
+
+The discount will be automatically applied to all cost calculations for the configured providers.
+
+
+#### How Discounts Work
+
+- Discounts are applied **after** all other cost calculations (tokens, caching, tools, etc.)
+- The discount is a percentage (0.05 = 5%, 0.10 = 10%, etc.)
+- Discounts only apply to the configured providers
+- Original cost, discount amount, and final cost are tracked in cost breakdown logs
+- Discount information is returned in response headers:
+  - `x-litellm-response-cost` - Final cost after discount
+  - `x-litellm-response-cost-original` - Cost before discount
+  - `x-litellm-response-cost-discount-amount` - Discount amount in USD
+
+#### Supported Providers
+
+You can apply discounts to all LiteLLM supported providers. Common examples:
+
+- `vertex_ai` - Google Vertex AI
+- `gemini` - Google Gemini
+- `openai` - OpenAI
+- `anthropic` - Anthropic
+- `azure` - Azure OpenAI
+- `bedrock` - AWS Bedrock
+- `cohere` - Cohere
+- `openrouter` - OpenRouter
+
+See the full list of providers in the [LlmProviders](https://github.com/BerriAI/litellm/blob/main/litellm/types/utils.py) enum.
 
 ## Override Model Cost Map
 

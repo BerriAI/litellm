@@ -25,7 +25,7 @@ const EnterProxyUrl: React.FC = () => {
 
   return (
     <div>
-      <Card decoration="top" decorationColor="blue" style={{ width: '1000px' }}>
+      <Card decoration="top" decorationColor="blue" style={{ width: "1000px" }}>
         <Text>Admin Configuration</Text>
         <label htmlFor="proxyUrl">Enter Proxy URL:</label>
         <TextInput
@@ -35,24 +35,29 @@ const EnterProxyUrl: React.FC = () => {
           onChange={handleUrlChange}
           placeholder="https://your-proxy-endpoint.com"
         />
-        <Button onClick={handleSaveClick} className="gap-2">Save</Button>
+        <Button onClick={handleSaveClick} className="gap-2">
+          Save
+        </Button>
         {/* Display message if the URL is saved */}
         {isUrlSaved && (
           <div>
             <Grid numItems={1} className="gap-2">
-            <Col>
-            <p>
-              Proxy Admin UI (Save this URL): {clickableUrl}
-            </p>
-            </Col>
-            <Col>
-            <p>
-              Get Started with Proxy Admin UI  👉 
-              <a href={clickableUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'blue', textDecoration: 'underline' }}>
-                {clickableUrl}
-              </a>
-            </p>
-            </Col>
+              <Col>
+                <p>Proxy Admin UI (Save this URL): {clickableUrl}</p>
+              </Col>
+              <Col>
+                <p>
+                  Get Started with Proxy Admin UI 👉
+                  <a
+                    href={clickableUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: "blue", textDecoration: "underline" }}
+                  >
+                    {clickableUrl}
+                  </a>
+                </p>
+              </Col>
             </Grid>
           </div>
         )}

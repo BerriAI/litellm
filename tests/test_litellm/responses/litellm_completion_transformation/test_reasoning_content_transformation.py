@@ -4,14 +4,20 @@ Test reasoning content preservation in Responses API transformation
 
 from unittest.mock import AsyncMock
 
-from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.types.utils import ModelResponse, Choices, Message
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 
 class TestReasoningContentStreaming:
@@ -41,6 +47,7 @@ class TestReasoningContentStreaming:
         mock_stream = AsyncMock()
 
         iterator = LiteLLMCompletionStreamingIterator(
+            model="test-model",
             litellm_custom_stream_wrapper=mock_stream,
             request_input="Test input",
             responses_api_request={},
@@ -78,6 +85,7 @@ class TestReasoningContentStreaming:
 
         mock_stream = AsyncMock()
         iterator = LiteLLMCompletionStreamingIterator(
+            model="test-model",
             litellm_custom_stream_wrapper=mock_stream,
             request_input="Test input",
             responses_api_request={},
@@ -114,6 +122,7 @@ class TestReasoningContentStreaming:
 
         mock_stream = AsyncMock()
         iterator = LiteLLMCompletionStreamingIterator(
+            model="test-model",
             litellm_custom_stream_wrapper=mock_stream,
             request_input="Test input",
             responses_api_request={},
@@ -272,6 +281,7 @@ def test_streaming_chunk_id_raw():
     )
 
     iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
         litellm_custom_stream_wrapper=AsyncMock(),
         request_input="Test input",
         responses_api_request={},

@@ -204,6 +204,19 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         pass
 
+    async def async_post_call_streaming_deployment_hook(
+        self,
+        request_data: dict,
+        response_chunk: Any,
+        call_type: Optional[CallTypes],
+    ) -> Optional[Any]:
+        """
+        Allow modifying streaming chunks just before they're returned to the user.
+        
+        This is called for each streaming chunk in the response.
+        """
+        pass
+
     #### Fallback Events - router/proxy only ####
     async def log_model_group_rate_limit_error(
         self, exception: Exception, original_model_group: Optional[str], kwargs: dict
@@ -280,6 +293,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[
         Union[Exception, str, dict]
@@ -327,6 +341,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Any:
         pass

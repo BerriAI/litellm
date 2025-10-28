@@ -41,6 +41,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             "presence_penalty",
             "frequency_penalty",
             "top_logprobs",
+            "stop",
         ]
 
         return [

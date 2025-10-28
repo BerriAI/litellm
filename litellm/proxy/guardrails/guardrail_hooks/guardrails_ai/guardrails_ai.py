@@ -121,7 +121,7 @@ class GuardrailsAI(CustomGuardrail):
     ) -> str:
         from httpx import URL
 
-        # This branch of code does not work with current version of GuardrailsAI API (as of July 2025), and it is unclear if it ever worked. 
+        # This branch of code does not work with current version of GuardrailsAI API (as of July 2025), and it is unclear if it ever worked.
         # Use guardrails_ai_api_input_format: "llmOutput" config line for all guardrails (which is the default anyway)
         # We can still use the "pre_call" mode to validate the inputs even if the API input format is technicallt "llmOutput"
 
@@ -162,30 +162,33 @@ class GuardrailsAI(CustomGuardrail):
         return response
 
     async def process_input(self, data: dict, call_type: str) -> dict:
-        if call_type == "acompletion" or call_type == "completion":
-            from litellm.litellm_core_utils.prompt_templates.common_utils import (
-                get_last_user_message,
-                set_last_user_message,
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_last_user_message,
+            set_last_user_message,
+        )
+
+        # Only process completion-related call types
+        if call_type not in ["completion", "acompletion"]:
+            return data
+
+        if "messages" not in data:  # invalid request
+            return data
+
+        text = get_last_user_message(data["messages"])
+        if text is None:
+            return data
+        if self.guardrails_ai_api_input_format == "inputs":
+            updated_text = await self.make_guardrails_ai_api_request_pre_call_request(
+                text_input=text, request_data=data
             )
-
-            if "messages" not in data:  # invalid request
-                return data
-
-            text = get_last_user_message(data["messages"])
-            if text is None:
-                return data
-            if self.guardrails_ai_api_input_format == "inputs":
-                updated_text = (
-                    await self.make_guardrails_ai_api_request_pre_call_request(
-                        text_input=text, request_data=data
-                    )
-                )
-            else:
-                _result = await self.make_guardrails_ai_api_request(
-                    llm_output=text, request_data=data
-                )
-                updated_text = _result.get("validatedOutput") or _result.get("rawLlmOutput") or text
-            data["messages"] = set_last_user_message(data["messages"], updated_text)
+        else:
+            _result = await self.make_guardrails_ai_api_request(
+                llm_output=text, request_data=data
+            )
+            updated_text = (
+                _result.get("validatedOutput") or _result.get("rawLlmOutput") or text
+            )
+        data["messages"] = set_last_user_message(data["messages"], updated_text)
 
         return data
 
@@ -209,13 +212,11 @@ class GuardrailsAI(CustomGuardrail):
     ) -> Optional[
         Union[Exception, str, dict]
     ]:  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
-
         return await self.process_input(data=data, call_type=call_type)
 
     async def async_logging_hook(
         self, kwargs: dict, result: Any, call_type: str
     ) -> Tuple[dict, Any]:
-
         if call_type == "acompletion" or call_type == "completion":
             kwargs = await self.process_input(data=kwargs, call_type=call_type)
 

@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from "react"
-import { Button as TremorButton, Text } from "@tremor/react"
-import { Modal, Table, Upload, message, Alert, Typography } from "antd"
+import React, { useState, useEffect } from "react";
+import { Button as TremorButton, Text } from "@tremor/react";
+import { Modal, Table, Upload, Typography } from "antd";
 import {
   UploadOutlined,
   DownloadOutlined,
@@ -8,43 +8,42 @@ import {
   FileTextOutlined,
   DeleteOutlined,
   FileExclamationOutlined,
-} from "@ant-design/icons"
-import { userCreateCall, invitationCreateCall, getProxyUISettings } from "./networking"
-import Papa from "papaparse"
-import { CheckCircleIcon, XCircleIcon, ExclamationIcon } from "@heroicons/react/outline"
-import { CopyToClipboard } from "react-copy-to-clipboard"
-import { InvitationLink } from "./onboarding_link"
-import NotificationsManager from "./molecules/notifications_manager"
+} from "@ant-design/icons";
+import { userCreateCall, invitationCreateCall, getProxyUISettings } from "./networking";
+import Papa from "papaparse";
+import { CheckCircleIcon, XCircleIcon, ExclamationIcon } from "@heroicons/react/outline";
+import { CopyToClipboard } from "react-copy-to-clipboard";
+import NotificationsManager from "./molecules/notifications_manager";
 
 interface BulkCreateUsersProps {
-  accessToken: string
-  teams: any[] | null
-  possibleUIRoles: null | Record<string, Record<string, string>>
-  onUsersCreated?: () => void
+  accessToken: string;
+  teams: any[] | null;
+  possibleUIRoles: null | Record<string, Record<string, string>>;
+  onUsersCreated?: () => void;
 }
 
 interface UserData {
-  user_email: string
-  user_role: string
-  teams?: string | string[]
-  metadata?: string
-  max_budget?: string | number
-  budget_duration?: string
-  models?: string | string[]
-  status?: string
-  error?: string
-  rowNumber?: number
-  isValid?: boolean
-  key?: string
-  invitation_link?: string
+  user_email: string;
+  user_role: string;
+  teams?: string | string[];
+  metadata?: string;
+  max_budget?: string | number;
+  budget_duration?: string;
+  models?: string | string[];
+  status?: string;
+  error?: string;
+  rowNumber?: number;
+  isValid?: boolean;
+  key?: string;
+  invitation_link?: string;
 }
 
 // Define an interface for the UI settings
 interface UISettings {
-  PROXY_BASE_URL: string | null
-  PROXY_LOGOUT_URL: string | null
-  DEFAULT_TEAM_DISABLED: boolean
-  SSO_ENABLED: boolean
+  PROXY_BASE_URL: string | null;
+  PROXY_LOGOUT_URL: string | null;
+  DEFAULT_TEAM_DISABLED: boolean;
+  SSO_ENABLED: boolean;
 }
 
 const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
@@ -53,113 +52,115 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
   possibleUIRoles,
   onUsersCreated,
 }) => {
-  const [isModalVisible, setIsModalVisible] = useState(false)
-  const [parsedData, setParsedData] = useState<UserData[]>([])
-  const [isProcessing, setIsProcessing] = useState(false)
-  const [parseError, setParseError] = useState<string | null>(null)
-  const [csvStructureError, setCsvStructureError] = useState<string | null>(null)
-  const [fileError, setFileError] = useState<string | null>(null)
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [uiSettings, setUISettings] = useState<UISettings | null>(null)
-  const [baseUrl, setBaseUrl] = useState("http://localhost:4000")
+  const [isModalVisible, setIsModalVisible] = useState(false);
+  const [parsedData, setParsedData] = useState<UserData[]>([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [csvStructureError, setCsvStructureError] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uiSettings, setUISettings] = useState<UISettings | null>(null);
+  const [baseUrl, setBaseUrl] = useState("http://localhost:4000");
 
   useEffect(() => {
     // Get UI settings
     const fetchUISettings = async () => {
       try {
-        const uiSettingsResponse = await getProxyUISettings(accessToken)
-        setUISettings(uiSettingsResponse)
+        const uiSettingsResponse = await getProxyUISettings(accessToken);
+        setUISettings(uiSettingsResponse);
       } catch (error) {
-        console.error("Error fetching UI settings:", error)
+        console.error("Error fetching UI settings:", error);
       }
-    }
+    };
 
-    fetchUISettings()
+    fetchUISettings();
 
     // Set base URL
-    const base = new URL("/", window.location.href)
-    setBaseUrl(base.toString())
-  }, [accessToken])
+    const base = new URL("/", window.location.href);
+    setBaseUrl(base.toString());
+  }, [accessToken]);
 
   const downloadTemplate = () => {
     const template = [
       ["user_email", "user_role", "teams", "max_budget", "budget_duration", "models"],
       ["user@example.com", "internal_user", "team-id-1,team-id-2", "100", "30d", "gpt-3.5-turbo,gpt-4"],
-    ]
+    ];
 
-    const csv = Papa.unparse(template)
-    const blob = new Blob([csv], { type: "text/csv" })
-    const url = window.URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = "bulk_users_template.csv"
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    window.URL.revokeObjectURL(url)
-  }
+    const csv = Papa.unparse(template);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "bulk_users_template.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  };
 
   const handleFileUpload = (file: File) => {
     // Reset all error states
-    setParseError(null)
-    setCsvStructureError(null)
-    setFileError(null)
+    setParseError(null);
+    setCsvStructureError(null);
+    setFileError(null);
 
     // Set the selected file - always show the file even if it's invalid
-    setSelectedFile(file)
+    setSelectedFile(file);
 
     // Check file type
     if (file.type !== "text/csv" && !file.name.endsWith(".csv")) {
-      setFileError(`Invalid file type: ${file.name}. Please upload a CSV file (.csv extension).`)
-      NotificationsManager.fromBackend("Invalid file type. Please upload a CSV file.")
-      return false
+      setFileError(`Invalid file type: ${file.name}. Please upload a CSV file (.csv extension).`);
+      NotificationsManager.fromBackend("Invalid file type. Please upload a CSV file.");
+      return false;
     }
 
     // Check file size (limit to 5MB)
     if (file.size > 5 * 1024 * 1024) {
       setFileError(
         `File is too large (${(file.size / (1024 * 1024)).toFixed(1)} MB). Please upload a CSV file smaller than 5MB.`,
-      )
-      return false
+      );
+      return false;
     }
 
     Papa.parse(file, {
       complete: (results) => {
         // Check if file is empty
         if (!results.data || results.data.length === 0) {
-          setCsvStructureError("The CSV file appears to be empty. Please upload a file with data.")
-          setParsedData([])
-          return
+          setCsvStructureError("The CSV file appears to be empty. Please upload a file with data.");
+          setParsedData([]);
+          return;
         }
 
         // Check if there's only header row
         if (results.data.length === 1) {
-          setCsvStructureError("The CSV file only contains headers but no user data. Please add user data to your CSV.")
-          setParsedData([])
-          return
+          setCsvStructureError(
+            "The CSV file only contains headers but no user data. Please add user data to your CSV.",
+          );
+          setParsedData([]);
+          return;
         }
 
-        const headers = results.data[0] as string[]
+        const headers = results.data[0] as string[];
 
         // Check if headers exist
         if (headers.length === 0 || (headers.length === 1 && headers[0] === "")) {
           setCsvStructureError(
             "The CSV file doesn't contain any column headers. Please make sure your CSV has headers.",
-          )
-          setParsedData([])
-          return
+          );
+          setParsedData([]);
+          return;
         }
 
-        const requiredColumns = ["user_email", "user_role"]
+        const requiredColumns = ["user_email", "user_role"];
 
         // Check if all required columns are present
-        const missingColumns = requiredColumns.filter((col) => !headers.includes(col))
+        const missingColumns = requiredColumns.filter((col) => !headers.includes(col));
         if (missingColumns.length > 0) {
           setCsvStructureError(
             `Your CSV is missing these required columns: ${missingColumns.join(", ")}. Please add these columns to your CSV file.`,
-          )
-          setParsedData([])
-          return
+          );
+          setParsedData([]);
+          return;
         }
 
         try {
@@ -168,7 +169,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             .map((row: any, index: number) => {
               // Skip empty rows
               if (row.length === 0 || (row.length === 1 && row[0] === "")) {
-                return null
+                return null;
               }
 
               // Check if row has enough columns
@@ -179,7 +180,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                   error: `Row ${index + 2} has fewer columns than the header row. Please ensure all data is properly formatted.`,
                   user_email: "",
                   user_role: "",
-                } as UserData
+                } as UserData;
               }
 
               const user: UserData = {
@@ -192,35 +193,35 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                 rowNumber: index + 2,
                 isValid: true,
                 error: "",
-              }
+              };
 
               // Validate the row
-              const errors: string[] = []
+              const errors: string[] = [];
 
               // Email validation
               if (!user.user_email) {
-                errors.push("Email is required")
+                errors.push("Email is required");
               } else if (!user.user_email.includes("@") || !user.user_email.includes(".")) {
-                errors.push("Invalid email format (must contain @ and domain)")
+                errors.push("Invalid email format (must contain @ and domain)");
               }
 
               // Role validation
               if (!user.user_role) {
-                errors.push("Role is required")
+                errors.push("Role is required");
               } else {
                 // Validate user role
-                const validRoles = ["proxy_admin", "proxy_admin_view_only", "internal_user", "internal_user_view_only"]
+                const validRoles = ["proxy_admin", "proxy_admin_view_only", "internal_user", "internal_user_view_only"];
                 if (!validRoles.includes(user.user_role)) {
-                  errors.push(`Invalid role "${user.user_role}". Must be one of: ${validRoles.join(", ")}`)
+                  errors.push(`Invalid role "${user.user_role}". Must be one of: ${validRoles.join(", ")}`);
                 }
               }
 
               // Budget validation
               if (user.max_budget && user.max_budget.toString().trim() !== "") {
                 if (isNaN(parseFloat(user.max_budget.toString()))) {
-                  errors.push(`Max budget "${user.max_budget}" must be a number`)
+                  errors.push(`Max budget "${user.max_budget}" must be a number`);
                 } else if (parseFloat(user.max_budget.toString()) <= 0) {
-                  errors.push("Max budget must be greater than 0")
+                  errors.push("Max budget must be greater than 0");
                 }
               }
 
@@ -228,93 +229,93 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
               if (user.budget_duration && !user.budget_duration.match(/^\d+[dhmwy]$|^\d+mo$/)) {
                 errors.push(
                   `Invalid budget duration format "${user.budget_duration}". Use format like "30d", "1mo", "2w", "6h"`,
-                )
+                );
               }
 
               // Teams validation
               if (user.teams && typeof user.teams === "string") {
                 // Check if teams exist (if teams data is available)
                 if (teams && teams.length > 0) {
-                  const teamIds = teams.map((t) => t.team_id)
-                  const userTeams = user.teams.split(",").map((t) => t.trim())
-                  const invalidTeams = userTeams.filter((t) => !teamIds.includes(t))
+                  const teamIds = teams.map((t) => t.team_id);
+                  const userTeams = user.teams.split(",").map((t) => t.trim());
+                  const invalidTeams = userTeams.filter((t) => !teamIds.includes(t));
                   if (invalidTeams.length > 0) {
-                    errors.push(`Unknown team(s): ${invalidTeams.join(", ")}`)
+                    errors.push(`Unknown team(s): ${invalidTeams.join(", ")}`);
                   }
                 }
               }
 
               if (errors.length > 0) {
-                user.isValid = false
-                user.error = errors.join(", ")
+                user.isValid = false;
+                user.error = errors.join(", ");
               }
 
-              return user
+              return user;
             })
-            .filter(Boolean) as UserData[] // Filter out null values (empty rows)
+            .filter(Boolean) as UserData[]; // Filter out null values (empty rows)
 
-          const validData = userData.filter((user) => user.isValid)
-          setParsedData(userData)
+          const validData = userData.filter((user) => user.isValid);
+          setParsedData(userData);
 
           if (userData.length === 0) {
-            setCsvStructureError("No valid data rows found in the CSV file. Please check your file format.")
+            setCsvStructureError("No valid data rows found in the CSV file. Please check your file format.");
           } else if (validData.length === 0) {
-            setParseError("No valid users found in the CSV. Please check the errors below and fix your CSV file.")
+            setParseError("No valid users found in the CSV. Please check the errors below and fix your CSV file.");
           } else if (validData.length < userData.length) {
             setParseError(
               `Found ${userData.length - validData.length} row(s) with errors out of ${userData.length} total rows. Please correct them before proceeding.`,
-            )
+            );
           } else {
-            NotificationsManager.success(`Successfully parsed ${validData.length} users`)
+            NotificationsManager.success(`Successfully parsed ${validData.length} users`);
           }
         } catch (error: unknown) {
-          const errorMessage = error instanceof Error ? error.message : "Unknown error"
-          setParseError(`Error parsing CSV: ${errorMessage}`)
-          setParsedData([])
+          const errorMessage = error instanceof Error ? error.message : "Unknown error";
+          setParseError(`Error parsing CSV: ${errorMessage}`);
+          setParsedData([]);
         }
       },
       error: (error) => {
-        setParseError(`Failed to parse CSV file: ${error.message}`)
-        setParsedData([])
+        setParseError(`Failed to parse CSV file: ${error.message}`);
+        setParsedData([]);
       },
       header: false,
-    })
-    return false
-  }
+    });
+    return false;
+  };
 
   const removeSelectedFile = () => {
-    setSelectedFile(null)
-    setParsedData([])
-    setParseError(null)
-    setCsvStructureError(null)
-    setFileError(null)
-  }
+    setSelectedFile(null);
+    setParsedData([]);
+    setParseError(null);
+    setCsvStructureError(null);
+    setFileError(null);
+  };
 
   const handleBulkCreate = async () => {
-    setIsProcessing(true)
-    const updatedData = parsedData.map((user) => ({ ...user, status: "pending" }))
-    setParsedData(updatedData)
+    setIsProcessing(true);
+    const updatedData = parsedData.map((user) => ({ ...user, status: "pending" }));
+    setParsedData(updatedData);
 
-    let anySuccessful = false
+    let anySuccessful = false;
 
     for (let index = 0; index < updatedData.length; index++) {
-      const user = updatedData[index]
+      const user = updatedData[index];
       try {
         // Create a clean user object with only non-empty values
         const cleanUser: Partial<UserData> = {
           user_email: user.user_email,
           user_role: user.user_role,
-        }
+        };
 
         // Only add optional fields if they have values
         if (user.teams && typeof user.teams === "string" && user.teams.trim() !== "") {
           cleanUser.teams = user.teams
             .split(",")
             .map((team) => team.trim())
-            .filter(Boolean)
+            .filter(Boolean);
           // Only include teams if there's at least one valid team
           if (cleanUser.teams.length === 0) {
-            delete cleanUser.teams
+            delete cleanUser.teams;
           }
         }
 
@@ -323,47 +324,47 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
           cleanUser.models = user.models
             .split(",")
             .map((model) => model.trim())
-            .filter(Boolean)
+            .filter(Boolean);
           // Only include models if there's at least one valid model
           if (cleanUser.models.length === 0) {
-            delete cleanUser.models
+            delete cleanUser.models;
           }
         }
 
         // Only add max_budget if it's a valid number
         if (user.max_budget && user.max_budget.toString().trim() !== "") {
-          const budgetValue = parseFloat(user.max_budget.toString())
+          const budgetValue = parseFloat(user.max_budget.toString());
           if (!isNaN(budgetValue) && budgetValue > 0) {
-            cleanUser.max_budget = budgetValue
+            cleanUser.max_budget = budgetValue;
           }
         }
 
         // Only add budget_duration if provided and non-empty
         if (user.budget_duration && user.budget_duration.trim() !== "") {
-          cleanUser.budget_duration = user.budget_duration.trim()
+          cleanUser.budget_duration = user.budget_duration.trim();
         }
 
         // Only add metadata if provided and non-empty
         if (user.metadata && typeof user.metadata === "string" && user.metadata.trim() !== "") {
-          cleanUser.metadata = user.metadata.trim()
+          cleanUser.metadata = user.metadata.trim();
         }
 
-        console.log("Sending user data:", cleanUser)
-        const response = await userCreateCall(accessToken, null, cleanUser)
-        console.log("Full response:", response)
+        console.log("Sending user data:", cleanUser);
+        const response = await userCreateCall(accessToken, null, cleanUser);
+        console.log("Full response:", response);
 
         // Check if response has key or user_id, indicating success
         if (response && (response.key || response.user_id)) {
-          anySuccessful = true
-          console.log("Success case triggered")
-          const user_id = response.data?.user_id || response.user_id
+          anySuccessful = true;
+          console.log("Success case triggered");
+          const user_id = response.data?.user_id || response.user_id;
 
           // Create invitation link for the user
           try {
             if (!uiSettings?.SSO_ENABLED) {
               // Regular invitation flow
-              const invitationData = await invitationCreateCall(accessToken, user_id)
-              const invitationUrl = new URL(`/ui?invitation_id=${invitationData.id}`, baseUrl).toString()
+              const invitationData = await invitationCreateCall(accessToken, user_id);
+              const invitationUrl = new URL(`/ui?invitation_id=${invitationData.id}`, baseUrl).toString();
 
               setParsedData((current) =>
                 current.map((u, i) =>
@@ -376,10 +377,10 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       }
                     : u,
                 ),
-              )
+              );
             } else {
               // SSO flow - just use the base URL
-              const invitationUrl = new URL("/ui", baseUrl).toString()
+              const invitationUrl = new URL("/ui", baseUrl).toString();
 
               setParsedData((current) =>
                 current.map((u, i) =>
@@ -392,10 +393,10 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       }
                     : u,
                 ),
-              )
+              );
             }
           } catch (inviteError) {
-            console.error("Error creating invitation:", inviteError)
+            console.error("Error creating invitation:", inviteError);
             setParsedData((current) =>
               current.map((u, i) =>
                 i === index
@@ -407,32 +408,32 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                     }
                   : u,
               ),
-            )
+            );
           }
         } else {
-          console.log("Error case triggered")
-          const errorMessage = response?.error || "Failed to create user"
-          console.log("Error message:", errorMessage)
+          console.log("Error case triggered");
+          const errorMessage = response?.error || "Failed to create user";
+          console.log("Error message:", errorMessage);
           setParsedData((current) =>
             current.map((u, i) => (i === index ? { ...u, status: "failed", error: errorMessage } : u)),
-          )
+          );
         }
       } catch (error) {
-        console.error("Caught error:", error)
-        const errorMessage = (error as any)?.response?.data?.error || (error as Error)?.message || String(error)
+        console.error("Caught error:", error);
+        const errorMessage = (error as any)?.response?.data?.error || (error as Error)?.message || String(error);
         setParsedData((current) =>
           current.map((u, i) => (i === index ? { ...u, status: "failed", error: errorMessage } : u)),
-        )
+        );
       }
     }
 
-    setIsProcessing(false)
+    setIsProcessing(false);
 
     // Call the callback if any users were successfully created
     if (anySuccessful && onUsersCreated) {
-      onUsersCreated()
+      onUsersCreated();
     }
-  }
+  };
 
   const downloadResults = () => {
     const results = parsedData.map((user) => ({
@@ -442,19 +443,19 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
       key: user.key || "",
       invitation_link: user.invitation_link || "",
       error: user.error || "",
-    }))
+    }));
 
-    const csv = Papa.unparse(results)
-    const blob = new Blob([csv], { type: "text/csv" })
-    const url = window.URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = "bulk_users_results.csv"
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    window.URL.revokeObjectURL(url)
-  }
+    const csv = Papa.unparse(results);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "bulk_users_results.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  };
 
   const columns = [
     {
@@ -496,10 +497,10 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
               </div>
               {record.error && <span className="text-sm text-red-500 ml-7">{record.error}</span>}
             </div>
-          )
+          );
         }
         if (!record.status || record.status === "pending") {
-          return <span className="text-gray-500">Pending</span>
+          return <span className="text-gray-500">Pending</span>;
         }
         if (record.status === "success") {
           return (
@@ -522,7 +523,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                 </div>
               )}
             </div>
-          )
+          );
         }
         return (
           <div>
@@ -532,10 +533,10 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             </div>
             {record.error && <span className="text-sm text-red-500 ml-7">{JSON.stringify(record.error)}</span>}
           </div>
-        )
+        );
       },
     },
-  ]
+  ];
 
   return (
     <>
@@ -782,8 +783,8 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                     <div className="flex space-x-3">
                       <TremorButton
                         onClick={() => {
-                          setParsedData([])
-                          setParseError(null)
+                          setParsedData([]);
+                          setParseError(null);
                         }}
                         variant="secondary"
                       >
@@ -830,8 +831,8 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                   <div className="flex justify-end mt-4">
                     <TremorButton
                       onClick={() => {
-                        setParsedData([])
-                        setParseError(null)
+                        setParsedData([]);
+                        setParseError(null);
                       }}
                       variant="secondary"
                       className="mr-3"
@@ -851,8 +852,8 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                   <div className="flex justify-end mt-4">
                     <TremorButton
                       onClick={() => {
-                        setParsedData([])
-                        setParseError(null)
+                        setParsedData([]);
+                        setParseError(null);
                       }}
                       variant="secondary"
                       className="mr-3"
@@ -870,7 +871,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
         </div>
       </Modal>
     </>
-  )
-}
+  );
+};
 
-export default BulkCreateUsersButton
+export default BulkCreateUsersButton;

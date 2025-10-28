@@ -1,24 +1,17 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { modelHubCall, makeModelGroupPublic, modelHubPublicModelsCall, getProxyBaseUrl } from "./networking";
-import { getConfigFieldSetting, updateConfigFieldSetting } from "./networking";
+import { useRouter } from "next/navigation";
+import { modelHubCall, modelHubPublicModelsCall, getProxyBaseUrl } from "./networking";
+import { getConfigFieldSetting } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { modelHubColumns } from "./model_hub_table_columns";
 import PublicModelHub from "./public_model_hub";
 import MakeModelPublicForm from "./make_model_public_form";
 import ModelFilters from "./model_filters";
 import UsefulLinksManagement from "./useful_links_management";
-import {
-  Card,
-  Text,
-  Title,
-  Button,
-  Badge,
-  Flex,
-} from "@tremor/react";
-import { Modal, message, Tooltip } from "antd";
+import { Card, Text, Title, Button, Badge } from "@tremor/react";
+import { Modal } from "antd";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { Table as TableInstance } from '@tanstack/react-table';
+import { Table as TableInstance } from "@tanstack/react-table";
 import { Copy } from "lucide-react";
 import { isAdminRole } from "../utils/roles";
 import NotificationsManager from "./molecules/notifications_manager";
@@ -49,12 +42,7 @@ interface ModelGroupInfo {
   [key: string]: any;
 }
 
-const ModelHubTable: React.FC<ModelHubTableProps> = ({
-  accessToken,
-  publicPage,
-  premiumUser,
-  userRole,
-}) => {
+const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, premiumUser, userRole }) => {
   const [publicPageAllowed, setPublicPageAllowed] = useState<boolean>(false);
   const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -106,7 +94,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
       } finally {
         setLoading(false);
       }
-    }
+    };
 
     if (accessToken) {
       fetchData(accessToken);
@@ -128,7 +116,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     if (!accessToken) {
       return;
     }
-    
+
     // Show the modal for selecting models to make public
     setIsMakePublicModalVisible(true);
   };
@@ -153,16 +141,16 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const formatCapabilityName = (key: string) => {
     // Remove 'supports_' prefix and convert snake_case to Title Case
     return key
-      .replace(/^supports_/, '')
-      .split('_')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
+      .replace(/^supports_/, "")
+      .split("_")
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
   };
 
   const getModelCapabilities = (model: ModelGroupInfo) => {
     // Find all properties that start with 'supports_' and are true
     return Object.entries(model)
-      .filter(([key, value]) => key.startsWith('supports_') && value === true)
+      .filter(([key, value]) => key.startsWith("supports_") && value === true)
       .map(([key]) => key);
   };
 
@@ -191,79 +179,63 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
 
   console.log("publicPage: ", publicPage);
   console.log("publicPageAllowed: ", publicPageAllowed);
-  
+
   // If this is a public page, use the dedicated PublicModelHub component
   if (publicPage && publicPageAllowed) {
     return <PublicModelHub accessToken={accessToken} />;
   }
-  
+
   return (
     <div className="w-full mx-4 h-[75vh]">
       {publicPage == false ? (
         <div className="w-full m-2 mt-2 p-8">
           <div className="flex justify-between items-center mb-6">
             <div className="flex flex-col items-start">
-            <Title className="text-center">Model Hub</Title>
-            {isAdminRole(userRole || "") ? (
-              <p className="text-sm text-gray-600">
-                Make models public for developers to know what models are available on the proxy.
-              </p>
-            ): (
-            <p className="text-sm text-gray-600">
-              A list of all public model names personally available to you.
-            </p>
-            )}
+              <Title className="text-center">Model Hub</Title>
+              {isAdminRole(userRole || "") ? (
+                <p className="text-sm text-gray-600">
+                  Make models public for developers to know what models are available on the proxy.
+                </p>
+              ) : (
+                <p className="text-sm text-gray-600">A list of all public model names personally available to you.</p>
+              )}
             </div>
-                          <div className="flex items-center space-x-4">
-                <Text>Model Hub URL:</Text>
-                <div className="flex items-center bg-gray-200 px-2 py-1 rounded">
-                  <Text className="mr-2">{`${getProxyBaseUrl()}/ui/model_hub_table`}</Text>
-                  <button
-                    onClick={() => copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
-                    className="p-1 hover:bg-gray-300 rounded transition-colors"
-                    title="Copy URL"
-                  >
-                    <Copy size={16} className="text-gray-600" />
-                  </button>
-                </div>
-            
-            {publicPage == false && isAdminRole(userRole || "") && (
-              <Button 
-                className="ml-4" 
-                onClick={() => handleMakePublicPage()}
-              >
-                Make Public
-              </Button>
-            )}
-          </div>
-          </div>
+            <div className="flex items-center space-x-4">
+              <Text>Model Hub URL:</Text>
+              <div className="flex items-center bg-gray-200 px-2 py-1 rounded">
+                <Text className="mr-2">{`${getProxyBaseUrl()}/ui/model_hub_table`}</Text>
+                <button
+                  onClick={() => copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
+                  className="p-1 hover:bg-gray-300 rounded transition-colors"
+                  title="Copy URL"
+                >
+                  <Copy size={16} className="text-gray-600" />
+                </button>
+              </div>
 
+              {publicPage == false && isAdminRole(userRole || "") && (
+                <Button className="ml-4" onClick={() => handleMakePublicPage()}>
+                  Make Public
+                </Button>
+              )}
+            </div>
+          </div>
 
           {/* Useful Links Management Section for Admins */}
           {isAdminRole(userRole || "") && (
             <div className="mt-8 mb-2">
-              <UsefulLinksManagement 
-                accessToken={accessToken}
-                userRole={userRole}
-              />
+              <UsefulLinksManagement accessToken={accessToken} userRole={userRole} />
             </div>
           )}
 
           {/* Model Filters and Table */}
           <Card>
             {/* Filters */}
-            <ModelFilters
-              modelHubData={modelHubData || []}
-              onFilteredDataChange={handleFilteredDataChange}
-            />
+            <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
 
             {/* Model Table */}
             <ModelDataTable
-              columns={modelHubColumns(
-                showModal,
-                copyToClipboard,
-                publicPage,
-              )}
+              columns={modelHubColumns(showModal, copyToClipboard, publicPage)}
               data={filteredData}
               isLoading={loading}
               table={tableRef}
@@ -276,17 +248,11 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
               Showing {filteredData.length} of {modelHubData?.length || 0} models
             </Text>
           </div>
-
-          
         </div>
       ) : (
         <Card className="mx-auto max-w-xl mt-10">
-          <Text className="text-xl text-center mb-2 text-black">
-            Public Model Hub not enabled.
-          </Text>
-          <p className="text-base text-center text-slate-800">
-            Ask your proxy admin to enable this on their Admin UI.
-          </p>
+          <Text className="text-xl text-center mb-2 text-black">Public Model Hub not enabled.</Text>
+          <p className="text-base text-center text-slate-800">Ask your proxy admin to enable this on their Admin UI.</p>
         </Card>
       )}
 
@@ -338,8 +304,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 <div>
                   <Text className="font-medium">Providers:</Text>
                   <div className="flex flex-wrap gap-1 mt-1">
-                    {selectedModel.providers.map(provider => (
-                      <Badge key={provider} color="blue">{provider}</Badge>
+                    {selectedModel.providers.map((provider) => (
+                      <Badge key={provider} color="blue">
+                        {provider}
+                      </Badge>
                     ))}
                   </div>
                 </div>
@@ -360,11 +328,19 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 </div>
                 <div>
                   <Text className="font-medium">Input Cost per 1M Tokens:</Text>
-                  <Text>{selectedModel.input_cost_per_token ? formatCost(selectedModel.input_cost_per_token) : "Not specified"}</Text>
+                  <Text>
+                    {selectedModel.input_cost_per_token
+                      ? formatCost(selectedModel.input_cost_per_token)
+                      : "Not specified"}
+                  </Text>
                 </div>
                 <div>
                   <Text className="font-medium">Output Cost per 1M Tokens:</Text>
-                  <Text>{selectedModel.output_cost_per_token ? formatCost(selectedModel.output_cost_per_token) : "Not specified"}</Text>
+                  <Text>
+                    {selectedModel.output_cost_per_token
+                      ? formatCost(selectedModel.output_cost_per_token)
+                      : "Not specified"}
+                  </Text>
                 </div>
               </div>
             </div>
@@ -375,17 +351,14 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
               <div className="flex flex-wrap gap-2">
                 {(() => {
                   const capabilities = getModelCapabilities(selectedModel);
-                  const colors = ['green', 'blue', 'purple', 'orange', 'red', 'yellow'];
-                  
+                  const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
+
                   if (capabilities.length === 0) {
                     return <Text className="text-gray-500">No special capabilities listed</Text>;
                   }
-                  
+
                   return capabilities.map((capability, index) => (
-                    <Badge 
-                      key={capability} 
-                      color={colors[index % colors.length]}
-                    >
+                    <Badge key={capability} color={colors[index % colors.length]}>
                       {formatCapabilityName(capability)}
                     </Badge>
                   ));
@@ -419,8 +392,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
               <div>
                 <Text className="text-lg font-semibold mb-4">Supported OpenAI Parameters</Text>
                 <div className="flex flex-wrap gap-2">
-                  {selectedModel.supported_openai_params.map(param => (
-                    <Badge key={param} color="green">{param}</Badge>
+                  {selectedModel.supported_openai_params.map((param) => (
+                    <Badge key={param} color="green">
+                      {param}
+                    </Badge>
                   ))}
                 </div>
               </div>
@@ -466,4 +441,4 @@ print(response.choices[0].message.content)`}
   );
 };
 
-export default ModelHubTable; 
+export default ModelHubTable;

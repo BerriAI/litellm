@@ -56,27 +56,24 @@ export interface StreamProcessCallbacks {
   onUsage?: (usage: TokenUsage) => void;
 }
 
-export const processStreamingResponse = (
-  response: StreamingResponse, 
-  callbacks: StreamProcessCallbacks
-) => {
+export const processStreamingResponse = (response: StreamingResponse, callbacks: StreamProcessCallbacks) => {
   // Extract model information if available
   const model = response.model;
-  
+
   // Process regular content
   if (response.choices && response.choices.length > 0) {
     const choice = response.choices[0];
-    
+
     if (choice.delta?.content) {
       callbacks.onContent(choice.delta.content, model);
     }
-    
+
     // Process reasoning content if it exists
     if (choice.delta?.reasoning_content) {
       callbacks.onReasoningContent(choice.delta.reasoning_content);
     }
   }
-  
+
   // Process usage information if it exists and we have a handler
   if (response.usage && callbacks.onUsage) {
     console.log("Processing usage data:", response.usage);
@@ -85,12 +82,12 @@ export const processStreamingResponse = (
       promptTokens: response.usage.prompt_tokens,
       totalTokens: response.usage.total_tokens,
     };
-    
+
     // Extract reasoning tokens if available
     if (response.usage.completion_tokens_details?.reasoning_tokens) {
       usageData.reasoningTokens = response.usage.completion_tokens_details.reasoning_tokens;
     }
-    
+
     callbacks.onUsage(usageData);
   }
-}; 
+};

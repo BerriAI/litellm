@@ -38,10 +38,7 @@ const PresidioDetectedEntities = ({ entities }: PresidioDetectedEntitiesProps) =
 
   return (
     <div className="mt-4">
-      <div
-        className="flex items-center mb-2 cursor-pointer"
-        onClick={() => setEntityListExpanded(!entityListExpanded)}
-      >
+      <div className="flex items-center mb-2 cursor-pointer" onClick={() => setEntityListExpanded(!entityListExpanded)}>
         <svg
           className={`w-5 h-5 mr-2 transition-transform ${entityListExpanded ? "transform rotate-90" : ""}`}
           fill="none"
@@ -74,11 +71,11 @@ const PresidioDetectedEntities = ({ entities }: PresidioDetectedEntitiesProps) =
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
                     <span className="font-medium mr-2">{entity.entity_type}</span>
-                    <span className={`font-mono ${getScoreColor(entity.score)}`}>
-                      Score: {entity.score.toFixed(2)}
-                    </span>
+                    <span className={`font-mono ${getScoreColor(entity.score)}`}>Score: {entity.score.toFixed(2)}</span>
                   </div>
-                  <span className="text-xs text-gray-500">Position: {entity.start}-{entity.end}</span>
+                  <span className="text-xs text-gray-500">
+                    Position: {entity.start}-{entity.end}
+                  </span>
                 </div>
 
                 {isExpanded && (
@@ -91,7 +88,9 @@ const PresidioDetectedEntities = ({ entities }: PresidioDetectedEntitiesProps) =
                         </div>
                         <div className="flex">
                           <span className="font-medium w-1/3">Position:</span>
-                          <span>Characters {entity.start}-{entity.end}</span>
+                          <span>
+                            Characters {entity.start}-{entity.end}
+                          </span>
                         </div>
                         <div className="flex">
                           <span className="font-medium w-1/3">Confidence:</span>
@@ -131,6 +130,6 @@ const PresidioDetectedEntities = ({ entities }: PresidioDetectedEntitiesProps) =
       )}
     </div>
   );
-}
+};
 
 export default PresidioDetectedEntities;

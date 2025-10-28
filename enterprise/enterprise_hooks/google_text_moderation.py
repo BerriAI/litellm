@@ -6,13 +6,14 @@
 # +-----------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-
 from typing import Literal
-import litellm
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
+
 from fastapi import HTTPException
+
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 
 
 class _ENTERPRISE_GoogleTextModeration(CustomLogger):
@@ -96,6 +97,7 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
             "audio_transcription",
             "responses",
             "mcp_call",
+            "anthropic_messages",
         ],
     ):
         """

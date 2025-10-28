@@ -2,7 +2,6 @@ import copy
 import json
 import mimetypes
 import re
-from litellm._uuid import uuid
 import xml.etree.ElementTree as ET
 from enum import Enum
 from typing import Any, List, Optional, Tuple, cast, overload
@@ -13,6 +12,7 @@ import litellm
 import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
+from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
@@ -232,7 +232,6 @@ def ollama_pt(
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_str += convert_content_list_to_str(messages[msg_i])
-            msg_i += 1
 
             tool_calls = messages[msg_i].get("tool_calls")
             ollama_tool_calls = []
@@ -258,7 +257,7 @@ def ollama_pt(
                     f"Tool Calls: {json.dumps(ollama_tool_calls, indent=2)}"
                 )
 
-                msg_i += 1
+            msg_i += 1
 
         if assistant_content_str:
             prompt += f"### Assistant:\n{assistant_content_str}\n\n"
@@ -365,62 +364,22 @@ def phind_codellama_pt(messages):
     return prompt
 
 
-def hf_chat_template(  # noqa: PLR0915
-    model: str, messages: list, chat_template: Optional[Any] = None
-):
-    # Define Jinja2 environment
-    env = ImmutableSandboxedEnvironment()
+def _render_chat_template(
+    env, chat_template: str, bos_token: str, eos_token: str, messages: list
+) -> str:
+    """
+    Shared template rendering logic for both sync and async hf_chat_template
 
-    def raise_exception(message):
-        raise Exception(f"Error message - {message}")
+    Args:
+        env: Jinja2 environment
+        chat_template: Chat template string
+        bos_token: Beginning of sequence token
+        eos_token: End of sequence token
+        messages: Messages to render
 
-    # Create a template object from the template text
-    env.globals["raise_exception"] = raise_exception
-
-    ## get the tokenizer config from huggingface
-    bos_token = ""
-    eos_token = ""
-    if chat_template is None:
-
-        def _get_tokenizer_config(hf_model_name):
-            try:
-                url = f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
-                # Make a GET request to fetch the JSON data
-                client = HTTPHandler(concurrent_limit=1)
-
-                response = client.get(url)
-            except Exception as e:
-                raise e
-            if response.status_code == 200:
-                # Parse the JSON data
-                tokenizer_config = json.loads(response.content)
-                return {"status": "success", "tokenizer": tokenizer_config}
-            else:
-                return {"status": "failure"}
-
-        if model in litellm.known_tokenizer_config:
-            tokenizer_config = litellm.known_tokenizer_config[model]
-        else:
-            tokenizer_config = _get_tokenizer_config(model)
-            litellm.known_tokenizer_config.update({model: tokenizer_config})
-
-        if (
-            tokenizer_config["status"] == "failure"
-            or "chat_template" not in tokenizer_config["tokenizer"]
-        ):
-            raise Exception("No chat template found")
-        ## read the bos token, eos token and chat template from the json
-        tokenizer_config = tokenizer_config["tokenizer"]  # type: ignore
-
-        bos_token = tokenizer_config["bos_token"]  # type: ignore
-        if bos_token is not None and not isinstance(bos_token, str):
-            if isinstance(bos_token, dict):
-                bos_token = bos_token.get("content", None)
-        eos_token = tokenizer_config["eos_token"]  # type: ignore
-        if eos_token is not None and not isinstance(eos_token, str):
-            if isinstance(eos_token, dict):
-                eos_token = eos_token.get("content", None)
-        chat_template = tokenizer_config["chat_template"]  # type: ignore
+    Returns:
+        Rendered template string
+    """
     try:
         template = env.from_string(chat_template)  # type: ignore
     except Exception as e:
@@ -435,7 +394,6 @@ def hf_chat_template(  # noqa: PLR0915
                 bos_token="<bos>",
             )
             return True
-
         # This will be raised if Jinja attempts to render the system message and it can't
         except Exception:
             return False
@@ -469,7 +427,7 @@ def hf_chat_template(  # noqa: PLR0915
                 )
             except Exception as e:
                 if "Conversation roles must alternate user/assistant" in str(e):
-                    # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
+                    # reformat messages to ensure user/assistant are alternating
                     new_messages = []
                     for i in range(len(reformatted_messages) - 1):
                         new_messages.append(reformatted_messages[i])
@@ -493,6 +451,186 @@ def hf_chat_template(  # noqa: PLR0915
         raise Exception(
             f"Error rendering template - {str(e)}"
         )  # don't use verbose_logger.exception, if exception is raised
+
+
+async def _afetch_and_extract_template(
+    model: str, chat_template: Optional[Any], get_config_fn, get_template_fn
+) -> Tuple[str, str, str]:
+    """
+    Async version: Fetch template and tokens from HuggingFace.
+
+    Returns: (chat_template, bos_token, eos_token)
+    """
+    from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
+        _extract_token_value,
+    )
+
+    bos_token = ""
+    eos_token = ""
+
+    if chat_template is None:
+        # Fetch or retrieve cached tokenizer config
+        if model in litellm.known_tokenizer_config:
+            tokenizer_config = litellm.known_tokenizer_config[model]
+        else:
+            tokenizer_config = await get_config_fn(hf_model_name=model)
+            litellm.known_tokenizer_config.update({model: tokenizer_config})
+
+        # Try to get chat template from tokenizer_config.json first
+        if (
+            tokenizer_config.get("status") == "success"
+            and "tokenizer" in tokenizer_config
+            and isinstance(tokenizer_config["tokenizer"], dict)
+            and "chat_template" in tokenizer_config["tokenizer"]
+        ):
+            tokenizer_data: dict = tokenizer_config["tokenizer"]  # type: ignore
+            bos_token = _extract_token_value(
+                token_value=tokenizer_data.get("bos_token")
+            )
+            eos_token = _extract_token_value(
+                token_value=tokenizer_data.get("eos_token")
+            )
+            chat_template = tokenizer_data["chat_template"]
+        else:
+            # Fallback: Try to fetch chat template from separate .jinja file
+            template_result = await get_template_fn(hf_model_name=model)
+            if template_result.get("status") == "success":
+                chat_template = template_result["chat_template"]
+                # Still try to get tokens from tokenizer_config if available
+                if (
+                    tokenizer_config.get("status") == "success"
+                    and "tokenizer" in tokenizer_config
+                    and isinstance(tokenizer_config["tokenizer"], dict)
+                ):
+                    tokenizer_data: dict = tokenizer_config["tokenizer"]  # type: ignore
+                    bos_token = _extract_token_value(
+                        token_value=tokenizer_data.get("bos_token")
+                    )
+                    eos_token = _extract_token_value(
+                        token_value=tokenizer_data.get("eos_token")
+                    )
+            else:
+                raise Exception("No chat template found")
+
+    return chat_template, bos_token, eos_token  # type: ignore
+
+
+def _fetch_and_extract_template(
+    model: str, chat_template: Optional[Any], get_config_fn, get_template_fn
+) -> Tuple[str, str, str]:
+    """
+    Sync version: Fetch template and tokens from HuggingFace.
+
+    Returns: (chat_template, bos_token, eos_token)
+    """
+    from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
+        _extract_token_value,
+    )
+
+    bos_token = ""
+    eos_token = ""
+
+    if chat_template is None:
+        # Fetch or retrieve cached tokenizer config
+        if model in litellm.known_tokenizer_config:
+            tokenizer_config = litellm.known_tokenizer_config[model]
+        else:
+            tokenizer_config = get_config_fn(hf_model_name=model)
+            litellm.known_tokenizer_config.update({model: tokenizer_config})
+
+        # Try to get chat template from tokenizer_config.json first
+        if (
+            tokenizer_config.get("status") == "success"
+            and "tokenizer" in tokenizer_config
+            and isinstance(tokenizer_config["tokenizer"], dict)
+            and "chat_template" in tokenizer_config["tokenizer"]
+        ):
+            tokenizer_data: dict = tokenizer_config["tokenizer"]  # type: ignore
+            bos_token = _extract_token_value(
+                token_value=tokenizer_data.get("bos_token")
+            )
+            eos_token = _extract_token_value(
+                token_value=tokenizer_data.get("eos_token")
+            )
+            chat_template = tokenizer_data["chat_template"]
+        else:
+            # Fallback: Try to fetch chat template from separate .jinja file
+            template_result = get_template_fn(hf_model_name=model)
+            if template_result.get("status") == "success":
+                chat_template = template_result["chat_template"]
+                # Still try to get tokens from tokenizer_config if available
+                if (
+                    tokenizer_config.get("status") == "success"
+                    and "tokenizer" in tokenizer_config
+                    and isinstance(tokenizer_config["tokenizer"], dict)
+                ):
+                    tokenizer_data: dict = tokenizer_config["tokenizer"]  # type: ignore
+                    bos_token = _extract_token_value(
+                        token_value=tokenizer_data.get("bos_token")
+                    )
+                    eos_token = _extract_token_value(
+                        token_value=tokenizer_data.get("eos_token")
+                    )
+            else:
+                raise Exception("No chat template found")
+
+    return chat_template, bos_token, eos_token  # type: ignore
+
+
+async def ahf_chat_template(
+    model: str, messages: list, chat_template: Optional[Any] = None
+):
+    """HuggingFace chat template (async version)"""
+    from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
+        _aget_chat_template_file,
+        _aget_tokenizer_config,
+        strftime_now,
+    )
+
+    env = ImmutableSandboxedEnvironment()
+    env.globals["raise_exception"] = lambda msg: Exception(f"Error message - {msg}")
+    env.globals["strftime_now"] = strftime_now
+
+    template, bos_token, eos_token = await _afetch_and_extract_template(
+        model=model,
+        chat_template=chat_template,
+        get_config_fn=_aget_tokenizer_config,
+        get_template_fn=_aget_chat_template_file,
+    )
+    return _render_chat_template(
+        env=env,
+        chat_template=template,
+        bos_token=bos_token,
+        eos_token=eos_token,
+        messages=messages,
+    )
+
+
+def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = None):
+    """HuggingFace chat template (sync version)"""
+    from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
+        _get_chat_template_file,
+        _get_tokenizer_config,
+        strftime_now,
+    )
+
+    env = ImmutableSandboxedEnvironment()
+    env.globals["raise_exception"] = lambda msg: Exception(f"Error message - {msg}")
+    env.globals["strftime_now"] = strftime_now
+
+    template, bos_token, eos_token = _fetch_and_extract_template(
+        model=model,
+        chat_template=chat_template,
+        get_config_fn=_get_tokenizer_config,
+        get_template_fn=_get_chat_template_file,
+    )
+    return _render_chat_template(
+        env=env,
+        chat_template=template,
+        bos_token=bos_token,
+        eos_token=eos_token,
+        messages=messages,
+    )
 
 
 def deepseek_r1_pt(messages):
@@ -1067,10 +1205,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for tool in tool_calls:
                 if "function" in tool:
-                    gemini_function_call: Optional[
-                        VertexFunctionCall
-                    ] = _gemini_tool_call_invoke_helper(
-                        function_call_params=tool["function"]
+                    gemini_function_call: Optional[VertexFunctionCall] = (
+                        _gemini_tool_call_invoke_helper(
+                            function_call_params=tool["function"]
+                        )
                     )
                     if gemini_function_call is not None:
                         _parts_list.append(
@@ -1589,9 +1727,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element[
-                                    "cache_control"
-                                ] = _content_element["cache_control"]
+                                _anthropic_content_element["cache_control"] = (
+                                    _content_element["cache_control"]
+                                )
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -1629,9 +1767,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_content_text_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -3826,9 +3964,11 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         # related issue: https://github.com/BerriAI/litellm/issues/5007
         # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
         name = make_valid_bedrock_tool_name(input_tool_name=name)
-        description = tool.get("function", {}).get(
-            "description", name
-        )  # converse api requires a description
+        _tool_description = tool.get("function", {}).get("description", None)
+        if _tool_description:  # bedrock doesn't accept empty "" or None descriptions
+            description = _tool_description
+        else:
+            description = name
 
         defs = parameters.pop("$defs", {})
         defs_copy = copy.deepcopy(defs)
@@ -4032,33 +4172,12 @@ def prompt_factory(
     elif custom_llm_provider == "azure_text":
         return azure_text_pt(messages=messages)
     elif custom_llm_provider == "watsonx":
-        if "granite" in model and "chat" in model:
-            # granite-13b-chat-v1 and granite-13b-chat-v2 use a specific prompt template
-            return ibm_granite_pt(messages=messages)
-        elif "ibm-mistral" in model and "instruct" in model:
-            # models like ibm-mistral/mixtral-8x7b-instruct-v01-q use the mistral instruct prompt template
-            return mistral_instruct_pt(messages=messages)
-        elif "meta-llama/llama-3" in model and "instruct" in model:
-            # https://llama.meta.com/docs/model-cards-and-prompt-formats/meta-llama-3/
-            return custom_prompt(
-                role_dict={
-                    "system": {
-                        "pre_message": "<|start_header_id|>system<|end_header_id|>\n",
-                        "post_message": "<|eot_id|>",
-                    },
-                    "user": {
-                        "pre_message": "<|start_header_id|>user<|end_header_id|>\n",
-                        "post_message": "<|eot_id|>",
-                    },
-                    "assistant": {
-                        "pre_message": "<|start_header_id|>assistant<|end_header_id|>\n",
-                        "post_message": "<|eot_id|>",
-                    },
-                },
-                messages=messages,
-                initial_prompt_value="<|begin_of_text|>",
-                final_prompt_value="<|start_header_id|>assistant<|end_header_id|>\n",
-            )
+        from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
+
+        return IBMWatsonXChatConfig.apply_prompt_template(
+            model=model, messages=messages
+        )
+
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)

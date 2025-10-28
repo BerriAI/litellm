@@ -788,6 +788,30 @@ docker run --name litellm-proxy \
 ## Platform-specific Guide
 
 <Tabs>
+<TabItem value="AWS ECS" label="AWS ECS - Elastic Container Service">
+
+### Terraform-based ECS Deployment
+
+LiteLLM maintains a dedicated Terraform tutorial for deploying the proxy on ECS. Follow the step-by-step guide in the [litellm-ecs-deployment repository](https://github.com/BerriAI/litellm-ecs-deployment) to provision the required ECS services, task definitions, and supporting AWS resources.
+
+1. Clone the tutorial repository to review the Terraform modules and variables.
+  ```bash
+  git clone https://github.com/BerriAI/litellm-ecs-deployment.git
+  cd litellm-ecs-deployment
+  ```
+
+2. Initialize and validate the Terraform project before applying it to your chosen workspace/account.
+  ```bash
+  terraform init
+  terraform plan
+  terraform apply
+  ```
+
+3. Once `terraform apply` completes, do `./build.sh` to push the repository on ECR and update the ECS cluster. Use that endpoint (port `4000` by default) for API requests to your LiteLLM proxy.
+
+
+</TabItem>
+
 <TabItem value="AWS EKS" label="AWS EKS - Kubernetes">
 
 ### Kubernetes (AWS EKS)
