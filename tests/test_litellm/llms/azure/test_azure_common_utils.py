@@ -1504,3 +1504,23 @@ def test_get_azure_ad_token_fallback_to_default_azure_credential(setup_mocks, mo
 
     # Verify the token is what we expect from our DefaultAzureCredential mock
     assert token == "mock-default-azure-credential-token"
+
+
+@pytest.mark.parametrize(
+    "api_version,expected",
+    [
+        ("preview", True),
+        ("latest", True),
+        ("v1", True),
+        (None, False),
+        ("2023-05-15", False),
+        ("2024-01-01", False),
+        ("", False),
+    ],
+)
+def test_is_azure_v1_api_version(api_version, expected):
+    """
+    Test that _is_azure_v1_api_version correctly identifies v1 API versions.
+    """
+    result = BaseAzureLLM._is_azure_v1_api_version(api_version=api_version)
+    assert result == expected

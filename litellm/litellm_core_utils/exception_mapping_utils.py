@@ -67,6 +67,7 @@ class ExceptionCheckers:
             "string too long. expected a string with maximum length",
             "model's maximum context limit",
             "is longer than the model's context length",
+            "input tokens exceed the configured limit",
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:

@@ -1700,7 +1700,7 @@ async def test_router_amoderation():
         {
             "model_name": "openai-moderations",
             "litellm_params": {
-                "model": "text-moderation-stable",
+                "model": "omni-moderation-latest",
                 "api_key": os.getenv("OPENAI_API_KEY", None),
             },
         }
@@ -1709,7 +1709,7 @@ async def test_router_amoderation():
     router = Router(model_list=model_list)
     ## Test 1: user facing function
     result = await router.amoderation(
-        model="text-moderation-stable", input="this is valid good text"
+        model="omni-moderation-latest", input="this is valid good text"
     )
 
 
