@@ -282,7 +282,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             asyncio.create_task(self.async_send_message(payload))
 
     async def _strip_base64_from_messages(
-            self, payload: "StandardLoggingPayload"
+            self, payload: "StandardLoggingPayload", max_depth: int = 10
     ) -> "StandardLoggingPayload":
         """
         Removes or redacts base64-encoded file data (e.g., PDFs, images, audio)
@@ -294,12 +294,19 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
           • Keep untyped or text content.
           • Recursively redact inline base64 blobs in *any* string field, at any depth.
         """
+
         raw_messages: Any = payload.get("messages", [])
         messages: list[Any] = raw_messages if isinstance(raw_messages, list) else []
         verbose_logger.debug(f"[SQSLogger] Stripping base64 from {len(messages)} messages")
 
-        def _redact_base64(value: Any) -> Any:
-            """Recursively redact inline base64 from any nested structure."""
+        def _redact_base64(value: Any, depth: int = 0) -> Any:
+            """Recursively redact inline base64 from any nested structure with a max recursion depth limit."""
+            if depth > max_depth:
+                verbose_logger.warning(
+                    f"[SQSLogger] Max recursion depth {max_depth} reached while redacting base64"
+                )
+                return "[MAX_DEPTH_REACHED]"
+
             if isinstance(value, str):
                 if _BASE64_INLINE_PATTERN.search(value):
                     verbose_logger.debug(
@@ -307,10 +314,13 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                     )
                     return _BASE64_INLINE_PATTERN.sub("[BASE64_REDACTED]", value)
                 return value
+
             if isinstance(value, list):
-                return [_redact_base64(v) for v in value]
+                return [_redact_base64(v, depth + 1) for v in value]
+
             if isinstance(value, dict):
-                return {k: _redact_base64(v) for k, v in value.items()}
+                return {k: _redact_base64(v, depth + 1) for k, v in value.items()}
+
             return value
 
         def _should_keep_content(content: Any) -> bool:
