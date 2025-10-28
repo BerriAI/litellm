@@ -1203,7 +1203,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     ) -> EmbeddingResponse:
         super().embedding()
         try:
-            model = model
             data = {"model": model, "input": input, **optional_params}
             max_retries = max_retries or litellm.DEFAULT_MAX_RETRIES
             if not isinstance(max_retries, int):
