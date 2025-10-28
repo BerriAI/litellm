@@ -1244,15 +1244,24 @@ def move_guardrails_to_metadata(
         metadata_variable_name=_metadata_variable_name,
     )
 
-    # Check request-level guardrails
+    #########################################################################################
+    # User's might send "guardrails" in the request body, we need to add them to the request metadata. 
+    # Since downstream logic requires "guardrails" to be in the request metadata
+    #########################################################################################
     if "guardrails" in data:
-        data[_metadata_variable_name]["guardrails"] = data["guardrails"]
-        del data["guardrails"]
-
+        request_body_guardrails = data.pop("guardrails")
+        if "guardrails" in data[_metadata_variable_name] and isinstance(data[_metadata_variable_name]["guardrails"], list):
+            data[_metadata_variable_name]["guardrails"].extend(request_body_guardrails)
+        else:
+            data[_metadata_variable_name]["guardrails"] = request_body_guardrails
+    
+    #########################################################################################
     if "guardrail_config" in data:
-        data[_metadata_variable_name]["guardrail_config"] = data["guardrail_config"]
-        del data["guardrail_config"]
-
+        request_body_guardrail_config = data.pop("guardrail_config")
+        if "guardrail_config" in data[_metadata_variable_name] and isinstance(data[_metadata_variable_name]["guardrail_config"], dict):
+            data[_metadata_variable_name]["guardrail_config"].update(request_body_guardrail_config)
+        else:
+            data[_metadata_variable_name]["guardrail_config"] = request_body_guardrail_config
 
 def add_provider_specific_headers_to_request(
     data: dict,
