@@ -6464,8 +6464,23 @@ export const applyGuardrail = async (
 
     if (!response.ok) {
       const errorData = await response.text();
+      let errorMessage = "Failed to apply guardrail";
+      
+      try {
+        const errorJson = JSON.parse(errorData);
+        if (errorJson.error?.message) {
+          errorMessage = errorJson.error.message;
+        } else if (errorJson.detail) {
+          errorMessage = errorJson.detail;
+        } else if (errorJson.message) {
+          errorMessage = errorJson.message;
+        }
+      } catch (e) {
+        errorMessage = errorData || errorMessage;
+      }
+      
       handleError(errorData);
-      throw new Error("Failed to apply guardrail");
+      throw new Error(errorMessage);
     }
 
     const data = await response.json();
