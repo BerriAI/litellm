@@ -509,3 +509,22 @@ def test_copilot_vision_request_header_with_type_image_url():
     
     assert headers["Copilot-Vision-Request"] == "true"
     assert headers["X-Initiator"] == "user"
+
+
+def test_requires_custom_headers_validation():
+    """Test that GithubCopilotConfig.requires_custom_headers_validation() returns True"""
+    config = GithubCopilotConfig()
+    
+    # GitHub Copilot should require custom headers validation
+    assert config.requires_custom_headers_validation() is True
+
+
+def test_base_config_requires_custom_headers_validation():
+    """Test that BaseConfig.requires_custom_headers_validation() returns False by default"""
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+    
+    # Use a concrete implementation that doesn't override requires_custom_headers_validation
+    config = OpenAIGPTConfig()
+    
+    # Default implementation should return False
+    assert config.requires_custom_headers_validation() is False
