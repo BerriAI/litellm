@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Card, Title, Text, TextInput, Button as TremorButton } from "@tremor/react";
+import { Card, Title, Text, TextInput } from "@tremor/react";
 import { List, Empty, Spin, Checkbox } from "antd";
 import { ExperimentOutlined, SearchOutlined } from "@ant-design/icons";
 import GuardrailTestPanel from "./GuardrailTestPanel";
@@ -122,18 +122,15 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
           {/* Left Sidebar - Guardrails List */}
           <div className="w-1/4 border-r border-gray-200 flex flex-col overflow-hidden">
             <div className="p-4 border-b border-gray-200">
-              <div className="flex items-center justify-between mb-3">
-                <Title className="text-lg font-semibold mb-0">Guardrails</Title>
-                <TremorButton size="xs" variant="secondary" onClick={onClose}>
-                  Back
-                </TremorButton>
+              <div className="mb-3">
+                <Title className="text-lg font-semibold mb-3">Guardrails</Title>
+                <TextInput
+                  icon={SearchOutlined}
+                  placeholder="Search guardrails..."
+                  value={searchQuery}
+                  onValueChange={setSearchQuery}
+                />
               </div>
-              <TextInput
-                icon={SearchOutlined}
-                placeholder="Search guardrails..."
-                value={searchQuery}
-                onValueChange={setSearchQuery}
-              />
             </div>
 
             <div className="flex-1 overflow-auto">
