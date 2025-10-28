@@ -273,6 +273,7 @@ from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -7662,6 +7663,15 @@ class ProviderConfigManager:
             return AzureVideoConfig()
         return None
 
+    @staticmethod
+    def get_provider_container_config(
+        provider: LlmProviders,
+    ) -> Optional[BaseContainerConfig]:
+        if LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
+
+            return OpenAIContainerConfig()
+        return None
 
     @staticmethod
     def get_provider_realtime_config(
