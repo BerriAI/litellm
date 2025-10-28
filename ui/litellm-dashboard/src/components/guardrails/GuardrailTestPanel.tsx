@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Button, Card } from "@tremor/react";
-import { Input, Typography } from "antd";
-import { CopyOutlined, CheckCircleOutlined, ClockCircleOutlined } from "@ant-design/icons";
+import { Input, Typography, Tooltip } from "antd";
+import { CopyOutlined, CheckCircleOutlined, ClockCircleOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import NotificationsManager from "../molecules/notifications_manager";
 
 const { TextArea } = Input;
@@ -33,6 +33,13 @@ export function GuardrailTestPanel({
     }
 
     onSubmit(inputText);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
   };
 
   const copyToClipboard = async (text: string) => {
@@ -103,7 +110,12 @@ export function GuardrailTestPanel({
         <div className="space-y-3">
           <div>
             <div className="flex justify-between items-center mb-2">
-              <label className="text-sm font-medium text-gray-700">Input Text</label>
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium text-gray-700">Input Text</label>
+                <Tooltip title="Press Enter to submit. Use Shift+Enter for new line.">
+                  <InfoCircleOutlined className="text-gray-400 cursor-help" />
+                </Tooltip>
+              </div>
               {inputText && (
                 <Button
                   size="xs"
@@ -118,11 +130,17 @@ export function GuardrailTestPanel({
             <TextArea
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
+              onKeyDown={handleKeyDown}
               placeholder="Enter text to test with guardrails..."
               rows={8}
               className="font-mono text-sm"
             />
-            <Text className="text-xs text-gray-500 mt-1">Characters: {inputText.length}</Text>
+            <div className="flex justify-between items-center mt-1">
+              <Text className="text-xs text-gray-500">
+                Press <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">Enter</kbd> to submit • <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">Shift+Enter</kbd> for new line
+              </Text>
+              <Text className="text-xs text-gray-500">Characters: {inputText.length}</Text>
+            </div>
           </div>
 
           <div className="pt-2">
