@@ -1,6 +1,6 @@
 # What is this?
 ## Helper utilities
-from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
 
 import httpx
 
@@ -140,7 +140,7 @@ def add_missing_spend_metadata_to_litellm_metadata(
 
 def get_metadata_variable_name_from_kwargs(
     kwargs: dict,
-) -> str:
+) -> Literal["metadata", "litellm_metadata"]:
     """
     Helper to return what the "metadata" field should be called in the request data
 
