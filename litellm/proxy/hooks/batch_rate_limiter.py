@@ -340,7 +340,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 custom_llm_provider=custom_llm_provider,
             )
 
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"Batch input file usage - Tokens: {batch_usage.total_tokens}, "
                 f"Requests: {batch_usage.request_count}"
             )
