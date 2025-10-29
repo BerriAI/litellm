@@ -9,9 +9,9 @@
 
 import ast
 import asyncio
-import contextvars
 import base64
 import binascii
+import contextvars
 import copy
 import datetime
 import hashlib
@@ -7658,6 +7658,12 @@ class ProviderConfigManager:
             )
 
             return LiteLLMProxyImageGenerationConfig()
+        elif LlmProviders.FAL_AI == provider:
+            from litellm.llms.fal_ai.image_generation import (
+                get_fal_ai_image_generation_config,
+            )
+
+            return get_fal_ai_image_generation_config(model)
         return None
 
     @staticmethod
