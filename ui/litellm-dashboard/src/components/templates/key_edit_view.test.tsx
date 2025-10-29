@@ -42,6 +42,7 @@ describe("KeyEditView", () => {
     budget_duration: "30d",
     budget_reset_at: "never",
     allowed_cache_controls: [],
+    allowed_routes: [],
     permissions: {},
     model_spend: {},
     model_max_budget: {},

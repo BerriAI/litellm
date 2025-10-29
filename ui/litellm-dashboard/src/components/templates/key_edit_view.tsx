@@ -47,6 +47,27 @@ const getAvailableModelsForKey = (keyData: KeyResponse, teams: any[] | null): st
   return [];
 };
 
+// Helper function to determine key_type display value from allowed_routes
+const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string => {
+  if (!allowedRoutes || allowedRoutes.length === 0) {
+    return "default";
+  }
+
+  if (allowedRoutes.includes("llm_api_routes")) {
+    return "llm_api";
+  }
+
+  if (allowedRoutes.includes("management_routes")) {
+    return "management";
+  }
+
+  if (allowedRoutes.includes("info_routes")) {
+    return "read_only";
+  }
+
+  return "default";
+};
+
 export function KeyEditView({
   keyData,
   onCancel,
@@ -154,6 +175,7 @@ export function KeyEditView({
       : [],
     auto_rotate: keyData.auto_rotate || false,
     ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
+    allowed_routes: keyData.allowed_routes,
   };
 
   useEffect(() => {
@@ -176,6 +198,7 @@ export function KeyEditView({
         : [],
       auto_rotate: keyData.auto_rotate || false,
       ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
+      allowed_routes: keyData.allowed_routes,
     });
   }, [keyData, form]);
 
@@ -202,12 +225,12 @@ export function KeyEditView({
         <Form.Item
           noStyle
           shouldUpdate={(prevValues, currentValues) =>
-            prevValues.key_type !== currentValues.key_type || prevValues.models !== currentValues.models
+            prevValues.allowed_routes !== currentValues.allowed_routes || prevValues.models !== currentValues.models
           }
         >
           {({ getFieldValue, setFieldValue }) => {
-            const keyType = getFieldValue("key_type");
-            const isDisabled = keyType === "management" || keyType === "read_only";
+            const allowedRoutes = getFieldValue("allowed_routes") || [];
+            const isDisabled = allowedRoutes.includes("management_routes") || allowedRoutes.includes("info_routes");
             const models = getFieldValue("models") || [];
 
             return (
@@ -239,44 +262,64 @@ export function KeyEditView({
         </Form.Item>
       </Form.Item>
 
-      <Form.Item label="Key Type" name="key_type">
-        <Select
-          placeholder="Select key type"
-          style={{ width: "100%" }}
-          optionLabelProp="label"
-          onChange={(value) => {
-            form.setFieldsValue({ key_type: value });
-            // Clear models field and disable if management or read_only
-            if (value === "management" || value === "read_only") {
-              form.setFieldsValue({ models: [] });
-            }
-          }}
+      <Form.Item label="Key Type">
+        <Form.Item
+          noStyle
+          shouldUpdate={(prevValues, currentValues) => prevValues.allowed_routes !== currentValues.allowed_routes}
         >
-          <Select.Option value="default" label="Default">
-            <div style={{ padding: "4px 0" }}>
-              <div style={{ fontWeight: 500 }}>Default</div>
-              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                Can call LLM API + Management routes
-              </div>
-            </div>
-          </Select.Option>
-          <Select.Option value="llm_api" label="LLM API">
-            <div style={{ padding: "4px 0" }}>
-              <div style={{ fontWeight: 500 }}>LLM API</div>
-              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                Can call only LLM API routes (chat/completions, embeddings, etc.)
-              </div>
-            </div>
-          </Select.Option>
-          <Select.Option value="management" label="Management">
-            <div style={{ padding: "4px 0" }}>
-              <div style={{ fontWeight: 500 }}>Management</div>
-              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                Can call only management routes (user/team/key management)
-              </div>
-            </div>
-          </Select.Option>
-        </Select>
+          {({ getFieldValue, setFieldValue }) => {
+            const allowedRoutes = getFieldValue("allowed_routes");
+            const keyTypeValue = getKeyTypeFromRoutes(allowedRoutes);
+
+            return (
+              <Select
+                placeholder="Select key type"
+                style={{ width: "100%" }}
+                optionLabelProp="label"
+                value={keyTypeValue}
+                onChange={(value) => {
+                  switch (value) {
+                    case "default":
+                      setFieldValue("allowed_routes", []);
+                      break;
+                    case "llm_api":
+                      setFieldValue("allowed_routes", ["llm_api_routes"]);
+                      break;
+                    case "management":
+                      setFieldValue("allowed_routes", ["management_routes"]);
+                      setFieldValue("models", []);
+                      break;
+                  }
+                }}
+              >
+                <Select.Option value="default" label="Default">
+                  <div style={{ padding: "4px 0" }}>
+                    <div style={{ fontWeight: 500 }}>Default</div>
+                    <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                      Can call LLM API + Management routes
+                    </div>
+                  </div>
+                </Select.Option>
+                <Select.Option value="llm_api" label="LLM API">
+                  <div style={{ padding: "4px 0" }}>
+                    <div style={{ fontWeight: 500 }}>LLM API</div>
+                    <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                      Can call only LLM API routes (chat/completions, embeddings, etc.)
+                    </div>
+                  </div>
+                </Select.Option>
+                <Select.Option value="management" label="Management">
+                  <div style={{ padding: "4px 0" }}>
+                    <div style={{ fontWeight: 500 }}>Management</div>
+                    <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                      Can call only management routes (user/team/key management)
+                    </div>
+                  </div>
+                </Select.Option>
+              </Select>
+            );
+          }}
+        </Form.Item>
       </Form.Item>
 
       <Form.Item label="Max Budget (USD)" name="max_budget">
@@ -451,6 +494,11 @@ export function KeyEditView({
 
       {/* Hidden form field for token */}
       <Form.Item name="token" hidden>
+        <Input />
+      </Form.Item>
+
+      {/* Hidden form field for allowed_routes */}
+      <Form.Item name="allowed_routes" hidden>
         <Input />
       </Form.Item>
 
