@@ -14,7 +14,6 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
-from litellm.litellm_core_utils.token_counter import get_image_type
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import CachePointBlock

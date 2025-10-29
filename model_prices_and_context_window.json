@@ -8259,6 +8259,46 @@
         "supports_function_calling": true,
         "supports_tool_choice": false
     },
+    "fal_ai/bria/text-to-image/3.2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0398,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/flux-pro/v1.1-ultra": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0398,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/imagen4/preview": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0398,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/recraft/v3/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0398,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/stable-diffusion-v35-medium": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0398,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "featherless_ai/featherless-ai/Qwerky-72B": {
         "litellm_provider": "featherless_ai",
         "max_input_tokens": 32768,
