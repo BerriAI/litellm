@@ -18,6 +18,24 @@ from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
 from litellm.types.utils import EmbeddingResponse
 
 
+def test_is_bge_model_detection():
+    """
+    Test BGE model detection for post-provider-split patterns.
+    
+    After main.py splits the provider, model strings are passed without the provider prefix.
+    Model name transformation (bge/ -> numeric ID) is handled in common_utils._get_vertex_url().
+    """
+    # Should detect BGE models (after provider split)
+    assert VertexBGEConfig.is_bge_model("bge-small-en-v1.5") is True
+    assert VertexBGEConfig.is_bge_model("bge/204379420394258432") is True
+    assert VertexBGEConfig.is_bge_model("BGE-large-en-v1.5") is True  # case insensitive
+    
+    # Should not detect non-BGE models
+    assert VertexBGEConfig.is_bge_model("textembedding-gecko") is False
+    assert VertexBGEConfig.is_bge_model("gemma") is False
+    assert VertexBGEConfig.is_bge_model("123456789") is False
+
+
 def test_bge_response_transformation_success():
     """
     Test successful BGE response transformation.
