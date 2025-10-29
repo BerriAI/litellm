@@ -221,8 +221,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _supports_penalty_parameters(self, model: str) -> bool:
         unsupported_models = ["gemini-2.5-pro-preview-06-05"]
 
-        for model in unsupported_models:
-            return False
+        for unsupported_model in unsupported_models:
+            if model == unsupported_model:
+                return False
 
         return True
 
