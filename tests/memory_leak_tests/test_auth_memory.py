@@ -18,7 +18,6 @@ import os
 import tracemalloc
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath("../.."))
@@ -33,32 +32,62 @@ from .memory_test_helpers import (
     print_analysis_header,
     print_growth_metrics,
     print_memory_samples,
+    verify_module_id_consistency,
     create_auth_call_function,
     get_memory_test_config,
     create_mock_prisma_client,
     setup_proxy_server_dependencies,
+    setup_proxy_server_dependencies_without_db,
     save_proxy_server_state,
     restore_proxy_server_state,
+    force_gc,
 )
 from .constants import TEST_API_KEY
 
 API_KEY = TEST_API_KEY
 
+
+@pytest.fixture(autouse=True, scope="function")
+def cleanup_between_tests():
+    """
+    Fixture to ensure complete isolation between test cases.
+    
+    This fixture runs before and after each test to clean up state,
+    ensuring tests don't interfere with each other.
+    """
+    # Cleanup before test
+    print("\n[FIXTURE] Cleaning up state before test...", flush=True)
+    force_gc()
+    
+    # Run the test
+    yield
+    
+    # Cleanup after test
+    print("\n[FIXTURE] Cleaning up state after test...", flush=True)
+    force_gc()
+
+
 @pytest.fixture
-def setup_auth_dependencies_with_db():
+def setup_auth_dependencies(request):
     """
-    Fixture to set up all dependencies needed by _user_api_key_auth_builder WITH database.
+    Parametrizable fixture to set up auth dependencies WITH or WITHOUT database.
     
-    This fixture creates a mock PrismaClient to test the database-backed auth path.
-    With a mock DB, the auth flow:
-    - Looks up API keys in the database
-    - Retrieves user/team information
-    - Validates user permissions and budgets
-    - Returns appropriate user role
+    Args:
+        request: pytest request object with param indicating with_db (bool)
     
-    This tests the full auth logic including database interactions.
+    This fixture creates either:
+    - WITHOUT DB (with_db=False): Tests master key validation path
+    - WITH DB (with_db=True): Tests full database-backed auth path
+    
+    Returns:
+        proxy_server module (and mock_prisma if with_db=True)
     """
-    print("\n[FIXTURE] Setting up auth dependencies with DB...", flush=True)
+    with_db = request.param
+    
+    if with_db:
+        print("\n[FIXTURE] Setting up auth dependencies WITH DB...", flush=True)
+    else:
+        print("\n[FIXTURE] Setting up auth dependencies WITHOUT DB...", flush=True)
     
     # Import proxy_server to set up dependencies
     import litellm.proxy.proxy_server as proxy_server
@@ -72,30 +101,41 @@ def setup_auth_dependencies_with_db():
     real_cache = DualCache()
     real_logging = ProxyLogging(user_api_key_cache=real_cache)
     
-    # Create mock Prisma client
-    mock_prisma_client = create_mock_prisma_client(API_KEY)
+    if with_db:
+        # WITH DATABASE: Create mock Prisma client
+        mock_prisma_client = create_mock_prisma_client(API_KEY)
+        setup_proxy_server_dependencies(proxy_server, mock_prisma_client, real_cache, real_logging)
+        print("[FIXTURE] Dependencies set up complete (WITH DB mock)", flush=True)
+    else:
+        # WITHOUT DATABASE: Use master key authentication path
+        setup_proxy_server_dependencies_without_db(proxy_server, real_cache, real_logging, API_KEY)
+        print("[FIXTURE] Dependencies set up complete (WITHOUT DB - master key path)", flush=True)
     
-    # Set up the dependencies
-    setup_proxy_server_dependencies(proxy_server, mock_prisma_client, real_cache, real_logging)
-    
-    print("[FIXTURE] Dependencies set up complete (with DB mock)", flush=True)
-    
-    yield proxy_server, mock_prisma_client
+    yield proxy_server
     
     # Restore original values
     print("[FIXTURE] Restoring original dependencies...", flush=True)
     restore_proxy_server_state(proxy_server, original_values)
-    
     print("[FIXTURE] Cleanup complete", flush=True)
 
 
 @pytest.mark.asyncio
-async def test_user_api_key_auth_memory_leak_with_db(setup_auth_dependencies_with_db):
+@pytest.mark.parametrize(
+    "setup_auth_dependencies,with_db,test_title",
+    [
+        (False, False, "Auth Memory Leak Test (WITHOUT DB - Master Key Path)"),
+        (True, True, "Auth Memory Leak Test (WITH DB - Database Lookup Path)"),
+    ],
+    indirect=["setup_auth_dependencies"],
+    ids=["without-db", "with-db"]
+)
+async def test_user_api_key_auth_memory_leak(setup_auth_dependencies, with_db, test_title):
     """
-    Memory leak test for _user_api_key_auth_builder function WITH database using tracemalloc.
+    Memory leak test for _user_api_key_auth_builder function using tracemalloc.
+    Tests both WITH and WITHOUT database scenarios via parametrization.
     
     Goals:
-    - Detect unbounded memory growth across repeated auth checks with DB lookups.
+    - Detect unbounded memory growth across repeated auth checks.
     - Filter out normal allocator noise and cache warm-up.
     - Fail only when memory truly grows over time.
     
@@ -105,35 +145,37 @@ async def test_user_api_key_auth_memory_leak_with_db(setup_auth_dependencies_wit
     - Warm-up phase excluded from growth analysis.
     - Rolling average smoothing suppresses transient allocator noise.
     
-    Code Path Tested (WITH DATABASE MOCK):
-    The fixture creates a mock PrismaClient, forcing the database-backed auth path:
-    1. pre_db_read_auth_checks() - validates request structure
-    2. get_api_key() - extracts API key from headers
-    3. Skip JWT/OAuth2 checks (disabled in test config)
-    4. get_key_object() with check_cache_only=True - cache miss (returns None)
-    5. secrets.compare_digest(api_key, master_key) - SKIPPED (token in cache from step 4 cache miss)
-    6. get_key_object() with check_cache_only=False - DB lookup via prisma_client.get_data()
-    7. Returns LiteLLM_VerificationToken from mock DB
-    8. Converts to UserAPIKeyAuth object
-    9. asyncio.create_task(_cache_key_object()) - caches the result
-    10. Returns UserAPIKeyAuth object with user permissions
+    Test Scenarios:
     
-    This path exercises:
-    - Full auth logic including database queries
-    - Cache lookups and writes (real cache, not mock)
-    - User/team/permission lookups
-    - Budget validation logic
-    - UserAPIKeyAuth object creation with full metadata
+    1. WITHOUT DATABASE (with_db=False) - Master Key Path:
+       - prisma_client=None
+       - Validates API key against master_key using secrets.compare_digest()
+       - Returns admin role immediately (no DB lookup)
+       - Tests basic auth logic without database overhead
     
-    The fixture sets up proxy_server dependencies with a mock database.
+    2. WITH DATABASE (with_db=True) - Full Database Path:
+       - Mock PrismaClient created
+       - DB lookup via prisma_client.get_data()
+       - Retrieves user/team information and permissions
+       - Tests full auth logic including database queries
+    
+    Args:
+        setup_auth_dependencies: Fixture that sets up auth dependencies
+        with_db: Whether to test WITH database (True) or WITHOUT (False)
+        test_title: Display title for this test variant
     """
-    # Ensure fixture is executed (sets up dependencies)
-    _ = setup_auth_dependencies_with_db
+    # Ensure fixture is executed and get proxy_server module
+    proxy_server = setup_auth_dependencies
+    
+    # Track proxy_server module ID for consistency verification
+    initial_id = id(proxy_server)
+    print(f"\n[TEST] proxy_server module ID: {initial_id}", flush=True)
+    verify_module_id_consistency(proxy_server, initial_id, "at test start")
     
     # Get standardized test configuration (all values from constants.py)
     config = get_memory_test_config()
 
-    print_test_header(title="_user_api_key_auth_builder Memory Leak Detection Test (WITH DB)")
+    print_test_header(title=test_title)
     
     # Create the auth call function using the test API key
     # Master key is set to different value to force DB lookup path
@@ -151,6 +193,9 @@ async def test_user_api_key_auth_memory_leak_with_db(setup_auth_dependencies_wit
             completion_func=call_user_api_key_auth,
             completion_kwargs={}
         )
+        
+        # Verify ID hasn't changed after warmup
+        verify_module_id_consistency(proxy_server, initial_id, "after warmup")
 
         # --- Measurement Phase ---
         print(f"\nMeasuring memory over {config['num_batches']} batches...")
@@ -162,12 +207,16 @@ async def test_user_api_key_auth_memory_leak_with_db(setup_auth_dependencies_wit
             tracemalloc_module=tracemalloc,
             litellm_module=None  # No need for litellm cleanup in auth test
         )
+        
+        # Verify ID hasn't changed after measurement
+        verify_module_id_consistency(proxy_server, initial_id, "after measurement")
 
     finally:
         tracemalloc.stop()
 
     # --- Analysis Phase ---
-    print_analysis_header(title="_user_api_key_auth_builder Memory Growth Analysis (WITH DB)")
+    db_status = "WITH DB" if with_db else "WITHOUT DB"
+    print_analysis_header(title=f"_user_api_key_auth_builder Memory Growth Analysis ({db_status})")
 
     if len(memory_samples) < config['sample_window'] * 2:
         pytest.skip("Not enough samples for reliable growth analysis")
@@ -199,7 +248,10 @@ async def test_user_api_key_auth_memory_leak_with_db(setup_auth_dependencies_wit
     print(message)
     print_memory_samples(memory_samples, num_samples=10)
     
-    print("\n[TEST] ✓ _user_api_key_auth_builder memory test complete (WITH DB) - no leaks detected", flush=True)
+    # Final verification that ID remained consistent throughout
+    verify_module_id_consistency(proxy_server, initial_id, "at test end")
+    print(f"\n[TEST] ✓ proxy_server module ID remained consistent throughout: {initial_id}", flush=True)
+    print(f"[TEST] ✓ _user_api_key_auth_builder memory test complete ({db_status}) - no leaks detected", flush=True)
 
 
 if __name__ == "__main__":

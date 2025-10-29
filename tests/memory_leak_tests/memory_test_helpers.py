@@ -801,7 +801,7 @@ def get_memory_test_config(
 
 def setup_proxy_server_dependencies(proxy_server_module, mock_prisma_client, real_cache, real_logging):
     """
-    Set up proxy_server module dependencies for auth testing.
+    Set up proxy_server module dependencies for auth testing WITH database.
     
     Args:
         proxy_server_module: The proxy_server module to configure
@@ -820,6 +820,39 @@ def setup_proxy_server_dependencies(proxy_server_module, mock_prisma_client, rea
         "allow_user_auth": False,
     }
     proxy_server_module.master_key = "different-master-key-to-avoid-matching"
+    proxy_server_module.llm_model_list = []
+    proxy_server_module.llm_router = None
+    proxy_server_module.model_max_budget_limiter = None
+    proxy_server_module.open_telemetry_logger = None
+    proxy_server_module.litellm_proxy_admin_name = "admin"
+    proxy_server_module.user_custom_auth = None
+    proxy_server_module.jwt_handler = None
+    proxy_server_module.premium_user = False
+
+
+def setup_proxy_server_dependencies_without_db(proxy_server_module, real_cache, real_logging, master_key):
+    """
+    Set up proxy_server module dependencies for auth testing WITHOUT database.
+    
+    This configures the proxy server to use master key authentication path.
+    
+    Args:
+        proxy_server_module: The proxy_server module to configure
+        real_cache: Real DualCache instance
+        real_logging: Real ProxyLogging instance
+        master_key: The master key to use for authentication
+    """
+    proxy_server_module.prisma_client = None  # No database!
+    proxy_server_module.user_api_key_cache = real_cache
+    proxy_server_module.proxy_logging_obj = real_logging
+    proxy_server_module.general_settings = {
+        "pass_through_endpoints": None,
+        "enable_jwt_auth": False,
+        "enable_oauth2_auth": False,
+        "enable_oauth2_proxy_auth": False,
+        "allow_user_auth": False,
+    }
+    proxy_server_module.master_key = master_key
     proxy_server_module.llm_model_list = []
     proxy_server_module.llm_router = None
     proxy_server_module.model_max_budget_limiter = None
@@ -933,21 +966,20 @@ def create_mock_prisma_client(api_key: str):
 
 def create_auth_call_function(master_key: str = TEST_API_KEY):
     """
-    Create a function that calls _user_api_key_auth_builder.
+    Create an async function that calls _user_api_key_auth_builder.
     
-    This factory function returns a callable suitable for memory testing.
+    This factory function returns an async callable suitable for memory testing.
     Uses the master key for successful auth without DB.
     
     Args:
         master_key: The master key to use for authentication
         
     Returns:
-        A callable function that performs auth and returns True on success
+        An async callable function that performs auth and returns True on success
     """
-    import asyncio
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
     
-    def call_auth():
+    async def call_auth():
         """
         Call the actual user_api_key_auth function.
         
@@ -960,7 +992,7 @@ def create_auth_call_function(master_key: str = TEST_API_KEY):
             auth_header=f"Bearer {master_key}"
         )
         
-        async def _async_call():
+        try:
             result = await _user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {master_key}",  # Add Bearer prefix
@@ -973,9 +1005,6 @@ def create_auth_call_function(master_key: str = TEST_API_KEY):
             # Clean up the result to release references
             del result
             return True
-        
-        try:
-            return asyncio.run(_async_call())
         except Exception as e:
             # Fail the test if auth call fails
             pytest.fail(f"Auth call failed: {e}")
