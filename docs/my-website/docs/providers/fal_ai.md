@@ -10,7 +10,7 @@ Fal AI provides fast, scalable access to state-of-the-art image generation model
 | Property | Details |
 |----------|---------|
 | Description | Fal AI offers optimized infrastructure for running image generation models at scale with low latency. |
-| Provider Route on LiteLLM | `fal-ai/`, `fal_ai/` |
+| Provider Route on LiteLLM | `fal_ai/` |
 | Provider Doc | [Fal AI Documentation ↗](https://fal.ai/models) |
 | Supported Operations | [`/images/generations`](#image-generation) |
 
@@ -31,11 +31,11 @@ Get your API key from [fal.ai](https://fal.ai/).
 
 | Model Name | Description | Documentation |
 |------------|-------------|---------------|
-| `fal-ai/flux-pro/v1.1-ultra` | FLUX Pro v1.1 Ultra - High-quality image generation | [Docs ↗](https://fal.ai/models/fal-ai/flux-pro/v1.1-ultra) |
-| `fal-ai/imagen4/preview` | Google's Imagen 4 - Highest quality model | [Docs ↗](https://fal.ai/models/fal-ai/imagen4/preview) |
-| `fal-ai/recraft/v3/text-to-image` | Recraft v3 - Multiple style options | [Docs ↗](https://fal.ai/models/fal-ai/recraft/v3/text-to-image) |
-| `fal-ai/stable-diffusion-v35-medium` | Stable Diffusion v3.5 Medium | [Docs ↗](https://fal.ai/models/fal-ai/stable-diffusion-v35-medium) |
-| `bria/text-to-image/3.2` | Bria 3.2 - Commercial-grade generation | [Docs ↗](https://fal.ai/models/bria/text-to-image/3.2) |
+| `fal_ai/fal-ai/flux-pro/v1.1-ultra` | FLUX Pro v1.1 Ultra - High-quality image generation | [Docs ↗](https://fal.ai/models/fal-ai/flux-pro/v1.1-ultra) |
+| `fal_ai/fal-ai/imagen4/preview` | Google's Imagen 4 - Highest quality model | [Docs ↗](https://fal.ai/models/fal-ai/imagen4/preview) |
+| `fal_ai/fal-ai/recraft/v3/text-to-image` | Recraft v3 - Multiple style options | [Docs ↗](https://fal.ai/models/fal-ai/recraft/v3/text-to-image) |
+| `fal_ai/fal-ai/stable-diffusion-v35-medium` | Stable Diffusion v3.5 Medium | [Docs ↗](https://fal.ai/models/fal-ai/stable-diffusion-v35-medium) |
+| `fal_ai/bria/text-to-image/3.2` | Bria 3.2 - Commercial-grade generation | [Docs ↗](https://fal.ai/models/bria/text-to-image/3.2) |
 
 ## Image Generation
 
@@ -53,7 +53,7 @@ os.environ["FAL_AI_API_KEY"] = "your-fal-api-key"
 
 # Generate an image
 response = litellm.image_generation(
-    model="fal-ai/flux-pro/v1.1-ultra",
+    model="fal_ai/fal-ai/flux-pro/v1.1-ultra",
     prompt="A serene mountain landscape at sunset with vibrant colors"
 )
 
@@ -72,7 +72,7 @@ os.environ["FAL_AI_API_KEY"] = "your-fal-api-key"
 
 # Generate with Imagen 4
 response = litellm.image_generation(
-    model="fal-ai/imagen4/preview",
+    model="fal_ai/fal-ai/imagen4/preview",
     prompt="A vintage 1960s kitchen with flour package on countertop",
     aspect_ratio="16:9",
     num_images=1
@@ -93,7 +93,7 @@ os.environ["FAL_AI_API_KEY"] = "your-fal-api-key"
 
 # Generate with specific style
 response = litellm.image_generation(
-    model="fal-ai/recraft/v3/text-to-image",
+    model="fal_ai/fal-ai/recraft/v3/text-to-image",
     prompt="A red panda eating bamboo",
     style="realistic_image",
     image_size="landscape_4_3"
@@ -115,7 +115,7 @@ async def generate_image():
     os.environ["FAL_AI_API_KEY"] = "your-fal-api-key"
     
     response = await litellm.aimage_generation(
-        model="fal-ai/stable-diffusion-v35-medium",
+        model="fal_ai/fal-ai/stable-diffusion-v35-medium",
         prompt="A cyberpunk cityscape with neon lights",
         guidance_scale=7.5,
         num_inference_steps=50
@@ -139,7 +139,7 @@ os.environ["FAL_AI_API_KEY"] = "your-fal-api-key"
 
 # Generate with advanced parameters
 response = litellm.image_generation(
-    model="fal-ai/flux-pro/v1.1-ultra",
+    model="fal_ai/fal-ai/flux-pro/v1.1-ultra",
     prompt="A majestic dragon soaring over mountains",
     n=2,
     size="1792x1024",  # Maps to aspect_ratio="16:9"
@@ -163,21 +163,21 @@ for image in response.data:
 model_list:
   - model_name: flux-ultra
     litellm_params:
-      model: fal-ai/flux-pro/v1.1-ultra
+      model: fal_ai/fal-ai/flux-pro/v1.1-ultra
       api_key: os.environ/FAL_AI_API_KEY
     model_info:
       mode: image_generation
   
   - model_name: imagen4
     litellm_params:
-      model: fal-ai/imagen4/preview
+      model: fal_ai/fal-ai/imagen4/preview
       api_key: os.environ/FAL_AI_API_KEY
     model_info:
       mode: image_generation
   
   - model_name: stable-diffusion
     litellm_params:
-      model: fal-ai/stable-diffusion-v35-medium
+      model: fal_ai/fal-ai/stable-diffusion-v35-medium
       api_key: os.environ/FAL_AI_API_KEY
     model_info:
       mode: image_generation
@@ -253,80 +253,7 @@ curl --location 'http://localhost:4000/v1/images/generations' \
 </TabItem>
 </Tabs>
 
-## Model-Specific Parameters
 
-### FLUX Pro v1.1-ultra
-
-```python showLineNumbers title="FLUX Pro Parameters"
-response = litellm.image_generation(
-    model="fal-ai/flux-pro/v1.1-ultra",
-    prompt="Your prompt",
-    num_images=1,              # 1-4 images
-    aspect_ratio="16:9",       # 21:9, 16:9, 4:3, 3:2, 1:1, 2:3, 3:4, 9:16, 9:21
-    seed=42,                   # For reproducibility
-    safety_tolerance="2",      # 1-6 (1=strict, 6=permissive)
-    enhance_prompt=True,       # Enhance prompt for better results
-    raw=False                  # Less processed, natural-looking images
-)
-```
-
-### Imagen 4
-
-```python showLineNumbers title="Imagen 4 Parameters"
-response = litellm.image_generation(
-    model="fal-ai/imagen4/preview",
-    prompt="Your prompt",
-    aspect_ratio="1:1",        # 1:1, 16:9, 9:16, 3:4, 4:3
-    num_images=1,              # 1-4 images
-    resolution="1K",           # 1K or 2K
-    seed=42,                   # For reproducibility
-    negative_prompt=""         # What to avoid
-)
-```
-
-### Recraft v3
-
-```python showLineNumbers title="Recraft v3 Parameters"
-response = litellm.image_generation(
-    model="fal-ai/recraft/v3/text-to-image",
-    prompt="Your prompt (max 1000 chars)",
-    image_size="landscape_4_3",  # square_hd, square, portrait_4_3, etc.
-    style="realistic_image",     # any, realistic_image, digital_illustration, vector_illustration
-    colors=[{"r": 255, "g": 100, "b": 50}],  # Optional color palette
-    enable_safety_checker=False
-)
-```
-
-### Stable Diffusion v3.5
-
-```python showLineNumbers title="Stable Diffusion Parameters"
-response = litellm.image_generation(
-    model="fal-ai/stable-diffusion-v35-medium",
-    prompt="Your prompt",
-    num_images=1,                # 1-4 images
-    image_size="landscape_4_3",  # Preset or custom {"width": 1024, "height": 768}
-    guidance_scale=4.5,          # 0-20 (CFG scale)
-    num_inference_steps=40,      # 1-50 steps
-    seed=42,                     # For reproducibility
-    negative_prompt="blurry, low quality",
-    enable_safety_checker=True
-)
-```
-
-### Bria 3.2
-
-```python showLineNumbers title="Bria Parameters"
-response = litellm.image_generation(
-    model="bria/text-to-image/3.2",
-    prompt="Your prompt",
-    aspect_ratio="1:1",          # 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9
-    prompt_enhancer=True,        # Improve the prompt
-    guidance_scale=5,            # 1-10
-    num_inference_steps=30,      # 20-50
-    seed=5555,                   # For reproducibility
-    negative_prompt=""           # What to avoid
-)
-```
 
 ## Supported Parameters
 
