@@ -100,7 +100,7 @@ async def test_completion_memory_leak_with_growth_detection(use_async, streaming
         )
         verify_module_id_consistency(litellm, initial_id, "after warmup")
 
-        memory_samples = await run_measurement_phase(
+        memory_samples, error_counts = await run_measurement_phase(
             batch_size=config['batch_size'],
             num_batches=config['num_batches'],
             completion_func=completion_func,
@@ -125,9 +125,11 @@ async def test_completion_memory_leak_with_growth_detection(use_async, streaming
     growth_metrics = analyze_memory_growth(rolling_avg, num_samples_for_avg=num_samples_for_avg)
     print_growth_metrics(growth_metrics)
 
+    # Detect memory leaks (including error-induced leaks)
     leak_detected, message = detect_memory_leak(
         growth_metrics=growth_metrics,
         memory_samples=memory_samples,
+        error_counts=error_counts,
         max_growth_percent=config['max_growth_percent'],
         stabilization_tolerance_mb=config['stabilization_tolerance_mb'],
         tail_samples=tail_samples

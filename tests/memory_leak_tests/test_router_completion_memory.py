@@ -196,7 +196,7 @@ async def test_router_completion_memory_leak_with_growth_detection(clean_router,
         verify_module_id_consistency(clean_router, initial_id, "after warmup")
 
         # --- Measurement Phase ---
-        memory_samples = await run_measurement_phase(
+        memory_samples, error_counts = await run_measurement_phase(
             batch_size=config['batch_size'],
             num_batches=config['num_batches'],
             completion_func=completion_func,
@@ -228,10 +228,11 @@ async def test_router_completion_memory_leak_with_growth_detection(clean_router,
     
     print_growth_metrics(growth_metrics)
 
-    # Detect memory leaks
+    # Detect memory leaks (including error-induced leaks)
     leak_detected, message = detect_memory_leak(
         growth_metrics=growth_metrics,
         memory_samples=memory_samples,
+        error_counts=error_counts,
         max_growth_percent=config['max_growth_percent'],
         stabilization_tolerance_mb=config['stabilization_tolerance_mb'],
         tail_samples=tail_samples

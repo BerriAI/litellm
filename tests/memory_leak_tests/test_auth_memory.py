@@ -89,8 +89,8 @@ def setup_auth_dependencies_with_db():
     print("[FIXTURE] Cleanup complete", flush=True)
 
 
-
-def test_user_api_key_auth_memory_leak_with_db(setup_auth_dependencies_with_db):
+@pytest.mark.asyncio
+async def test_user_api_key_auth_memory_leak_with_db(setup_auth_dependencies_with_db):
     """
     Memory leak test for _user_api_key_auth_builder function WITH database using tracemalloc.
     
@@ -145,7 +145,7 @@ def test_user_api_key_auth_memory_leak_with_db(setup_auth_dependencies_with_db):
     try:
         # --- Warm-up Phase ---
         print(f"\nWarming up with {config['warmup_batches']} batches of {config['batch_size']} calls each...")
-        run_warmup_phase(
+        await run_warmup_phase(
             batch_size=config['batch_size'],
             warmup_batches=config['warmup_batches'],
             completion_func=call_user_api_key_auth,
@@ -154,7 +154,7 @@ def test_user_api_key_auth_memory_leak_with_db(setup_auth_dependencies_with_db):
 
         # --- Measurement Phase ---
         print(f"\nMeasuring memory over {config['num_batches']} batches...")
-        memory_samples = run_measurement_phase(
+        memory_samples, error_counts = await run_measurement_phase(
             batch_size=config['batch_size'],
             num_batches=config['num_batches'],
             completion_func=call_user_api_key_auth,
@@ -183,10 +183,11 @@ def test_user_api_key_auth_memory_leak_with_db(setup_auth_dependencies_with_db):
     
     print_growth_metrics(growth_metrics)
 
-    # Detect memory leaks
+    # Detect memory leaks (including error-induced leaks)
     leak_detected, message = detect_memory_leak(
         growth_metrics=growth_metrics,
         memory_samples=memory_samples,
+        error_counts=error_counts,
         max_growth_percent=config['max_growth_percent'],
         stabilization_tolerance_mb=config['stabilization_tolerance_mb'],
         tail_samples=tail_samples
