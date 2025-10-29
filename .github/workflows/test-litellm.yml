@@ -2,7 +2,7 @@ name: LiteLLM Mock Tests (folder - tests/test_litellm)
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ main, carto/main ]
 
 jobs:
   test:

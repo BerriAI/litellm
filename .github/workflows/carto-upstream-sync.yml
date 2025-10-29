@@ -55,14 +55,12 @@ jobs:
         run: |
           set -eu
 
-          echo "[Sync] Detecting new stable releases using gh CLI..."
+          echo "::group::Detecting new stable releases"
+          echo "[Sync] Using gh CLI to fetch releases from BerriAI/litellm..."
 
           # Get current version from pyproject.toml
           CURRENT_VERSION=$(grep -E "^version\s*=" pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
           echo "[Sync] Current version in pyproject.toml: ${CURRENT_VERSION}"
-
-          # Fetch latest stable releases from upstream using gh CLI
-          echo "[Sync] Fetching releases from BerriAI/litellm..."
 
           # Get latest stable release tag (ends with -stable, not a prerelease)
           LATEST_STABLE=$(gh release list --repo BerriAI/litellm --limit 50 --json tagName,isPrerelease,isDraft | \
@@ -72,6 +70,7 @@ jobs:
           if [[ -z "${LATEST_STABLE}" ]]; then
             echo "[Sync] No stable releases found in upstream"
             echo "has-new-release=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
             exit 0
           fi
 
@@ -95,6 +94,8 @@ jobs:
             echo "[Sync] ✅ Already on latest stable: ${CURRENT_VERSION}"
             echo "has-new-release=false" >> $GITHUB_OUTPUT
           fi
+
+          echo "::endgroup::"
 
   ##############################################################################
   # Sync main branch with upstream
@@ -126,25 +127,25 @@ jobs:
         run: |
           set -eu
 
-          echo "[Sync] Syncing main branch with upstream..."
+          echo "::group::Syncing main branch with upstream"
+          echo "[Sync] Preparing to merge upstream/main into origin/main..."
 
           # Add upstream remote
           git remote add upstream https://github.com/BerriAI/litellm.git || true
           git fetch upstream --tags
 
           # Merge upstream/main into main
-          echo "::group::[Sync] Merging upstream/main"
           git merge upstream/main --no-ff -m "sync: merge upstream/main for ${NEW_VERSION}
 
           Automatic sync from upstream BerriAI/litellm
           Preparing for ${NEW_VERSION} release"
-          echo "::endgroup::"
 
           # Push to origin/main
           echo "[Sync] Pushing updated main branch to origin..."
           git push origin main
 
           echo "[Sync] ✅ main branch synced successfully"
+          echo "::endgroup::"
 
   ##############################################################################
   # Check if PR Already Exists
@@ -171,7 +172,8 @@ jobs:
         run: |
           set -eu
 
-          echo "[Sync] Checking if PR already exists for ${NEW_VERSION}..."
+          echo "::group::Checking for existing PR"
+          echo "[Sync] Looking for open PR from main to carto/main..."
 
           # Check if PR exists from main to carto/main with upstream-sync label
           PR_URL=$(gh pr list \
@@ -192,6 +194,8 @@ jobs:
             echo "[Sync] No existing PR found"
             echo "pr-exists=false" >> $GITHUB_OUTPUT
           fi
+
+          echo "::endgroup::"
 
   ##############################################################################
   # Create Sync PR (main -> carto/main)
@@ -345,9 +349,9 @@ jobs:
         run: |
           set -eu
 
-          PR_BODY_FILE="sync-pr-body.md"
+          echo "::group::Creating Pull Request"
 
-          echo "::group::[Sync] Creating Pull Request"
+          PR_BODY_FILE="sync-pr-body.md"
 
           # Create PR from main to carto/main
           PR_URL=$(gh pr create \
@@ -360,12 +364,13 @@ jobs:
             --label "automated")
 
           echo "[Sync] Pull Request created: ${PR_URL}"
-          echo "::endgroup::"
-
           echo "pr-url=${PR_URL}" >> $GITHUB_OUTPUT
           echo "::notice title=PR Created::${PR_URL}"
 
+          echo "::endgroup::"
+
           # GitHub Actions summary
+          echo "::group::Workflow Summary"
           cat >> $GITHUB_STEP_SUMMARY << EOF
           ## 🎉 Upstream Sync PR Created Successfully
 
@@ -378,6 +383,7 @@ jobs:
           2. Run tests: \`make lint && make test-unit\`
           3. Approve and merge when ready
           EOF
+          echo "::endgroup::"
 
   ##############################################################################
   # Notify Slack
@@ -393,9 +399,9 @@ jobs:
       - check-pr-exists
       - create-sync-pr
     steps:
-      - name: Determine notification message
-        id: message
+      - name: Send Slack notification
         env:
+          SLACK_CHANNEL: "C3W6342EN" # infrastructure-dev
           HAS_NEW_RELEASE: ${{ needs.check-new-release.outputs.has-new-release }}
           NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
           PR_EXISTS: ${{ needs.check-pr-exists.outputs.pr-exists }}
@@ -405,63 +411,48 @@ jobs:
         run: |
           set -eu
 
-          echo "[Slack] Determining notification message..."
+          echo "::group::Determining Slack notification"
 
-          # Check if Slack webhook is configured
-          if [[ -z "${{ vars.SLACK_WEBHOOK_URL }}" ]]; then
-            echo "[Slack] No webhook configured, skipping notification"
-            echo "skip=true" >> $GITHUB_OUTPUT
+          # Skip if channel not configured
+          if [[ -z "${SLACK_CHANNEL}" ]]; then
+            echo "[Slack] SLACK_CHANNEL not configured, skipping notification"
+            echo "::endgroup::"
             exit 0
           fi
 
           # Determine message based on workflow results
-          if [[ "${HAS_NEW_RELEASE}" == "true" && "${SYNC_STATUS}" == "success" && "${PR_EXISTS}" == "false" && -n "${NEW_PR_URL}" ]]; then
-            EMOJI="✅"
-            MESSAGE="Upstream sync PR created: ${NEW_PR_URL}"
-          elif [[ "${HAS_NEW_RELEASE}" == "true" && "${PR_EXISTS}" == "true" ]]; then
-            EMOJI="ℹ️"
-            MESSAGE="Upstream sync PR already exists: ${EXISTING_PR_URL}"
-          elif [[ "${HAS_NEW_RELEASE}" == "false" ]]; then
-            EMOJI="✅"
-            MESSAGE="No new upstream releases detected"
-          elif [[ "${SYNC_STATUS}" == "failure" ]]; then
-            EMOJI="❌"
-            MESSAGE="Failed to sync main branch with upstream"
-          else
-            EMOJI="❌"
-            MESSAGE="Upstream sync workflow encountered an error"
-          fi
+          WORKFLOW_RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          echo "skip=false" >> $GITHUB_OUTPUT
-          echo "emoji=${EMOJI}" >> $GITHUB_OUTPUT
-          echo "message=${MESSAGE}" >> $GITHUB_OUTPUT
+          case "${HAS_NEW_RELEASE}:${SYNC_STATUS}:${PR_EXISTS}" in
+            true:success:false)
+              if [[ -n "${NEW_PR_URL}" ]]; then
+                MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - PR created for ${NEW_VERSION}\n${NEW_PR_URL}"
+              else
+                MESSAGE=":x: *LiteLLM Upstream Sync* - Workflow error (PR URL missing)\n<${WORKFLOW_RUN_URL}|View workflow run>"
+              fi
+              ;;
+            true:*:true)
+              MESSAGE=":information_source: *LiteLLM Upstream Sync* - PR already exists\n${EXISTING_PR_URL}"
+              ;;
+            false:*:*)
+              MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - No new releases detected"
+              ;;
+            true:failure:*)
+              MESSAGE=":x: *LiteLLM Upstream Sync* - Failed to sync main branch with upstream\n<${WORKFLOW_RUN_URL}|View workflow run>"
+              ;;
+            *)
+              MESSAGE=":x: *LiteLLM Upstream Sync* - Workflow encountered an error\n<${WORKFLOW_RUN_URL}|View workflow run>"
+              ;;
+          esac
 
-      - name: Send Slack notification
-        if: steps.message.outputs.skip == 'false'
-        env:
-          SLACK_WEBHOOK_URL: ${{ vars.SLACK_WEBHOOK_URL }}
-          EMOJI: ${{ steps.message.outputs.emoji }}
-          MESSAGE: ${{ steps.message.outputs.message }}
-        run: |
-          set -eu
+          echo "[Slack] Sending notification to channel ${SLACK_CHANNEL}"
+          echo "::endgroup::"
 
-          echo "[Slack] Sending notification..."
-
-          curl -X POST "${SLACK_WEBHOOK_URL}" \
-            -H "Content-Type: application/json" \
-            -d @- <<EOF
-          {
-            "text": "${EMOJI} ${MESSAGE}",
-            "blocks": [
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "*CARTO LiteLLM Upstream Sync*\n\n${EMOJI} ${MESSAGE}\n\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>"
-                }
-              }
-            ]
-          }
-          EOF
+          echo "::group::Posting to Slack"
+          curl -F "text=${MESSAGE}" \
+            -F "channel=${SLACK_CHANNEL}" \
+            -H "Authorization: Bearer ${{ secrets.SLACK_KEY }}" \
+            -X POST https://slack.com/api/chat.postMessage
 
           echo "[Slack] Notification sent successfully"
+          echo "::endgroup::"
