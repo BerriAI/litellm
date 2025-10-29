@@ -4768,6 +4768,7 @@ def embedding(  # noqa: PLR0915
                 or litellm.api_base
                 or get_secret_str("IO_INTELLIGENCE_API_BASE")
                 or "https://api.intelligence.io.solutions/api/v1"
+            )
         elif custom_llm_provider == "cometapi":
             api_key = (
                 api_key
