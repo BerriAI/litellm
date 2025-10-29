@@ -386,6 +386,15 @@ def list_containers(
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
 
+        # Check for mock response first
+        mock_response = kwargs.get("mock_response")
+        if mock_response is not None:
+            if isinstance(mock_response, str):
+                mock_response = json.loads(mock_response)
+
+            response = ContainerListResponse(**mock_response)
+            return response
+
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
         # get provider config
@@ -562,6 +571,15 @@ def retrieve_container(
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
 
+        # Check for mock response first
+        mock_response = kwargs.get("mock_response")
+        if mock_response is not None:
+            if isinstance(mock_response, str):
+                mock_response = json.loads(mock_response)
+
+            response = ContainerObject(**mock_response)
+            return response
+
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
         # get provider config
@@ -729,6 +747,15 @@ def delete_container(
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
+
+        # Check for mock response first
+        mock_response = kwargs.get("mock_response")
+        if mock_response is not None:
+            if isinstance(mock_response, str):
+                mock_response = json.loads(mock_response)
+
+            response = DeleteContainerResult(**mock_response)
+            return response
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
