@@ -395,7 +395,7 @@ async def get_sso_settings():
     """
     import os
 
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
 
     if prisma_client is None:
         raise HTTPException(
@@ -415,25 +415,23 @@ async def get_sso_settings():
         # Load settings from database
         sso_settings_dict = dict(sso_db_record.sso_settings)
     
-    # Fall back to environment variables if not in DB
-    def get_value(key: str, env_var: str):
-        return sso_settings_dict.get(key) or os.getenv(env_var)
+    decrypted_sso_settings_dict = proxy_config._decrypt_and_set_db_env_variables(environment_variables=sso_settings_dict)
 
     # Build SSO config with database values or environment fallback
     sso_config = SSOConfig(
-        google_client_id=get_value("google_client_id", "GOOGLE_CLIENT_ID"),
-        google_client_secret=get_value("google_client_secret", "GOOGLE_CLIENT_SECRET"),
-        microsoft_client_id=get_value("microsoft_client_id", "MICROSOFT_CLIENT_ID"),
-        microsoft_client_secret=get_value("microsoft_client_secret", "MICROSOFT_CLIENT_SECRET"),
-        microsoft_tenant=get_value("microsoft_tenant", "MICROSOFT_TENANT"),
-        generic_client_id=get_value("generic_client_id", "GENERIC_CLIENT_ID"),
-        generic_client_secret=get_value("generic_client_secret", "GENERIC_CLIENT_SECRET"),
-        generic_authorization_endpoint=get_value("generic_authorization_endpoint", "GENERIC_AUTHORIZATION_ENDPOINT"),
-        generic_token_endpoint=get_value("generic_token_endpoint", "GENERIC_TOKEN_ENDPOINT"),
-        generic_userinfo_endpoint=get_value("generic_userinfo_endpoint", "GENERIC_USERINFO_ENDPOINT"),
-        proxy_base_url=get_value("proxy_base_url", "PROXY_BASE_URL"),
-        user_email=sso_settings_dict.get("user_email"),
-        ui_access_mode=sso_settings_dict.get("ui_access_mode"),
+        google_client_id=decrypted_sso_settings_dict.get("google_client_id", None),
+        google_client_secret=decrypted_sso_settings_dict.get("google_client_secret", None),
+        microsoft_client_id=decrypted_sso_settings_dict.get("microsoft_client_id", None),
+        microsoft_client_secret=decrypted_sso_settings_dict.get("microsoft_client_secret", None),
+        microsoft_tenant=decrypted_sso_settings_dict.get("microsoft_tenant", None),
+        generic_client_id=decrypted_sso_settings_dict.get("generic_client_id", None),
+        generic_client_secret=decrypted_sso_settings_dict.get("generic_client_secret", None),
+        generic_authorization_endpoint=decrypted_sso_settings_dict.get("generic_authorization_endpoint", None),
+        generic_token_endpoint=decrypted_sso_settings_dict.get("generic_token_endpoint", None),
+        generic_userinfo_endpoint=decrypted_sso_settings_dict.get("generic_userinfo_endpoint", None),
+        proxy_base_url=decrypted_sso_settings_dict.get("proxy_base_url", None),
+        user_email=decrypted_sso_settings_dict.get("user_email"),
+        ui_access_mode=decrypted_sso_settings_dict.get("ui_access_mode"),
     )
 
     # Get the schema for UI display
@@ -520,16 +518,18 @@ async def update_sso_settings(sso_config: SSOConfig):
                 # Clear environment variable if value is null/empty
                 os.environ.pop(env_var_name, None)
 
+    encrypted_sso_data = proxy_config._encrypt_env_variables(environment_variables=sso_data)
+
     # Save to dedicated SSO table
     await prisma_client.db.litellm_ssoconfig.upsert(
         where={"id": "sso_config"},
         data={
             "create": {
                 "id": "sso_config",
-                "sso_settings": json.dumps(sso_data),
+                "sso_settings": json.dumps(encrypted_sso_data),
             },
             "update": {
-                "sso_settings": json.dumps(sso_data),
+                "sso_settings": json.dumps(encrypted_sso_data),
             },
         },
     )

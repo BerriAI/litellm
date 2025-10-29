@@ -1067,6 +1067,9 @@ celery_fn = None  # Redis Queue for handling requests
 scheduler = None
 last_model_cost_map_reload = None
 
+# Global variable for SSO settings from database
+sso_settings: Optional[Any] = None
+
 ### DB WRITER ###
 db_writer_client: Optional[AsyncHTTPHandler] = None
 ### logger ###
@@ -3331,6 +3334,29 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
+        if self._should_load_db_object(object_type="sso_settings"):
+            await self._init_sso_settings_in_db(prisma_client=prisma_client)
+
+    async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize SSO settings from database into the router on startup.
+        """
+        global sso_settings
+        
+        try:
+            sso_settings = await prisma_client.db.litellm_ssoconfig.find_unique(
+                where={"id": "sso_config"}
+            )
+            if sso_settings is not None:
+                # Capitalize all keys in sso_settings dictionary
+                uppercase_sso_settings = {key.upper(): value for key, value in sso_settings.sso_settings.items()}
+                self._decrypt_and_set_db_env_variables(environment_variables=uppercase_sso_settings)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - {}".format(
+                    str(e)
+                )
+            )   
 
     async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
         """
