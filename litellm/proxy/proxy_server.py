@@ -28,8 +28,13 @@ from typing import (
 
 from litellm._uuid import uuid
 from litellm.constants import (
+    AIOHTTP_CONNECTOR_LIMIT,
+    AIOHTTP_KEEPALIVE_TIMEOUT,
+    AIOHTTP_TTL_DNS_CACHE,
     BASE_MCP_ROUTE,
     DEFAULT_MAX_RECURSE_DEPTH,
+    DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
+    DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
@@ -44,6 +49,7 @@ from litellm.types.utils import (
 from litellm.utils import load_credentials_from_list
 
 if TYPE_CHECKING:
+    from aiohttp import ClientSession
     from opentelemetry.trace import Span as _Span
 
     from litellm.integrations.opentelemetry import OpenTelemetry
@@ -131,6 +137,10 @@ from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
+    APSCHEDULER_COALESCE,
+    APSCHEDULER_MAX_INSTANCES,
+    APSCHEDULER_MISFIRE_GRACE_TIME,
+    APSCHEDULER_REPLACE_EXISTING,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
@@ -247,13 +257,18 @@ from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.cost_tracking_settings import (
+    router as cost_tracking_settings_router,
+)
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -297,10 +312,14 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
+from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -321,6 +340,10 @@ from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.search_endpoints.endpoints import router as search_router
+from litellm.proxy.search_endpoints.search_tool_management import (
+    router as search_tool_management_router,
+)
 from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
@@ -382,9 +405,15 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import (
+    DeploymentTypedDict,
+)
 from litellm.types.router import ModelInfo as RouterModelInfo
-from litellm.types.router import RouterGeneralSettings, updateDeployment
+from litellm.types.router import (
+    RouterGeneralSettings,
+    SearchToolTypedDict,
+    updateDeployment,
+)
 from litellm.types.scheduler import DefaultPriorities
 from litellm.types.secret_managers.main import (
     KeyManagementSettings,
@@ -510,7 +539,7 @@ _description = (
 
 
 def cleanup_router_config_variables():
-    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, health_check_interval, prisma_client
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, prisma_client
 
     # Set all variables to None
     master_key = None
@@ -522,6 +551,7 @@ def cleanup_router_config_variables():
     user_custom_sso = None
     user_custom_ui_sso_sign_in_handler = None
     use_background_health_checks = None
+    use_shared_health_check = None
     health_check_interval = None
     prisma_client = None
 
@@ -557,9 +587,34 @@ async def proxy_shutdown_event():
     cleanup_router_config_variables()
 
 
+async def _initialize_shared_aiohttp_session():
+    """Initialize shared aiohttp session for connection reuse."""
+    try:
+        from aiohttp import ClientSession, TCPConnector
+
+        # Create connector with connection pooling settings optimized for long-lived connections
+        connector = TCPConnector(
+            limit=AIOHTTP_CONNECTOR_LIMIT,
+            keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
+            ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
+            enable_cleanup_closed=True,
+        )
+
+        session = ClientSession(connector=connector)
+        verbose_proxy_logger.info(
+            f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(session)})"
+        )
+        return session
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"Failed to create shared aiohttp session: {e}. Continuing without session reuse."
+        )
+        return None
+
+
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval, shared_aiohttp_session
     import json
 
     init_verbose_loggers()
@@ -674,10 +729,20 @@ async def proxy_startup_event(app: FastAPI):
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
+    ## Initialize shared aiohttp session for connection reuse
+    shared_aiohttp_session = await _initialize_shared_aiohttp_session()
+
     # End of startup event
     yield
 
-    # Shutdown event
+    # Shutdown event - close shared aiohttp session
+    if shared_aiohttp_session is not None:
+        try:
+            await shared_aiohttp_session.close()
+            verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error closing shared aiohttp session: {e}")
+
     await proxy_shutdown_event()
 
 
@@ -949,12 +1014,16 @@ experimental = False
 llm_router: Optional[Router] = None
 llm_model_list: Optional[list] = None
 general_settings: dict = {}
+config_passthrough_endpoints: Optional[List[Dict[str, Any]]] = None
 callback_settings: dict = {}
 log_file = "api_log.json"
 worker_config = None
 master_key: Optional[str] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
+shared_aiohttp_session: Optional["ClientSession"] = (
+    None  # Global shared session for connection reuse
+)
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -970,6 +1039,7 @@ user_custom_key_generate = None
 user_custom_sso = None
 user_custom_ui_sso_sign_in_handler = None
 use_background_health_checks = None
+use_shared_health_check = None
 use_queue = False
 health_check_interval = None
 health_check_details = None
@@ -1109,6 +1179,7 @@ async def update_cache(  # noqa: PLR0915
     team_id: Optional[str],
     response_cost: Optional[float],
     parent_otel_span: Optional[Span],  # type: ignore
+    tags: Optional[List[str]] = None,
 ):
     """
     Use this to update the cache with new user spend.
@@ -1329,6 +1400,52 @@ async def update_cache(  # noqa: PLR0915
                 f"An error occurred updating end user cache: {str(e)}"
             )
 
+    ### UPDATE TAG SPEND ###
+    async def _update_tag_cache():
+        """
+        Update the tag cache with the new spend.
+        """
+        if tags is None or response_cost is None:
+            return
+
+        try:
+            for tag_name in tags:
+                if not tag_name or not isinstance(tag_name, str):
+                    continue
+
+                cache_key = f"tag:{tag_name}"
+                # Fetch the existing tag object from cache
+                existing_tag_obj = await user_api_key_cache.async_get_cache(
+                    key=cache_key
+                )
+                if existing_tag_obj is None:
+                    # do nothing if tag not in api key cache
+                    continue
+
+                verbose_proxy_logger.debug(
+                    f"_update_tag_cache: existing spend for tag={tag_name}: {existing_tag_obj}; response_cost: {response_cost}"
+                )
+
+                if isinstance(existing_tag_obj, dict):
+                    existing_spend = existing_tag_obj.get("spend", 0) or 0
+                else:
+                    existing_spend = getattr(existing_tag_obj, "spend", 0) or 0
+
+                # Calculate the new cost by adding the existing cost and response_cost
+                new_spend = existing_spend + response_cost
+
+                # Update the spend column for the given tag
+                if isinstance(existing_tag_obj, dict):
+                    existing_tag_obj["spend"] = new_spend
+                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
+                else:
+                    existing_tag_obj.spend = new_spend
+                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"An error occurred updating tag cache: {str(e)}"
+            )
+
     if token is not None and response_cost is not None:
         await _update_key_cache(token=token, response_cost=response_cost)
 
@@ -1340,6 +1457,9 @@ async def update_cache(  # noqa: PLR0915
 
     if team_id is not None:
         await _update_team_cache()
+
+    if tags is not None:
+        await _update_tag_cache()
 
     asyncio.create_task(
         user_api_key_cache.async_set_cache_pipeline(
@@ -1369,8 +1489,9 @@ async def _run_background_health_check():
     Periodically run health checks in the background on the endpoints.
 
     Update health_check_results, based on this.
+    Uses shared health check state when Redis is available to coordinate across pods.
     """
-    global health_check_results, llm_model_list, health_check_interval, health_check_details
+    global health_check_results, llm_model_list, health_check_interval, health_check_details, use_shared_health_check, redis_usage_cache
 
     if (
         health_check_interval is None
@@ -1378,6 +1499,20 @@ async def _run_background_health_check():
         or health_check_interval <= 0
     ):
         return
+
+    # Initialize shared health check manager if Redis is available and feature is enabled
+    shared_health_manager = None
+    if use_shared_health_check and redis_usage_cache is not None:
+        from litellm.proxy.health_check_utils.shared_health_check_manager import (
+            SharedHealthCheckManager,
+        )
+
+        shared_health_manager = SharedHealthCheckManager(
+            redis_cache=redis_usage_cache,
+            health_check_ttl=DEFAULT_SHARED_HEALTH_CHECK_TTL,
+            lock_ttl=DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
+        )
+        verbose_proxy_logger.info("Initialized shared health check manager")
 
     while True:
         # make 1 deep copy of llm_model_list on every health check iteration
@@ -1390,9 +1525,32 @@ async def _run_background_health_check():
             if not m.get("model_info", {}).get("disable_background_health_check", False)
         ]
 
-        healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-            model_list=_llm_model_list, details=health_check_details
+        # Use shared health check if available, otherwise fall back to direct health check
+        # Convert health_check_details to bool for perform_shared_health_check (defaults to True if None)
+        details_bool = (
+            health_check_details if health_check_details is not None else True
         )
+
+        if shared_health_manager is not None:
+            try:
+                (
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                ) = await shared_health_manager.perform_shared_health_check(
+                    model_list=_llm_model_list, details=details_bool
+                )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    "Error in shared health check, falling back to direct health check: %s",
+                    str(e),
+                )
+                healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+                    model_list=_llm_model_list, details=health_check_details
+                )
+        else:
+            healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+                model_list=_llm_model_list, details=health_check_details
+            )
 
         # Update the global variable with the health check results
         health_check_results["healthy_endpoints"] = healthy_endpoints
@@ -1526,8 +1684,28 @@ class ProxyConfig:
         ):
             # if using - db for config - models are in ModelTable
 
-            new_config.pop("model_list", None)
-            await prisma_client.insert_data(data=new_config, table_name="config")
+            # Make a copy to avoid mutating the original config
+            config_to_save = new_config.copy()
+
+            # SECURITY: Always encrypt environment_variables before DB write
+            if (
+                "environment_variables" in config_to_save
+                and config_to_save["environment_variables"]
+            ):
+
+                # decrypt the environment_variables - in case a caller function has already encrypted the environment_variables
+                decrypted_env_vars = self._decrypt_and_set_db_env_variables(
+                    environment_variables=config_to_save["environment_variables"],
+                    return_original_value=True,
+                )
+
+                # encrypt the environment_variables,
+                config_to_save["environment_variables"] = self._encrypt_env_variables(
+                    environment_variables=decrypted_env_vars
+                )
+
+            config_to_save.pop("model_list", None)
+            await prisma_client.insert_data(data=config_to_save, table_name="config")
         else:
             # Save the updated config - if user is not using a dB
             ## YAML
@@ -1711,6 +1889,45 @@ class ProxyConfig:
             credential_list = [CredentialItem(**cred) for cred in credential_list_dict]
         return credential_list
 
+    def parse_search_tools(self, config: dict) -> Optional[List[SearchToolTypedDict]]:
+        """
+        Parse and validate search tools from config.
+        Loads environment variables and casts to SearchToolTypedDict.
+        
+        Args:
+            config: Config dictionary containing search_tools
+            
+        Returns:
+            List of validated SearchToolTypedDict or None if not configured
+        """
+        search_tools_raw = config.get("search_tools", None)
+        if not search_tools_raw:
+            return None
+        
+        search_tools_parsed: List[SearchToolTypedDict] = []
+        
+        print(  # noqa
+            "\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m"
+        )  # noqa
+        
+        for search_tool in search_tools_raw:
+            # Display loaded search tool
+            search_tool_name = search_tool.get("search_tool_name", "")
+            search_provider = search_tool.get("litellm_params", {}).get("search_provider", "")
+            print(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")  # noqa
+            
+            # Cast to SearchToolTypedDict for type safety
+            try:
+                search_tool_typed: SearchToolTypedDict = SearchToolTypedDict(**search_tool)  # type: ignore
+                search_tools_parsed.append(search_tool_typed)
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Error parsing search tool {search_tool_name}: {str(e)}"
+                )
+                continue
+        
+        return search_tools_parsed if search_tools_parsed else None
+
     def _load_environment_variables(self, config: dict):
         ## ENVIRONMENT VARIABLES
         global premium_user
@@ -1752,7 +1969,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings, proxy_batch_polling_interval
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings, proxy_batch_polling_interval, config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -2107,9 +2324,13 @@ class ProxyConfig:
 
             ## pass through endpoints
             if general_settings.get("pass_through_endpoints", None) is not None:
+                config_passthrough_endpoints = general_settings[
+                    "pass_through_endpoints"
+                ]
                 await initialize_pass_through_endpoints(
                     pass_through_endpoints=general_settings["pass_through_endpoints"]
                 )
+
             ## ADMIN UI ACCESS ##
             ui_access_mode = general_settings.get(
                 "ui_access_mode", "all"
@@ -2143,6 +2364,10 @@ class ProxyConfig:
             # Enable background health checks
             use_background_health_checks = general_settings.get(
                 "background_health_checks", False
+            )
+            # Enable shared health check state across pods (requires Redis)
+            use_shared_health_check = general_settings.get(
+                "use_shared_health_check", False
             )
             health_check_interval = general_settings.get(
                 "health_check_interval", DEFAULT_HEALTH_CHECK_INTERVAL
@@ -2205,6 +2430,9 @@ class ProxyConfig:
                     assistant_settings["litellm_params"][k] = v
             assistants_config = AssistantsTypedDict(**assistant_settings)  # type: ignore
 
+        ## SEARCH TOOLS SETTINGS
+        search_tools: Optional[List[SearchToolTypedDict]] = self.parse_search_tools(config)
+
         ## /fine_tuning/jobs endpoints config
         finetuning_config = config.get("finetune_settings", None)
         set_fine_tuning_config(config=finetuning_config)
@@ -2224,10 +2452,11 @@ class ProxyConfig:
 
         if router_settings and isinstance(router_settings, dict):
             arg_spec = inspect.getfullargspec(litellm.Router)
-            # model list already set
+            # model list and search_tools already set
             exclude_args = {
                 "self",
                 "model_list",
+                "search_tools",
             }
 
             available_args = [x for x in arg_spec.args if x not in exclude_args]
@@ -2238,6 +2467,7 @@ class ProxyConfig:
         router = litellm.Router(
             **router_params,
             assistants_config=assistants_config,
+            search_tools=search_tools,
             router_general_settings=RouterGeneralSettings(
                 async_only_mode=True  # only init async clients
             ),
@@ -2696,7 +2926,9 @@ class ProxyConfig:
             encrypted_env_vars[k] = encrypted_value
         return encrypted_env_vars
 
-    def _decrypt_and_set_db_env_variables(self, environment_variables: dict) -> dict:
+    def _decrypt_and_set_db_env_variables(
+        self, environment_variables: dict, return_original_value: bool = False
+    ) -> dict:
         """
         Decrypts a dictionary of environment variables and then sets them in the environment
 
@@ -2707,7 +2939,9 @@ class ProxyConfig:
         decrypted_env_vars = {}
         for k, v in environment_variables.items():
             try:
-                decrypted_value = decrypt_value_helper(value=v, key=k)
+                decrypted_value = decrypt_value_helper(
+                    value=v, key=k, return_original_value=return_original_value
+                )
                 if decrypted_value is not None:
                     os.environ[k] = decrypted_value
                     decrypted_env_vars[k] = decrypted_value
@@ -2887,8 +3121,27 @@ class ProxyConfig:
             dict: Updated configuration dictionary
         """
 
+        def _deep_merge_dicts(dst: dict, src: dict) -> None:
+            """
+            Deep-merge src into dst, skipping None values from src.
+            On conflicts, src (DB) wins.
+            """
+            stack = [(dst, src)]
+            while stack:
+                d, s = stack.pop()
+                for k, v in s.items():
+                    if v is None:
+                        # Preserve existing config when DB value is None (matches prior behavior)
+                        continue
+                    if isinstance(v, dict) and isinstance(d.get(k), dict):
+                        stack.append((d[k], v))
+                    else:
+                        d[k] = v
+
         if param_name == "environment_variables":
-            decrypted_env_vars = self._decrypt_and_set_db_env_variables(db_param_value)
+            decrypted_env_vars = self._decrypt_and_set_db_env_variables(
+                db_param_value, return_original_value=True
+            )
             current_config.setdefault("environment_variables", {}).update(
                 decrypted_env_vars
             )
@@ -2907,13 +3160,12 @@ class ProxyConfig:
             return current_config
 
         # For dictionary values, update only non-none values
-        if isinstance(current_config[param_name], dict):
-            # Only keep non None values from db_param_value
-            non_none_values = {k: v for k, v in db_param_value.items() if v is not None}
-
-            # Update the config with non-none values
-            current_config[param_name].update(non_none_values)
+        if isinstance(current_config[param_name], dict) and isinstance(
+            db_param_value, dict
+        ):
+            _deep_merge_dicts(current_config[param_name], db_param_value)
         else:
+            # Non-dict or mismatched types: DB value replaces config (unchanged behavior)
             current_config[param_name] = db_param_value
 
         return current_config
@@ -3077,6 +3329,9 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="prompts"):
             await self._init_prompts_in_db(prisma_client=prisma_client)
+
+        if self._should_load_db_object(object_type="search_tools"):
+            await self._init_search_tools_in_db(prisma_client=prisma_client)
 
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
@@ -3271,7 +3526,44 @@ class ProxyConfig:
                     str(e)
                 )
             )
-
+    
+    async def _init_search_tools_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize search tools from database into the router on startup.
+        """
+        global llm_router
+        
+        from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+        from litellm.router_utils.search_api_router import SearchAPIRouter
+        
+        try:
+            search_tools = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
+            
+            verbose_proxy_logger.info(
+                f"Loading {len(search_tools)} search tool(s) from database into router"
+            )
+            
+            if llm_router is not None:
+                # Add search tools to the router
+                await SearchAPIRouter.update_router_search_tools(
+                    router_instance=llm_router,
+                    search_tools=search_tools
+                )
+                verbose_proxy_logger.info(
+                    f"Successfully loaded {len(search_tools)} search tool(s) into router"
+                )
+            else:
+                verbose_proxy_logger.debug(
+                    "Router not initialized yet, search tools will be added when router is created"
+                )
+                
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_search_tools_in_db - {}".format(
+                    str(e)
+                )
+            )
+    
     async def _init_pass_through_endpoints_in_db(self):
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             initialize_pass_through_endpoints_in_db,
@@ -3750,13 +4042,43 @@ class ProxyStartupEvent:
     ):
         """Initializes scheduled background jobs"""
         global store_model_in_db
-        scheduler = AsyncIOScheduler()
-        interval = random.randint(
-            proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
-        )  # random interval, so multiple workers avoid resetting budget at the same time
-        batch_writing_interval = random.randint(
-            proxy_batch_write_at - 3, proxy_batch_write_at + 3
-        )  # random interval, so multiple workers avoid batch writing at the same time
+
+        # MEMORY LEAK FIX: Configure scheduler with optimized settings
+        # Memray analysis showed APScheduler's normalize() and _apply_jitter() causing
+        # massive memory allocations (35GB with 483M allocations)
+        # Key fixes:
+        # 1. Remove/minimize jitter to avoid normalize() memory explosion
+        # 2. Use larger misfire_grace_time to prevent backlog calculations
+        # 3. Set replace_existing=True to avoid duplicate jobs
+        from apscheduler.jobstores.memory import MemoryJobStore
+        from apscheduler.executors.asyncio import AsyncIOExecutor
+
+        scheduler = AsyncIOScheduler(
+            job_defaults={
+                "coalesce": APSCHEDULER_COALESCE,
+                "misfire_grace_time": APSCHEDULER_MISFIRE_GRACE_TIME,
+                "max_instances": APSCHEDULER_MAX_INSTANCES,
+                "replace_existing": APSCHEDULER_REPLACE_EXISTING,
+            },
+            # Limit job store size to prevent memory growth
+            jobstores={
+                'default': MemoryJobStore()    # explicitly use memory job store
+            },
+            # Use simple executor to minimize overhead
+            executors={
+                'default': AsyncIOExecutor(),
+            },
+            # Disable timezone awareness to reduce computation
+            timezone=None
+        )
+
+        # Use fixed intervals with small random offset instead of jitter
+        # This avoids the expensive jitter calculations in APScheduler
+        budget_interval = proxy_budget_rescheduler_min_time + random.randint(0,
+            min(30, proxy_budget_rescheduler_max_time - proxy_budget_rescheduler_min_time))
+
+        # Ensure minimum interval of 30 seconds for batch writing to prevent memory issues
+        batch_writing_interval = max(30, proxy_batch_write_at) + random.randint(0, 5)
 
         ### RESET BUDGET ###
         if general_settings.get("disable_reset_budget", False) is False:
@@ -3768,7 +4090,11 @@ class ProxyStartupEvent:
             scheduler.add_job(
                 budget_reset_job.reset_budget,
                 "interval",
-                seconds=interval,
+                seconds=budget_interval,
+                # REMOVED jitter parameter - major cause of memory leak
+                id="reset_budget_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
 
         ### UPDATE SPEND ###
@@ -3776,7 +4102,11 @@ class ProxyStartupEvent:
             update_spend,
             "interval",
             seconds=batch_writing_interval,
+            # REMOVED jitter parameter - major cause of memory leak
             args=[prisma_client, db_writer_client, proxy_logging_obj],
+            id="update_spend_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
         ### ADD NEW MODELS ###
@@ -3785,11 +4115,17 @@ class ProxyStartupEvent:
         )
 
         if store_model_in_db is True:
+            # MEMORY LEAK FIX: Increase interval from 10s to 30s minimum
+            # Frequent polling was causing excessive memory allocations
             scheduler.add_job(
                 proxy_config.add_deployment,
                 "interval",
-                seconds=10,
+                seconds=30,  # increased from 10s to reduce memory pressure
+                # REMOVED jitter parameter - major cause of memory leak
                 args=[prisma_client, proxy_logging_obj],
+                id="add_deployment_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
 
             # this will load all existing models on proxy startup
@@ -3801,8 +4137,12 @@ class ProxyStartupEvent:
             scheduler.add_job(
                 proxy_config.get_credentials,
                 "interval",
-                seconds=10,
+                seconds=30,  # increased from 10s to reduce memory pressure
+                # REMOVED jitter parameter - major cause of memory leak
                 args=[prisma_client],
+                id="get_credentials_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
         if (
@@ -3828,15 +4168,22 @@ class ProxyStartupEvent:
                 proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report,
                 "interval",
                 days=days,
+                # REMOVED jitter parameter - major cause of memory leak
+                # Use random start time instead for distribution
                 next_run_time=datetime.now()
-                + timedelta(seconds=10),  # Start 10 seconds from now
+                + timedelta(seconds=10 + random.randint(0, 300)),  # Random 0-5 min offset
                 args=[spend_report_frequency],
+                id="weekly_spend_report_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
 
             scheduler.add_job(
                 proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report,
                 "cron",
                 day=1,
+                id="monthly_spend_report_job",
+                replace_existing=True,
             )
 
             # Beta Feature - only used when prometheus api is in .env
@@ -3849,6 +4196,8 @@ class ProxyStartupEvent:
                     hour=PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
                     minute=0,
                     timezone=ZoneInfo("America/Los_Angeles"),  # Pacific Time
+                    id="prometheus_fallback_stats_job",
+                    replace_existing=True,
                 )
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
 
@@ -3866,8 +4215,12 @@ class ProxyStartupEvent:
                 scheduler.add_job(
                     spend_log_cleanup.cleanup_old_spend_logs,
                     "interval",
-                    seconds=interval_seconds,
+                    seconds=interval_seconds + random.randint(0, 60),  # Add small random offset
+                    # REMOVED jitter parameter - major cause of memory leak
                     args=[prisma_client],
+                    id="spend_log_cleanup_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                 )
             except ValueError:
                 verbose_proxy_logger.error(
@@ -3888,16 +4241,33 @@ class ProxyStartupEvent:
                 scheduler.add_job(
                     check_batch_cost_job.check_batch_cost,
                     "interval",
-                    seconds=proxy_batch_polling_interval,  # these can run infrequently, as batch jobs take time to complete
+                    seconds=proxy_batch_polling_interval + random.randint(0, 30),  # Add small random offset
+                    # REMOVED jitter parameter - major cause of memory leak
+                    id="check_batch_cost_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                 )
+                verbose_proxy_logger.info("Batch cost check job scheduled successfully")
 
-            except Exception:
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Failed to setup batch cost checking: {e}"
+                )
                 verbose_proxy_logger.debug(
                     "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
                 pass
 
-        scheduler.start()
+        # MEMORY LEAK FIX: Start scheduler with paused=False to avoid backlog processing
+        # Do NOT reset job times to "now" as this can trigger the memory leak
+        # The misfire_grace_time and coalesce settings will handle any missed runs properly
+
+        # Start the scheduler immediately without processing backlogs
+        scheduler.start(paused=False)
+        verbose_proxy_logger.info(
+            f"APScheduler started with memory leak prevention settings: "
+            f"removed jitter, increased intervals, misfire_grace_time={APSCHEDULER_MISFIRE_GRACE_TIME}"
+        )
 
     @classmethod
     async def _initialize_spend_tracking_background_jobs(
@@ -6075,6 +6445,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             pass
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
+        model_info = deployment.get("model_info", {})
         load_credentials_from_list(deployment.get("litellm_params", {}))
         # remove the custom_llm_provider_prefix in the litellm_model_name
         if "/" in litellm_model_name:
@@ -9609,6 +9980,9 @@ app.include_router(response_router)
 app.include_router(batches_router)
 app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
+app.include_router(ocr_router)
+app.include_router(video_router)
+app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(vector_store_router)
@@ -9632,6 +10006,7 @@ app.include_router(cloudzero_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)
+app.include_router(search_tool_management_router)
 app.include_router(prompts_router)
 app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
@@ -9641,6 +10016,7 @@ app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(tag_management_router)
+app.include_router(cost_tracking_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)

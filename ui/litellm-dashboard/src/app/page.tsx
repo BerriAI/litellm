@@ -8,9 +8,8 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import UserDashboard from "@/components/user_dashboard";
-import ModelDashboard from "@/components/templates/model_dashboard";
+import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import ViewUserDashboard from "@/components/view_users";
-import Teams from "@/components/teams";
 import Organizations from "@/components/organizations";
 import { fetchOrganizations } from "@/components/organizations";
 import AdminPanel from "@/components/admins";
@@ -21,7 +20,7 @@ import BudgetPanel from "@/components/budgets/budget_panel";
 import SpendLogsTable from "@/components/view_logs";
 import ModelHubTable from "@/components/model_hub_table";
 import NewUsagePage from "@/components/new_usage";
-import APIRef from "@/components/api_ref";
+import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
 import ChatUI from "@/components/chat_ui/ChatUI";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
@@ -36,10 +35,13 @@ import { MCPServers } from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
 import VectorStoreManagement from "@/components/vector_store_management";
 import UIThemeSettings from "@/components/ui_theme_settings";
+import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
 import useFeatureFlags from "@/hooks/useFeatureFlags";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
+import OldTeams from "@/components/OldTeams";
+import { SearchTools } from "@/components/search_tools";
 
 function getCookie(name: string) {
   // Safer cookie read + decoding; handles '=' inside values
@@ -346,7 +348,7 @@ export default function CreateKeyPage() {
                     createClicked={createClicked}
                   />
                 ) : page == "models" ? (
-                  <ModelDashboard
+                  <OldModelDashboard
                     userID={userID}
                     userRole={userRole}
                     token={token}
@@ -376,15 +378,15 @@ export default function CreateKeyPage() {
                     setKeys={setKeys}
                   />
                 ) : page == "teams" ? (
-                  <Teams
+                  <OldTeams
                     teams={teams}
                     setTeams={setTeams}
-                    searchParams={searchParams}
                     accessToken={accessToken}
                     userID={userID}
                     userRole={userRole}
                     organizations={organizations}
                     premiumUser={premiumUser}
+                    searchParams={searchParams}
                   />
                 ) : page == "organizations" ? (
                   <Organizations
@@ -406,7 +408,7 @@ export default function CreateKeyPage() {
                     proxySettings={proxySettings}
                   />
                 ) : page == "api_ref" ? (
-                  <APIRef proxySettings={proxySettings} />
+                  <APIReferenceView proxySettings={proxySettings} />
                 ) : page == "settings" ? (
                   <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
                 ) : page == "budgets" ? (
@@ -426,6 +428,8 @@ export default function CreateKeyPage() {
                   />
                 ) : page == "ui-theme" ? (
                   <UIThemeSettings userID={userID} userRole={userRole} accessToken={accessToken} />
+                ) : page == "cost-tracking-settings" ? (
+                  <CostTrackingSettings userID={userID} userRole={userRole} accessToken={accessToken} />
                 ) : page == "model-hub-table" ? (
                   <ModelHubTable
                     accessToken={accessToken}
@@ -447,6 +451,7 @@ export default function CreateKeyPage() {
                     userRole={userRole}
                     accessToken={accessToken}
                     modelData={modelData}
+                    premiumUser={premiumUser}
                   />
                 ) : page == "logs" ? (
                   <SpendLogsTable
@@ -459,6 +464,8 @@ export default function CreateKeyPage() {
                   />
                 ) : page == "mcp-servers" ? (
                   <MCPServers accessToken={accessToken} userRole={userRole} userID={userID} />
+                ) : page == "search-tools" ? (
+                  <SearchTools accessToken={accessToken} userRole={userRole} userID={userID} />
                 ) : page == "tag-management" ? (
                   <TagManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                 ) : page == "vector-stores" ? (

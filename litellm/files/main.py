@@ -18,6 +18,7 @@ from litellm import get_secret_str
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.openai import FileDeleted, FileObject, OpenAIFilesAPI
 from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
@@ -275,7 +276,7 @@ async def afile_retrieve(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-):
+) -> OpenAIFileObject:
     """
     Async: Get file contents
 
@@ -304,7 +305,7 @@ async def afile_retrieve(
         else:
             response = init_response
 
-        return response
+        return OpenAIFileObject(**response.model_dump())
     except Exception as e:
         raise e
 
@@ -418,6 +419,7 @@ def file_retrieve(
                     request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
             )
+
         return cast(FileObject, response)
     except Exception as e:
         raise e

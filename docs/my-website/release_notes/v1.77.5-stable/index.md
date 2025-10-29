@@ -11,10 +11,6 @@ authors:
     title: CTO, LiteLLM
     url: https://www.linkedin.com/in/reffajnaahsi/
     image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
-  - name: Alexsander Hamir
-    title: Backend Performance Engineer
-    url: https://www.linkedin.com/in/alexsander-baptista/
-    image_url: https://media.licdn.com/dms/image/v2/D5603AQGXnziu4kqNCQ/profile-displayphoto-crop_800_800/B56ZkxEcuOKEAI-/0/1757464874550?e=1762387200&v=beta&t=9SNXLsWhx8OnYPAMQ9fqAr02oevDYEAL2vMYg2f9ieg
 
 hide_table_of_contents: false
 ---
@@ -57,19 +53,6 @@ pip install litellm==1.77.5
 
 ---
 
-### Scheduled Key Rotations
-
-<Image img={require('../../img/release_notes/schedule_key_rotations.png')}  style={{ width: '800px', height: 'auto' }} />
-
-<br/>
-
-This release brings support for scheduling virtual key rotations on LiteLLM AI Gateway.
-
-This is great for Proxy Admins looking to enforce Enterprise Grade security for use cases going through LiteLLM AI Gateway.
-
-From this release you can enforce Virtual Keys to rotate on a schedule of your choice e.g every 15 days/30 days/60 days etc.
-
----
 ### Performance Improvements - 54% RPS Improvement
 
 <Image img={require('../../img/release_notes/perf_77_5.png')}  style={{ width: '800px', height: 'auto' }} />

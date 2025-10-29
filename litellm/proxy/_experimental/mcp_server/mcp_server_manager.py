@@ -206,6 +206,7 @@ class MCPServerManager:
                 scopes=server_config.get("scopes", None),
                 authorization_url=server_config.get("authorization_url", None),
                 token_url=server_config.get("token_url", None),
+                registration_url=server_config.get("registration_url", None),
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),
                 auth_type=server_config.get("auth_type", None),
@@ -218,6 +219,7 @@ class MCPServerManager:
                 disallowed_tools=server_config.get("disallowed_tools", None),
                 allowed_params=server_config.get("allowed_params", None),
                 access_groups=server_config.get("access_groups", None),
+                static_headers=server_config.get("static_headers", None),
             )
             self.config_mcp_servers[server_id] = new_server
 
@@ -355,12 +357,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
-                        server_prefix
-                    )
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
-                        server_prefix
-                    )
+                    self.tool_name_to_mcp_server_name_mapping[
+                        base_tool_name
+                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[
+                        prefixed_tool_name
+                    ] = server_prefix
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -430,6 +432,7 @@ class MCPServerManager:
                     scopes=getattr(mcp_server, "scopes", None),
                     authorization_url=getattr(mcp_server, "authorization_url", None),
                     token_url=getattr(mcp_server, "token_url", None),
+                    registration_url=getattr(mcp_server, "registration_url", None),
                     # Stdio-specific fields
                     command=getattr(mcp_server, "command", None),
                     args=getattr(mcp_server, "args", None) or [],
@@ -632,6 +635,11 @@ class MCPServerManager:
         client = None
 
         try:
+            if server.static_headers:
+                if extra_headers is None:
+                    extra_headers = {}
+                extra_headers.update(server.static_headers)
+
             client = self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
@@ -932,7 +940,6 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging,
         server: MCPServer,
     ):
-
         ## check if the tool is allowed or banned for the given server
         if not self.check_allowed_or_banned_tools(name, server):
             raise HTTPException(
@@ -1019,6 +1026,158 @@ class MCPServerManager:
             verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
             raise e
 
+    def _create_during_hook_task(
+        self,
+        name: str,
+        arguments: Dict[str, Any],
+        server_name_from_prefix: Optional[str],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        proxy_logging_obj: ProxyLogging,
+        start_time: datetime.datetime,
+    ):
+        """Create and return a during hook task for MCP tool calls."""
+        from litellm.types.llms.base import HiddenParams
+        from litellm.types.mcp import MCPDuringCallRequestObject
+
+        request_obj = MCPDuringCallRequestObject(
+            tool_name=name,
+            arguments=arguments,
+            server_name=server_name_from_prefix,
+            start_time=start_time.timestamp() if start_time else None,
+            hidden_params=HiddenParams(),
+        )
+
+        during_hook_kwargs = {
+            "name": name,
+            "arguments": arguments,
+            "server_name": server_name_from_prefix,
+            "user_api_key_auth": user_api_key_auth,
+        }
+
+        synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(
+            request_obj, during_hook_kwargs
+        )
+
+        return asyncio.create_task(
+            proxy_logging_obj.during_call_hook(
+                user_api_key_dict=user_api_key_auth,
+                data=synthetic_llm_data,
+                call_type="mcp_call",  # type: ignore
+            )
+        )
+
+    async def _call_regular_mcp_tool(
+        self,
+        mcp_server: MCPServer,
+        original_tool_name: str,
+        arguments: Dict[str, Any],
+        tasks: List,
+        mcp_auth_header: Optional[str],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+        proxy_logging_obj: Optional[ProxyLogging],
+    ) -> CallToolResult:
+        """
+        Call a regular MCP tool using the MCP client.
+
+        Args:
+            mcp_server: The MCP server configuration
+            original_tool_name: The original tool name (without prefix)
+            arguments: Tool arguments
+            tasks: List of async tasks to append to (for during hooks)
+            mcp_auth_header: MCP auth header (deprecated)
+            mcp_server_auth_headers: Optional dict of server-specific auth headers
+            oauth2_headers: Optional OAuth2 headers
+            raw_headers: Optional raw headers from the request
+            proxy_logging_obj: Optional ProxyLogging object for hook integration
+
+        Returns:
+            CallToolResult from the MCP server
+
+        Raises:
+            BlockedPiiEntityError: If PII is blocked by guardrails
+            GuardrailRaisedException: If guardrails block the call
+            HTTPException: If an HTTP error occurs
+        """
+        # Get server-specific auth header if available (case-insensitive)
+        # FIX: Added case-insensitive matching to handle auth header keys that may not match
+        # the exact case of server alias/name (e.g., '1litellmagcgateway' vs '1LiteLLMAGCGateway')
+        server_auth_header: Optional[Union[Dict[str, str], str]] = None
+        if mcp_server_auth_headers:
+            # Normalize keys for case-insensitive lookup
+            normalized_headers = {
+                k.lower(): v for k, v in mcp_server_auth_headers.items()
+            }
+
+            if mcp_server.alias:
+                server_auth_header = normalized_headers.get(mcp_server.alias.lower())
+            if server_auth_header is None and mcp_server.server_name:
+                server_auth_header = normalized_headers.get(
+                    mcp_server.server_name.lower()
+                )
+
+        # Fall back to deprecated mcp_auth_header if no server-specific header found
+        if server_auth_header is None:
+            server_auth_header = mcp_auth_header
+
+        # oauth2 headers
+        extra_headers: Optional[Dict[str, str]] = None
+        if mcp_server.auth_type == MCPAuth.oauth2:
+            extra_headers = oauth2_headers
+
+        if mcp_server.extra_headers and raw_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            for header in mcp_server.extra_headers:
+                if header in raw_headers:
+                    extra_headers[header] = raw_headers[header]
+
+        if mcp_server.static_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            extra_headers.update(mcp_server.static_headers)
+
+        client = self._create_mcp_client(
+            server=mcp_server,
+            mcp_auth_header=server_auth_header,
+            extra_headers=extra_headers,
+        )
+
+        call_tool_params = MCPCallToolRequestParams(
+            name=original_tool_name,
+            arguments=arguments,
+        )
+
+        async def _call_tool_via_client(client, params):
+            async with client:
+                return await client.call_tool(params)
+
+        tasks.append(
+            asyncio.create_task(_call_tool_via_client(client, call_tool_params))
+        )
+
+        # IMPORTANT: Must await tasks INSIDE the context manager to keep connection alive
+        try:
+            mcp_responses = await asyncio.gather(*tasks)
+        except (
+            BlockedPiiEntityError,
+            GuardrailRaisedException,
+            HTTPException,
+        ) as e:
+            # Re-raise guardrail exceptions to properly fail the MCP call
+            verbose_logger.error(
+                f"Guardrail blocked MCP tool call during result check: {str(e)}"
+            )
+            raise e
+
+        # If proxy_logging_obj is None, the tool call result is at index 0
+        # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
+        result_index = 1 if proxy_logging_obj else 0
+        result = mcp_responses[result_index]
+
+        return cast(CallToolResult, result)
+
     async def call_tool(
         self,
         name: str,
@@ -1085,35 +1244,13 @@ class MCPServerManager:
         # Prepare tasks for during hooks
         tasks = []
         if proxy_logging_obj:
-            # Create synthetic LLM data for during hook processing
-            from litellm.types.llms.base import HiddenParams
-            from litellm.types.mcp import MCPDuringCallRequestObject
-
-            request_obj = MCPDuringCallRequestObject(
-                tool_name=name,
+            during_hook_task = self._create_during_hook_task(
+                name=name,
                 arguments=arguments,
-                server_name=server_name_from_prefix,
-                start_time=start_time.timestamp() if start_time else None,
-                hidden_params=HiddenParams(),
-            )
-
-            during_hook_kwargs = {
-                "name": name,
-                "arguments": arguments,
-                "server_name": server_name_from_prefix,
-                "user_api_key_auth": user_api_key_auth,
-            }
-
-            synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(
-                request_obj, during_hook_kwargs
-            )
-
-            during_hook_task = asyncio.create_task(
-                proxy_logging_obj.during_call_hook(
-                    user_api_key_dict=user_api_key_auth,
-                    data=synthetic_llm_data,
-                    call_type="mcp_call",  # type: ignore
-                )
+                server_name_from_prefix=server_name_from_prefix,
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging_obj,
+                start_time=start_time,
             )
             tasks.append(during_hook_task)
 
@@ -1129,43 +1266,19 @@ class MCPServerManager:
             )
         else:
             # For regular MCP servers, use the MCP client
-            # Get server-specific auth header if available
-            server_auth_header: Optional[Union[Dict[str, str], str]] = None
-            if mcp_server_auth_headers and mcp_server.alias:
-                server_auth_header = mcp_server_auth_headers.get(mcp_server.alias)
-            elif mcp_server_auth_headers and mcp_server.server_name:
-                server_auth_header = mcp_server_auth_headers.get(mcp_server.server_name)
-
-            # Fall back to deprecated mcp_auth_header if no server-specific header found
-            if server_auth_header is None:
-                server_auth_header = mcp_auth_header
-
-            # oauth2 headers
-            extra_headers: Optional[Dict[str, str]] = None
-            if mcp_server.auth_type == MCPAuth.oauth2:
-                extra_headers = oauth2_headers
-
-            if mcp_server.extra_headers and raw_headers:
-                if extra_headers is None:
-                    extra_headers = {}
-                for header in mcp_server.extra_headers:
-                    if header in raw_headers:
-                        extra_headers[header] = raw_headers[header]
-
-            client = self._create_mcp_client(
-                server=mcp_server,
-                mcp_auth_header=server_auth_header,
-                extra_headers=extra_headers,
+            return await self._call_regular_mcp_tool(
+                mcp_server=mcp_server,
+                original_tool_name=original_tool_name,
+                arguments=arguments,
+                tasks=tasks,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                proxy_logging_obj=proxy_logging_obj,
             )
 
-            async with client:
-                # Use the original tool name (without prefix) for the actual call
-                call_tool_params = MCPCallToolRequestParams(
-                    name=original_tool_name,
-                    arguments=arguments,
-                )
-                tasks.append(asyncio.create_task(client.call_tool(call_tool_params)))
-
+        # For OpenAPI tools, await outside the client context
         try:
             mcp_responses = await asyncio.gather(*tasks)
 
@@ -1254,7 +1367,7 @@ class MCPServerManager:
             get_prisma_client_or_throw,
         )
 
-        verbose_logger.info("Loading MCP servers from database into registry...")
+        verbose_logger.debug("Loading MCP servers from database into registry...")
 
         # perform authz check to filter the mcp servers user has access to
         prisma_client = get_prisma_client_or_throw(
@@ -1270,7 +1383,9 @@ class MCPServerManager:
             )
             self.add_update_server(server)
 
-        verbose_logger.info(f"Registry now contains {len(self.get_registry())} servers")
+        verbose_logger.debug(
+            f"Registry now contains {len(self.get_registry())} servers"
+        )
 
     def get_mcp_server_by_id(self, server_id: str) -> Optional[MCPServer]:
         """
@@ -1358,6 +1473,7 @@ class MCPServerManager:
         if not server:
             return {
                 "server_id": server_id,
+                "server_name": None,
                 "status": "unknown",
                 "error": "Server not found",
                 "last_health_check": datetime.now().isoformat(),
@@ -1372,6 +1488,7 @@ class MCPServerManager:
 
             return {
                 "server_id": server_id,
+                "server_name": server.name,
                 "status": "healthy",
                 "tools_count": len(tools),
                 "last_health_check": datetime.now().isoformat(),
@@ -1384,6 +1501,7 @@ class MCPServerManager:
 
             return {
                 "server_id": server_id,
+                "server_name": server.name,
                 "status": "unhealthy",
                 "last_health_check": datetime.now().isoformat(),
                 "response_time_ms": round(response_time, 2),

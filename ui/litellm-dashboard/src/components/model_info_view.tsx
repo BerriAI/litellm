@@ -9,7 +9,6 @@ import {
   TabPanel,
   TabPanels,
   Grid,
-  Badge,
   Button as TremorButton,
   TextInput,
 } from "@tremor/react";
@@ -17,22 +16,17 @@ import NumericalInput from "./shared/numerical_input";
 import { ArrowLeftIcon, TrashIcon, KeyIcon } from "@heroicons/react/outline";
 import {
   modelDeleteCall,
-  modelUpdateCall,
   CredentialItem,
   credentialGetCall,
   credentialCreateCall,
-  modelInfoCall,
   modelInfoV1Call,
   modelPatchUpdateCall,
   getGuardrailsList,
 } from "./networking";
-import { Button, Form, Input, InputNumber, message, Select, Modal, Tooltip } from "antd";
+import { Button, Form, Input, Select, Modal, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import EditModelModal from "./edit_model/edit_model_modal";
-import { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 import { getDisplayModelName } from "./view_model/model_name_display";
-import AddCredentialsModal from "./model_add/add_credentials_tab";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
 import CacheControlSettings from "./add_model/cache_control_settings";
 import { CheckIcon, CopyIcon } from "lucide-react";
@@ -79,7 +73,8 @@ export default function ModelInfoView({
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
-  const canEditModel = userRole === "Admin" || modelData?.model_info?.created_by === userID;
+  const canEditModel =
+    (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
   const isAdmin = userRole === "Admin";
   const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
 
@@ -435,10 +430,20 @@ export default function ModelInfoView({
                       Edit Auto Router
                     </TremorButton>
                   )}
-                  {canEditModel && !isEditing && (
-                    <TremorButton variant="secondary" onClick={() => setIsEditing(true)} className="flex items-center">
-                      Edit Model
-                    </TremorButton>
+                  {canEditModel ? (
+                    !isEditing && (
+                      <TremorButton
+                        variant="secondary"
+                        onClick={() => setIsEditing(true)}
+                        className="flex items-center"
+                      >
+                        Edit Model
+                      </TremorButton>
+                    )
+                  ) : (
+                    <Tooltip title="Only DB models can be edited. You must be an admin or the creator of the model to edit it.">
+                      <InfoCircleOutlined />
+                    </Tooltip>
                   )}
                 </div>
               </div>
