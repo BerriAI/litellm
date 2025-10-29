@@ -179,6 +179,70 @@ print(response)
 </TabItem>
 </Tabs>
 
+## **BGE Embeddings**
+
+Use BGE (Baidu General Embedding) models deployed on Vertex AI.
+
+### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers title="Using BGE on Vertex AI"
+import litellm
+
+response = litellm.embedding(
+    model="vertex_ai/bge/<your-endpoint-id>",
+    input=["Hello", "World"],
+    vertex_project="your-project-id",
+    vertex_location="your-location"
+)
+
+print(response)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="LiteLLM PROXY">
+
+1. Add model to config.yaml
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: bge-embedding
+    litellm_params:
+      model: vertex_ai/bge/<your-endpoint-id>
+      vertex_project: "your-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: your-credentials.json
+
+litellm_settings:
+  drop_params: True
+```
+
+2. Start Proxy 
+
+```bash
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request using OpenAI Python SDK
+
+```python showLineNumbers title="Making requests to BGE"
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.embeddings.create(
+    model="bge-embedding",
+    input=["good morning from litellm", "this is another item"]
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
 ## **Multi-Modal Embeddings**
 
 
