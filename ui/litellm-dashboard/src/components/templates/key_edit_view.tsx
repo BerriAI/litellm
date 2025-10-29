@@ -199,15 +199,83 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Models" name="models">
-        <Select mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
-          {/* Only show All Team Models if team has models */}
-          {availableModels.length > 0 && <Select.Option value="all-team-models">All Team Models</Select.Option>}
-          {/* Show available team models */}
-          {availableModels.map((model) => (
-            <Select.Option key={model} value={model}>
-              {model}
-            </Select.Option>
-          ))}
+        <Form.Item
+          noStyle
+          shouldUpdate={(prevValues, currentValues) =>
+            prevValues.key_type !== currentValues.key_type || prevValues.models !== currentValues.models
+          }
+        >
+          {({ getFieldValue, setFieldValue }) => {
+            const keyType = getFieldValue("key_type");
+            const isDisabled = keyType === "management" || keyType === "read_only";
+            const models = getFieldValue("models") || [];
+
+            return (
+              <>
+                <Select
+                  mode="multiple"
+                  placeholder="Select models"
+                  style={{ width: "100%" }}
+                  disabled={isDisabled}
+                  value={isDisabled ? [] : models}
+                  onChange={(value) => setFieldValue("models", value)}
+                >
+                  {/* Only show All Team Models if team has models */}
+                  {availableModels.length > 0 && <Select.Option value="all-team-models">All Team Models</Select.Option>}
+                  {availableModels.map((model) => (
+                    <Select.Option key={model} value={model}>
+                      {model}
+                    </Select.Option>
+                  ))}
+                </Select>
+                {isDisabled && (
+                  <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                    Models field is disabled for this key type
+                  </div>
+                )}
+              </>
+            );
+          }}
+        </Form.Item>
+      </Form.Item>
+
+      <Form.Item label="Key Type" name="key_type">
+        <Select
+          placeholder="Select key type"
+          style={{ width: "100%" }}
+          optionLabelProp="label"
+          onChange={(value) => {
+            form.setFieldsValue({ key_type: value });
+            // Clear models field and disable if management or read_only
+            if (value === "management" || value === "read_only") {
+              form.setFieldsValue({ models: [] });
+            }
+          }}
+        >
+          <Select.Option value="default" label="Default">
+            <div style={{ padding: "4px 0" }}>
+              <div style={{ fontWeight: 500 }}>Default</div>
+              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                Can call LLM API + Management routes
+              </div>
+            </div>
+          </Select.Option>
+          <Select.Option value="llm_api" label="LLM API">
+            <div style={{ padding: "4px 0" }}>
+              <div style={{ fontWeight: 500 }}>LLM API</div>
+              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                Can call only LLM API routes (chat/completions, embeddings, etc.)
+              </div>
+            </div>
+          </Select.Option>
+          <Select.Option value="management" label="Management">
+            <div style={{ padding: "4px 0" }}>
+              <div style={{ fontWeight: 500 }}>Management</div>
+              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                Can call only management routes (user/team/key management)
+              </div>
+            </div>
+          </Select.Option>
         </Select>
       </Form.Item>
 
@@ -278,7 +346,10 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
-        <Tooltip title={!premiumUser ? "Setting allowed pass through routes by key is a premium feature" : ""} placement="top">
+        <Tooltip
+          title={!premiumUser ? "Setting allowed pass through routes by key is a premium feature" : ""}
+          placement="top"
+        >
           <PassThroughRoutesSelector
             onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
             value={form.getFieldValue("allowed_passthrough_routes")}
@@ -286,7 +357,8 @@ export function KeyEditView({
             placeholder={
               !premiumUser
                 ? "Premium feature - Upgrade to set allowed pass through routes by key"
-                : Array.isArray(keyData.metadata?.allowed_passthrough_routes) && keyData.metadata.allowed_passthrough_routes.length > 0
+                : Array.isArray(keyData.metadata?.allowed_passthrough_routes) &&
+                    keyData.metadata.allowed_passthrough_routes.length > 0
                   ? `Current: ${keyData.metadata.allowed_passthrough_routes.join(", ")}`
                   : "Select or enter allowed pass through routes"
             }
