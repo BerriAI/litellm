@@ -105,7 +105,7 @@ async def test_router_provider_wildcard_routing():
     print("router model list = ", router.get_model_list())
 
     response1 = await router.acompletion(
-        model="anthropic/claude-3-5-sonnet-latest",
+        model="anthropic/claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -126,7 +126,7 @@ async def test_router_provider_wildcard_routing():
     print("response 3 = ", response3)
 
     response4 = await router.acompletion(
-        model="claude-3-5-sonnet-latest",
+        model="claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "hello"}],
     )
 

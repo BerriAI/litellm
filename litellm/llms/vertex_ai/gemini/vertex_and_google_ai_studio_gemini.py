@@ -416,7 +416,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             # Handle tools with 'type' field (OpenAI spec compliance) Ignore this field -> https://github.com/BerriAI/litellm/issues/14644#issuecomment-3342061838
             if "type" in tool:
-                del tool["type"]  # type: ignore
+                tool = {k: tool[k] for k in tool if k != "type"}
 
             tool_name = list(tool.keys())[0] if len(tool.keys()) == 1 else None
             if tool_name and (
