@@ -22,6 +22,19 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+MILVUS_OPTIONAL_PARAMS = {
+    "dbName",
+    "annsField",
+    "limit",
+    "filter",
+    "offset",
+    "groupingField",
+    "outputFields",
+    "searchParams",
+    "partitionNames",
+    "consistencyLevel",
+}
+
 
 class MilvusVectorStoreConfig(BaseVectorStoreConfig):
     """
@@ -49,6 +62,14 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         headers.update({"Authorization": f"Bearer {api_key}"})
 
         return headers
+
+    def map_openai_params(
+        self, non_default_params: dict, optional_params: dict, drop_params: bool
+    ) -> dict:
+        for param, value in non_default_params.items():
+            if param in MILVUS_OPTIONAL_PARAMS:
+                optional_params[param] = value
+        return optional_params
 
     def get_complete_url(
         self,
@@ -106,8 +127,6 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
             )
 
         # Get top_k (number of results to return)
-        top_k = vector_store_search_optional_params.get("top_k", 10)
-
         # Generate embedding for the query using litellm.embeddings
         try:
             embedding_response = litellm.embedding(
@@ -127,7 +146,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         request_body = {
             "collectionName": index_name,
             "data": [query_vector],
-            "annsField": "vector",
+            "annsField": "book_intro_vector",
             **vector_store_search_optional_params,
         }
 
@@ -151,8 +170,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
                 {
                     "id": "...",
                     "content": "...",
-                    "@search.score": 0.95,
-                    ... (other fields)
+                    "distance": 0.95,
                 }
             ]
         }
@@ -163,11 +181,24 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
             # Extract results from Azure AI Search API response
             results = response_json.get("data", [])
 
+            # Try to get text_field from optional_params first, then litellm_params
+            optional_params = litellm_logging_obj.model_call_details.get(
+                "optional_params", {}
+            )
+            text_field = optional_params.get("milvus_text_field", "")
+
+            # Fallback to litellm_params if not in optional_params
+
+            if not text_field:
+                text_field = litellm_logging_obj.model_call_details.get(
+                    "litellm_params", {}
+                ).get("milvus_text_field", "")
+
             # Transform results to standard format
             search_results: List[VectorStoreSearchResult] = []
             for result in results:
                 # Extract text content
-                text_content = result.get("content", "")
+                text_content = result.get(text_field, "")
 
                 content = [
                     VectorStoreResultContent(
@@ -183,7 +214,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
                 # Exclude system fields and already-processed fields
                 attributes = {}
                 for key, value in result.items():
-                    if key not in ["id", "content", "distance"]:
+                    if key not in ["id", "content", "distance", text_field]:
                         attributes[key] = value
 
                 result_obj = VectorStoreSearchResult(

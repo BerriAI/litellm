@@ -446,6 +446,7 @@ def search(
             litellm_params={
                 "litellm_call_id": litellm_call_id,
                 "vector_store_id": vector_store_id,
+                **litellm_params.model_dump(exclude_none=True),
             },
             custom_llm_provider=custom_llm_provider,
         )
