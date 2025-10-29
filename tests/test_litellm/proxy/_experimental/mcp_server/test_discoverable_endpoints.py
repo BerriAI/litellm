@@ -673,12 +673,12 @@ async def test_authorize_endpoint_respects_x_forwarded_host():
 
     # Mock request simulating nginx proxy:
     # Internal: http://localhost:8888/github/mcp
-    # External: https://chatproxy.yelpcorp.com/github/mcp
+    # External: https://proxy.example.com/github/mcp
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "http://localhost:8888/github/mcp"
     mock_request.headers = {
         "X-Forwarded-Proto": "https",
-        "X-Forwarded-Host": "chatproxy.yelpcorp.com",
+        "X-Forwarded-Host": "proxy.example.com",
     }
 
     # Mock the encryption functions
@@ -700,8 +700,8 @@ async def test_authorize_endpoint_respects_x_forwarded_host():
     location = response.headers["location"]
 
     # The redirect_uri parameter should use the external URL
-    assert "redirect_uri=https%3A%2F%2Fchatproxy.yelpcorp.com%2Fgithub%2Fmcp%2Fcallback" in location or \
-           "redirect_uri=https://chatproxy.yelpcorp.com/github/mcp/callback" in location
+    assert "redirect_uri=https%3A%2F%2Fproxy.example.com%2Fgithub%2Fmcp%2Fcallback" in location or \
+           "redirect_uri=https://proxy.example.com/github/mcp/callback" in location
 
 
 @pytest.mark.asyncio
@@ -745,7 +745,7 @@ async def test_token_endpoint_respects_x_forwarded_host():
     mock_request.base_url = "http://localhost:8888/github/mcp"
     mock_request.headers = {
         "X-Forwarded-Proto": "https",
-        "X-Forwarded-Host": "chatproxy.yelpcorp.com",
+        "X-Forwarded-Host": "proxy.example.com",
     }
 
     # Mock httpx client response
@@ -779,4 +779,4 @@ async def test_token_endpoint_respects_x_forwarded_host():
 
     # Verify that the redirect_uri sent to the provider uses the external URL
     call_args = mock_async_client.post.call_args
-    assert call_args[1]["data"]["redirect_uri"] == "https://chatproxy.yelpcorp.com/github/mcp/callback"
+    assert call_args[1]["data"]["redirect_uri"] == "https://proxy.example.com/github/mcp/callback"

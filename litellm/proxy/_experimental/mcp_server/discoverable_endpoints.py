@@ -33,7 +33,7 @@ def get_request_base_url(request: Request) -> str:
         request: FastAPI Request object
 
     Returns:
-        The reconstructed base URL (e.g., "https://chatproxy.yelpcorp.com")
+        The reconstructed base URL (e.g., "https://proxy.example.com")
     """
     base_url = str(request.base_url).rstrip("/")
     parsed = urlparse(base_url)
