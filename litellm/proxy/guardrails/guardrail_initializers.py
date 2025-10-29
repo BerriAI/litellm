@@ -48,7 +48,6 @@ def initialize_lakera(litellm_params: LitellmParams, guardrail: Guardrail):
     return _lakera_callback
 
 
-
 def initialize_lakera_v2(litellm_params: LitellmParams, guardrail: Guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import LakeraAIGuardrail
 
