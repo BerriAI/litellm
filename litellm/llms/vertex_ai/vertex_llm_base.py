@@ -19,6 +19,7 @@ from .common_utils import (
     _get_gemini_url,
     _get_vertex_url,
     all_gemini_url_modes,
+    get_vertex_base_model_name,
     is_global_only_vertex_model,
 )
 
@@ -328,10 +329,13 @@ class VertexBase:
                 # Check if this is a PSC endpoint or custom deployment
                 # PSC/custom endpoints need the full path structure
                 if vertex_project and vertex_location and model:
+                    # Strip routing prefixes (bge/, gemma/, etc.) for endpoint URL construction
+                    model_for_url = get_vertex_base_model_name(model=model)
+                    
                     # Check if model is numeric (endpoint ID) or if api_base doesn't contain googleapis.com
                     # These are indicators of PSC/custom endpoints
                     is_psc_or_custom = (
-                        "googleapis.com" not in api_base.lower() or model.isdigit()
+                        "googleapis.com" not in api_base.lower() or model_for_url.isdigit()
                     )
                     
                     if is_psc_or_custom:
@@ -343,7 +347,7 @@ class VertexBase:
                             version,
                             vertex_project,
                             vertex_location,
-                            model,
+                            model_for_url,
                             endpoint,
                         )
                     else:
