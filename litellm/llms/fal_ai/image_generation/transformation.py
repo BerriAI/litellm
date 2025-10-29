@@ -20,42 +20,13 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class FalAIImageGenerationConfig(BaseImageGenerationConfig):
+class FalAIBaseConfig(BaseImageGenerationConfig):
+    """
+    Base configuration for Fal AI image generation models.
+    Handles common functionality like URL construction and authentication.
+    """
     DEFAULT_BASE_URL: str = "https://fal.run"
     IMAGE_GENERATION_ENDPOINT: str = ""
-    
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
-        """
-        Get supported OpenAI parameters for fal.ai image generation
-        """
-        return [
-            "n",
-            "response_format",
-            "size",
-        ]
-    
-    def map_openai_params(
-        self,
-        non_default_params: dict,
-        optional_params: dict,
-        model: str,
-        drop_params: bool,
-    ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
-                if k in supported_params:
-                    optional_params[k] = non_default_params[k]
-                elif drop_params:
-                    pass
-                else:
-                    raise ValueError(
-                        f"Parameter {k} is not supported for model {model}. Supported parameters are {supported_params}. Set drop_params=True to drop unsupported parameters."
-                    )
-
-        return optional_params
 
     def get_complete_url(
         self,
@@ -102,25 +73,6 @@ class FalAIImageGenerationConfig(BaseImageGenerationConfig):
         headers["Authorization"] = f"Key {final_api_key}"        
         return headers
 
-
-
-    def transform_image_generation_request(
-        self,
-        model: str,
-        prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
-        """
-        Transform the image generation request to the fal.ai image generation request body
-        """
-        fal_ai_image_generation_request_body = {
-            "prompt": prompt,
-            **optional_params,
-        }
-        return fal_ai_image_generation_request_body
-
     def transform_image_generation_response(
         self,
         model: str,
@@ -165,4 +117,60 @@ class FalAIImageGenerationConfig(BaseImageGenerationConfig):
                     ))
         
         return model_response
+
+
+class FalAIImageGenerationConfig(FalAIBaseConfig):
+    """
+    Default Fal AI image generation configuration for generic models.
+    """
+    
+    def get_supported_openai_params(
+        self, model: str
+    ) -> List[OpenAIImageGenerationOptionalParams]:
+        """
+        Get supported OpenAI parameters for fal.ai image generation
+        """
+        return [
+            "n",
+            "response_format",
+            "size",
+        ]
+    
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        supported_params = self.get_supported_openai_params(model)
+        for k in non_default_params.keys():
+            if k not in optional_params.keys():
+                if k in supported_params:
+                    optional_params[k] = non_default_params[k]
+                elif drop_params:
+                    pass
+                else:
+                    raise ValueError(
+                        f"Parameter {k} is not supported for model {model}. Supported parameters are {supported_params}. Set drop_params=True to drop unsupported parameters."
+                    )
+
+        return optional_params
+
+    def transform_image_generation_request(
+        self,
+        model: str,
+        prompt: str,
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Transform the image generation request to the fal.ai image generation request body
+        """
+        fal_ai_image_generation_request_body = {
+            "prompt": prompt,
+            **optional_params,
+        }
+        return fal_ai_image_generation_request_body
 
