@@ -1,11 +1,14 @@
 """
 Vertex AI BGE (BAAI General Embedding) Configuration
 
-BGE models deployed on Vertex AI require different input format:
-- Use "prompt" instead of "content" as the input field
+BGE models deployed on Vertex AI require different input/output format:
+- Request: Use "prompt" instead of "content" as the input field
+- Response: Embeddings are returned directly as arrays, not wrapped in objects
 """
 
 from typing import List, Optional, Union
+
+from litellm.types.utils import EmbeddingResponse, Usage
 
 from .types import (
     EmbeddingParameters,
@@ -97,4 +100,51 @@ class VertexBGEConfig:
         if title is not None:
             text_embedding_input["title"] = title
         return text_embedding_input
+
+    @staticmethod
+    def transform_response(
+        response: dict, model: str, model_response: EmbeddingResponse
+    ) -> EmbeddingResponse:
+        """
+        Transforms a Vertex BGE embedding response to OpenAI format.
+        
+        BGE models return embeddings directly as arrays in predictions:
+        {
+          "predictions": [
+            [0.002, 0.021, ...],
+            [0.003, 0.022, ...]
+          ]
+        }
+        
+        Args:
+            response: The raw response from Vertex AI
+            model: The model name
+            model_response: The EmbeddingResponse object to populate
+            
+        Returns:
+            EmbeddingResponse: The transformed response in OpenAI format
+        """
+        _predictions = response["predictions"]
+
+        embedding_response = []
+        # BGE models don't return token counts, so we estimate or set to 0
+        input_tokens = 0
+
+        for idx, embedding_values in enumerate(_predictions):
+            embedding_response.append(
+                {
+                    "object": "embedding",
+                    "index": idx,
+                    "embedding": embedding_values,
+                }
+            )
+
+        model_response.object = "list"
+        model_response.data = embedding_response
+        model_response.model = model
+        usage = Usage(
+            prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
+        )
+        setattr(model_response, "usage", usage)
+        return model_response
 

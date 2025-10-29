@@ -215,6 +215,11 @@ class VertexAITextEmbeddingConfig(BaseModel):
             return self._transform_vertex_response_to_openai_for_fine_tuned_models(
                 response, model, model_response
             )
+        
+        if VertexBGEConfig.is_bge_model(model):
+            return VertexBGEConfig.transform_response(
+                response=response, model=model, model_response=model_response
+            )
 
         _predictions = response["predictions"]
 
