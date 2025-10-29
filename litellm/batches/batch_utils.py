@@ -1,10 +1,15 @@
 import json
+import time
 from typing import Any, List, Literal, Optional, Tuple
+
+import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.types.llms.openai import Batch
-from litellm.types.utils import CallTypes, Usage
+from litellm.types.utils import CallTypes, ModelResponse, Usage
+from litellm.utils import token_counter
 
 
 async def calculate_batch_cost_and_usage(
@@ -107,6 +112,10 @@ def calculate_vertex_ai_batch_cost_and_usage(
     """
     Calculate both cost and usage from Vertex AI batch responses
     """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
     total_cost = 0.0
     total_tokens = 0
     prompt_tokens = 0
@@ -115,17 +124,6 @@ def calculate_vertex_ai_batch_cost_and_usage(
     for response in vertex_ai_batch_responses:
         if response.get("status") == "JOB_STATE_SUCCEEDED":  # Check if response was successful
             # Transform Vertex AI response to OpenAI format if needed
-            import time
-
-            import httpx
-
-            from litellm import ModelResponse
-            from litellm._uuid import uuid
-            from litellm.litellm_core_utils.litellm_logging import Logging
-            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-                VertexGeminiConfig,
-            )
-            from litellm.types.utils import CallTypes
 
             # Create required arguments for the transformation method
             model_response = ModelResponse()
@@ -292,9 +290,7 @@ def _get_batch_job_input_file_usage(
     Count the number of tokens in the input file
 
     Used for batch rate limiting to count the number of tokens in the input file
-    """
-    from litellm.utils import token_counter
-    
+    """    
     prompt_tokens: int = 0
     completion_tokens: int = 0
     
