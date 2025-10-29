@@ -29,6 +29,7 @@ IGNORE_FUNCTIONS = [
     "_convert_schema_types",  # max depth set.,
     "_fix_enum_empty_strings",  # max depth set.,
     "get_access_token",  # max depth set.,
+    "_redact_base64",  # max depth set.
 ]
 
 
