@@ -141,6 +141,36 @@ all_gemini_url_modes = Literal[
 ]
 
 
+def _get_embedding_url(
+    model: str,
+    vertex_project: Optional[str],
+    vertex_location: Optional[str],
+    vertex_api_version: Literal["v1", "v1beta1"],
+) -> Tuple[str, str]:
+    """
+    Get URL for embedding models.
+    
+    Handles special patterns:
+    - bge/endpoint_id -> strips to endpoint_id for endpoints/ routing
+    - numeric model -> routes to endpoints/
+    - regular model -> routes to publishers/google/models/
+    """
+    from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
+    endpoint = "predict"
+    
+    # Handle BGE models with pattern bge/endpoint_id (similar to gemma/ pattern)
+    # After provider split: vertex_ai/bge/123456 -> bge/123456 -> 123456
+    if VertexBGEConfig.is_bge_model(model):
+        model = model.replace("bge/", "", 1)
+    
+    url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+    if model.isdigit():
+        # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/endpoints/$ENDPOINT_ID:predict
+        url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+    
+    return url, endpoint
+
+
 def _get_vertex_url(
     mode: all_gemini_url_modes,
     model: str,
@@ -153,6 +183,7 @@ def _get_vertex_url(
     endpoint: Optional[str] = None
 
     model = litellm.VertexGeminiConfig.get_model_for_vertex_ai_url(model=model)
+    
     if mode == "chat":
         ### SET RUNTIME ENDPOINT ###
         endpoint = "generateContent"
@@ -177,11 +208,12 @@ def _get_vertex_url(
             if stream is True:
                 url += "?alt=sse"
     elif mode == "embedding":
-        endpoint = "predict"
-        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
-        if model.isdigit():
-            # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/endpoints/$ENDPOINT_ID:predict
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+        return _get_embedding_url(
+            model=model,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_api_version=vertex_api_version,
+        )
     elif mode == "image_generation":
         endpoint = "predict"
         url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
