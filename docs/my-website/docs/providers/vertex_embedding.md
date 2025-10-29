@@ -246,7 +246,7 @@ Using a Private Service Connect (PSC) endpoint
 model_list:
   - model_name: bge-small-en-v1.5
     litellm_params:
-      model: vertex_ai/1234567890 
+      model: vertex_ai/bge/1234567890 
       api_base: http://10.96.32.8  # Your PSC IP
       vertex_project: my-project-id  #optional
       vertex_location: us-central1 #optional
