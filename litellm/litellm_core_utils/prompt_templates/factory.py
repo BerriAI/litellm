@@ -14,6 +14,7 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
+from litellm.litellm_core_utils.token_counter import get_image_type
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import CachePointBlock
@@ -38,7 +39,11 @@ from litellm.types.llms.vertex_ai import FunctionResponse as VertexFunctionRespo
 from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
-from .common_utils import convert_content_list_to_str, is_non_content_values_set
+from .common_utils import (
+    convert_content_list_to_str,
+    infer_content_type_from_url_and_content,
+    is_non_content_values_set,
+)
 from .image_handling import convert_url_to_base64
 
 
@@ -2536,13 +2541,17 @@ class BedrockImageProcessor:
     """Handles both sync and async image processing for Bedrock conversations."""
 
     @staticmethod
-    def _post_call_image_processing(response: httpx.Response) -> Tuple[str, str]:
+    def _post_call_image_processing(response: httpx.Response, image_url: str = "") -> Tuple[str, str]:
         # Check the response's content type to ensure it is an image
         content_type = response.headers.get("content-type")
-        if not content_type:
-            raise ValueError(
-                f"URL does not contain content-type (content-type: {content_type})"
-            )
+        
+        # Use helper function to infer content type with fallback logic
+        content_type = infer_content_type_from_url_and_content(
+            url=image_url,
+            content=response.content,
+            current_content_type=content_type,
+        )
+        
         content_type = _parse_content_type(content_type)
 
         # Convert the image content to base64 bytes
@@ -2561,7 +2570,7 @@ class BedrockImageProcessor:
             response = await client.get(image_url, follow_redirects=True)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
-            return BedrockImageProcessor._post_call_image_processing(response)
+            return BedrockImageProcessor._post_call_image_processing(response, image_url)
 
         except Exception as e:
             raise e
@@ -2574,7 +2583,7 @@ class BedrockImageProcessor:
             response = client.get(image_url, follow_redirects=True)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
-            return BedrockImageProcessor._post_call_image_processing(response)
+            return BedrockImageProcessor._post_call_image_processing(response, image_url)
 
         except Exception as e:
             raise e

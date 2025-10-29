@@ -93,6 +93,14 @@ AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 0))
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
 
+# WebSocket constants
+# Default to None (unlimited) to match OpenAI's official agents SDK behavior
+# https://github.com/openai/openai-agents-python/blob/cf1b933660e44fd37b4350c41febab8221801409/src/agents/realtime/openai_realtime.py#L235
+_max_size_env = os.getenv("REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES")
+REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES = (
+    int(_max_size_env) if _max_size_env is not None else None
+)
+
 # SSL/TLS cipher configuration for faster handshakes
 # Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
 # This balances performance with broad compatibility
@@ -265,6 +273,12 @@ ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "high": 10,
 }
 DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
+DEFAULT_VIDEO_ENDPOINT_MODEL = "sora-2"
+
+### DATAFORSEO CONSTANTS ###
+DEFAULT_DATAFORSEO_LOCATION_CODE = int(
+    os.getenv("DEFAULT_DATAFORSEO_LOCATION_CODE", 2250)
+)  # Default to France (2250) - lower number, commonly used location
 
 LITELLM_CHAT_PROVIDERS = [
     "openai",
@@ -810,6 +824,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "ai21",
     "nova",
     "deepseek_r1",
+    "qwen3",
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
@@ -1035,7 +1050,17 @@ PROXY_BATCH_POLLING_INTERVAL = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 360
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 )
-PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds
+# MEMORY LEAK FIX: Increased from 10s to 30s minimum to prevent memory issues with APScheduler
+# Very frequent intervals (<30s) can cause memory leaks in APScheduler's internal functions
+PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 30))  # in seconds, increased from 10
+
+# APScheduler Configuration - MEMORY LEAK FIX
+# These settings prevent memory leaks in APScheduler's normalize() and _apply_jitter() functions
+APSCHEDULER_COALESCE = True  # collapse many missed runs into one
+APSCHEDULER_MISFIRE_GRACE_TIME = 3600  # ignore runs older than 1 hour (was 120)
+APSCHEDULER_MAX_INSTANCES = 1  # prevent concurrent job instances
+APSCHEDULER_REPLACE_EXISTING = True  # always replace existing jobs
+
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
 )  # 5 minutes

@@ -1226,8 +1226,8 @@ class PrometheusLogger(CustomLogger):
 
         try:
             _tags = StandardLoggingPayloadSetup._get_request_tags(
-                request_data.get("metadata", {}),
-                request_data.get("proxy_server_request", {}),
+                litellm_params=request_data,
+                proxy_server_request=request_data.get("proxy_server_request", {}),
             )
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
@@ -1289,7 +1289,8 @@ class PrometheusLogger(CustomLogger):
                 status_code="200",
                 route=user_api_key_dict.request_route,
                 tags=StandardLoggingPayloadSetup._get_request_tags(
-                    data.get("metadata", {}), data.get("proxy_server_request", {})
+                    litellm_params=data,
+                    proxy_server_request=data.get("proxy_server_request", {}),
                 ),
             )
             _labels = prometheus_label_factory(
@@ -2188,6 +2189,9 @@ class PrometheusLogger(CustomLogger):
                 prometheus_logger.initialize_remaining_budget_metrics,
                 "interval",
                 minutes=PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
+                # REMOVED jitter parameter - major cause of memory leak
+                id="prometheus_budget_metrics_job",
+                replace_existing=True,
             )
 
     @staticmethod
@@ -2212,8 +2216,9 @@ class PrometheusLogger(CustomLogger):
             )
 
         # Create metrics ASGI app
-        if 'PROMETHEUS_MULTIPROC_DIR' in os.environ:
+        if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
             from prometheus_client import CollectorRegistry, multiprocess
+
             registry = CollectorRegistry()
             multiprocess.MultiProcessCollector(registry)
             metrics_app = make_asgi_app(registry)

@@ -23,7 +23,7 @@ def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/gpt-4.1-nano",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -102,7 +102,7 @@ async def test_arouter_with_tags_and_fallbacks():
             {
                 "model_name": "anthropic-claude-3-5-sonnet",
                 "litellm_params": {
-                    "model": "claude-3-5-sonnet-latest",
+                    "model": "claude-sonnet-4-5-20250929",
                     "mock_response": "Hello, world 2!",
                 },
             },
@@ -670,9 +670,9 @@ async def test_router_v1_messages_fallbacks():
     router = litellm.Router(
         model_list=[
             {
-                "model_name": "claude-3-5-sonnet-latest",
+                "model_name": "claude-sonnet-4-5-20250929",
                 "litellm_params": {
-                    "model": "anthropic/claude-3-5-sonnet-latest",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                     "mock_response": "litellm.InternalServerError",
                 },
             },
@@ -685,12 +685,12 @@ async def test_router_v1_messages_fallbacks():
             },
         ],
         fallbacks=[
-            {"claude-3-5-sonnet-latest": ["bedrock-claude"]},
+            {"claude-sonnet-4-5-20250929": ["bedrock-claude"]},
         ],
     )
 
     result = await router.aanthropic_messages(
-        model="claude-3-5-sonnet-latest",
+        model="claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "Hello, world!"}],
         max_tokens=256,
     )

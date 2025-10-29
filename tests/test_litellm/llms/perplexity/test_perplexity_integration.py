@@ -20,7 +20,7 @@ import litellm
 from litellm import ModelResponse
 from litellm.cost_calculator import completion_cost, cost_per_token
 from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
-from litellm.types.utils import Usage, PromptTokensDetailsWrapper
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 from litellm.utils import get_model_info
 
 
@@ -48,10 +48,10 @@ class TestPerplexityIntegration:
                     "output_cost_per_token": 8e-06,
                     "output_cost_per_reasoning_token": 3e-06,
                     "citation_cost_per_token": 2e-06,
-                    "search_queries_cost_per_query": {
-                        "search_queries_size_low": 0.005,
-                        "search_queries_size_medium": 0.005,
-                        "search_queries_size_high": 0.005
+                    "search_context_cost_per_query": {
+                        "search_context_size_low": 0.005,
+                        "search_context_size_medium": 0.005,
+                        "search_context_size_high": 0.005
                     },
                     "litellm_provider": "perplexity",
                     "mode": "chat",
