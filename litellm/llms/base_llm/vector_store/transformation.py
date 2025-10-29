@@ -2,7 +2,6 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
-from numpy import isin
 
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (

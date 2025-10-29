@@ -930,6 +930,69 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
     return metadata
 
 
+async def _parse_request_data_by_content_type(
+    request: Request,
+) -> Tuple[Optional[Any], Optional[Any], Optional[Any], Optional[Any]]:
+    """
+    Parse request data based on content type.
+
+    Handles JSON, multipart/form-data, and URL-encoded form data.
+
+    Returns:
+        Tuple of (query_params_data, custom_body_data, file_data, stream)
+    """
+    content_type = request.headers.get("content-type", "")
+
+    query_params_data = None
+    custom_body_data = None
+    file_data = None
+    stream = None
+
+    if "application/json" in content_type:
+        # ✅ Handle JSON
+        body = await request.json()
+        query_params_data = body.get("query_params")
+        custom_body_data = body.get("custom_body")
+        stream = body.get("stream")
+    elif "multipart/form-data" in content_type:
+        # ✅ Handle multipart form-data
+        form = await request.form()
+        if "query_params" in form:
+            form_value = form["query_params"]
+            if isinstance(form_value, str):
+                try:
+                    query_params_data = json.loads(form_value)
+                except Exception:
+                    query_params_data = form_value
+            else:
+                query_params_data = form_value
+
+        if "custom_body" in form:
+            form_value = form["custom_body"]
+            if isinstance(form_value, str):
+                try:
+                    custom_body_data = json.loads(form_value)
+                except Exception:
+                    custom_body_data = form_value
+            else:
+                custom_body_data = form_value
+
+        if "file" in form:
+            file_data = form["file"]  # this is a Starlette UploadFile object
+
+    elif "application/x-www-form-urlencoded" in content_type:
+        # ✅ Handle URL-encoded form data
+        form = await request.form()
+        query_params_data = form.get("query_params")
+        custom_body_data = form.get("custom_body")
+
+    else:
+        # ✅ Fallback: maybe no body, just query params
+        query_params_data = dict(request.query_params) or None
+
+    return query_params_data, custom_body_data, file_data, stream
+
+
 def create_pass_through_route(
     endpoint,
     target: str,
@@ -981,54 +1044,13 @@ def create_pass_through_route(
 
             path = request.url.path
 
-            content_type = request.headers.get("content-type", "")
-
-            query_params_data = None
-            custom_body_data = None
-            file_data = None
-            stream = None
-
-            if "application/json" in content_type:
-                # ✅ Handle JSON
-                body = await request.json()
-                query_params_data = body.get("query_params")
-                custom_body_data = body.get("custom_body")
-                stream = body.get("stream")
-            elif "multipart/form-data" in content_type:
-                # ✅ Handle multipart form-data
-                form = await request.form()
-                if "query_params" in form:
-                    form_value = form["query_params"]
-                    if isinstance(form_value, str):
-                        try:
-                            query_params_data = json.loads(form_value)
-                        except Exception:
-                            query_params_data = form_value
-                    else:
-                        query_params_data = form_value
-
-                if "custom_body" in form:
-                    form_value = form["custom_body"]
-                    if isinstance(form_value, str):
-                        try:
-                            custom_body_data = json.loads(form_value)
-                        except Exception:
-                            custom_body_data = form_value
-                    else:
-                        custom_body_data = form_value
-
-                if "file" in form:
-                    file_data = form["file"]  # this is a Starlette UploadFile object
-
-            elif "application/x-www-form-urlencoded" in content_type:
-                # ✅ Handle URL-encoded form data
-                form = await request.form()
-                query_params_data = form.get("query_params")
-                custom_body_data = form.get("custom_body")
-
-            else:
-                # ✅ Fallback: maybe no body, just query params
-                query_params_data = dict(request.query_params) or None
+            # Parse request data based on content type
+            (
+                query_params_data,
+                custom_body_data,
+                file_data,
+                stream,
+            ) = await _parse_request_data_by_content_type(request)
 
             if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
                 route=path
