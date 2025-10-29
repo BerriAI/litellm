@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🆕 Github
+# Github
 https://github.com/marketplace/models
 
 :::tip

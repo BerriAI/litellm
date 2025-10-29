@@ -537,6 +537,7 @@ const sidebars = {
         "providers/groq",
         "providers/deepseek",
         "providers/elevenlabs",
+        "providers/fal_ai",
         "providers/fireworks_ai",
         "providers/clarifai",
         "providers/compactifai",

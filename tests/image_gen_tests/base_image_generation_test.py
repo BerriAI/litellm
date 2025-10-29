@@ -47,6 +47,7 @@ class BaseImageGenTest(ABC):
     async def test_basic_image_generation(self):
         """Test basic image generation"""
         try:
+            litellm._turn_on_debug()
             custom_logger = TestCustomLogger()
             litellm.logging_callback_manager._reset_all_callbacks()
             litellm.callbacks = [custom_logger]
@@ -55,7 +56,7 @@ class BaseImageGenTest(ABC):
             response = await litellm.aimage_generation(
                 **base_image_generation_call_args, prompt="A image of a otter"
             )
-            print(response)
+            print("FAL AI RESPONSE: ", response)
 
             await asyncio.sleep(1)
 

@@ -168,7 +168,7 @@ def test_get_request_body_stability3():
     model = "stability.sd3-large"
 
     result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
+        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
     )
 
     assert result["prompt"] == prompt
@@ -181,7 +181,7 @@ def test_get_request_body_stability():
     model = "stability.stable-diffusion-xl-v1"
 
     result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
+        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
     )
 
     assert result["text_prompts"][0]["text"] == prompt
@@ -239,7 +239,7 @@ def test_get_request_body_nova_canvas_default():
     model = "amazon.nova-canvas-v1"
 
     result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
+        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
     )
 
     assert result["taskType"] == "TEXT_IMAGE"
@@ -254,7 +254,7 @@ def test_get_request_body_nova_canvas_text_image():
     model = "amazon.nova-canvas-v1"
 
     result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
+        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
     )
 
     assert result["taskType"] == "TEXT_IMAGE"
@@ -273,7 +273,7 @@ def test_get_request_body_nova_canvas_color_guided_generation():
     model = "amazon.nova-canvas-v1"
 
     result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
+        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
     )
 
     assert result["taskType"] == "COLOR_GUIDED_GENERATION"
@@ -434,7 +434,7 @@ def test_get_request_body_nova_canvas_inference_profile_arn():
     nova_model = "us.amazon.nova-canvas-v1:0"
 
     result = handler._get_request_body(
-        model=nova_model, prompt=prompt, optional_params=optional_params
+        model=nova_model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
     )
 
     assert result["taskType"] == "TEXT_IMAGE"
@@ -450,7 +450,7 @@ def test_get_request_body_nova_canvas_with_model_id_param():
     model = "amazon.nova-canvas-v1"
 
     result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
+        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
     )
 
     # After fix, model_id should not appear in the result
@@ -487,7 +487,7 @@ def test_get_request_body_cross_region_inference_profile():
 
     # This should work after the fix - cross-region format should be detected as 'nova'
     result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
+        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
     )
 
     assert result["taskType"] == "TEXT_IMAGE"
@@ -502,7 +502,7 @@ def test_backward_compatibility_regular_nova_model():
     model = "amazon.nova-canvas-v1"
 
     result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
+        model=model, bedrock_provider=None, prompt=prompt, optional_params=optional_params
     )
 
     assert result["taskType"] == "TEXT_IMAGE"

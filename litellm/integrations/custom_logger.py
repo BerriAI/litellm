@@ -644,8 +644,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         ctype = content.get("type")
         return not (isinstance(ctype, str) and ctype != "text")
 
-    def _process_messages(self, messages: list[Any], max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER) -> List[dict[str, Any]]:
-        filtered_messages: List[dict[str, Any]] = []
+    def _process_messages(self, messages: list[Any], max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER) -> List[Dict[str, Any]]:
+        filtered_messages: List[Dict[str, Any]] = []
         for msg in messages:
             if not isinstance(msg, dict):
                 continue

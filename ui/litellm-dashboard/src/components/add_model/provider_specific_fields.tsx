@@ -575,6 +575,14 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       placeholder: "http://localhost:7997",
     },
   ],
+  [Providers.FalAI]: [
+    {
+      key: "api_key",
+      label: "API Key",
+      type: "password",
+      required: true,
+    }
+  ],
 };
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, uploadProps }) => {
