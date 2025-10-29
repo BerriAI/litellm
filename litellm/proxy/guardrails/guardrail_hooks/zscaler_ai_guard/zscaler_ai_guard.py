@@ -24,6 +24,10 @@ from litellm.types.utils import (
 from litellm import ModelResponse as LiteLLMModelResponse
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 
 GUARDRAIL_TIMEOUT = 5
 
@@ -113,24 +117,22 @@ class ZscalerAIGuard(CustomGuardrail):
             extra_headers.update({"user-api-key-user-id": user_api_key_user_id})
         return extra_headers
     
-    def _send_request(self, url, headers, data):
-        session = requests.Session()
-        retry_strategy = Retry(
-            total=3,
-            status_forcelist=[429, 500, 502, 503, 504],
-            backoff_factor=1,
+    async def _send_request(self, url, headers, data):
+        # Use LiteLLM's async HTTP client
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
         )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("https://", adapter)
-        session.mount("http://", adapter)
 
-        response = session.post(
-            url,
+        response = await async_client.post(
+            f"{url}",
             headers=headers,
             json=data,
-            timeout=GUARDRAIL_TIMEOUT
+            timeout=GUARDRAIL_TIMEOUT,
         )
+        response.raise_for_status()
         return response
+
+
 
     def _handle_response(self, response, direction):
         # Raise exceptions on critical errors to stop the request
@@ -207,7 +209,7 @@ class ZscalerAIGuard(CustomGuardrail):
                 status_code=response.status_code, detail=user_facing_error
             )
 
-    def make_zscaler_ai_guard_api_call(
+    async def make_zscaler_ai_guard_api_call(
         self, zscaler_ai_guard_url, api_key, policy_id, direction, content, **kwargs
     ):
         """
@@ -223,7 +225,7 @@ class ZscalerAIGuard(CustomGuardrail):
         }
 
         try:
-            response = self._send_request(zscaler_ai_guard_url, extra_headers, data)
+            response =  await self._send_request(zscaler_ai_guard_url, extra_headers, data)
             return self._handle_response(response, direction)
 
         except requests.exceptions.Timeout:
@@ -364,7 +366,7 @@ class ZscalerAIGuard(CustomGuardrail):
             )
             return data
 
-        zscaler_ai_guard_result = self.make_zscaler_ai_guard_api_call(
+        zscaler_ai_guard_result = await self.make_zscaler_ai_guard_api_call(
             self.zscaler_ai_guard_url,
             self.api_key,
             custom_policy_id,
@@ -457,7 +459,7 @@ class ZscalerAIGuard(CustomGuardrail):
             )
             return
         if response_str is not None:
-            zscaler_ai_guard_result = self.make_zscaler_ai_guard_api_call(
+            zscaler_ai_guard_result = await self.make_zscaler_ai_guard_api_call(
                 self.zscaler_ai_guard_url,
                 self.api_key,
                 custom_policy_id,
