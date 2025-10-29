@@ -255,6 +255,32 @@ curl --location 'http://localhost:4000/v1/images/generations' \
 
 
 
+## Using Model-Specific Parameters
+
+LiteLLM forwards any additional parameters directly to the Fal AI API. You can pass model-specific parameters in your request and they will be sent to Fal AI.
+
+```python showLineNumbers title="Pass Model-Specific Parameters"
+import litellm
+
+# Any parameters beyond the standard ones are forwarded to Fal AI
+response = litellm.image_generation(
+    model="fal_ai/fal-ai/flux-pro/v1.1-ultra",
+    prompt="A beautiful sunset",
+    # Model-specific Fal AI parameters
+    aspect_ratio="16:9",
+    safety_tolerance="2",
+    enhance_prompt=True,
+    seed=42
+)
+```
+
+For the complete list of parameters supported by each model, see:
+- [FLUX Pro v1.1-ultra Parameters ↗](https://fal.ai/models/fal-ai/flux-pro/v1.1-ultra/api)
+- [Imagen 4 Parameters ↗](https://fal.ai/models/fal-ai/imagen4/preview/api)
+- [Recraft v3 Parameters ↗](https://fal.ai/models/fal-ai/recraft/v3/text-to-image/api)
+- [Stable Diffusion v3.5 Parameters ↗](https://fal.ai/models/fal-ai/stable-diffusion-v35-medium/api)
+- [Bria 3.2 Parameters ↗](https://fal.ai/models/bria/text-to-image/3.2/api)
+
 ## Supported Parameters
 
 Standard OpenAI-compatible parameters that work across all models:
