@@ -107,7 +107,14 @@ async def authorize(
     # Parse it to remove any existing query
     parsed = urlparse(redirect_uri)
     base_url = urlunparse(parsed._replace(query=""))
+
+    # Detect correct scheme when behind a proxy (X-Forwarded-Proto header)
     request_base_url = str(request.base_url).rstrip("/")
+    x_forwarded_proto = request.headers.get("X-Forwarded-Proto")
+    if x_forwarded_proto:
+        # Replace the scheme with the forwarded protocol (http -> https)
+        parsed_base = urlparse(request_base_url)
+        request_base_url = urlunparse(parsed_base._replace(scheme=x_forwarded_proto))
 
     # Encode the base_url, original state, PKCE params, and client redirect_uri in encrypted state
     encoded_state = encode_state_with_base_url(
@@ -177,7 +184,13 @@ async def token_endpoint(
     if mcp_server.token_url is None:
         raise HTTPException(status_code=400, detail="MCP server token url is not set")
 
+    # Detect correct scheme when behind a proxy (X-Forwarded-Proto header)
     proxy_base_url = str(request.base_url).rstrip("/")
+    x_forwarded_proto = request.headers.get("X-Forwarded-Proto")
+    if x_forwarded_proto:
+        # Replace the scheme with the forwarded protocol (http -> https)
+        parsed_base = urlparse(proxy_base_url)
+        proxy_base_url = urlunparse(parsed_base._replace(scheme=x_forwarded_proto))
 
     # Build token request data
     token_data = {
@@ -251,7 +264,13 @@ async def callback(code: str, state: str):
 async def oauth_protected_resource_mcp(
     request: Request, mcp_server_name: Optional[str] = None
 ):
+    # Detect correct scheme when behind a proxy (X-Forwarded-Proto header)
     request_base_url = str(request.base_url).rstrip("/")
+    x_forwarded_proto = request.headers.get("X-Forwarded-Proto")
+    if x_forwarded_proto:
+        # Replace the scheme with the forwarded protocol (http -> https)
+        parsed_base = urlparse(request_base_url)
+        request_base_url = urlunparse(parsed_base._replace(scheme=x_forwarded_proto))
     return {
         "authorization_servers": [
             (
@@ -273,7 +292,13 @@ async def oauth_protected_resource_mcp(
 async def oauth_authorization_server_mcp(
     request: Request, mcp_server_name: Optional[str] = None
 ):
+    # Detect correct scheme when behind a proxy (X-Forwarded-Proto header)
     request_base_url = str(request.base_url).rstrip("/")
+    x_forwarded_proto = request.headers.get("X-Forwarded-Proto")
+    if x_forwarded_proto:
+        # Replace the scheme with the forwarded protocol (http -> https)
+        parsed_base = urlparse(request_base_url)
+        request_base_url = urlunparse(parsed_base._replace(scheme=x_forwarded_proto))
 
     authorization_endpoint = (
         f"{request_base_url}/{mcp_server_name}/authorize"
@@ -320,7 +345,13 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
         global_mcp_server_manager,
     )
 
+    # Detect correct scheme when behind a proxy (X-Forwarded-Proto header)
     request_base_url = str(request.base_url).rstrip("/")
+    x_forwarded_proto = request.headers.get("X-Forwarded-Proto")
+    if x_forwarded_proto:
+        # Replace the scheme with the forwarded protocol (http -> https)
+        parsed_base = urlparse(request_base_url)
+        request_base_url = urlunparse(parsed_base._replace(scheme=x_forwarded_proto))
 
     request_data = await _read_request_body(request=request)
     data: dict = {**request_data}
