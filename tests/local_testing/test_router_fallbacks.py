@@ -1133,9 +1133,9 @@ async def test_router_content_policy_fallbacks(
     router = Router(
         model_list=[
             {
-                "model_name": "claude-sonnet-4-5-latest",
+                "model_name": "claude-sonnet-4-5-20250929",
                 "litellm_params": {
-                    "model": "anthropic/claude-sonnet-4-5-latest",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                     "api_key": "",
                     "mock_response": mock_response,
                 },
@@ -1159,7 +1159,7 @@ async def test_router_content_policy_fallbacks(
             {
                 "model_name": "my-general-model",
                 "litellm_params": {
-                    "model": "anthropic/claude-sonnet-4-5-latest",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                     "api_key": "",
                     "mock_response": Exception("Should not have called this."),
                 },
@@ -1167,14 +1167,14 @@ async def test_router_content_policy_fallbacks(
             {
                 "model_name": "my-context-window-model",
                 "litellm_params": {
-                    "model": "anthropic/claude-sonnet-4-5-latest",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                     "api_key": "",
                     "mock_response": Exception("Should not have called this."),
                 },
             },
         ],
         content_policy_fallbacks=(
-            [{"claude-sonnet-4-5-latest": ["my-fallback-model"]}]
+            [{"claude-sonnet-4-5-20250929": ["my-fallback-model"]}]
             if fallback_type == "model-specific"
             else None
         ),
@@ -1185,12 +1185,12 @@ async def test_router_content_policy_fallbacks(
 
     if sync_mode is True:
         response = router.completion(
-            model="claude-sonnet-4-5-latest",
+            model="claude-sonnet-4-5-20250929",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
     else:
         response = await router.acompletion(
-            model="claude-sonnet-4-5-latest",
+            model="claude-sonnet-4-5-20250929",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
 

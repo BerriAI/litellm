@@ -34,11 +34,11 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
             "completion_tokens": 318,
             "startTime": "2025-05-30T03:17:06.703+00:00",
             "endTime": "2025-05-30T03:17:11.894+00:00",
-            "model": "claude-sonnet-4-5-latest",
+            "model": "claude-sonnet-4-5-20250929",
             "session_id": "a96757c4-c6dc-4c76-b37e-e7dfa526b701",
             "proxy_server_request": {
                 "input": "who is Michael Jordan",
-                "model": "anthropic/claude-sonnet-4-5-latest",
+                "model": "anthropic/claude-sonnet-4-5-20250929",
             },
             "response": {
                 "id": "chatcmpl-935b8dad-fdc2-466e-a8ca-e26e5a8a21bb",
@@ -75,11 +75,11 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
             "completion_tokens": 628,
             "startTime": "2025-05-30T03:17:28.600+00:00",
             "endTime": "2025-05-30T03:17:39.921+00:00",
-            "model": "claude-sonnet-4-5-latest",
+            "model": "claude-sonnet-4-5-20250929",
             "session_id": "a96757c4-c6dc-4c76-b37e-e7dfa526b701",
             "proxy_server_request": {
                 "input": "can you tell me more about him",
-                "model": "anthropic/claude-sonnet-4-5-latest",
+                "model": "anthropic/claude-sonnet-4-5-20250929",
                 "previous_response_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOmFudGhyb3BpYzttb2RlbF9pZDplMGYzMDJhMTQxMmU3ODQ3MGViYjI4Y2JlZDAxZmZmNWY4OGMwZDMzMWM2NjdlOWYyYmE0YjQxM2M2ZmJkMjgyO3Jlc3BvbnNlX2lkOmNoYXRjbXBsLTkzNWI4ZGFkLWZkYzItNDY2ZS1hOGNhLWUyNmU1YThhMjFiYg==",
             },
             "response": {

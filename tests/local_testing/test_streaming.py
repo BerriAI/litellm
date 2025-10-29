@@ -3982,7 +3982,7 @@ def test_streaming_finish_reason():
 
     ## Anthropic
     response = litellm.completion(
-        model="anthropic/claude-sonnet-4-5-latest",
+        model="anthropic/claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "What is the capital of France?"}],
         stream=True,
         stream_options={"include_usage": True},
