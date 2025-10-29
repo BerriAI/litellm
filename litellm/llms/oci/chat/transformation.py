@@ -2,7 +2,8 @@ import base64
 import datetime
 import hashlib
 import json
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Protocol, Tuple, Union
 from urllib.parse import urlparse
 
 import httpx
@@ -60,6 +61,47 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class OCISignerProtocol(Protocol):
+    """
+    Protocol for OCI request signers (e.g., oci.signer.Signer).
+
+    This protocol defines the interface expected for OCI SDK signer objects.
+    Compatible with the OCI Python SDK's Signer class.
+
+    See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html
+    """
+
+    def do_request_sign(self, request: Any, *, enforce_content_headers: bool = False) -> None:
+        """
+        Sign an HTTP request by adding authentication headers.
+
+        Args:
+            request: Request object with method, url, headers, body, and path_url attributes
+            enforce_content_headers: Whether to enforce content-type and content-length headers
+        """
+        ...
+
+
+@dataclass
+class OCIRequestWrapper:
+    """
+    Wrapper for HTTP requests compatible with OCI signer interface.
+
+    This class wraps request data in a format compatible with OCI SDK signers,
+    which expect objects with method, url, headers, body, and path_url attributes.
+    """
+    method: str
+    url: str
+    headers: dict
+    body: bytes
+
+    @property
+    def path_url(self) -> str:
+        """Returns the path + query string for OCI signing."""
+        parsed_url = urlparse(self.url)
+        return parsed_url.path + ("?" + parsed_url.query if parsed_url.query else "")
 
 
 def sha256_base64(data: bytes) -> str:
@@ -240,17 +282,94 @@ class OCIChatConfig(BaseConfig):
         fake_stream: Optional[bool] = None,
     ) -> Tuple[dict, Optional[bytes]]:
         """
-        Some providers like Bedrock require signing the request. The sign request funtion needs access to `request_data` and `complete_url`
-        Args:
-            headers: dict
-            optional_params: dict
-            request_data: dict - the request body being sent in http request
-            api_base: str - the complete url being sent in http request
-        Returns:
-            dict - the signed headers
-        """
-        import json
+        Sign the OCI request by adding authentication headers.
 
+        Supports two signing modes:
+        1. OCI SDK Signer: Use an oci_signer object to sign the request
+        2. Manual Signing: Use OCI credentials to manually sign the request
+
+        Args:
+            headers: Request headers to be signed
+            optional_params: Optional parameters including auth credentials or oci_signer
+            request_data: The request body dict to be sent in HTTP request
+            api_base: The complete URL for the HTTP request
+            api_key: Optional API key (not used for OCI)
+            model: Optional model name
+            stream: Optional streaming flag
+            fake_stream: Optional fake streaming flag
+
+        Returns:
+            Tuple of (signed_headers, encoded_body):
+            - If oci_signer is provided: Returns (headers, body) where body is the encoded JSON
+            - If manual credentials are provided: Returns (headers, None) as body is not returned
+              for the manual signing path
+
+        Raises:
+            OCIError: If signing fails with oci_signer
+            Exception: If required credentials are missing
+            ImportError: If cryptography package is not installed (manual signing only)
+
+        Example:
+            >>> from oci.signer import Signer
+            >>> signer = Signer(
+            ...     tenancy="ocid1.tenancy.oc1..",
+            ...     user="ocid1.user.oc1..",
+            ...     fingerprint="xx:xx:xx",
+            ...     private_key_file_location="~/.oci/key.pem"
+            ... )
+            >>> headers, body = config.sign_request(
+            ...     headers={},
+            ...     optional_params={"oci_signer": signer},
+            ...     request_data={"message": "Hello"},
+            ...     api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/..."
+            ... )
+        """
+        oci_signer = optional_params.get("oci_signer")
+
+        # If a signer is provided, use it for request signing
+        if oci_signer is not None:
+            # Prepare the request body
+            body = json.dumps(request_data).encode("utf-8")
+            method = str(optional_params.get("method", "POST")).upper()
+
+            # Validate HTTP method
+            if method not in ["POST", "GET", "PUT", "DELETE", "PATCH"]:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+
+            # Prepare headers with required fields for OCI signing
+            prepared_headers = headers.copy()
+            prepared_headers.setdefault("content-type", "application/json")
+            prepared_headers.setdefault("content-length", str(len(body)))
+
+            # Create request wrapper for OCI signing
+            request_wrapper = OCIRequestWrapper(
+                method=method,
+                url=api_base,
+                headers=prepared_headers,
+                body=body
+            )
+
+            # Sign the request using the provided signer
+            try:
+                oci_signer.do_request_sign(request_wrapper, enforce_content_headers=True)
+            except Exception as e:
+                from litellm.llms.oci.common_utils import OCIError
+                raise OCIError(
+                    status_code=500,
+                    message=(
+                        f"Failed to sign request with provided oci_signer: {str(e)}. "
+                        "The signer must implement the OCI SDK Signer interface with a "
+                        "do_request_sign(request, enforce_content_headers=True) method. "
+                        "See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html"
+                    )
+                ) from e
+
+            # Update headers with signed headers
+            headers.update(request_wrapper.headers)
+
+            return headers, body
+
+        # Standard manual credential signing
         oci_region = optional_params.get("oci_region", "us-ashburn-1")
         api_base = (
             api_base
@@ -365,36 +484,67 @@ class OCIChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        """
+        Validate the OCI environment and credentials.
+
+        Supports two authentication modes:
+        1. OCI SDK Signer: Pass an oci_signer object (e.g., oci.signer.Signer)
+        2. Manual Credentials: Pass oci_user, oci_fingerprint, oci_tenancy, and oci_key/oci_key_file
+
+        Args:
+            headers: Request headers to populate
+            model: Model name
+            messages: List of chat messages
+            optional_params: Optional parameters including authentication credentials
+            litellm_params: LiteLLM parameters
+            api_key: Optional API key (not used for OCI)
+            api_base: Optional API base URL
+
+        Returns:
+            Updated headers dict
+
+        Raises:
+            Exception: If required parameters are missing or invalid
+        """
+        oci_signer = optional_params.get("oci_signer")
         oci_region = optional_params.get("oci_region", "us-ashburn-1")
+
+        # Determine api_base
         api_base = (
             api_base
             or litellm.api_base
             or f"https://inference.generativeai.{oci_region}.oci.oraclecloud.com"
         )
-        oci_user = optional_params.get("oci_user")
-        oci_fingerprint = optional_params.get("oci_fingerprint")
-        oci_tenancy = optional_params.get("oci_tenancy")
-        oci_key = optional_params.get("oci_key")
-        oci_key_file = optional_params.get("oci_key_file")
-        oci_compartment_id = optional_params.get("oci_compartment_id")
-
-        if (
-            not oci_user
-            or not oci_fingerprint
-            or not oci_tenancy
-            or not (oci_key or oci_key_file)
-            or not oci_compartment_id
-        ):
-            raise Exception(
-                "Missing required parameters: oci_user, oci_fingerprint, oci_tenancy, oci_compartment_id "
-                "and at least one of oci_key or oci_key_file."
-            )
 
         if not api_base:
             raise Exception(
-                "Either `api_base` must be provided or `litellm.api_base` must be set. Alternatively, you can set the `oci_region` optional parameter to use the default OCI region."
+                "Either `api_base` must be provided or `litellm.api_base` must be set. "
+                "Alternatively, you can set the `oci_region` optional parameter to use the default OCI region."
             )
 
+        # Validate credentials only if signer is not provided
+        if oci_signer is None:
+            oci_user = optional_params.get("oci_user")
+            oci_fingerprint = optional_params.get("oci_fingerprint")
+            oci_tenancy = optional_params.get("oci_tenancy")
+            oci_key = optional_params.get("oci_key")
+            oci_key_file = optional_params.get("oci_key_file")
+            oci_compartment_id = optional_params.get("oci_compartment_id")
+
+            if (
+                not oci_user
+                or not oci_fingerprint
+                or not oci_tenancy
+                or not (oci_key or oci_key_file)
+                or not oci_compartment_id
+            ):
+                raise Exception(
+                    "Missing required parameters: oci_user, oci_fingerprint, oci_tenancy, oci_compartment_id "
+                    "and at least one of oci_key or oci_key_file. "
+                    "Alternatively, provide an oci_signer object from the OCI SDK."
+                )
+
+        # Common header setup
         headers.update(
             {
                 "content-type": "application/json",
