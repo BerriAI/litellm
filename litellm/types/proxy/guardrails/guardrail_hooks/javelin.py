@@ -88,9 +88,10 @@ class JavelinGuardResponse(TypedDict):
 
 class JavelinGuardrailConfigModelOptionalParams(BaseModel):
     """Optional parameters for the Javelin guardrail"""
-    
+
     guard_name: Optional[str] = Field(
-        default="javelin_guard", description="(Optional) Name of the Javelin guard to use"
+        default="javelin_guard",
+        description="(Optional) Name of the Javelin guard to use",
     )
     api_version: Optional[str] = Field(
         default="v1", description="(Optional) API version for Javelin service"
@@ -100,13 +101,15 @@ class JavelinGuardrailConfigModelOptionalParams(BaseModel):
     )
 
 
-class JavelinGuardrailConfigModel(GuardrailConfigModel[JavelinGuardrailConfigModelOptionalParams]):
+class JavelinGuardrailConfigModel(
+    GuardrailConfigModel[JavelinGuardrailConfigModelOptionalParams]
+):
     """Configuration parameters for the Javelin guardrail"""
 
-    api_key: str = Field(
+    api_key: Optional[str] = Field(
         default=None, description="The API key for the Javelin guardrail."
     )
-    api_base: str = Field(
+    api_base: Optional[str] = Field(
         default=None, description="The API base for the Javelin guardrail."
     )
 

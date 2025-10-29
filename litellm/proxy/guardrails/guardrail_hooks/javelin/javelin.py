@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Type, Union
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Type, Union
 
 from fastapi import HTTPException
 
@@ -160,6 +160,100 @@ class JavelinGuardrail(CustomGuardrail):
                 duration=(datetime.now() - start_time).total_seconds(),
             )
 
+    def _process_assessments(
+        self, assessments: List[Dict]
+    ) -> Tuple[bool, bool, Optional[str], Optional[str]]:
+        """
+        Process Javelin assessments to determine if content should be rejected or transformed.
+
+        Returns:
+            Tuple of (should_reject, should_transform_content, reject_prompt, transformed_content)
+        """
+        should_reject = False
+        should_transform_content = False
+        reject_prompt = "Violated guardrail policy"
+        transformed_content = None
+
+        for assessment in assessments:
+            verbose_proxy_logger.debug(
+                "Javelin Guardrail: Processing assessment: %s", assessment
+            )
+            for assessment_type, assessment_data in assessment.items():
+                verbose_proxy_logger.debug(
+                    "Javelin Guardrail: Processing assessment_type: %s, data: %s",
+                    assessment_type,
+                    assessment_data,
+                )
+
+                results = assessment_data.get("results", {})
+                strategy = results.get("strategy", "")
+
+                # Check if this assessment indicates rejection
+                if assessment_data.get("request_reject") is True:
+                    should_reject = True
+                    verbose_proxy_logger.debug(
+                        "Javelin Guardrail: Request rejected by Javelin guardrail: %s (assessment_type: %s)",
+                        self.guardrail_name,
+                        assessment_type,
+                    )
+
+                    reject_prompt = str(results.get("reject_prompt", ""))
+
+                    verbose_proxy_logger.debug(
+                        "Javelin Guardrail: Extracted reject_prompt: '%s'",
+                        reject_prompt,
+                    )
+                    break
+
+                # Check if content transformation is needed (for DLP processors)
+                elif (
+                    strategy.lower() in ["mask", "redact", "replace"]
+                    and "content" in results
+                ):
+                    should_transform_content = True
+                    transformed_content = results.get("content")
+                    verbose_proxy_logger.debug(
+                        "Javelin Guardrail: Content transformation detected: strategy=%s, content=%s",
+                        strategy,
+                        transformed_content,
+                    )
+                    break
+
+            if should_reject or should_transform_content:
+                break
+
+        return (
+            should_reject,
+            should_transform_content,
+            reject_prompt,
+            transformed_content,
+        )
+
+    def _apply_content_transformation(
+        self, data: Dict, transformed_content: str
+    ) -> None:
+        """Apply content transformation to the request data."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            set_last_user_message,
+        )
+
+        verbose_proxy_logger.debug(
+            "Javelin Guardrail: Applying content transformation to messages"
+        )
+        try:
+            # Update the messages with the transformed content
+            data["messages"] = set_last_user_message(
+                data["messages"], transformed_content
+            )
+            verbose_proxy_logger.debug(
+                "Javelin Guardrail: Successfully updated messages with transformed content"
+            )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Javelin Guardrail: Failed to update messages with transformed content: %s",
+                e,
+            )
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -183,7 +277,6 @@ class JavelinGuardrail(CustomGuardrail):
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             get_last_user_message,
-            set_last_user_message,
         )
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -222,60 +315,19 @@ class JavelinGuardrail(CustomGuardrail):
 
         javelin_response = await self.call_javelin_guard(request=javelin_guard_request)
 
-        assessments = javelin_response.get("assessments", [])
-        reject_prompt = "Violated guardrail policy"
-        should_reject = False
-        should_transform_content = False
-        transformed_content = None
-
         # Debug: Log the full Javelin response
         verbose_proxy_logger.debug(
             "Javelin Guardrail: Full Javelin response: %s", javelin_response
         )
 
-        for assessment in assessments:
-            verbose_proxy_logger.debug(
-                "Javelin Guardrail: Processing assessment: %s", assessment
-            )
-            for assessment_type, assessment_data in assessment.items():
-                verbose_proxy_logger.debug(
-                    "Javelin Guardrail: Processing assessment_type: %s, data: %s",
-                    assessment_type,
-                    assessment_data,
-                )
-
-                results = assessment_data.get("results", {})
-                strategy = results.get("strategy", "")
-
-                # Check if this assessment indicates rejection
-                if assessment_data.get("request_reject") is True:
-                    should_reject = True
-                    verbose_proxy_logger.debug(
-                        "Javelin Guardrail: Request rejected by Javelin guardrail: %s (assessment_type: %s)",
-                        self.guardrail_name,
-                        assessment_type,
-                    )
-
-                    reject_prompt = str(results.get("reject_prompt", ""))
-
-                    verbose_proxy_logger.debug(
-                        "Javelin Guardrail: Extracted reject_prompt: '%s'",
-                        reject_prompt,
-                    )
-                    break
-
-                elif strategy.lower() in ["mask", "redact", "replace"] and "content" in results:
-                    should_transform_content = True
-                    transformed_content = results.get("content")
-                    verbose_proxy_logger.debug(
-                        "Javelin Guardrail: Content transformation detected: strategy=%s, content=%s",
-                        strategy,
-                        transformed_content,
-                    )
-                    break
-
-            if should_reject or should_transform_content:
-                break
+        # Process assessments to determine action
+        assessments = javelin_response.get("assessments", [])
+        (
+            should_reject,
+            should_transform_content,
+            reject_prompt,
+            transformed_content,
+        ) = self._process_assessments(assessments)
 
         verbose_proxy_logger.debug(
             "Javelin Guardrail: should_reject=%s, should_transform_content=%s, reject_prompt='%s'",
@@ -284,19 +336,9 @@ class JavelinGuardrail(CustomGuardrail):
             reject_prompt,
         )
 
+        # Handle content transformation if needed
         if should_transform_content and transformed_content is not None:
-            verbose_proxy_logger.debug(
-                "Javelin Guardrail: Applying content transformation to messages"
-            )
-            try:
-                data["messages"] = set_last_user_message(data["messages"], transformed_content)
-                verbose_proxy_logger.debug(
-                    "Javelin Guardrail: Successfully updated messages with transformed content"
-                )
-            except Exception as e:
-                verbose_proxy_logger.error(
-                    "Javelin Guardrail: Failed to update messages with transformed content: %s", e
-                )
+            self._apply_content_transformation(data, transformed_content)
 
         if should_reject:
             if not reject_prompt:
@@ -312,7 +354,7 @@ class JavelinGuardrail(CustomGuardrail):
                 status_code=400,
                 detail={
                     "error": reject_prompt,
-                    "javelin_guardrail_response": javelin_response
+                    "javelin_guardrail_response": javelin_response,
                 },
             )
 

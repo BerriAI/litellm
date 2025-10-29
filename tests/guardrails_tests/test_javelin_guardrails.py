@@ -3,7 +3,6 @@ import os
 import pytest
 from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException
-sys.path.insert(0, os.path.abspath("../.."))
 from litellm.proxy.guardrails.guardrail_hooks.javelin import JavelinGuardrail
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
