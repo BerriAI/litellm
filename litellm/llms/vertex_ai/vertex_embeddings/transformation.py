@@ -5,7 +5,6 @@ from pydantic import BaseModel
 
 from litellm.types.utils import EmbeddingResponse, Usage
 
-from .bge import VertexBGEConfig
 from .types import *
 
 
@@ -106,11 +105,12 @@ class VertexAITextEmbeddingConfig(BaseModel):
         """
         Transforms an openai request to a vertex embedding request.
         """
+        # Import here to avoid circular import issues with litellm.__init__
+        from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
         if model.isdigit():
             return self._transform_openai_request_to_fine_tuned_embedding_request(
                 input, optional_params, model
             )
-        
         if VertexBGEConfig.is_bge_model(model):
             return VertexBGEConfig.transform_request(
                 input=input, optional_params=optional_params, model=model
@@ -215,6 +215,9 @@ class VertexAITextEmbeddingConfig(BaseModel):
             return self._transform_vertex_response_to_openai_for_fine_tuned_models(
                 response, model, model_response
             )
+        
+        # Import here to avoid circular import issues with litellm.__init__
+        from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
         
         if VertexBGEConfig.is_bge_model(model):
             return VertexBGEConfig.transform_response(
