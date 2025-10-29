@@ -10,6 +10,7 @@ import tempfile
 
 import httpx
 
+from litellm import sap_service_key
 
 AUTH_ENDPOINT_SUFFIX = "/oauth/token"
 
@@ -194,7 +195,7 @@ def fetch_credentials(profile: Optional[str] = None, **kwargs) -> Dict[str, str]
     env = os.environ  # snapshot for testability
 
     # Prefer AICORE_SERVICE_KEY if present; otherwise fall back to the VCAP service.
-    service_like = _load_json_env(SERVICE_KEY_ENV_VAR) or _get_vcap_service(
+    service_like = sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR) or _get_vcap_service(
         VCAP_AICORE_SERVICE_NAME
     )
 
