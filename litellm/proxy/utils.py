@@ -33,7 +33,7 @@ from litellm.proxy._types import (
     SpendLogsPayload,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, CallTypesLiteral
 
 try:
     import backoff
@@ -796,18 +796,7 @@ class ProxyLogging:
         callback: CustomGuardrail,
         data: dict,
         user_api_key_dict: Optional[UserAPIKeyAuth],
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[dict]:
         """
         Process a guardrail callback during pre-call hook.
@@ -865,18 +854,7 @@ class ProxyLogging:
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: None,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> None:
         pass
 
@@ -885,18 +863,7 @@ class ProxyLogging:
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> dict:
         pass
 
@@ -904,18 +871,7 @@ class ProxyLogging:
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: Optional[dict],
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[dict]:
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
@@ -1038,15 +994,7 @@ class ProxyLogging:
         self,
         data: dict,
         user_api_key_dict: Optional[UserAPIKeyAuth],
-        call_type: Literal[
-            "completion",
-            "responses",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "mcp_call",
-        ],
+        call_type: CallTypesLiteral,
     ):
         """
         Runs the CustomGuardrail's async_moderation_hook()
