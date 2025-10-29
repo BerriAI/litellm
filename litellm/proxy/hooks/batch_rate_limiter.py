@@ -19,9 +19,12 @@ Quick summary:
 
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
+from pydantic import BaseModel
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import (
+    _get_batch_job_input_file_usage,
     _get_file_content_as_dictionary,
     calculate_batch_cost_and_usage,
 )
@@ -47,6 +50,12 @@ else:
     Router = Any
     ParallelRequestLimiter = Any
 
+class BatchFileUsage(BaseModel):
+    """
+    Internal model for batch file usage tracking, used for batch rate limiting
+    """
+    total_tokens: int
+    request_count: int
 
 class _PROXY_BatchRateLimiter(CustomLogger):
     """
@@ -79,7 +88,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self,
         file_id: str,
         custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
-    ) -> Tuple[int, int]:
+    ) -> BatchFileUsage:
         """
         Count number of requests and tokens in a batch input file.
         
@@ -100,8 +109,16 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             file_content_as_dict = _get_file_content_as_dictionary(
                 file_content.content
             )
+
+            input_file_usage = _get_batch_job_input_file_usage(
+                file_content_dictionary=file_content_as_dict,
+                custom_llm_provider=custom_llm_provider,
+            )
             request_count = len(file_content_as_dict)
-            return (request_count, 0)
+            return BatchFileUsage(
+                total_tokens=input_file_usage.total_tokens,
+                request_count=request_count,
+            )
             
         except Exception as e:
             verbose_proxy_logger.error(
