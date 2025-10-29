@@ -1621,7 +1621,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OpenAIModerationResponse)
             or isinstance(logging_result, dict)
             and logging_result.get("object") == "vector_store.search_results.page"
-            or isinstance(logging_result, VideoObject) 
+            or isinstance(logging_result, VideoObject)
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
             return True
