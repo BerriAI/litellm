@@ -12,7 +12,7 @@ Create a vector store which can be used to store and search document chunks for 
 | Cost Tracking | ✅ | Tracked per vector store operation |
 | Logging | ✅ | Works across all integrations |
 | End-user Tracking | ✅ | |
-| Support LLM Providers | **OpenAI, Azure OpenAI, Bedrock, Vertex RAG Engine** | Full vector stores API support across providers |
+| Support LLM Providers | **OpenAI** | Full vector stores API support across providers |
 
 ## Usage
 
@@ -21,7 +21,7 @@ Create a vector store which can be used to store and search document chunks for 
 <Tabs>
 <TabItem value="basic" label="Basic Usage">
 
-#### Non-streaming example
+#### Async example
 ```python showLineNumbers title="Create Vector Store - Basic"
 import litellm
 
@@ -32,7 +32,7 @@ response = await litellm.vector_stores.acreate(
 print(response)
 ```
 
-#### Synchronous example
+#### Sync example
 ```python showLineNumbers title="Create Vector Store - Sync"
 import litellm
 
