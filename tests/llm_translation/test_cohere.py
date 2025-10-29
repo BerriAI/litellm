@@ -638,8 +638,8 @@ def test_cohere_v2_tool_calling():
 @pytest.mark.parametrize("stream", [True, False])
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
-async def test_cohere_v2_citations(stream):
-    """Test Cohere v2 citations functionality."""
+async def test_cohere_v2_annotations(stream):
+    """Test Cohere v2 annotations functionality (replaces citations)."""
     try:
         litellm.set_verbose = True
         messages = [
@@ -649,14 +649,14 @@ async def test_cohere_v2_citations(stream):
         documents = [
             {
                 "data": {
-                    "title": "Test Document 1", 
-                    "snippet": "This is test content 1"
+                    "title": "Renewable Energy Benefits Document", 
+                    "snippet": "Renewable energy sources like solar and wind power provide clean electricity while reducing greenhouse gas emissions and dependence on fossil fuels."
                 }
             },
             {
                 "data": {
-                    "title": "Test Document 2", 
-                    "snippet": "This is test content 2"
+                    "title": "Environmental Impact Study", 
+                    "snippet": "Studies show that renewable energy significantly reduces carbon footprint and helps combat climate change."
                 }
             }
         ]
@@ -670,26 +670,47 @@ async def test_cohere_v2_citations(stream):
         )
         
         if stream:
-            # Test streaming with citations
-            citations_found = False
+            # Test streaming with annotations
+            annotations_found = False
             async for chunk in response:
-                if hasattr(chunk, 'citations') and chunk.citations:
-                    citations_found = True
-                    print(f"Streaming citations: {chunk.citations}")
+                # Check if chunk has a message with annotations
+                if (hasattr(chunk, 'choices') and chunk.choices and 
+                    len(chunk.choices) > 0 and 
+                    hasattr(chunk.choices[0], 'message') and 
+                    hasattr(chunk.choices[0].message, 'annotations') and 
+                    chunk.choices[0].message.annotations):
+                    annotations_found = True
+                    print(f"Streaming annotations: {chunk.choices[0].message.annotations}")
                     break
-            # Note: Citations might not appear in every chunk during streaming
+            # Note: Annotations might not appear in every chunk during streaming
         else:
-            # Test non-streaming with citations
+            # Test non-streaming with annotations
             assert response.choices is not None
             assert len(response.choices) > 0
             
-            # Check for citations in response
-            if hasattr(response, 'citations') and response.citations:
-                assert len(response.citations) > 0
-                print(f"Citations: {response.citations}")
+            # Check for annotations in message
+            message = response.choices[0].message
+            if hasattr(message, 'annotations') and message.annotations:
+                assert len(message.annotations) > 0
+                print(f"Annotations found: {len(message.annotations)}")
+                
+                # Validate annotation structure
+                for annotation in message.annotations:
+                    assert annotation.get('type') == 'url_citation', f"Expected type 'url_citation', got {annotation.get('type')}"
+                    assert 'url_citation' in annotation, "Missing url_citation field"
+                    url_citation = annotation['url_citation']
+                    assert 'start_index' in url_citation, "Missing start_index"
+                    assert 'end_index' in url_citation, "Missing end_index"
+                    assert 'title' in url_citation, "Missing title"
+                    assert 'url' in url_citation, "Missing url"
+                
+                print(f"First annotation: {message.annotations[0]}")
             else:
-                # Citations might not always be present depending on the response
-                print("No citations in this response")
+                # Annotations might not always be present depending on the response
+                print("No annotations in this response")
+            
+            # Ensure citations field is NOT present (removed backward compatibility)
+            assert not hasattr(response, 'citations'), "Citations field should be removed - no backward compatibility"
                 
     except litellm.ServiceUnavailableError:
         pass
