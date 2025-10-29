@@ -142,6 +142,48 @@ def get_spend_logs_id(
     return id
 
 
+def _extract_usage_for_ocr_call(
+    response_obj: Any, response_obj_dict: dict
+) -> dict:
+    """
+    Extract usage information for OCR/AOCR calls.
+    
+    OCR responses use usage_info (with pages_processed) instead of token-based usage.
+    
+    Args:
+        response_obj: The raw response object (can be dict, BaseModel, or other)
+        response_obj_dict: Dictionary representation of the response object
+    
+    Returns:
+        A dict with prompt_tokens=0, completion_tokens=0, total_tokens=0,
+        and pages_processed from usage_info.
+    """
+    usage_info = None
+    
+    # Try to extract usage_info from dict
+    if isinstance(response_obj_dict, dict):
+        usage_info = response_obj_dict.get("usage_info", {})
+    
+    # Try to extract usage_info from object attributes
+    elif hasattr(response_obj, "usage_info"):
+        usage_info = response_obj.usage_info
+        if hasattr(usage_info, "model_dump"):
+            usage_info = usage_info.model_dump()
+        elif hasattr(usage_info, "__dict__"):
+            usage_info = vars(usage_info)
+    
+    # For OCR, we track pages instead of tokens
+    if usage_info:
+        return {
+            "prompt_tokens": 0,  # OCR doesn't use traditional tokens
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "pages_processed": usage_info.get("pages_processed", 0) if isinstance(usage_info, dict) else 0
+        }
+    else:
+        return {}
+
+
 def get_logging_payload(  # noqa: PLR0915
     kwargs, response_obj, start_time, end_time
 ) -> SpendLogsPayload:
@@ -170,26 +212,7 @@ def get_logging_payload(  # noqa: PLR0915
     
     # Handle OCR responses which use usage_info instead of usage
     if call_type in ["ocr", "aocr"]:
-        usage_info = None
-        if isinstance(response_obj_dict, dict):
-            usage_info = response_obj_dict.get("usage_info", {})
-        elif hasattr(response_obj, "usage_info"):
-            usage_info = response_obj.usage_info
-            if hasattr(usage_info, "model_dump"):
-                usage_info = usage_info.model_dump()
-            elif hasattr(usage_info, "__dict__"):
-                usage_info = vars(usage_info)
-        
-        # For OCR, we track pages instead of tokens
-        if usage_info:
-            usage = {
-                "prompt_tokens": 0,  # OCR doesn't use traditional tokens
-                "completion_tokens": 0,
-                "total_tokens": 0,
-                "pages_processed": usage_info.get("pages_processed", 0) if isinstance(usage_info, dict) else 0
-            }
-        else:
-            usage = {}
+        usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
     else:
         usage = cast(dict, response_obj).get("usage", None) or {}
         if isinstance(usage, litellm.Usage):
