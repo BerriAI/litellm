@@ -57,6 +57,9 @@ def get_vertex_ai_model_route(model: str, litellm_params: Optional[dict] = None)
         
         >>> get_vertex_ai_model_route("openai/gpt-oss-120b")
         VertexAIModelRoute.MODEL_GARDEN
+        
+        >>> get_vertex_ai_model_route("1234567890", {"api_base": "http://10.96.32.8"})
+        VertexAIModelRoute.GEMINI  # Numeric endpoints with api_base use HTTP path
     """
     from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
         VertexAIPartnerModels,
@@ -66,6 +69,11 @@ def get_vertex_ai_model_route(model: str, litellm_params: Optional[dict] = None)
     if litellm_params and litellm_params.get("base_model") is not None:
         if "gemini" in litellm_params["base_model"]:
             return VertexAIModelRoute.GEMINI
+    
+    # Check if numeric endpoint ID with custom api_base (PSC endpoint)
+    # Route to GEMINI (HTTP path) to support PSC endpoints properly
+    if model.isdigit() and litellm_params and litellm_params.get("api_base"):
+        return VertexAIModelRoute.GEMINI
     
     # Check for partner models (llama, mistral, claude, etc.)
     if VertexAIPartnerModels.is_vertex_partner_model(model=model):
