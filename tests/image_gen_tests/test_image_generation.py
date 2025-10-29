@@ -166,7 +166,7 @@ class TestAimlImageGeneration(BaseImageGenTest):
 
 class TestFAL_AI_ImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
-        return {"model": "fal_ai/fal-ai/flux-krea-lora/stream"}
+        return {"model": "fal_ai/fal-ai/imagen4/preview"}
 
 class TestGoogleImageGen(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
