@@ -700,8 +700,11 @@ async def test_authorize_endpoint_respects_x_forwarded_host():
     location = response.headers["location"]
 
     # The redirect_uri parameter should use the external URL
-    assert "redirect_uri=https%3A%2F%2Fproxy.example.com%2Fgithub%2Fmcp%2Fcallback" in location or \
-           "redirect_uri=https://proxy.example.com/github/mcp/callback" in location
+    assert (
+        "redirect_uri=https%3A%2F%2Fproxy.example.com%2Fgithub%2Fmcp%2Fcallback"
+        in location
+        or "redirect_uri=https://proxy.example.com/github/mcp/callback" in location
+    )
 
 
 @pytest.mark.asyncio
@@ -779,4 +782,7 @@ async def test_token_endpoint_respects_x_forwarded_host():
 
     # Verify that the redirect_uri sent to the provider uses the external URL
     call_args = mock_async_client.post.call_args
-    assert call_args[1]["data"]["redirect_uri"] == "https://proxy.example.com/github/mcp/callback"
+    assert (
+        call_args[1]["data"]["redirect_uri"]
+        == "https://proxy.example.com/github/mcp/callback"
+    )
