@@ -4,6 +4,10 @@ Vertex AI BGE (BAAI General Embedding) Configuration
 BGE models deployed on Vertex AI require different input/output format:
 - Request: Use "prompt" instead of "content" as the input field
 - Response: Embeddings are returned directly as arrays, not wrapped in objects
+
+Model name handling:
+- Model names like "bge/endpoint_id" are automatically transformed in common_utils._get_vertex_url()
+- This module focuses on request/response transformation only
 """
 
 from typing import List, Optional, Union
@@ -24,6 +28,13 @@ class VertexBGEConfig:
     
     BGE (BAAI General Embedding) models use a different request format
     where the input field is named "prompt" instead of "content".
+    
+    Supported model patterns (after provider split in main.py):
+    - "bge-small-en-v1.5" (model name)
+    - "bge/204379420394258432" (endpoint ID pattern)
+    
+    Note: Model name transformation (bge/ -> numeric ID) is handled automatically
+    in common_utils._get_vertex_url(). This class focuses on request/response format only.
     """
 
     @staticmethod
@@ -31,13 +42,19 @@ class VertexBGEConfig:
         """
         Check if the model is a BGE (BAAI General Embedding) model.
         
+        After provider split in main.py, supports:
+        - "bge-small-en-v1.5" (model name)
+        - "bge/204379420394258432" (endpoint ID pattern)
+        
         Args:
-            model: The model name
+            model: The model name after provider split
             
         Returns:
             bool: True if the model is a BGE model
         """
-        return "bge" in model.lower()
+        model_lower = model.lower()
+        # Check for "bge/" prefix (endpoint pattern) or "bge" in model name
+        return model_lower.startswith("bge/") or "bge" in model_lower
 
     @staticmethod
     def transform_request(
