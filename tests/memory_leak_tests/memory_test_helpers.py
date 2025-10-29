@@ -15,13 +15,20 @@ from .constants import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_NUM_BATCHES,
     DEFAULT_WARMUP_BATCHES,
-    DEFAULT_SAMPLE_WINDOW,
-    DEFAULT_MAX_GROWTH_PERCENT,
-    DEFAULT_STABILIZATION_TOLERANCE_MB,
+    DEFAULT_ROLLING_AVERAGE_WINDOW,
+    DEFAULT_TEST_MAX_GROWTH_PERCENT,
+    DEFAULT_TEST_STABILIZATION_TOLERANCE_MB,
+    DEFAULT_NUM_SAMPLES_FOR_GROWTH_ANALYSIS,
+    DEFAULT_ERROR_MEMORY_SPIKE_THRESHOLD_PERCENT,
+    DEFAULT_ERROR_SPIKE_STABILIZATION_TOLERANCE_PERCENT,
+    DEFAULT_ERROR_SPIKE_MIN_STABLE_BATCHES,
+    DEFAULT_LEAK_DETECTION_MAX_GROWTH_PERCENT,
+    DEFAULT_LEAK_DETECTION_STABILIZATION_TOLERANCE_MB,
+    DEFAULT_LEAK_DETECTION_TAIL_SAMPLES,
     MAX_NUM_BATCHES,
-    NEAR_ZERO_MEMORY_THRESHOLD,
+    NEAR_ZERO_MEMORY_THRESHOLD_MB,
     DEFAULT_SDK_MODEL,
-    DEFAULT_TEST_CONTENT,
+    DEFAULT_TEST_MESSAGE_CONTENT,
     TEST_API_KEY,
     DEFAULT_TEST_USER,
     DEFAULT_ROUTER_MODEL,
@@ -129,7 +136,7 @@ def verify_module_id_consistency(module, expected_id: int, stage: str = "") -> N
 
 def get_completion_kwargs(
     model: str = DEFAULT_SDK_MODEL,
-    content: str = DEFAULT_TEST_CONTENT,
+    content: str = DEFAULT_TEST_MESSAGE_CONTENT,
     api_base: str = "http://0.0.0.0:4000",
     api_key: str = TEST_API_KEY,
     user: str = DEFAULT_TEST_USER
@@ -199,7 +206,7 @@ def get_completion_function(litellm_module, use_async: bool, streaming: bool):
 
 def get_router_completion_kwargs(
     model: str = DEFAULT_ROUTER_MODEL,
-    content: str = DEFAULT_TEST_CONTENT,
+    content: str = DEFAULT_TEST_MESSAGE_CONTENT,
     user: str = DEFAULT_TEST_USER
 ) -> Dict[str, Any]:
     """
@@ -425,7 +432,7 @@ def calculate_rolling_average(
 
 def analyze_memory_growth(
     rolling_avg: List[float],
-    num_samples_for_avg: int = 3
+    num_samples_for_avg: int = DEFAULT_NUM_SAMPLES_FOR_GROWTH_ANALYSIS
 ) -> Dict[str, float]:
     """
     Analyze memory growth from smoothed samples.
@@ -453,9 +460,9 @@ def analyze_memory_growth(
 def detect_error_induced_memory_leak(
     memory_samples: List[float],
     error_counts: List[int],
-    error_spike_threshold_percent: float = 50.0,
-    stabilization_tolerance_percent: float = 10.0,
-    min_stable_batches: int = 2
+    error_spike_threshold_percent: float = DEFAULT_ERROR_MEMORY_SPIKE_THRESHOLD_PERCENT,
+    stabilization_tolerance_percent: float = DEFAULT_ERROR_SPIKE_STABILIZATION_TOLERANCE_PERCENT,
+    min_stable_batches: int = DEFAULT_ERROR_SPIKE_MIN_STABLE_BATCHES
 ) -> Tuple[bool, str, List[int]]:
     """
     Detect error-induced memory leaks where errors cause memory spikes that don't get released.
@@ -490,7 +497,7 @@ def detect_error_induced_memory_leak(
         curr_errors = error_counts[i]
         
         # Skip if previous memory is too small to calculate meaningful percentage
-        if prev_memory < NEAR_ZERO_MEMORY_THRESHOLD:
+        if prev_memory < NEAR_ZERO_MEMORY_THRESHOLD_MB:
             continue
         
         # Calculate percent increase
@@ -617,10 +624,10 @@ def detect_memory_leak(
     growth_metrics: Dict[str, float],
     memory_samples: List[float],
     error_counts: Optional[List[int]] = None,
-    max_growth_percent: float = 25.0,
-    stabilization_tolerance_mb: float = 0.05,
-    tail_samples: int = 5,
-    error_spike_threshold_percent: float = 50.0
+    max_growth_percent: float = DEFAULT_LEAK_DETECTION_MAX_GROWTH_PERCENT,
+    stabilization_tolerance_mb: float = DEFAULT_LEAK_DETECTION_STABILIZATION_TOLERANCE_MB,
+    tail_samples: int = DEFAULT_LEAK_DETECTION_TAIL_SAMPLES,
+    error_spike_threshold_percent: float = DEFAULT_ERROR_MEMORY_SPIKE_THRESHOLD_PERCENT
 ) -> Tuple[bool, str]:
     """
     Detect memory leaks based on growth metrics and continuous growth patterns.
@@ -652,16 +659,16 @@ def detect_memory_leak(
     
     # Handle near-zero memory scenarios (tracemalloc may not track very small allocations)
     # If both initial and final averages are very close to zero, consider it as no growth
-    if initial_avg < NEAR_ZERO_MEMORY_THRESHOLD and final_avg < NEAR_ZERO_MEMORY_THRESHOLD:
+    if initial_avg < NEAR_ZERO_MEMORY_THRESHOLD_MB and final_avg < NEAR_ZERO_MEMORY_THRESHOLD_MB:
         # No meaningful memory to track - skip leak detection
         return (False, "Memory measurements near zero — tracemalloc tracking not sufficient for this workload")
     
     # Recalculate growth_percent properly to avoid division by zero issues
-    if initial_avg > NEAR_ZERO_MEMORY_THRESHOLD:
+    if initial_avg > NEAR_ZERO_MEMORY_THRESHOLD_MB:
         growth_percent = (growth / initial_avg * 100)
-    elif growth > NEAR_ZERO_MEMORY_THRESHOLD:
+    elif growth > NEAR_ZERO_MEMORY_THRESHOLD_MB:
         # If we started near zero but grew substantially, that's a potential leak
-        growth_percent = (growth / NEAR_ZERO_MEMORY_THRESHOLD * 100)
+        growth_percent = (growth / NEAR_ZERO_MEMORY_THRESHOLD_MB * 100)
     else:
         growth_percent = 0
     
@@ -757,9 +764,9 @@ def get_memory_test_config(
     batch_size: int = DEFAULT_BATCH_SIZE,
     num_batches: int = DEFAULT_NUM_BATCHES,
     warmup_batches: int = DEFAULT_WARMUP_BATCHES,
-    sample_window: int = DEFAULT_SAMPLE_WINDOW,
-    max_growth_percent: float = DEFAULT_MAX_GROWTH_PERCENT,
-    stabilization_tolerance_mb: float = DEFAULT_STABILIZATION_TOLERANCE_MB
+    sample_window: int = DEFAULT_ROLLING_AVERAGE_WINDOW,
+    max_growth_percent: float = DEFAULT_TEST_MAX_GROWTH_PERCENT,
+    stabilization_tolerance_mb: float = DEFAULT_TEST_STABILIZATION_TOLERANCE_MB
 ) -> Dict[str, Any]:
     """
     Get standardized memory test configuration parameters.
