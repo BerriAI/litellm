@@ -24,8 +24,6 @@ FAKE_LLM_ENDPOINT = "https://exampleopenaiendpoint-production-0ee2.up.railway.ap
 
 # Test API keys used for authentication in memory leak tests
 TEST_API_KEY = "sk-1234"  # API key used in test requests
-TEST_MASTER_KEY = "sk-1234"  # Master key for WITHOUT DB test (must equal TEST_API_KEY)
-TEST_DIFFERENT_MASTER_KEY = "sk-different-master-key-for-db-test"  # Master key for WITH DB test (must NOT equal TEST_API_KEY)
 
 # =============================================================================
 # Memory Test Execution Configuration
