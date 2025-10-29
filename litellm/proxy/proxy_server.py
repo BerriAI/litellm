@@ -1067,8 +1067,6 @@ celery_fn = None  # Redis Queue for handling requests
 scheduler = None
 last_model_cost_map_reload = None
 
-# Global variable for SSO settings from database
-sso_settings: Optional[Any] = None
 
 ### DB WRITER ###
 db_writer_client: Optional[AsyncHTTPHandler] = None
@@ -3341,7 +3339,6 @@ class ProxyConfig:
         """
         Initialize SSO settings from database into the router on startup.
         """
-        global sso_settings
         
         try:
             sso_settings = await prisma_client.db.litellm_ssoconfig.find_unique(

@@ -393,7 +393,6 @@ async def get_sso_settings():
     Get all SSO configuration settings from the dedicated SSO table.
     Returns a structured object with values and descriptions for UI display.
     """
-    import os
 
     from litellm.proxy.proxy_server import prisma_client, proxy_config
 
@@ -479,6 +478,14 @@ async def update_sso_settings(sso_config: SSOConfig):
         raise HTTPException(
             status_code=500,
             detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    if store_model_in_db is not True:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+            },
         )
 
     # Update environment variables

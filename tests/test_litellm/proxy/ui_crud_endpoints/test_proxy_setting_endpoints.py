@@ -301,6 +301,7 @@ class TestProxySettingEndpoints:
         from unittest.mock import AsyncMock, MagicMock
 
         monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
 
         # Mock the prisma client
         mock_prisma = MagicMock()
@@ -374,6 +375,7 @@ class TestProxySettingEndpoints:
         from unittest.mock import AsyncMock, MagicMock
 
         monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
 
         # Mock the prisma client
         mock_prisma = MagicMock()
@@ -433,6 +435,7 @@ class TestProxySettingEndpoints:
         from unittest.mock import AsyncMock, MagicMock
 
         monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
 
         # Mock the prisma client
         mock_prisma = MagicMock()
@@ -484,6 +487,7 @@ class TestProxySettingEndpoints:
         from unittest.mock import AsyncMock, MagicMock
 
         monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
 
         # Mock the prisma client
         mock_prisma = MagicMock()
@@ -542,6 +546,7 @@ class TestProxySettingEndpoints:
         from unittest.mock import AsyncMock, MagicMock
 
         monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
 
         # Mock the prisma client
         mock_prisma = MagicMock()
