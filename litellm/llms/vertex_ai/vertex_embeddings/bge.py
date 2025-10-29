@@ -123,14 +123,29 @@ class VertexBGEConfig:
             
         Returns:
             EmbeddingResponse: The transformed response in OpenAI format
+            
+        Raises:
+            KeyError: If response doesn't contain 'predictions'
+            ValueError: If predictions is not a list or contains invalid data
         """
+        if "predictions" not in response:
+            raise KeyError("Response missing 'predictions' field")
+        
         _predictions = response["predictions"]
+        
+        if not isinstance(_predictions, list):
+            raise ValueError(f"Expected 'predictions' to be a list, got {type(_predictions)}")
 
         embedding_response = []
         # BGE models don't return token counts, so we estimate or set to 0
         input_tokens = 0
 
         for idx, embedding_values in enumerate(_predictions):
+            if not isinstance(embedding_values, list):
+                raise ValueError(
+                    f"Expected embedding at index {idx} to be a list, got {type(embedding_values)}"
+                )
+            
             embedding_response.append(
                 {
                     "object": "embedding",
