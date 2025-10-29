@@ -227,16 +227,7 @@ class ZscalerAIGuard(CustomGuardrail):
         try:
             response =  await self._send_request(zscaler_ai_guard_url, extra_headers, data)
             return self._handle_response(response, direction)
-
-        except requests.exceptions.Timeout:
-            verbose_proxy_logger.error(
-                "Request to Zscaler AI Guard timed out. Blocking request."
-            )
-            user_facing_error = self._create_user_facing_error("Service timed out")
-            # This exception will be caught by the proxy and returned to the user
-            raise HTTPException(status_code=500, detail=user_facing_error)
-
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
             verbose_proxy_logger.error(
                 f"Hit exception when request Zscaler AI Guard: {e}. Blocking request."
             )
