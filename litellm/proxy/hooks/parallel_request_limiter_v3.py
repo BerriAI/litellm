@@ -161,6 +161,27 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.token_increment_script = None
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
+        
+        # Batch rate limiter (lazy loaded)
+        self._batch_rate_limiter: Optional[Any] = None
+
+    def _get_batch_rate_limiter(self) -> Optional[Any]:
+        """Get or lazy-load the batch rate limiter."""
+        if self._batch_rate_limiter is None:
+            try:
+                from litellm.proxy.hooks.batch_rate_limiter import (
+                    _PROXY_BatchRateLimiter,
+                )
+
+                self._batch_rate_limiter = _PROXY_BatchRateLimiter(
+                    internal_usage_cache=self.internal_usage_cache,
+                    parallel_request_limiter=self,
+                )
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Could not load batch rate limiter: {str(e)}"
+                )
+        return self._batch_rate_limiter
 
     def _get_current_time(self) -> datetime:
         """Return the current time for rate limiting calculations."""
@@ -986,6 +1007,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             # Fail safe: enforce limits if we can't check
             return True
+    
+    def get_rate_limiter_for_call_type(self, call_type: str) -> Optional[Any]:
+        """Get the rate limiter for the call type."""
+        if call_type == "acreate_batch":
+            batch_limiter = self._get_batch_rate_limiter()
+            return batch_limiter
+        return None
 
     async def async_pre_call_hook(
         self,
@@ -999,6 +1027,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Supports dynamic rate limiting based on deployment health.
         """
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
+
+        #########################################################
+        # Check if the call type has a specific rate limiter
+        # eg. for Batch APIs we need to use the batch rate limiter to read the input file and count the tokens and requests
+        #########################################################
+        call_type_specific_rate_limiter = self.get_rate_limiter_for_call_type(call_type=call_type)
+        if call_type_specific_rate_limiter:
+            return await call_type_specific_rate_limiter.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=cache,
+                data=data,
+                call_type=call_type,
+            )
 
         # Get rate limit types from metadata
         metadata = user_api_key_dict.metadata or {}
@@ -1470,69 +1511,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 f"Error in rate limit failure event: {str(e)}"
             )
 
-    async def reserve_batch_capacity(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        data: dict,
-        token_count: int,
-        request_count: int,
-        parent_otel_span: Optional[Span] = None,
-    ) -> RateLimitResponse:
-        """
-        Reserve rate limit capacity for a batch request.
-        
-        This method is called by the batch rate limiter to check and reserve
-        capacity for batch submissions. It creates descriptors with the provided
-        token and request counts, then checks them against current limits.
-
-        Args:
-            user_api_key_dict: User API key authentication dictionary
-            data: Request data containing model and other parameters
-            token_count: Number of tokens to reserve for the batch
-            request_count: Number of requests in the batch
-            parent_otel_span: Optional OpenTelemetry span for tracing
-
-        Returns:
-            RateLimitResponse with overall_code and status for each limit
-
-        Raises:
-            HTTPException: 429 if any rate limit would be exceeded
-        """
-        # TODO: Implement batch capacity reservation
-        # This will:
-        # 1. Create rate limit descriptors using token_count and request_count
-        # 2. Call should_rate_limit() to check and reserve capacity
-        # 3. Return the response or raise HTTPException on limit exceeded
-        raise NotImplementedError("Batch capacity reservation not yet implemented")
-
-    async def adjust_batch_usage(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        data: dict,
-        token_adjustment: int,
-        request_adjustment: int,
-        parent_otel_span: Optional[Span] = None,
-    ) -> None:
-        """
-        Adjust rate limit counters based on actual batch usage.
-        
-        Called when a batch completes to adjust counters based on the difference
-        between reserved capacity and actual usage. Can increment (if we under-reserved)
-        or decrement (if we over-reserved).
-
-        Args:
-            user_api_key_dict: User API key authentication dictionary
-            data: Request data containing model and other parameters
-            token_adjustment: Token difference (positive = increment, negative = decrement)
-            request_adjustment: Request difference (positive = increment, negative = decrement)
-            parent_otel_span: Optional OpenTelemetry span for tracing
-        """
-        # TODO: Implement batch usage adjustment
-        # This will:
-        # 1. Create pipeline operations for token/request adjustments
-        # 2. Execute the adjustments across all relevant rate limit keys
-        #    (api_key, user, team, end_user, model-specific, etc.)
-        raise NotImplementedError("Batch usage adjustment not yet implemented")
 
     async def async_post_call_success_hook(
         self, data: dict, user_api_key_dict: UserAPIKeyAuth, response
