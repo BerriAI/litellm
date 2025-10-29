@@ -6,6 +6,7 @@ from .image_generation import (
     FalAIImageGenerationConfig,
     FalAIImagen4Config,
     FalAIRecraftV3Config,
+    FalAIStableDiffusionConfig,
     get_fal_ai_image_generation_config,
 )
 
@@ -17,6 +18,7 @@ __all__ = [
     "FalAIRecraftV3Config",
     "FalAIBriaConfig",
     "FalAIFluxProV11UltraConfig",
+    "FalAIStableDiffusionConfig",
     "get_fal_ai_image_generation_config",
 ]
 
