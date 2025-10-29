@@ -15,6 +15,10 @@
 
 name: CARTO - Upstream Sync
 
+permissions:
+  contents: write        # Allow push to main branch and modify files (including workflows)
+  pull-requests: write   # Allow PR creation and management
+
 on:
   # Automatic sync disabled for initial testing phase
   # Uncomment after successful manual testing
