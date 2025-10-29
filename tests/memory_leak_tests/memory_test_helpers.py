@@ -799,7 +799,7 @@ def get_memory_test_config(
     }
 
 
-def setup_proxy_server_dependencies(proxy_server_module, mock_prisma_client, real_cache, real_logging):
+def setup_proxy_server_dependencies(proxy_server_module, mock_prisma_client, real_cache, real_logging, master_key):
     """
     Set up proxy_server module dependencies for auth testing WITH database.
     
@@ -808,6 +808,7 @@ def setup_proxy_server_dependencies(proxy_server_module, mock_prisma_client, rea
         mock_prisma_client: Mock PrismaClient instance
         real_cache: Real DualCache instance
         real_logging: Real ProxyLogging instance
+        master_key: The master key to set (should be DIFFERENT from test API key to force DB path)
     """
     proxy_server_module.prisma_client = mock_prisma_client
     proxy_server_module.user_api_key_cache = real_cache
@@ -819,7 +820,7 @@ def setup_proxy_server_dependencies(proxy_server_module, mock_prisma_client, rea
         "enable_oauth2_proxy_auth": False,
         "allow_user_auth": False,
     }
-    proxy_server_module.master_key = "different-master-key-to-avoid-matching"
+    proxy_server_module.master_key = master_key
     proxy_server_module.llm_model_list = []
     proxy_server_module.llm_router = None
     proxy_server_module.model_max_budget_limiter = None

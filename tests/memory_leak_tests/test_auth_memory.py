@@ -42,9 +42,19 @@ from .memory_test_helpers import (
     restore_proxy_server_state,
     force_gc,
 )
-from .constants import TEST_API_KEY
+from .constants import TEST_API_KEY, TEST_MASTER_KEY, TEST_DIFFERENT_MASTER_KEY
 
 API_KEY = TEST_API_KEY
+
+# Validate constants configuration at import time
+assert TEST_API_KEY == TEST_MASTER_KEY, (
+    "TEST_API_KEY must equal TEST_MASTER_KEY for WITHOUT DB test to work! "
+    f"Got TEST_API_KEY={TEST_API_KEY}, TEST_MASTER_KEY={TEST_MASTER_KEY}"
+)
+assert TEST_API_KEY != TEST_DIFFERENT_MASTER_KEY, (
+    "TEST_API_KEY must NOT equal TEST_DIFFERENT_MASTER_KEY for WITH DB test to work! "
+    f"Got TEST_API_KEY={TEST_API_KEY}, TEST_DIFFERENT_MASTER_KEY={TEST_DIFFERENT_MASTER_KEY}"
+)
 
 
 @pytest.fixture(autouse=True, scope="function")
@@ -103,13 +113,39 @@ def setup_auth_dependencies(request):
     
     if with_db:
         # WITH DATABASE: Create mock Prisma client
+        # Set master_key to DIFFERENT value to force database lookup path
         mock_prisma_client = create_mock_prisma_client(API_KEY)
-        setup_proxy_server_dependencies(proxy_server, mock_prisma_client, real_cache, real_logging)
+        setup_proxy_server_dependencies(proxy_server, mock_prisma_client, real_cache, real_logging, TEST_DIFFERENT_MASTER_KEY)
+        
+        # Validate configuration
+        assert proxy_server.master_key == TEST_DIFFERENT_MASTER_KEY, (
+            f"Master key not set correctly! Expected {TEST_DIFFERENT_MASTER_KEY}, got {proxy_server.master_key}"
+        )
+        assert API_KEY != proxy_server.master_key, (
+            f"API_KEY must NOT equal master_key for WITH DB test! Both are {API_KEY}"
+        )
+        
         print("[FIXTURE] Dependencies set up complete (WITH DB mock)", flush=True)
+        print(f"[FIXTURE] Test API key: {API_KEY}", flush=True)
+        print(f"[FIXTURE] Master key: {proxy_server.master_key}", flush=True)
+        print(f"[FIXTURE] Keys are DIFFERENT → will trigger database path ✓", flush=True)
     else:
         # WITHOUT DATABASE: Use master key authentication path
-        setup_proxy_server_dependencies_without_db(proxy_server, real_cache, real_logging, API_KEY)
+        # Set master_key to SAME value as API_KEY to trigger master key path
+        setup_proxy_server_dependencies_without_db(proxy_server, real_cache, real_logging, TEST_MASTER_KEY)
+        
+        # Validate configuration
+        assert proxy_server.master_key == TEST_MASTER_KEY, (
+            f"Master key not set correctly! Expected {TEST_MASTER_KEY}, got {proxy_server.master_key}"
+        )
+        assert API_KEY == proxy_server.master_key, (
+            f"API_KEY must equal master_key for WITHOUT DB test! API_KEY={API_KEY}, master_key={proxy_server.master_key}"
+        )
+        
         print("[FIXTURE] Dependencies set up complete (WITHOUT DB - master key path)", flush=True)
+        print(f"[FIXTURE] Test API key: {API_KEY}", flush=True)
+        print(f"[FIXTURE] Master key: {proxy_server.master_key}", flush=True)
+        print(f"[FIXTURE] Keys are SAME → will trigger master key path ✓", flush=True)
     
     yield proxy_server
     
