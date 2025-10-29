@@ -688,13 +688,13 @@ async def new_team(  # noqa: PLR0915
 
             if (
                 data.max_budget is not None
-                and user_api_key_dict.max_budget is not None
-                and data.max_budget > user_api_key_dict.max_budget
+                and user_api_key_dict.end_user_max_budget is not None
+                and data.max_budget > user_api_key_dict.end_user_max_budget
             ):
                 raise HTTPException(
                     status_code=400,
                     detail={
-                        "error": f"max budget higher than user max. User max budget={user_api_key_dict.max_budget}. User role={user_api_key_dict.user_role}"
+                        "error": f"max budget higher than user max. User max budget={user_api_key_dict.end_user_max_budget}. User role={user_api_key_dict.user_role}"
                     },
                 )
 
