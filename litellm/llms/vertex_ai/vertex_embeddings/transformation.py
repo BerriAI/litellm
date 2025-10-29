@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from litellm.types.utils import EmbeddingResponse, Usage
 
+from .bge import VertexBGEConfig
 from .types import *
 
 
@@ -109,6 +110,11 @@ class VertexAITextEmbeddingConfig(BaseModel):
             return self._transform_openai_request_to_fine_tuned_embedding_request(
                 input, optional_params, model
             )
+        
+        if VertexBGEConfig.is_bge_model(model):
+            return VertexBGEConfig.transform_request(
+                input=input, optional_params=optional_params, model=model
+            )
 
         vertex_request: VertexEmbeddingRequest = VertexEmbeddingRequest()
         vertex_text_embedding_input_list: List[TextEmbeddingInput] = []
@@ -186,8 +192,8 @@ class VertexAITextEmbeddingConfig(BaseModel):
 
         Args:
             content (str): The content to be embedded.
-            task_type (Optional[TaskType]): The type of task to be performed".
-            title (Optional[str]): The title of the document to be embedded
+            task_type (Optional[TaskType]): The type of task to be performed.
+            title (Optional[str]): The title of the document to be embedded.
 
         Returns:
             TextEmbeddingInput: A TextEmbeddingInput object.
