@@ -3,7 +3,7 @@ import os
 import ssl
 import sys
 import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 import certifi
 import httpx
@@ -50,7 +50,7 @@ _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
 def _prepare_request_data_and_content(
     data: Optional[Union[dict, str, bytes]] = None,
     content: Any = None,
-) -> tuple[Optional[Union[dict, Mapping]], Any]:
+) -> Tuple[Optional[Union[dict, Mapping]], Any]:
     """
     Helper function to route data/content parameters correctly for httpx requests
     
