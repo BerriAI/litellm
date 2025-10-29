@@ -39,21 +39,16 @@ def test_vertex_ai_bge_embedding_with_custom_api_base():
     ):
         mock_response = MagicMock()
         mock_response.status_code = 200
+        # BGE models return embeddings directly as arrays, not wrapped in objects
         mock_response.json.return_value = {
             "predictions": [
-                {
-                    "embeddings": {
-                        "values": [0.1, 0.2, 0.3, 0.4, 0.5],
-                        "statistics": {"token_count": 2}
-                    }
-                },
-                {
-                    "embeddings": {
-                        "values": [0.6, 0.7, 0.8, 0.9, 1.0],
-                        "statistics": {"token_count": 2}
-                    }
-                }
-            ]
+                [0.1, 0.2, 0.3, 0.4, 0.5],
+                [0.6, 0.7, 0.8, 0.9, 1.0]
+            ],
+            "deployedModelId": "849506872875548672",
+            "model": "projects/1060139831167/locations/us-central1/models/baai_bge-small-en-v1.5",
+            "modelDisplayName": "baai_bge-small-en-v1.5",
+            "modelVersionId": "1"
         }
         mock_post.return_value = mock_response
         
