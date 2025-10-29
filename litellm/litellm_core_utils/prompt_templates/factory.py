@@ -39,7 +39,11 @@ from litellm.types.llms.vertex_ai import FunctionResponse as VertexFunctionRespo
 from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
-from .common_utils import convert_content_list_to_str, is_non_content_values_set
+from .common_utils import (
+    convert_content_list_to_str,
+    infer_content_type_from_url_and_content,
+    is_non_content_values_set,
+)
 from .image_handling import convert_url_to_base64
 
 
@@ -2541,54 +2545,12 @@ class BedrockImageProcessor:
         # Check the response's content type to ensure it is an image
         content_type = response.headers.get("content-type")
         
-        # Fallback logic when content-type is missing or generic
-        if not content_type or content_type in ["binary/octet-stream", "application/octet-stream"]:
-            # Try to infer from URL extension (similar to image_handling.py)
-            if image_url:
-                img_extension = image_url.split(".")[-1].lower().split("?")[0]  # Remove query params
-                extension_to_mime = {
-                    # Image formats
-                    "jpg": "image/jpeg",
-                    "jpeg": "image/jpeg",
-                    "png": "image/png",
-                    "gif": "image/gif",
-                    "webp": "image/webp",
-                    # Document formats
-                    "pdf": "application/pdf",
-                    "csv": "text/csv",
-                    "doc": "application/msword",
-                    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    "xls": "application/vnd.ms-excel",
-                    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    "html": "text/html",
-                    "txt": "text/plain",
-                    "md": "text/markdown",
-                }
-                inferred_type = extension_to_mime.get(img_extension)
-                if inferred_type:
-                    content_type = inferred_type
-            
-            # If still no content_type, try to detect from binary content (similar to token_counter.py)
-            if not content_type or content_type in ["binary/octet-stream", "application/octet-stream"]:
-                detected_type = get_image_type(response.content[:100])
-                if detected_type:
-                    type_to_mime = {
-                        "png": "image/png",
-                        "jpeg": "image/jpeg",
-                        "gif": "image/gif",
-                        "webp": "image/webp",
-                        "heic": "image/heic",
-                    }
-                    # Only set content_type if we have a known mapping
-                    if detected_type in type_to_mime:
-                        content_type = type_to_mime[detected_type]
-            
-            # If all fallbacks failed, raise error
-            if not content_type or content_type in ["binary/octet-stream", "application/octet-stream"]:
-                raise ValueError(
-                    f"Unable to determine content type from URL: {image_url}. "
-                    f"Response content-type: {response.headers.get('content-type')}"
-                )
+        # Use helper function to infer content type with fallback logic
+        content_type = infer_content_type_from_url_and_content(
+            url=image_url,
+            content=response.content,
+            current_content_type=content_type,
+        )
         
         content_type = _parse_content_type(content_type)
 
