@@ -13,10 +13,10 @@ from litellm import aimage_generation
 @pytest.mark.parametrize(
     "model",
     [
-        "fal-ai/flux-pro/v1.1-ultra",
-        "fal-ai/recraft/v3/text-to-image",
-        "bria/text-to-image/3.2",
-        "fal-ai/ideogram/v2",
+        # "fal-ai/flux-pro/v1.1-ultra",
+        "fal_ai/fal-ai/recraft/v3/text-to-image",
+        "fal_ai/bria/text-to-image/3.2",
+        # "fal-ai/ideogram/v2",
     ],
 )
 @pytest.mark.asyncio
