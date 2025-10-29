@@ -159,16 +159,41 @@ def get_logging_payload(  # noqa: PLR0915
     completion_start_time = kwargs.get("completion_start_time", end_time)
     call_type = kwargs.get("call_type")
     cache_hit = kwargs.get("cache_hit", False)
-    usage = cast(dict, response_obj).get("usage", None) or {}
-    if isinstance(usage, litellm.Usage):
-        usage = dict(usage)
-
+    
+    # Convert response_obj to dict first
     if isinstance(response_obj, dict):
         response_obj_dict = response_obj
     elif isinstance(response_obj, BaseModel):
         response_obj_dict = response_obj.model_dump()
     else:
         response_obj_dict = {}
+    
+    # Handle OCR responses which use usage_info instead of usage
+    if call_type in ["ocr", "aocr"]:
+        usage_info = None
+        if isinstance(response_obj_dict, dict):
+            usage_info = response_obj_dict.get("usage_info", {})
+        elif hasattr(response_obj, "usage_info"):
+            usage_info = response_obj.usage_info
+            if hasattr(usage_info, "model_dump"):
+                usage_info = usage_info.model_dump()
+            elif hasattr(usage_info, "__dict__"):
+                usage_info = vars(usage_info)
+        
+        # For OCR, we track pages instead of tokens
+        if usage_info:
+            usage = {
+                "prompt_tokens": 0,  # OCR doesn't use traditional tokens
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "pages_processed": usage_info.get("pages_processed", 0) if isinstance(usage_info, dict) else 0
+            }
+        else:
+            usage = {}
+    else:
+        usage = cast(dict, response_obj).get("usage", None) or {}
+        if isinstance(usage, litellm.Usage):
+            usage = dict(usage)
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
     standard_logging_payload = cast(
