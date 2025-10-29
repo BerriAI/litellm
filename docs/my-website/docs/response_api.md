@@ -17,6 +17,7 @@ Requests to /chat/completions may be bridged here automatically when the provide
 | Image Generation Streaming | ✅ | Progressive image generation with partial images (1-3) |
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | |
 | Supported operations | Create a response, Get a response, Delete a response | |
 | Supported LiteLLM Versions | 1.63.8+ | |
 | Supported LLM providers | **All LiteLLM supported providers** | `openai`, `anthropic`, `bedrock`, `vertex_ai`, `gemini`, `azure`, `azure_ai` etc. |
