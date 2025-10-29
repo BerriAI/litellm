@@ -270,106 +270,86 @@ class OCIChatConfig(BaseConfig):
 
         return adapted_params
 
-    def sign_request(
+    def _sign_with_oci_signer(
         self,
         headers: dict,
         optional_params: dict,
         request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+    ) -> Tuple[dict, bytes]:
         """
-        Sign the OCI request by adding authentication headers.
-
-        Supports two signing modes:
-        1. OCI SDK Signer: Use an oci_signer object to sign the request
-        2. Manual Signing: Use OCI credentials to manually sign the request
+        Sign request using OCI SDK Signer object.
 
         Args:
             headers: Request headers to be signed
-            optional_params: Optional parameters including auth credentials or oci_signer
+            optional_params: Optional parameters including oci_signer
             request_data: The request body dict to be sent in HTTP request
             api_base: The complete URL for the HTTP request
-            api_key: Optional API key (not used for OCI)
-            model: Optional model name
-            stream: Optional streaming flag
-            fake_stream: Optional fake streaming flag
 
         Returns:
-            Tuple of (signed_headers, encoded_body):
-            - If oci_signer is provided: Returns (headers, body) where body is the encoded JSON
-            - If manual credentials are provided: Returns (headers, None) as body is not returned
-              for the manual signing path
+            Tuple of (signed_headers, encoded_body)
 
         Raises:
-            OCIError: If signing fails with oci_signer
-            Exception: If required credentials are missing
-            ImportError: If cryptography package is not installed (manual signing only)
-
-        Example:
-            >>> from oci.signer import Signer
-            >>> signer = Signer(
-            ...     tenancy="ocid1.tenancy.oc1..",
-            ...     user="ocid1.user.oc1..",
-            ...     fingerprint="xx:xx:xx",
-            ...     private_key_file_location="~/.oci/key.pem"
-            ... )
-            >>> headers, body = config.sign_request(
-            ...     headers={},
-            ...     optional_params={"oci_signer": signer},
-            ...     request_data={"message": "Hello"},
-            ...     api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/..."
-            ... )
+            OCIError: If signing fails
+            ValueError: If HTTP method is unsupported
         """
         oci_signer = optional_params.get("oci_signer")
+        body = json.dumps(request_data).encode("utf-8")
+        method = str(optional_params.get("method", "POST")).upper()
 
-        # If a signer is provided, use it for request signing
-        if oci_signer is not None:
-            # Prepare the request body
-            body = json.dumps(request_data).encode("utf-8")
-            method = str(optional_params.get("method", "POST")).upper()
+        if method not in ["POST", "GET", "PUT", "DELETE", "PATCH"]:
+            raise ValueError(f"Unsupported HTTP method: {method}")
 
-            # Validate HTTP method
-            if method not in ["POST", "GET", "PUT", "DELETE", "PATCH"]:
-                raise ValueError(f"Unsupported HTTP method: {method}")
+        prepared_headers = headers.copy()
+        prepared_headers.setdefault("content-type", "application/json")
+        prepared_headers.setdefault("content-length", str(len(body)))
 
-            # Prepare headers with required fields for OCI signing
-            prepared_headers = headers.copy()
-            prepared_headers.setdefault("content-type", "application/json")
-            prepared_headers.setdefault("content-length", str(len(body)))
+        request_wrapper = OCIRequestWrapper(
+            method=method,
+            url=api_base,
+            headers=prepared_headers,
+            body=body
+        )
 
-            # Create request wrapper for OCI signing
-            request_wrapper = OCIRequestWrapper(
-                method=method,
-                url=api_base,
-                headers=prepared_headers,
-                body=body
-            )
+        try:
+            oci_signer.do_request_sign(request_wrapper, enforce_content_headers=True)
+        except Exception as e:
+            raise OCIError(
+                status_code=500,
+                message=(
+                    f"Failed to sign request with provided oci_signer: {str(e)}. "
+                    "The signer must implement the OCI SDK Signer interface with a "
+                    "do_request_sign(request, enforce_content_headers=True) method. "
+                    "See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html"
+                )
+            ) from e
 
-            # Sign the request using the provided signer
-            try:
-                oci_signer.do_request_sign(request_wrapper, enforce_content_headers=True)
-            except Exception as e:
-                from litellm.llms.oci.common_utils import OCIError
-                raise OCIError(
-                    status_code=500,
-                    message=(
-                        f"Failed to sign request with provided oci_signer: {str(e)}. "
-                        "The signer must implement the OCI SDK Signer interface with a "
-                        "do_request_sign(request, enforce_content_headers=True) method. "
-                        "See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html"
-                    )
-                ) from e
+        headers.update(request_wrapper.headers)
+        return headers, body
 
-            # Update headers with signed headers
-            headers.update(request_wrapper.headers)
+    def _sign_with_manual_credentials(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+    ) -> Tuple[dict, None]:
+        """
+        Sign request using manual OCI credentials.
 
-            return headers, body
+        Args:
+            headers: Request headers to be signed
+            optional_params: Optional parameters including OCI credentials
+            request_data: The request body dict to be sent in HTTP request
+            api_base: The complete URL for the HTTP request
 
-        # Standard manual credential signing
+        Returns:
+            Tuple of (signed_headers, None)
+
+        Raises:
+            Exception: If required credentials are missing
+            ImportError: If cryptography package is not installed
+        """
         oci_region = optional_params.get("oci_region", "us-ashburn-1")
         api_base = (
             api_base
@@ -473,6 +453,69 @@ class OCIChatConfig(BaseConfig):
         )
 
         return headers, None
+
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> Tuple[dict, Optional[bytes]]:
+        """
+        Sign the OCI request by adding authentication headers.
+
+        Supports two signing modes:
+        1. OCI SDK Signer: Use an oci_signer object to sign the request
+        2. Manual Signing: Use OCI credentials to manually sign the request
+
+        Args:
+            headers: Request headers to be signed
+            optional_params: Optional parameters including auth credentials or oci_signer
+            request_data: The request body dict to be sent in HTTP request
+            api_base: The complete URL for the HTTP request
+            api_key: Optional API key (not used for OCI)
+            model: Optional model name
+            stream: Optional streaming flag
+            fake_stream: Optional fake streaming flag
+
+        Returns:
+            Tuple of (signed_headers, encoded_body):
+            - If oci_signer is provided: Returns (headers, body) where body is the encoded JSON
+            - If manual credentials are provided: Returns (headers, None) as body is not returned
+              for the manual signing path
+
+        Raises:
+            OCIError: If signing fails with oci_signer
+            Exception: If required credentials are missing
+            ImportError: If cryptography package is not installed (manual signing only)
+
+        Example:
+            >>> from oci.signer import Signer
+            >>> signer = Signer(
+            ...     tenancy="ocid1.tenancy.oc1..",
+            ...     user="ocid1.user.oc1..",
+            ...     fingerprint="xx:xx:xx",
+            ...     private_key_file_location="~/.oci/key.pem"
+            ... )
+            >>> headers, body = config.sign_request(
+            ...     headers={},
+            ...     optional_params={"oci_signer": signer},
+            ...     request_data={"message": "Hello"},
+            ...     api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/..."
+            ... )
+        """
+        oci_signer = optional_params.get("oci_signer")
+
+        # If a signer is provided, use it for request signing
+        if oci_signer is not None:
+            return self._sign_with_oci_signer(headers, optional_params, request_data, api_base)
+
+        # Standard manual credential signing
+        return self._sign_with_manual_credentials(headers, optional_params, request_data, api_base)
 
     def validate_environment(
         self,
