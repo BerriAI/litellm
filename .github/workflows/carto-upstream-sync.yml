@@ -128,17 +128,20 @@ jobs:
           set -eu
 
           echo "::group::Syncing main branch with upstream"
-          echo "[Sync] Preparing to merge upstream/main into origin/main..."
+          echo "[Sync] main should be a mirror of upstream - accepting all upstream changes"
 
           # Add upstream remote
           git remote add upstream https://github.com/BerriAI/litellm.git || true
           git fetch upstream --tags
 
-          # Merge upstream/main into main
-          git merge upstream/main --no-ff -m "sync: merge upstream/main for ${NEW_VERSION}
+          # Merge upstream/main into main (accept all upstream changes on conflict)
+          echo "[Sync] Merging upstream/main with strategy: accept upstream on conflicts"
+          git merge upstream/main --no-ff -X theirs -m "sync: merge upstream/main for ${NEW_VERSION}
 
           Automatic sync from upstream BerriAI/litellm
-          Preparing for ${NEW_VERSION} release"
+          Preparing for ${NEW_VERSION} release
+
+          Strategy: Accept all upstream changes (main is a mirror)"
 
           # Push to origin/main
           echo "[Sync] Pushing updated main branch to origin..."
