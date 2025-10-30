@@ -1,0 +1,465 @@
+################################################################################
+# CARTO - Upstream Sync
+################################################################################
+
+# This workflow automatically syncs CARTO's LiteLLM fork with upstream stable
+# releases from BerriAI/litellm.
+#
+# Branch Strategy:
+#   1. BerriAI/litellm:main -> CartoDB/litellm:main (sync with upstream)
+#   2. CartoDB/litellm:main -> CartoDB/litellm:carto/main (PR for CARTO production)
+#
+# The workflow runs every 8 hours to catch new releases quickly. It detects
+# new stable releases (tagged with -stable suffix), syncs main branch, and
+# creates a PR to carto/main with detailed merge information.
+
+name: CARTO - Upstream Sync
+
+permissions:
+  contents: write        # Allow push to main branch and modify files (including workflows)
+  pull-requests: write   # Allow PR creation and management
+
+on:
+  # Automatic sync disabled for initial testing phase
+  # Uncomment after successful manual testing
+  # schedule:
+  #   - cron: "0 */8 * * *"  # Every 8 hours
+
+  workflow_dispatch:  # Manual trigger for testing
+
+jobs:
+  ##############################################################################
+  # Check for New Release
+  ##############################################################################
+
+  check-new-release:
+    runs-on: ubuntu-latest
+    name: "Check for new upstream release"
+    outputs:
+      has-new-release: ${{ steps.detect-release.outputs.has-new-release }}
+      new-version: ${{ steps.detect-release.outputs.new-version }}
+      current-version: ${{ steps.detect-release.outputs.current-version }}
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Add upstream remote
+        run: |
+          set -eu
+          git remote add upstream https://github.com/BerriAI/litellm.git || true
+          git fetch upstream --tags
+
+      - name: Detect new stable release (bash + gh CLI)
+        id: detect-release
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+        run: |
+          set -eu
+
+          echo "::group::Detecting new stable releases"
+          echo "[Sync] Using gh CLI to fetch releases from BerriAI/litellm..."
+
+          # Get current version from pyproject.toml
+          CURRENT_VERSION=$(grep -E "^version\s*=" pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "[Sync] Current version in pyproject.toml: ${CURRENT_VERSION}"
+
+          # Get latest stable release tag (ends with -stable, not a prerelease)
+          LATEST_STABLE=$(gh release list --repo BerriAI/litellm --limit 50 --json tagName,isPrerelease,isDraft | \
+            jq -r '.[] | select(.isPrerelease == false and .isDraft == false and (.tagName | endswith("-stable"))) | .tagName' | \
+            sort -V | tail -1)
+
+          if [[ -z "${LATEST_STABLE}" ]]; then
+            echo "[Sync] No stable releases found in upstream"
+            echo "has-new-release=false" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          echo "[Sync] Latest upstream stable release: ${LATEST_STABLE}"
+
+          # Extract version from tag (remove 'v' prefix and '-stable' suffix)
+          # e.g., v1.78.5-stable -> 1.78.5
+          LATEST_VERSION=$(echo "${LATEST_STABLE}" | sed -E 's/^v//; s/-stable$//')
+
+          echo "[Sync] Latest version: ${LATEST_VERSION}"
+          echo "[Sync] Current version: ${CURRENT_VERSION}"
+
+          # Compare versions (simple string comparison works for semver)
+          if [[ "${LATEST_VERSION}" > "${CURRENT_VERSION}" ]]; then
+            echo "[Sync] ✅ New stable release available: ${LATEST_STABLE}"
+            echo "has-new-release=true" >> $GITHUB_OUTPUT
+            echo "new-version=${LATEST_STABLE}" >> $GITHUB_OUTPUT
+            echo "current-version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+            echo "::notice title=New Release Detected::${LATEST_STABLE} (current: ${CURRENT_VERSION})"
+          else
+            echo "[Sync] ✅ Already on latest stable: ${CURRENT_VERSION}"
+            echo "has-new-release=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "::endgroup::"
+
+  ##############################################################################
+  # Sync main branch with upstream
+  ##############################################################################
+
+  sync-main-branch:
+    runs-on: ubuntu-latest
+    name: "Sync main with upstream"
+    needs:
+      - check-new-release
+    if: needs.check-new-release.outputs.has-new-release == 'true'
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+
+      - name: Configure Git
+        run: |
+          set -eu
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: Sync main with upstream/main
+        env:
+          NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
+        run: |
+          set -eu
+
+          echo "::group::Syncing main branch with upstream"
+          echo "[Sync] main should be a mirror of upstream - accepting all upstream changes"
+
+          # Add upstream remote
+          git remote add upstream https://github.com/BerriAI/litellm.git || true
+          git fetch upstream --tags
+
+          # Merge upstream/main into main (accept all upstream changes on conflict)
+          echo "[Sync] Merging upstream/main with strategy: accept upstream on conflicts"
+          git merge upstream/main --no-ff -X theirs -m "sync: merge upstream/main for ${NEW_VERSION}
+
+          Automatic sync from upstream BerriAI/litellm
+          Preparing for ${NEW_VERSION} release
+
+          Strategy: Accept all upstream changes (main is a mirror)"
+
+          # Push to origin/main
+          echo "[Sync] Pushing updated main branch to origin..."
+          git push origin main
+
+          echo "[Sync] ✅ main branch synced successfully"
+          echo "::endgroup::"
+
+  ##############################################################################
+  # Check if PR Already Exists
+  ##############################################################################
+
+  check-pr-exists:
+    runs-on: ubuntu-latest
+    name: "Check if PR already exists"
+    needs:
+      - check-new-release
+      - sync-main-branch
+    outputs:
+      pr-exists: ${{ steps.check-pr.outputs.pr-exists }}
+      pr-url: ${{ steps.check-pr.outputs.pr-url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for existing PR from main to carto/main
+        id: check-pr
+        env:
+          NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+
+          echo "::group::Checking for existing PR"
+          echo "[Sync] Looking for open PR from main to carto/main..."
+
+          # Check if PR exists from main to carto/main with upstream-sync label
+          PR_URL=$(gh pr list \
+            --repo CartoDB/litellm \
+            --base carto/main \
+            --head main \
+            --label upstream-sync \
+            --state open \
+            --json url \
+            --jq ".[0].url" 2>/dev/null || echo "")
+
+          if [[ -n "${PR_URL}" ]]; then
+            echo "[Sync] PR already exists: ${PR_URL}"
+            echo "pr-exists=true" >> $GITHUB_OUTPUT
+            echo "pr-url=${PR_URL}" >> $GITHUB_OUTPUT
+            echo "::notice title=PR Already Exists::${PR_URL}"
+          else
+            echo "[Sync] No existing PR found"
+            echo "pr-exists=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "::endgroup::"
+
+  ##############################################################################
+  # Create Sync PR (main -> carto/main)
+  ##############################################################################
+
+  create-sync-pr:
+    runs-on: ubuntu-latest
+    name: "Create sync PR to carto/main"
+    needs:
+      - check-new-release
+      - sync-main-branch
+      - check-pr-exists
+    if: needs.check-pr-exists.outputs.pr-exists == 'false'
+    outputs:
+      pr-url: ${{ steps.create-pr.outputs.pr-url }}
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Generate PR body
+        id: generate-pr-body
+        env:
+          NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
+          CURRENT_VERSION: ${{ needs.check-new-release.outputs.current-version }}
+        run: |
+          set -eu
+
+          echo "::group::[Sync] Generating PR body"
+
+          PR_BODY_FILE="sync-pr-body.md"
+
+          # Extract version without v prefix and -stable suffix for comparison
+          NEW_VERSION_CLEAN=$(echo "${NEW_VERSION}" | sed -E 's/^v//; s/-stable$//')
+
+          # Count commits between current and new version
+          git fetch origin carto/main
+          COMMITS_COUNT=$(git rev-list --count origin/carto/main..main 2>/dev/null || echo "unknown")
+          FILES_CHANGED=$(git diff --name-only origin/carto/main..main | wc -l | tr -d ' ')
+
+          # Create PR body
+          cat > ${PR_BODY_FILE} << EOF
+          ## 🔄 Upstream Sync: ${NEW_VERSION}
+
+          This PR syncs CARTO's LiteLLM fork with the latest stable upstream release.
+
+          ### 📊 Release Information
+
+          - **Upstream Version:** \`${NEW_VERSION}\`
+          - **Current Version:** \`${CURRENT_VERSION}\`
+          - **Commits Ahead:** ${COMMITS_COUNT}
+          - **Files Changed:** ${FILES_CHANGED}
+          - **Upstream Repo:** [BerriAI/litellm](https://github.com/BerriAI/litellm)
+          - **Upstream Release:** [${NEW_VERSION}](https://github.com/BerriAI/litellm/releases/tag/${NEW_VERSION})
+          - **Compare Changes:** [v${CURRENT_VERSION}-stable...${NEW_VERSION}](https://github.com/BerriAI/litellm/compare/v${CURRENT_VERSION}-stable...${NEW_VERSION})
+
+          ### 🔀 Branch Flow
+
+          1. ✅ \`BerriAI/litellm:main\` merged into \`CartoDB/litellm:main\`
+          2. 📝 This PR: \`CartoDB/litellm:main\` → \`CartoDB/litellm:carto/main\`
+
+          ### 📝 CARTO-Specific File Guidelines
+
+          When reviewing or resolving conflicts, follow these guidelines:
+
+          #### ✅ Keep CARTO Versions (Ours)
+          - \`.github/workflows/carto_*.yaml\` - All CARTO-specific workflows
+          - \`.github/workflows/carto-*.yml\` - CARTO workflows
+          - \`CARTO_*.md\` - CARTO documentation files
+          - \`docs/CARTO_*.md\` - CARTO documentation in docs/
+
+          #### 🔄 Accept Upstream (Theirs)
+          - \`pyproject.toml\` - Version field (should match upstream)
+          - \`litellm/\` - Core LiteLLM library code
+          - \`tests/\` - Upstream test files
+          - \`requirements.txt\` - Upstream dependencies
+
+          #### ⚠️ Manual Review Required
+          - \`Dockerfile\` - Check sections marked with \`# CARTO:\` comments
+          - \`docker/Dockerfile.non_root\` - Contains CARTO customizations
+          - \`Makefile\` - Check sections marked with \`# CARTO:\` comments
+          - \`db_scripts/\` - CARTO may have custom scripts
+
+          ### 🧪 Testing Checklist
+
+          Before merging, ensure the following tests pass:
+
+          - [ ] \`make lint\` - Linting passes
+          - [ ] \`make test-unit\` - Unit tests pass
+          - [ ] Docker build succeeds: \`docker build -f docker/Dockerfile.non_root .\`
+          - [ ] CARTO workflows still work (check \`carto_*.yaml\` files)
+          - [ ] Review \`pyproject.toml\` version matches upstream
+
+          ### 📚 Documentation
+
+          - [CARTO Release Process](./docs/CARTO_RELEASE_PROCESS.md) - Full sync and release process
+          - [CARTO Customizations](./CARTO_CLAUDE.md) - CARTO-specific modifications
+
+          ### 🔧 Conflict Resolution (if needed)
+
+          If this PR has conflicts:
+
+          1. **Pull the branch locally:**
+            \`\`\`bash
+            git fetch origin
+            git checkout main
+            git pull origin main
+            \`\`\`
+
+          2. **Merge into carto/main locally:**
+            \`\`\`bash
+            git checkout carto/main
+            git pull origin carto/main
+            git merge main
+            \`\`\`
+
+          3. **Review conflicts:**
+            \`\`\`bash
+            git status
+            git diff
+            \`\`\`
+
+          4. **Resolve conflicts following guidelines above**
+
+          5. **Test your changes:**
+            \`\`\`bash
+            make lint
+            make test-unit
+            \`\`\`
+
+          6. **Push resolved changes:**
+            \`\`\`bash
+            git push origin carto/main
+            \`\`\`
+
+          ---
+
+          *🤖 This PR was automatically created by the [carto-upstream-sync workflow](https://github.com/CartoDB/litellm/actions/workflows/carto-upstream-sync.yml).*
+          EOF
+
+          echo "[Sync] PR body generated successfully"
+          echo "::endgroup::"
+
+      - name: Create Pull Request
+        id: create-pr
+        env:
+          NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+        run: |
+          set -eu
+
+          echo "::group::Creating Pull Request"
+
+          PR_BODY_FILE="sync-pr-body.md"
+
+          # Create PR from main to carto/main
+          PR_URL=$(gh pr create \
+            --repo CartoDB/litellm \
+            --base carto/main \
+            --head main \
+            --title "🔄 sync: upstream ${NEW_VERSION}" \
+            --body-file ${PR_BODY_FILE} \
+            --label "upstream-sync" \
+            --label "automated")
+
+          echo "[Sync] Pull Request created: ${PR_URL}"
+          echo "pr-url=${PR_URL}" >> $GITHUB_OUTPUT
+          echo "::notice title=PR Created::${PR_URL}"
+
+          echo "::endgroup::"
+
+          # GitHub Actions summary
+          echo "::group::Workflow Summary"
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## 🎉 Upstream Sync PR Created Successfully
+
+          - **PR URL:** ${PR_URL}
+          - **Version:** ${NEW_VERSION}
+          - **Branch Flow:** main → carto/main
+
+          ### Next Steps
+          1. Review the PR for any conflicts or issues
+          2. Run tests: \`make lint && make test-unit\`
+          3. Approve and merge when ready
+          EOF
+          echo "::endgroup::"
+
+  ##############################################################################
+  # Notify Slack
+  ##############################################################################
+
+  notify-slack:
+    runs-on: ubuntu-latest
+    name: "Notify Slack"
+    if: always()
+    needs:
+      - check-new-release
+      - sync-main-branch
+      - check-pr-exists
+      - create-sync-pr
+    steps:
+      - name: Send Slack notification
+        env:
+          SLACK_CHANNEL: "C3W6342EN" # infrastructure-dev
+          HAS_NEW_RELEASE: ${{ needs.check-new-release.outputs.has-new-release }}
+          NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
+          PR_EXISTS: ${{ needs.check-pr-exists.outputs.pr-exists }}
+          EXISTING_PR_URL: ${{ needs.check-pr-exists.outputs.pr-url }}
+          NEW_PR_URL: ${{ needs.create-sync-pr.outputs.pr-url }}
+          SYNC_STATUS: ${{ needs.sync-main-branch.result }}
+        run: |
+          set -eu
+
+          echo "::group::Determining Slack notification"
+
+          # Skip if channel not configured
+          if [[ -z "${SLACK_CHANNEL}" ]]; then
+            echo "[Slack] SLACK_CHANNEL not configured, skipping notification"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          # Determine message based on workflow results
+          WORKFLOW_RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          case "${HAS_NEW_RELEASE}:${SYNC_STATUS}:${PR_EXISTS}" in
+            true:success:false)
+              if [[ -n "${NEW_PR_URL}" ]]; then
+                MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - PR created for ${NEW_VERSION}\n${NEW_PR_URL}"
+              else
+                MESSAGE=":x: *LiteLLM Upstream Sync* - Workflow error (PR URL missing)\n<${WORKFLOW_RUN_URL}|View workflow run>"
+              fi
+              ;;
+            true:*:true)
+              MESSAGE=":information_source: *LiteLLM Upstream Sync* - PR already exists\n${EXISTING_PR_URL}"
+              ;;
+            false:*:*)
+              MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - No new releases detected"
+              ;;
+            true:failure:*)
+              MESSAGE=":x: *LiteLLM Upstream Sync* - Failed to sync main branch with upstream\n<${WORKFLOW_RUN_URL}|View workflow run>"
+              ;;
+            *)
+              MESSAGE=":x: *LiteLLM Upstream Sync* - Workflow encountered an error\n<${WORKFLOW_RUN_URL}|View workflow run>"
+              ;;
+          esac
+
+          echo "[Slack] Sending notification to channel ${SLACK_CHANNEL}"
+          echo "::endgroup::"
+
+          echo "::group::Posting to Slack"
+          curl -F "text=${MESSAGE}" \
+            -F "channel=${SLACK_CHANNEL}" \
+            -H "Authorization: Bearer ${{ secrets.SLACK_KEY }}" \
+            -X POST https://slack.com/api/chat.postMessage
+
+          echo "[Slack] Notification sent successfully"
+          echo "::endgroup::"
