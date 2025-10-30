@@ -311,6 +311,9 @@ class OCIChatConfig(BaseConfig):
             body=body
         )
 
+        if oci_signer is None:
+            raise ValueError("oci_signer cannot be None when calling _sign_with_oci_signer")
+
         try:
             oci_signer.do_request_sign(request_wrapper, enforce_content_headers=True)
         except Exception as e:
@@ -635,12 +638,12 @@ class OCIChatConfig(BaseConfig):
         for openai_key, oci_key in open_ai_to_oci_param_map.items():
             if oci_key and openai_key in optional_params:
                 selected_params[oci_key] = optional_params[openai_key]  # type: ignore[index]
-        
+
         # Also check for already-mapped OCI params (for backward compatibility)
         for oci_value in open_ai_to_oci_param_map.values():
             if oci_value and oci_value in optional_params and oci_value not in selected_params:
                 selected_params[oci_value] = optional_params[oci_value]  # type: ignore[index]
-        
+
         if "tools" in selected_params:
             if vendor == OCIVendors.COHERE:
                 selected_params["tools"] = self.adapt_tool_definitions_to_cohere_standard(  # type: ignore[assignment]
@@ -658,7 +661,7 @@ class OCIChatConfig(BaseConfig):
         for msg in messages[:-1]:  # All messages except the last one
             role = msg.get("role")
             content = msg.get("content")
-            
+
             if isinstance(content, list):
                 # Extract text from content array
                 text_content = ""
@@ -666,11 +669,11 @@ class OCIChatConfig(BaseConfig):
                     if isinstance(content_item, dict) and content_item.get("type") == "text":
                         text_content += content_item.get("text", "")
                 content = text_content
-            
+
             # Ensure content is a string
             if not isinstance(content, str):
                 content = str(content) if content is not None else ""
-            
+
             # Handle tool calls
             tool_calls: Optional[List[CohereToolCall]] = None
             if role == "assistant" and "tool_calls" in msg and msg.get("tool_calls"):  # type: ignore[union-attr,typeddict-item]
@@ -685,12 +688,12 @@ class OCIChatConfig(BaseConfig):
                             arguments = {}
                     else:
                         arguments = raw_arguments
-                    
+
                     tool_calls.append(CohereToolCall(
                         name=str(tool_call.get("function", {}).get("name", "")),
                         parameters=arguments
                     ))
-            
+
             if role == "user":
                 chat_history.append(CohereMessage(role="USER", message=content))
             elif role == "assistant":
@@ -698,11 +701,11 @@ class OCIChatConfig(BaseConfig):
             elif role == "tool":
                 # Tool messages need special handling
                 chat_history.append(CohereMessage(
-                    role="TOOL", 
+                    role="TOOL",
                     message=content,
                     toolCalls=None  # Tool messages don't have tool calls
                 ))
-        
+
         return chat_history
 
     def adapt_tool_definitions_to_cohere_standard(self, tools: List[Dict[str, Any]]) -> List[CohereTool]:
@@ -712,7 +715,7 @@ class OCIChatConfig(BaseConfig):
             function_def = tool.get("function", {})
             parameters = function_def.get("parameters", {}).get("properties", {})
             required = function_def.get("parameters", {}).get("required", [])
-            
+
             parameter_definitions = {}
             for param_name, param_schema in parameters.items():
                 parameter_definitions[param_name] = CohereParameterDefinition(
@@ -720,13 +723,13 @@ class OCIChatConfig(BaseConfig):
                     type=param_schema.get("type", "string"),
                     isRequired=param_name in required
                 )
-            
+
             cohere_tools.append(CohereTool(
                 name=function_def.get("name", ""),
                 description=function_def.get("description", ""),
                 parameterDefinitions=parameter_definitions
             ))
-        
+
         return cohere_tools
 
     def _extract_text_content(self, content: Any) -> str:
@@ -779,7 +782,7 @@ class OCIChatConfig(BaseConfig):
             user_messages = [msg for msg in messages if msg.get("role") == "user"]
             if not user_messages:
                 raise Exception("No user message found for Cohere model")
-            
+
 
             # Create Cohere-specific chat request
             chat_request = CohereChatRequest(
@@ -788,7 +791,7 @@ class OCIChatConfig(BaseConfig):
                 chatHistory=self.adapt_messages_to_cohere_standard(messages),
                 **self._get_optional_params(OCIVendors.COHERE, optional_params)
             )
-            
+
             data = OCICompletionPayload(
                 compartmentId=oci_compartment_id,
                 servingMode=servingMode,
@@ -809,24 +812,24 @@ class OCIChatConfig(BaseConfig):
         return data.model_dump(exclude_none=True)
 
     def _handle_cohere_response(
-        self, 
-        json_response: dict, 
-        model: str, 
+        self,
+        json_response: dict,
+        model: str,
         model_response: ModelResponse
     ) -> ModelResponse:
         """Handle Cohere-specific response format."""
         cohere_response = CohereChatResult(**json_response)
         # Cohere response format (uses camelCase)
         model_id = model
-        
+
         # Set basic response info
         model_response.model = model_id
         model_response.created = int(datetime.datetime.now().timestamp())
-        
+
         # Extract the response text
         response_text = cohere_response.chatResponse.text
         oci_finish_reason = cohere_response.chatResponse.finishReason
-        
+
         # Map finish reason
         if oci_finish_reason == "COMPLETE":
             finish_reason = "stop"
@@ -834,7 +837,7 @@ class OCIChatConfig(BaseConfig):
             finish_reason = "length"
         else:
             finish_reason = "stop"
-        
+
         # Handle tool calls
         tool_calls: Optional[List[Dict[str, Any]]] = None
         if cohere_response.chatResponse.toolCalls:
@@ -848,7 +851,7 @@ class OCIChatConfig(BaseConfig):
                         "arguments": json.dumps(tool_call.parameters)
                     }
                 })
-        
+
         # Create choice
         from litellm.types.utils import Choices
         choice = Choices(
@@ -861,7 +864,7 @@ class OCIChatConfig(BaseConfig):
             finish_reason=finish_reason
         )
         model_response.choices = [choice]
-        
+
         # Extract usage info
         usage_info = cohere_response.chatResponse.usage
         from litellm.types.utils import Usage
@@ -870,13 +873,13 @@ class OCIChatConfig(BaseConfig):
             completion_tokens=usage_info.completionTokens,  # type: ignore[union-attr]
             total_tokens=usage_info.totalTokens  # type: ignore[union-attr]
         )
-        
+
         return model_response
 
     def _handle_generic_response(
-        self, 
-        json: dict, 
-        model: str, 
+        self,
+        json: dict,
+        model: str,
         model_response: ModelResponse,
         raw_response: httpx.Response
     ) -> ModelResponse:
@@ -888,7 +891,7 @@ class OCIChatConfig(BaseConfig):
                 message=f"Response cannot be casted to OCICompletionResponse: {str(e)}",
                 status_code=raw_response.status_code,
             )
-        
+
         iso_str = completion_response.chatResponse.timeCreated
         dt = datetime.datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
         model_response.created = int(dt.timestamp())
@@ -944,7 +947,7 @@ class OCIChatConfig(BaseConfig):
             )
 
         vendor = get_vendor_from_model(model)
-        
+
         # Handle response based on vendor type
         if vendor == OCIVendors.COHERE:
             model_response = self._handle_cohere_response(json, model, model_response)
@@ -1273,7 +1276,7 @@ class OCIStreamWrapper(CustomStreamWrapper):
         if not chunk.startswith("data:"):
             raise ValueError(f"Chunk does not start with 'data:': {chunk}")
         dict_chunk = json.loads(chunk[5:])  # Remove 'data: ' prefix and parse JSON
-        
+
         # Check if this is a Cohere stream chunk
         if "apiFormat" in dict_chunk and dict_chunk.get("apiFormat") == "COHERE":
             return self._handle_cohere_stream_chunk(dict_chunk)

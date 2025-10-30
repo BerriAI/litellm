@@ -31,7 +31,7 @@ Check the [OCI Models List](https://docs.oracle.com/en-us/iaas/Content/generativ
 
 LiteLLM supports two authentication methods for OCI:
 
-### Method 1: Manual Credentials (Default)
+### Method 1: Manual Credentials
 Provide individual OCI credentials directly to LiteLLM. Follow the [official Oracle tutorial](https://docs.oracle.com/en-us/iaas/Content/API/Concepts/apisigningkey.htm) to create a signing key and obtain the following parameters:
 
 - `user`
@@ -41,12 +41,10 @@ Provide individual OCI credentials directly to LiteLLM. Follow the [official Ora
 - `key_file` or `key`
 - `compartment_id`
 
-### Method 2: OCI SDK Signer (Recommended)
+### Method 2: OCI SDK Signer
 Use an OCI SDK `Signer` object for authentication. This method:
-- Leverages the official OCI SDK for signing
-- Supports multiple authentication methods (API key, instance principal, resource principal, etc.)
-- Simplifies credential management
-- More secure and maintainable
+- Leverages the official [OCI SDK for signing](https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html)
+- Supports multiple authentication methods (API key, instance principals, workload identity, etc.)
 
 To use this method, install the OCI SDK:
 ```bash
@@ -56,6 +54,34 @@ pip install oci
 ## Usage
 
 <Tabs>
+<TabItem value="manual" label="Manual Credentials">
+
+Input the parameters obtained from the OCI signing key creation process into the `completion` function:
+
+```python
+import os
+from litellm import completion
+
+messages = [{"role": "user", "content": "Hey! how's it going?"}]
+response = completion(
+    model="oci/xai.grok-4",
+    messages=messages,
+    oci_region=<your_oci_region>,
+    oci_user=<your_oci_user>,
+    oci_fingerprint=<your_oci_fingerprint>,
+    oci_tenancy=<your_oci_tenancy>,
+    oci_serving_mode="ON_DEMAND",  # Optional, default is "ON_DEMAND". Other option is "DEDICATED"
+    # Provide either the private key string OR the path to the key file:
+    # Option 1: pass the private key as a string
+    oci_key=<string_with_content_of_oci_key>,
+    # Option 2: pass the private key file path
+    # oci_key_file="<path/to/oci_key.pem>",
+    oci_compartment_id=<oci_compartment_id>,
+)
+print(response)
+```
+
+</TabItem>
 <TabItem value="oci-sdk" label="OCI SDK Signer" default>
 
 Use the OCI SDK `Signer` for authentication:
@@ -123,6 +149,7 @@ For applications running on OCI compute instances:
 from litellm import completion
 from oci.auth.signers import InstancePrincipalsSecurityTokenSigner
 
+oci.auth.signers.get_oke_workload_identity_resource_principal_signer()
 # Use instance principal authentication
 signer = InstancePrincipalsSecurityTokenSigner()
 
@@ -137,69 +164,34 @@ response = completion(
 print(response)
 ```
 
-</TabItem>
-<TabItem value="manual" label="Manual Credentials">
+**Use workload identity authentication**
 
-Input the parameters obtained from the OCI signing key creation process into the `completion` function:
+For applications running in Oracle Kubernetes Engine (OKE):
 
 ```python
-import os
 from litellm import completion
+from oci.auth.signers import get_oke_workload_identity_resource_principal_signer
+
+# Use instance principal authentication
+signer = get_oke_workload_identity_resource_principal_signer()
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
 response = completion(
     model="oci/xai.grok-4",
     messages=messages,
-    oci_region=<your_oci_region>,
-    oci_user=<your_oci_user>,
-    oci_fingerprint=<your_oci_fingerprint>,
-    oci_tenancy=<your_oci_tenancy>,
-    oci_serving_mode="ON_DEMAND",  # Optional, default is "ON_DEMAND". Other option is "DEDICATED"
-    # Provide either the private key string OR the path to the key file:
-    # Option 1: pass the private key as a string
-    oci_key=<string_with_content_of_oci_key>,
-    # Option 2: pass the private key file path
-    # oci_key_file="<path/to/oci_key.pem>",
-    oci_compartment_id=<oci_compartment_id>,
+    oci_signer=signer,
+    oci_region="us-chicago-1",
+    oci_compartment_id="<oci_compartment_id>",
 )
 print(response)
 ```
-
 </TabItem>
 </Tabs>
-
 
 ## Usage - Streaming
 Just set `stream=True` when calling completion.
 
 <Tabs>
-<TabItem value="oci-sdk-stream" label="OCI SDK Signer" default>
-
-```python
-from litellm import completion
-from oci.signer import Signer
-
-signer = Signer(
-    tenancy="ocid1.tenancy.oc1..",
-    user="ocid1.user.oc1..",
-    fingerprint="xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx",
-    private_key_file_location="~/.oci/key.pem",
-)
-
-messages = [{"role": "user", "content": "Hey! how's it going?"}]
-response = completion(
-    model="oci/xai.grok-4",
-    messages=messages,
-    stream=True,
-    oci_signer=signer,
-    oci_region="us-chicago-1",
-    oci_compartment_id="<oci_compartment_id>",
-)
-for chunk in response:
-    print(chunk["choices"][0]["delta"]["content"])  # same as openai format
-```
-
-</TabItem>
 <TabItem value="manual-stream" label="Manual Credentials">
 
 ```python
@@ -222,6 +214,33 @@ response = completion(
     # Option 2: pass the private key file path
     # oci_key_file="<path/to/oci_key.pem>",
     oci_compartment_id=<oci_compartment_id>,
+)
+for chunk in response:
+    print(chunk["choices"][0]["delta"]["content"])  # same as openai format
+```
+
+</TabItem>
+<TabItem value="oci-sdk-stream" label="OCI SDK Signer" default>
+
+```python
+from litellm import completion
+from oci.signer import Signer
+
+signer = Signer(
+    tenancy="ocid1.tenancy.oc1..",
+    user="ocid1.user.oc1..",
+    fingerprint="xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx",
+    private_key_file_location="~/.oci/key.pem",
+)
+
+messages = [{"role": "user", "content": "Hey! how's it going?"}]
+response = completion(
+    model="oci/xai.grok-4",
+    messages=messages,
+    stream=True,
+    oci_signer=signer,
+    oci_region="us-chicago-1",
+    oci_compartment_id="<oci_compartment_id>",
 )
 for chunk in response:
     print(chunk["choices"][0]["delta"]["content"])  # same as openai format
