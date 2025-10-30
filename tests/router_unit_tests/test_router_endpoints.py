@@ -264,7 +264,6 @@ async def test_moderation_endpoint(model):
 async def test_moderation_endpoint_with_api_base():
     """
     Test that the moderation endpoint respects api_base configuration
-    Regression test for: https://github.com/BerriAI/litellm/issues/XXXX
     """
     from unittest.mock import AsyncMock, MagicMock, patch
 
