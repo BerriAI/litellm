@@ -73,11 +73,15 @@ jobs:
           fi
           echo "[Security] ✅ Actor verified: ${ACTOR}"
 
-          # Security Check 2: Block external forks (only for pull_request events)
+          # Security Check 2: Verify branch flow (main → carto/main)
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # Automatic trigger: validate PR directly
             PR_REPO="${{ github.event.pull_request.head.repo.full_name }}"
             BASE_REPO="${{ github.repository }}"
+            HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
+            BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
 
+            # Check fork
             if [[ "${PR_REPO}" != "${BASE_REPO}" ]]; then
               echo "[Security] ❌ External fork detected: ${PR_REPO}"
               echo "[Security] Only internal branches allowed"
@@ -85,23 +89,49 @@ jobs:
               exit 0
             fi
             echo "[Security] ✅ PR source verified: internal branch"
-          else
-            echo "[Security] ✅ Triggered via workflow_dispatch (manual)"
-          fi
 
-          # Security Check 3: Only main branch (upstream sync PRs)
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
-
-            if [[ "${HEAD_BRANCH}" != "main" ]]; then
-              echo "[Security] ❌ Invalid branch: ${HEAD_BRANCH}"
-              echo "[Security] Only 'main' branch (upstream sync) allowed"
+            # Check branch flow
+            if [[ "${HEAD_BRANCH}" != "main" ]] || [[ "${BASE_BRANCH}" != "carto/main" ]]; then
+              echo "[Security] ❌ Invalid branch flow: ${HEAD_BRANCH} → ${BASE_BRANCH}"
+              echo "[Security] Required: main → carto/main"
               echo "authorized=false" >> $GITHUB_OUTPUT
               exit 0
             fi
-            echo "[Security] ✅ Branch verified: ${HEAD_BRANCH}"
+            echo "[Security] ✅ Branch flow verified: main → carto/main"
           else
-            echo "[Security] ✅ Manual dispatch (branch checks skipped)"
+            # Manual trigger: fetch PR details via gh CLI
+            PR_NUMBER="${{ github.event.inputs.pr-number }}"
+            if [[ -z "${PR_NUMBER}" ]]; then
+              echo "[Security] ❌ PR number required for manual dispatch"
+              echo "authorized=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+
+            echo "[Security] Manual dispatch for PR #${PR_NUMBER}"
+
+            # Fetch PR details
+            PR_JSON=$(gh pr view ${PR_NUMBER} --repo ${{ github.repository }} --json headRefName,baseRefName,headRepository)
+            HEAD_BRANCH=$(echo "${PR_JSON}" | jq -r '.headRefName')
+            BASE_BRANCH=$(echo "${PR_JSON}" | jq -r '.baseRefName')
+            PR_REPO=$(echo "${PR_JSON}" | jq -r '.headRepository.nameWithOwner')
+
+            # Check fork
+            if [[ "${PR_REPO}" != "${{ github.repository }}" ]]; then
+              echo "[Security] ❌ External fork detected: ${PR_REPO}"
+              echo "[Security] Only internal branches allowed"
+              echo "authorized=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "[Security] ✅ PR source verified: internal branch"
+
+            # Check branch flow
+            if [[ "${HEAD_BRANCH}" != "main" ]] || [[ "${BASE_BRANCH}" != "carto/main" ]]; then
+              echo "[Security] ❌ Invalid branch flow: ${HEAD_BRANCH} → ${BASE_BRANCH}"
+              echo "[Security] Required: main → carto/main"
+              echo "authorized=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "[Security] ✅ Branch flow verified: main → carto/main"
           fi
 
           # All security checks passed
