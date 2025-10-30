@@ -1333,7 +1333,7 @@ class BaseLLMChatTest(ABC):
                 pytest.skip("Model does not support function calling")
 
             def get_weather(city: str):
-                return f"City: {city}, Weather: Sunny with 34 degree Celcius"
+                return f"City: {city}, Weather: Sunny with 34 degree Celsius"
 
             TOOLS = [
                 {

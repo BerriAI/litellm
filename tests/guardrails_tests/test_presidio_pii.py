@@ -292,7 +292,7 @@ async def test_output_parsing():
     new_response = await pii_masking.async_post_call_success_hook(
         user_api_key_dict=UserAPIKeyAuth(),
         data={
-            "messages": [{"role": "system", "content": "You are an helpfull assistant"}]
+            "messages": [{"role": "system", "content": "You are an helpful assistant"}]
         },
         response=response,
     )

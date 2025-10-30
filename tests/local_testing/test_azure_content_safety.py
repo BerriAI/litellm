@@ -43,7 +43,7 @@ async def test_strict_input_filtering_01():
 
     data = {
         "messages": [
-            {"role": "system", "content": "You are an helpfull assistant"},
+            {"role": "system", "content": "You are an helpful assistant"},
             {"role": "user", "content": "Fuck yourself you stupid bitch"},
         ]
     }
@@ -78,7 +78,7 @@ async def test_strict_input_filtering_02():
 
     data = {
         "messages": [
-            {"role": "system", "content": "You are an helpfull assistant"},
+            {"role": "system", "content": "You are an helpful assistant"},
             {"role": "user", "content": "Hello how are you ?"},
         ]
     }
@@ -108,7 +108,7 @@ async def test_loose_input_filtering_01():
 
     data = {
         "messages": [
-            {"role": "system", "content": "You are an helpfull assistant"},
+            {"role": "system", "content": "You are an helpful assistant"},
             {"role": "user", "content": "Fuck yourself you stupid bitch"},
         ]
     }
@@ -138,7 +138,7 @@ async def test_loose_input_filtering_02():
 
     data = {
         "messages": [
-            {"role": "system", "content": "You are an helpfull assistant"},
+            {"role": "system", "content": "You are an helpful assistant"},
             {"role": "user", "content": "Hello how are you ?"},
         ]
     }
@@ -186,7 +186,7 @@ async def test_strict_output_filtering_01():
             user_api_key_dict=UserAPIKeyAuth(),
             data={
                 "messages": [
-                    {"role": "system", "content": "You are an helpfull assistant"}
+                    {"role": "system", "content": "You are an helpful assistant"}
                 ]
             },
             response=response,
@@ -230,7 +230,7 @@ async def test_strict_output_filtering_02():
     await azure_content_safety.async_post_call_success_hook(
         user_api_key_dict=UserAPIKeyAuth(),
         data={
-            "messages": [{"role": "system", "content": "You are an helpfull assistant"}]
+            "messages": [{"role": "system", "content": "You are an helpful assistant"}]
         },
         response=response,
     )
@@ -269,7 +269,7 @@ async def test_loose_output_filtering_01():
     await azure_content_safety.async_post_call_success_hook(
         user_api_key_dict=UserAPIKeyAuth(),
         data={
-            "messages": [{"role": "system", "content": "You are an helpfull assistant"}]
+            "messages": [{"role": "system", "content": "You are an helpful assistant"}]
         },
         response=response,
     )
@@ -308,7 +308,7 @@ async def test_loose_output_filtering_02():
     await azure_content_safety.async_post_call_success_hook(
         user_api_key_dict=UserAPIKeyAuth(),
         data={
-            "messages": [{"role": "system", "content": "You are an helpfull assistant"}]
+            "messages": [{"role": "system", "content": "You are an helpful assistant"}]
         },
         response=response,
     )

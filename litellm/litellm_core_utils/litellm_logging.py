@@ -896,7 +896,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
                 except Exception as e:
                     verbose_logger.exception(
-                        "litellm.Logging.pre_call(): Exception occured - {}".format(
+                        "litellm.Logging.pre_call(): Exception occurred - {}".format(
                             str(e)
                         )
                     )
