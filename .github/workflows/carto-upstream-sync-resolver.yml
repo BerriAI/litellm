@@ -4,7 +4,7 @@ name: CARTO Upstream Sync - Conflict Resolver
 # for upstream sync PRs that have merge conflicts.
 #
 # Security features:
-# - Only runs when triggered by Cartofante automation user
+# - Only runs when triggered by authorized users (Cartofante, mateo-di)
 # - Only runs on PRs labeled 'upstream-sync'
 # - Only runs on main branch (upstream sync PRs)
 # - Only runs when conflicts are detected
@@ -51,14 +51,23 @@ jobs:
 
           echo "::group::Security verification"
 
-          # Security Check 1: Only allow Cartofante automation user
+          # Security Check 1: Only allow specific authorized users
           ACTOR="${{ github.actor }}"
-          ALLOWED_ACTOR="Cartofante"
+          ALLOWED_ACTORS="Cartofante mateo-di"
 
-          # Case-insensitive comparison
-          if [[ "${ACTOR,,}" != "${ALLOWED_ACTOR,,}" ]]; then
+          # Check if actor is in allowed list (case-insensitive)
+          ACTOR_LOWER="${ACTOR,,}"
+          ALLOWED=false
+          for allowed in ${ALLOWED_ACTORS}; do
+            if [[ "${ACTOR_LOWER}" == "${allowed,,}" ]]; then
+              ALLOWED=true
+              break
+            fi
+          done
+
+          if [[ "${ALLOWED}" == "false" ]]; then
             echo "[Security] ❌ Unauthorized actor: ${ACTOR}"
-            echo "[Security] Only ${ALLOWED_ACTOR} automation user can trigger this workflow"
+            echo "[Security] Allowed actors: ${ALLOWED_ACTORS}"
             echo "authorized=false" >> $GITHUB_OUTPUT
             exit 0
           fi
