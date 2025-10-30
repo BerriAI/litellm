@@ -309,7 +309,7 @@ class VertexBase:
                         "Missing gemini_api_key, please set `GEMINI_API_KEY`"
                     )
                 if gemini_api_key is not None:
-                    auth_header = {"x-goog-api-key": gemini_api_key} 
+                    auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment] 
             else:
                 url = "{}:{}".format(api_base, endpoint)
 
