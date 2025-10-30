@@ -10477,7 +10477,9 @@
         "mode": "embedding",
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
-        "source": "https://ai.google.dev/gemini-api/docs/embeddings#model-versions"
+        "rpm": 10000,
+        "source": "https://ai.google.dev/gemini-api/docs/embeddings#model-versions",
+        "tpm": 10000000
     },
     "gemini/gemini-1.5-flash": {
         "input_cost_per_token": 7.5e-08,
