@@ -117,7 +117,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
 
       - name: Configure Git
         run: |
