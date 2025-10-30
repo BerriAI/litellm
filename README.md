@@ -364,6 +364,45 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [Custom (`custom`)](https://docs.litellm.ai/docs/providers/custom_llm_server)                   | ✅                   |               |                      |
 | [LiteLLM Proxy (`litellm_proxy`)](https://docs.litellm.ai/docs/providers/litellm_proxy)         | ✅                   | ✅             | ✅                    |
 | [Hosted VLLM (`hosted_vllm`)](https://docs.litellm.ai/docs/providers/vllm)                      | ✅                   |               |                      |
+| [AssemblyAI (`assemblyai`)](https://docs.litellm.ai/docs/pass_through/assembly_ai)              | ✅                   |               |                      |
+| [Bytez (`bytez`)](https://docs.litellm.ai/docs/providers/bytez)                                 | ✅                   |               |                      |
+| [Cerebras (`cerebras`)](https://docs.litellm.ai/docs/providers/cerebras)                        | ✅                   |               |                      |
+| [Clarifai (`clarifai`)](https://docs.litellm.ai/docs/providers/clarifai)                        | ✅                   |               |                      |
+| [Dashscope (`dashscope`)](https://docs.litellm.ai/docs/providers/dashscope)                     | ✅                   |               |                      |
+| [Databricks (`databricks`)](https://docs.litellm.ai/docs/providers/databricks)                  | ✅                   |               |                      |
+| [DataRobot (`datarobot`)](https://docs.litellm.ai/docs/providers/datarobot)                     | ✅                   |               |                      |
+| [Deepgram (`deepgram`)](https://docs.litellm.ai/docs/providers/deepgram)                        | ✅                   |               |                      |
+| [ElevenLabs (`elevenlabs`)](https://docs.litellm.ai/docs/providers/elevenlabs)                  | ✅                   |               |                      |
+| [Fal AI (`fal_ai`)](https://docs.litellm.ai/docs/providers/fal_ai)                              | ✅                   |               | ✅                    |
+| [Fireworks AI (`fireworks_ai`)](https://docs.litellm.ai/docs/providers/fireworks_ai)            | ✅                   |               |                      |
+| [GitHub Models (`github`)](https://docs.litellm.ai/docs/providers/github)                       | ✅                   |               |                      |
+| [GitHub Copilot (`github_copilot`)](https://docs.litellm.ai/docs/providers/github_copilot)      | ✅                   |               |                      |
+| [Hyperbolic (`hyperbolic`)](https://docs.litellm.ai/docs/providers/hyperbolic)                  | ✅                   |               |                      |
+| [Infinity (`infinity`)](https://docs.litellm.ai/docs/providers/infinity)                        |                     | ✅             |                      |
+| [Jina AI (`jina_ai`)](https://docs.litellm.ai/docs/providers/jina_ai)                           |                     | ✅             |                      |
+| [Lambda AI (`lambda_ai`)](https://docs.litellm.ai/docs/providers/lambda_ai)                     | ✅                   |               |                      |
+| [Lemonade (`lemonade`)](https://docs.litellm.ai/docs/providers/lemonade)                        | ✅                   |               |                      |
+| [Llamafile (`llamafile`)](https://docs.litellm.ai/docs/providers/llamafile)                     | ✅                   |               |                      |
+| [LM Studio (`lm_studio`)](https://docs.litellm.ai/docs/providers/lm_studio)                     | ✅                   |               |                      |
+| [Maritalk (`maritalk`)](https://docs.litellm.ai/docs/providers/maritalk)                        | ✅                   |               |                      |
+| [Moonshot (`moonshot`)](https://docs.litellm.ai/docs/providers/moonshot)                        | ✅                   |               |                      |
+| [Morph (`morph`)](https://docs.litellm.ai/docs/providers/morph)                                 | ✅                   |               |                      |
+| [Nscale (`nscale`)](https://docs.litellm.ai/docs/providers/nscale)                              | ✅                   |               |                      |
+| [Nvidia NIM (`nvidia_nim`)](https://docs.litellm.ai/docs/providers/nvidia_nim)                  | ✅                   |               |                      |
+| [OCI (`oci`)](https://docs.litellm.ai/docs/providers/oci)                                       | ✅                   |               |                      |
+| [Oobabooga (`oobabooga`)](https://docs.litellm.ai/docs/providers/openai_compatible)             | ✅                   |               |                      |
+| [Predibase (`predibase`)](https://docs.litellm.ai/docs/providers/predibase)                     | ✅                   |               |                      |
+| [Recraft (`recraft`)](https://docs.litellm.ai/docs/providers/recraft)                           |                     |               | ✅                    |
+| [Sambanova (`sambanova`)](https://docs.litellm.ai/docs/providers/sambanova)                     | ✅                   |               |                      |
+| [Snowflake (`snowflake`)](https://docs.litellm.ai/docs/providers/snowflake)                     | ✅                   |               |                      |
+| [Topaz (`topaz`)](https://docs.litellm.ai/docs/providers/topaz)                                 | ✅                   |               |                      |
+| [Triton (`triton`)](https://docs.litellm.ai/docs/providers/triton-inference-server)             | ✅                   |               |                      |
+| [V0 (`v0`)](https://docs.litellm.ai/docs/providers/v0)                                          | ✅                   |               |                      |
+| [Volcengine (`volcengine`)](https://docs.litellm.ai/docs/providers/volcano)                     | ✅                   |               |                      |
+| [xAI (`xai`)](https://docs.litellm.ai/docs/providers/xai)                                       | ✅                   |               |                      |
+| [Vercel AI Gateway (`vercel_ai_gateway`)](https://docs.litellm.ai/docs/providers/vercel_ai_gateway) | ✅               |               |                      |
+| [WandB Inference (`wandb`)](https://docs.litellm.ai/docs/providers/wandb_inference)             | ✅                   |               |                      |
+| [Auto Router (`auto_router`)](https://docs.litellm.ai/docs/proxy/auto_routing)                  | ✅                   |               |                      |
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
 
