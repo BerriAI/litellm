@@ -1,12 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
-import {
-  Card,
-  Title,
-  Text,
-  TextInput,
-  Button as TremorButton,
-} from "@tremor/react";
+import { Card, Title, Text, TextInput, Button as TremorButton } from "@tremor/react";
 import { v4 as uuidv4 } from "uuid";
 
 import { Select, Spin, Typography, Tooltip, Input, Upload, Modal, Button } from "antd";
@@ -57,6 +51,8 @@ import {
   ArrowUpOutlined,
 } from "@ant-design/icons";
 import NotificationsManager from "../molecules/notifications_manager";
+import { makeOpenAIEmbeddingsRequest } from "./llm_calls/embeddings_api";
+import { truncateString } from "./chatUtils";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -497,6 +493,13 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     setChatHistory((prevHistory) => [...prevHistory, { role: "assistant", content: imageUrl, model, isImage: true }]);
   };
 
+  const updateEmbeddingsUI = (embeddings: string, model?: string) => {
+    setChatHistory((prevHistory) => [
+      ...prevHistory,
+      { role: "assistant", content: truncateString(embeddings, 100), model, isEmbeddings: true },
+    ]);
+  };
+
   const updateChatImageUI = (imageUrl: string, model?: string) => {
     setChatHistory((prev) => {
       const last = prev[prev.length - 1];
@@ -785,6 +788,14 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
             selectedMCPTools, // Pass the selected tools array
+          );
+        } else if (endpointType === EndpointType.EMBEDDINGS) {
+          await makeOpenAIEmbeddingsRequest(
+            inputMessage,
+            (embeddings, model) => updateEmbeddingsUI(embeddings, model),
+            selectedModel,
+            effectiveApiKey,
+            selectedTags,
           );
         }
       }
@@ -1413,6 +1424,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
                     onKeyDown={handleKeyDown}
                     placeholder={
                       endpointType === EndpointType.CHAT ||
+                      endpointType === EndpointType.EMBEDDINGS ||
                       endpointType === EndpointType.RESPONSES ||
                       endpointType === EndpointType.ANTHROPIC_MESSAGES
                         ? "Type your message... (Shift+Enter for new line)"
