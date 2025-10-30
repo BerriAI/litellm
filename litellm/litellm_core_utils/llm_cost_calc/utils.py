@@ -634,7 +634,7 @@ class CostCalculatorUtils:
     @staticmethod
     def route_image_generation_cost_calculator(
         model: str,
-        completion_response: Any,
+        completion_response: ImageResponse,
         custom_llm_provider: Optional[str] = None,
         quality: Optional[str] = None,
         n: Optional[int] = None,
@@ -660,6 +660,13 @@ class CostCalculatorUtils:
         from litellm.llms.vertex_ai.image_generation.cost_calculator import (
             cost_calculator as vertex_ai_image_cost_calculator,
         )
+
+        if size is None:
+            size = completion_response.size or "1024-x-1024"
+        if quality is None:
+            quality = completion_response.quality or "standard"
+        if n is None:
+            n = len(completion_response.data) if completion_response.data else 0
 
         if custom_llm_provider == litellm.LlmProviders.VERTEX_AI.value:
             if isinstance(completion_response, ImageResponse):

@@ -859,15 +859,6 @@ def completion_cost(  # noqa: PLR0915
                             "custom_llm_provider", custom_llm_provider or None
                         )
                         region_name = hidden_params.get("region_name", region_name)
-                        size = hidden_params.get("optional_params", {}).get(
-                            "size", "1024-x-1024"
-                        )  # openai default
-                        quality = hidden_params.get("optional_params", {}).get(
-                            "quality", "hd"
-                        )  # openai default
-                        n = hidden_params.get("optional_params", {}).get(
-                            "n", 1
-                        )  # openai default
                 else:
                     if model is None:
                         raise ValueError(
@@ -894,7 +885,9 @@ def completion_cost(  # noqa: PLR0915
                                 str(e)
                             )
                         )
-                if CostCalculatorUtils._call_type_has_image_response(call_type):
+                if CostCalculatorUtils._call_type_has_image_response(
+                    call_type
+                ) and isinstance(completion_response, ImageResponse):
                     ### IMAGE GENERATION COST CALCULATION ###
                     return CostCalculatorUtils.route_image_generation_cost_calculator(
                         model=model,
