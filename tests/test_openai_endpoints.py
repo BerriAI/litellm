@@ -556,7 +556,7 @@ async def test_proxy_all_models():
         await chat_completion(
             session=session,
             key=LITELLM_MASTER_KEY,
-            model="anthropic/claude-3-5-sonnet-latest",
+            model="anthropic/claude-sonnet-4-5-20250929",
         )
 
 

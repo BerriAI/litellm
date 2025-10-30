@@ -1,8 +1,9 @@
 import asyncio
 import os
 import ssl
+import sys
 import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 import certifi
 import httpx
@@ -44,6 +45,46 @@ headers = {
 
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
+
+
+def _prepare_request_data_and_content(
+    data: Optional[Union[dict, str, bytes]] = None,
+    content: Any = None,
+) -> Tuple[Optional[Union[dict, Mapping]], Any]:
+    """
+    Helper function to route data/content parameters correctly for httpx requests
+    
+    This prevents httpx DeprecationWarnings that cause memory leaks.
+    
+    Background:
+    - httpx shows a DeprecationWarning when you pass bytes/str to `data=`
+    - It wants you to use `content=` instead for bytes/str
+    - The warning itself leaks memory when triggered repeatedly
+    
+    Solution:
+    - Move bytes/str from `data=` to `content=` before calling build_request
+    - Keep dicts in `data=` (that's still the correct parameter for dicts)
+    
+    Args:
+        data: Request data (can be dict, str, or bytes)
+        content: Request content (raw bytes/str)
+        
+    Returns:
+        Tuple of (request_data, request_content) properly routed for httpx
+    """
+    request_data = None
+    request_content = content
+    
+    if data is not None:
+        if isinstance(data, (bytes, str)):
+            # Bytes/strings belong in content= (only if not already provided)
+            if content is None:
+                request_content = data
+        else:
+            # dict/Mapping stays in data= parameter
+            request_data = data
+    
+    return request_data, request_content
 
 
 def get_ssl_configuration(
@@ -113,6 +154,28 @@ def get_ssl_configuration(
             # Use optimized cipher list that strongly prefers fast ciphers
             # but falls back to widely compatible ones
             custom_ssl_context.set_ciphers(DEFAULT_SSL_CIPHERS)
+
+        # Configure ECDH curve for key exchange (e.g., to disable PQC and improve performance)
+        # Set SSL_ECDH_CURVE env var or litellm.ssl_ecdh_curve to 'X25519' to disable PQC
+        # Common valid curves: X25519, prime256v1, secp384r1, secp521r1
+        ssl_ecdh_curve = os.getenv("SSL_ECDH_CURVE", litellm.ssl_ecdh_curve)
+        if ssl_ecdh_curve and isinstance(ssl_ecdh_curve, str):
+            try:
+                custom_ssl_context.set_ecdh_curve(ssl_ecdh_curve)
+                verbose_logger.debug(f"SSL ECDH curve set to: {ssl_ecdh_curve}")
+            except AttributeError:
+                verbose_logger.warning(
+                    f"SSL ECDH curve configuration not supported. "
+                    f"Python version: {sys.version.split()[0]}, OpenSSL version: {ssl.OPENSSL_VERSION}. "
+                    f"Requested curve: {ssl_ecdh_curve}. Continuing with default curves."
+                )
+            except ValueError as e:
+                # Invalid curve name
+                verbose_logger.warning(
+                    f"Invalid SSL ECDH curve name: '{ssl_ecdh_curve}'. {e}. "
+                    f"Common valid curves: X25519, prime256v1, secp384r1, secp521r1. "
+                    f"Continuing with default curves (including PQC)."
+                )
 
         # Use our custom SSL context instead of the original ssl_verify value
         return custom_ssl_context
@@ -278,17 +341,20 @@ class AsyncHTTPHandler:
             if timeout is None:
                 timeout = self.timeout
 
+            # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
+            request_data, request_content = _prepare_request_data_and_content(data, content)
+                
             req = self.client.build_request(
                 "POST",
                 url,
-                data=data,  # type: ignore
+                data=request_data,
                 json=json,
                 params=params,
                 headers=headers,
                 timeout=timeout,
                 files=files,
-                content=content,
-            )
+                content=request_content,
+            )        
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
@@ -341,19 +407,23 @@ class AsyncHTTPHandler:
     async def put(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,  # type: ignore
+        data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         stream: bool = False,
+        content: Any = None,
     ):
         try:
             if timeout is None:
                 timeout = self.timeout
 
+            # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
+            request_data, request_content = _prepare_request_data_and_content(data, content)
+
             req = self.client.build_request(
-                "PUT", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+                "PUT", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
             )
             response = await self.client.send(req)
             response.raise_for_status()
@@ -401,19 +471,23 @@ class AsyncHTTPHandler:
     async def patch(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,  # type: ignore
+        data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         stream: bool = False,
+        content: Any = None,
     ):
         try:
             if timeout is None:
                 timeout = self.timeout
 
+            # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
+            request_data, request_content = _prepare_request_data_and_content(data, content)
+
             req = self.client.build_request(
-                "PATCH", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+                "PATCH", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
             )
             response = await self.client.send(req)
             response.raise_for_status()
@@ -461,18 +535,23 @@ class AsyncHTTPHandler:
     async def delete(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,  # type: ignore
+        data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         stream: bool = False,
+        content: Any = None,
     ):
         try:
             if timeout is None:
                 timeout = self.timeout
+            
+            # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
+            request_data, request_content = _prepare_request_data_and_content(data, content)
+            
             req = self.client.build_request(
-                "DELETE", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+                "DELETE", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
             )
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -520,8 +599,11 @@ class AsyncHTTPHandler:
 
         Used for retrying connection client errors.
         """
+        # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
+        request_data, request_content = _prepare_request_data_and_content(data, content)
+        
         req = client.build_request(
-            "POST", url, data=data, json=json, params=params, headers=headers, content=content  # type: ignore
+            "POST", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
         )
         response = await client.send(req, stream=stream)
         response.raise_for_status()
@@ -775,21 +857,24 @@ class HTTPHandler:
         logging_obj: Optional[LiteLLMLoggingObject] = None,
     ):
         try:
+            # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
+            request_data, request_content = _prepare_request_data_and_content(data, content)
+            
             if timeout is not None:
                 req = self.client.build_request(
                     "POST",
                     url,
-                    data=data,  # type: ignore
+                    data=request_data,  # type: ignore
                     json=json,
                     params=params,
                     headers=headers,
                     timeout=timeout,
                     files=files,
-                    content=content,  # type: ignore
+                    content=request_content,  # type: ignore
                 )
             else:
                 req = self.client.build_request(
-                    "POST", url, data=data, json=json, params=params, headers=headers, files=files, content=content  # type: ignore
+                    "POST", url, data=request_data, json=json, params=params, headers=headers, files=files, content=request_content  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -817,21 +902,25 @@ class HTTPHandler:
     def patch(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,
+        data: Optional[Union[dict, str, bytes]] = None,
         json: Optional[Union[dict, str]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         stream: bool = False,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        content: Any = None,
     ):
         try:
+            # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
+            request_data, request_content = _prepare_request_data_and_content(data, content)
+            
             if timeout is not None:
                 req = self.client.build_request(
-                    "PATCH", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+                    "PATCH", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
                 )
             else:
                 req = self.client.build_request(
-                    "PATCH", url, data=data, json=json, params=params, headers=headers  # type: ignore
+                    "PATCH", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -860,21 +949,25 @@ class HTTPHandler:
     def put(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,
+        data: Optional[Union[dict, str, bytes]] = None,
         json: Optional[Union[dict, str]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         stream: bool = False,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        content: Any = None,
     ):
         try:
+            # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
+            request_data, request_content = _prepare_request_data_and_content(data, content)
+            
             if timeout is not None:
                 req = self.client.build_request(
-                    "PUT", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+                    "PUT", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
                 )
             else:
                 req = self.client.build_request(
-                    "PUT", url, data=data, json=json, params=params, headers=headers  # type: ignore
+                    "PUT", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             return response
@@ -890,21 +983,25 @@ class HTTPHandler:
     def delete(
         self,
         url: str,
-        data: Optional[Union[dict, str]] = None,  # type: ignore
+        data: Optional[Union[dict, str, bytes]] = None,  # type: ignore
         json: Optional[dict] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         stream: bool = False,
+        content: Any = None,
     ):
         try:
+            # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
+            request_data, request_content = _prepare_request_data_and_content(data, content)
+            
             if timeout is not None:
                 req = self.client.build_request(
-                    "DELETE", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+                    "DELETE", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
                 )
             else:
                 req = self.client.build_request(
-                    "DELETE", url, data=data, json=json, params=params, headers=headers  # type: ignore
+                    "DELETE", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             response.raise_for_status()

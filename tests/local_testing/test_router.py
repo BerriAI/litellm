@@ -105,7 +105,7 @@ async def test_router_provider_wildcard_routing():
     print("router model list = ", router.get_model_list())
 
     response1 = await router.acompletion(
-        model="anthropic/claude-3-5-sonnet-latest",
+        model="anthropic/claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -126,7 +126,7 @@ async def test_router_provider_wildcard_routing():
     print("response 3 = ", response3)
 
     response4 = await router.acompletion(
-        model="claude-3-5-sonnet-latest",
+        model="claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -266,7 +266,7 @@ def test_router_sensitive_keys():
                 {
                     "model_name": "gpt-3.5-turbo",  # openai model name
                     "litellm_params": {  # params for litellm completion/embedding call
-                        "model": "azure/gpt-4.1-nano",
+                        "model": "azure/gpt-4.1-mini",
                         "api_key": "special-key",
                     },
                     "model_info": {"id": 12345},
@@ -415,7 +415,7 @@ def test_exception_raising():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4.1-nano",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -527,7 +527,7 @@ def test_reading_key_from_model_list():
 def test_call_one_endpoint():
     # [PROD TEST CASE]
     # user passes one deployment they want to call on the router, we call the specified one
-    # this test makes a completion calls azure/gpt-4.1-nano, it should work
+    # this test makes a completion calls azure/gpt-4.1-mini, it should work
     try:
         print("Testing calling a specific deployment")
         old_api_key = os.environ["AZURE_API_KEY"]
@@ -536,7 +536,7 @@ def test_call_one_endpoint():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4.1-nano",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": old_api_key,
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -566,7 +566,7 @@ def test_call_one_endpoint():
 
         async def call_azure_completion():
             response = await router.acompletion(
-                model="azure/gpt-4.1-nano",
+                model="azure/gpt-4.1-mini",
                 messages=[{"role": "user", "content": "hello this request will pass"}],
                 specific_deployment=True,
             )
@@ -612,7 +612,7 @@ def test_router_azure_acompletion():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4.1-nano",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": old_api_key,
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -785,7 +785,7 @@ def test_router_context_window_check_pre_call_check_in_group_custom_model_info()
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4.1-nano",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -839,7 +839,7 @@ def test_router_context_window_check_pre_call_check():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4.1-nano",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -893,7 +893,7 @@ def test_router_context_window_check_pre_call_check_out_group():
             {
                 "model_name": "gpt-3.5-turbo-small",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4.1-nano",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -972,7 +972,7 @@ def test_router_region_pre_call_check(allowed_model_region):
         {
             "model_name": "gpt-3.5-turbo",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/gpt-4.1-nano",
+                "model": "azure/gpt-4.1-mini",
                 "api_key": os.getenv("AZURE_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
@@ -1119,16 +1119,7 @@ async def test_aimg_gen_on_router():
                 "litellm_params": {
                     "model": "dall-e-3",
                 },
-            },
-            {
-                "model_name": "dall-e-3",
-                "litellm_params": {
-                    "model": "azure/dall-e-3-test",
-                    "api_version": "2023-12-01-preview",
-                    "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
-                    "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
-                },
-            },
+            }
         ]
         router = Router(model_list=model_list, num_retries=3)
         response = await router.aimage_generation(
@@ -1163,16 +1154,7 @@ def test_img_gen_on_router():
                 "litellm_params": {
                     "model": "dall-e-3",
                 },
-            },
-            {
-                "model_name": "dall-e-3",
-                "litellm_params": {
-                    "model": "azure/dall-e-3-test",
-                    "api_version": "2023-12-01-preview",
-                    "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
-                    "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
-                },
-            },
+            }
         ]
         router = Router(model_list=model_list)
         response = router.image_generation(
@@ -1718,7 +1700,7 @@ async def test_router_amoderation():
         {
             "model_name": "openai-moderations",
             "litellm_params": {
-                "model": "text-moderation-stable",
+                "model": "omni-moderation-latest",
                 "api_key": os.getenv("OPENAI_API_KEY", None),
             },
         }
@@ -1727,7 +1709,7 @@ async def test_router_amoderation():
     router = Router(model_list=model_list)
     ## Test 1: user facing function
     result = await router.amoderation(
-        model="text-moderation-stable", input="this is valid good text"
+        model="omni-moderation-latest", input="this is valid good text"
     )
 
 
@@ -2572,7 +2554,7 @@ def test_is_team_specific_model():
 #             {
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
-#                     "model": "azure/gpt-4.1-nano",
+#                     "model": "azure/gpt-4.1-mini",
 #                     "api_key": os.getenv("AZURE_API_KEY"),
 #                     "api_base": os.getenv("AZURE_API_BASE"),
 #                     "tpm": 100000,
@@ -2582,7 +2564,7 @@ def test_is_team_specific_model():
 #             {
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
-#                     "model": "azure/gpt-4.1-nano",
+#                     "model": "azure/gpt-4.1-mini",
 #                     "api_key": os.getenv("AZURE_API_KEY"),
 #                     "api_base": os.getenv("AZURE_API_BASE"),
 #                     "tpm": 500,

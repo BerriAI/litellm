@@ -1,12 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
-import {
-  Card,
-  Title,
-  Text,
-  TextInput,
-  Button as TremorButton,
-} from "@tremor/react";
+import { Card, Title, Text, TextInput, Button as TremorButton } from "@tremor/react";
 import { v4 as uuidv4 } from "uuid";
 
 import { Select, Spin, Typography, Tooltip, Input, Upload, Modal, Button } from "antd";
@@ -37,6 +31,7 @@ import ChatImageRenderer from "./ChatImageRenderer";
 import { createChatMultimodalMessage, createChatDisplayMessage } from "./ChatImageUtils";
 import SessionManagement from "./SessionManagement";
 import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
+import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import {
   ApiOutlined,
   KeyOutlined,
@@ -56,6 +51,8 @@ import {
   ArrowUpOutlined,
 } from "@ant-design/icons";
 import NotificationsManager from "../molecules/notifications_manager";
+import { makeOpenAIEmbeddingsRequest } from "./llm_calls/embeddings_api";
+import { truncateString } from "./chatUtils";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -436,6 +433,25 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     });
   };
 
+  const updateSearchResults = (searchResults: any[]) => {
+    console.log("Received search results:", searchResults);
+    setChatHistory((prevHistory) => {
+      const lastMessage = prevHistory[prevHistory.length - 1];
+
+      if (lastMessage && lastMessage.role === "assistant") {
+        console.log("Updating message with search results");
+        const updatedMessage = {
+          ...lastMessage,
+          searchResults,
+        };
+
+        return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
+      }
+
+      return prevHistory;
+    });
+  };
+
   const handleResponseId = (responseId: string) => {
     console.log("Received response ID for session management:", responseId);
     if (useApiSessionManagement) {
@@ -475,6 +491,13 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
 
   const updateImageUI = (imageUrl: string, model: string) => {
     setChatHistory((prevHistory) => [...prevHistory, { role: "assistant", content: imageUrl, model, isImage: true }]);
+  };
+
+  const updateEmbeddingsUI = (embeddings: string, model?: string) => {
+    setChatHistory((prevHistory) => [
+      ...prevHistory,
+      { role: "assistant", content: truncateString(embeddings, 100), model, isEmbeddings: true },
+    ]);
   };
 
   const updateChatImageUI = (imageUrl: string, model?: string) => {
@@ -687,6 +710,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
             selectedMCPTools, // Pass the selected tools array
             updateChatImageUI, // Pass the image callback
+            updateSearchResults, // Pass the search results callback
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -764,6 +788,14 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
             selectedMCPTools, // Pass the selected tools array
+          );
+        } else if (endpointType === EndpointType.EMBEDDINGS) {
+          await makeOpenAIEmbeddingsRequest(
+            inputMessage,
+            (embeddings, model) => updateEmbeddingsUI(embeddings, model),
+            selectedModel,
+            effectiveApiKey,
+            selectedTags,
           );
         }
       }
@@ -1101,6 +1133,11 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
                           </div>
                         )}
 
+                      {/* Show search results at the start of assistant messages */}
+                      {message.role === "assistant" && message.searchResults && (
+                        <SearchResultsDisplay searchResults={message.searchResults} />
+                      )}
+
                       <div
                         className="whitespace-pre-wrap break-words max-w-full message-content"
                         style={{
@@ -1387,6 +1424,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
                     onKeyDown={handleKeyDown}
                     placeholder={
                       endpointType === EndpointType.CHAT ||
+                      endpointType === EndpointType.EMBEDDINGS ||
                       endpointType === EndpointType.RESPONSES ||
                       endpointType === EndpointType.ANTHROPIC_MESSAGES
                         ? "Type your message... (Shift+Enter for new line)"

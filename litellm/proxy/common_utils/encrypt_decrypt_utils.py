@@ -22,7 +22,8 @@ def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
     try:
         if isinstance(value, str):
             encrypted_value = encrypt_value(value=value, signing_key=signing_key)  # type: ignore
-            encrypted_value = base64.b64encode(encrypted_value).decode("utf-8")
+            # Use urlsafe_b64encode for URL-safe base64 encoding (replaces + with - and / with _)
+            encrypted_value = base64.urlsafe_b64encode(encrypted_value).decode("utf-8")
 
             return encrypted_value
 
@@ -45,7 +46,14 @@ def decrypt_value_helper(
 
     try:
         if isinstance(value, str):
-            decoded_b64 = base64.b64decode(value)
+            # Try URL-safe base64 decoding first (new format)
+            # Fall back to standard base64 decoding for backwards compatibility (old format)
+            try:
+                decoded_b64 = base64.urlsafe_b64decode(value)
+            except Exception:
+                # If URL-safe decoding fails, try standard base64 decoding for backwards compatibility
+                decoded_b64 = base64.b64decode(value)
+
             value = decrypt_value(value=decoded_b64, signing_key=signing_key)  # type: ignore
             return value
 
@@ -61,9 +69,12 @@ def decrypt_value_helper(
         verbose_proxy_logger.debug(
             f"Unable to decrypt value={value} for key: {key}, returning None"
         )
-        verbose_proxy_logger.exception(error_message)
-        # [Non-Blocking Exception. - this should not block decrypting other values]
-        return value if return_original_value else None
+        if return_original_value:
+            return value
+        else:
+            verbose_proxy_logger.exception(error_message)
+            # [Non-Blocking Exception. - this should not block decrypting other values]
+            return None
 
 
 def encrypt_value(value: str, signing_key: str):

@@ -117,10 +117,52 @@ litellm_settings:
 ```bash
 export SSL_CERTIFICATE="/path/to/certificate.pem"
 ```
+
 </TabItem>
 </Tabs>
 
-## 5. Use HTTP_PROXY environment variable
+## 5. Configure ECDH Curve for SSL/TLS Performance
+
+The `ssl_ecdh_curve` setting allows you to configure the Elliptic Curve Diffie-Hellman (ECDH) curve used for SSL/TLS key exchange. This is particularly useful for disabling Post-Quantum Cryptography (PQC) to improve performance in environments where PQC is not required.
+
+**Use Case:** Some OpenSSL 3.x systems enable PQC by default, which can slow down TLS handshakes. Setting the ECDH curve to `X25519` disables PQC and can significantly improve connection performance.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+litellm.ssl_ecdh_curve = "X25519"  # Disables PQC for better performance
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+litellm_settings:
+  ssl_ecdh_curve: "X25519"
+```
+
+</TabItem>  
+<TabItem value="env_var" label="Environment Variables">
+
+```bash
+export SSL_ECDH_CURVE="X25519"
+```
+
+</TabItem>
+</Tabs>
+
+**Common Valid Curves:**
+
+- `X25519` - Modern, fast curve (recommended for disabling PQC)
+- `prime256v1` - NIST P-256 curve
+- `secp384r1` - NIST P-384 curve
+- `secp521r1` - NIST P-521 curve
+
+**Note:** If an invalid curve name is provided or if your Python/OpenSSL version doesn't support this feature, LiteLLM will log a warning and continue with default curves.
+
+## 6. Use HTTP_PROXY environment variable
 
 Both httpx and aiohttp libraries use `urllib.request.getproxies` from environment variables. Before client initialization, you may set proxy (and optional SSL_CERT_FILE) by setting the environment variables:
 

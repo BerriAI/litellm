@@ -7,8 +7,18 @@ import httpx
 from pydantic import BaseModel
 
 import litellm
+from litellm import BEDROCK_INVOKE_PROVIDERS_LITERAL
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.llms.bedrock.image.amazon_nova_canvas_transformation import (
+    AmazonNovaCanvasConfig,
+)
+from litellm.llms.bedrock.image.amazon_stability3_transformation import (
+    AmazonStability3Config,
+)
+from litellm.llms.bedrock.image.amazon_titan_transformation import (
+    AmazonTitanImageGenerationConfig,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -63,7 +73,7 @@ class BedrockImageGeneration(BaseAWSLLM):
             extra_headers=extra_headers,
             logging_obj=logging_obj,
             prompt=prompt,
-            api_key=api_key
+            api_key=api_key,
         )
 
         if aimg_generation is True:
@@ -174,8 +184,14 @@ class BedrockImageGeneration(BaseAWSLLM):
             optional_params, model
         )
 
+        # Use the existing ARN-aware provider detection method
+        bedrock_provider = self.get_bedrock_invoke_provider(model)
         ### SET RUNTIME ENDPOINT ###
-        modelId = model
+        modelId = self.get_bedrock_model_id(
+            model=model,
+            provider=bedrock_provider,
+            optional_params=optional_params,
+        )
         _, proxy_endpoint_url = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=boto3_credentials_info.aws_bedrock_runtime_endpoint,
@@ -183,14 +199,17 @@ class BedrockImageGeneration(BaseAWSLLM):
         )
         proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
         data = self._get_request_body(
-            model=model, prompt=prompt, optional_params=optional_params
+            model=model,
+            prompt=prompt,
+            optional_params=optional_params,
+            bedrock_provider=bedrock_provider,
         )
 
         # Make POST Request
         body = json.dumps(data).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
-            headers = {"Content-Type": "application/json", **extra_headers} 
+            headers = {"Content-Type": "application/json", **extra_headers}
 
         prepped = self.get_request_headers(
             credentials=boto3_credentials_info.credentials,
@@ -201,7 +220,7 @@ class BedrockImageGeneration(BaseAWSLLM):
             headers=headers,
             api_key=api_key,
         )
-            
+
         ## LOGGING
         logging_obj.pre_call(
             input=prompt,
@@ -222,6 +241,7 @@ class BedrockImageGeneration(BaseAWSLLM):
     def _get_request_body(
         self,
         model: str,
+        bedrock_provider: Optional[BEDROCK_INVOKE_PROVIDERS_LITERAL],
         prompt: str,
         optional_params: dict,
     ) -> dict:
@@ -233,9 +253,6 @@ class BedrockImageGeneration(BaseAWSLLM):
         Returns:
             dict: The request body to use for the Bedrock Image Generation API
         """
-        # Use the existing ARN-aware provider detection method
-        bedrock_provider = self.get_bedrock_invoke_provider(model)
-
         if bedrock_provider == "amazon" or bedrock_provider == "nova":
             # Handle Amazon Nova Canvas models
             provider = "amazon"
@@ -306,15 +323,21 @@ class BedrockImageGeneration(BaseAWSLLM):
         if response_dict is None:
             raise ValueError("Error in response object format, got None")
 
-        config_class = (
-            litellm.AmazonStability3Config
-            if litellm.AmazonStability3Config._is_stability_3_model(model=model)
-            else (
-                litellm.AmazonNovaCanvasConfig
-                if litellm.AmazonNovaCanvasConfig._is_nova_model(model=model)
-                else litellm.AmazonStabilityConfig
-            )
-        )
+        config_class: Union[
+            type[AmazonTitanImageGenerationConfig],
+            type[AmazonNovaCanvasConfig],
+            type[AmazonStability3Config],
+            type[litellm.AmazonStabilityConfig],
+        ]
+        if AmazonTitanImageGenerationConfig._is_titan_model(model=model):
+            config_class = AmazonTitanImageGenerationConfig
+        elif AmazonNovaCanvasConfig._is_nova_model(model=model):
+            config_class = AmazonNovaCanvasConfig
+        elif AmazonStability3Config._is_stability_3_model(model=model):
+            config_class = AmazonStability3Config
+        else:
+            config_class = litellm.AmazonStabilityConfig
+
         config_class.transform_response_dict_to_openai_response(
             model_response=model_response,
             response_dict=response_dict,

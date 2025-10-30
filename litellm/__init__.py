@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES ####################
+### INIT VARIABLES ######################
 import threading
 import os
 from typing import (
@@ -28,6 +28,7 @@ from litellm.types.utils import (
     all_litellm_params,
     all_litellm_params as _litellm_completion_params,
     CredentialItem,
+    PriorityReservationDict,
 )  # maintain backwards compatibility for root param
 from litellm._logging import (
     set_verbose,
@@ -89,7 +90,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     LiteLLM_UpperboundKeyGenerateParams,
 )
-from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
+from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders, SearchProviders
 from litellm.types.utils import PriorityReservationSettings
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
@@ -104,7 +105,7 @@ if litellm_mode == "DEV":
 # Register async client cleanup to prevent resource leaks
 register_async_client_cleanup()
 ####################################################
-if set_verbose == True:
+if set_verbose:
     _turn_on_debug()
 ####################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
@@ -156,7 +157,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "cloudzero",
     "posthog",
 ]
-configured_cold_storage_logger: Optional[
+cold_storage_custom_logger: Optional[
     _custom_logger_compatible_callbacks_literal
 ] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -263,6 +264,7 @@ use_client: bool = False
 ssl_verify: Union[str, bool] = True
 ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
+ssl_ecdh_curve: Optional[str] = None  # Set to 'X25519' to disable PQC and improve performance
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
@@ -368,7 +370,7 @@ disable_copilot_system_to_assistant: bool = False  # If false (default), convert
 public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
 #### REQUEST PRIORITIZATION #######
-priority_reservation: Optional[Dict[str, float]] = None
+priority_reservation: Optional[Dict[str, Union[float, PriorityReservationDict]]] = None
 priority_reservation_settings: "PriorityReservationSettings" = (
     PriorityReservationSettings()
 )
@@ -411,6 +413,7 @@ output_parse_pii: bool = False
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
+cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
 custom_prompt_dict: Dict[str, dict] = {}
 check_provider_endpoint = False
 
@@ -472,6 +475,7 @@ nlp_cloud_models: Set = set()
 aleph_alpha_models: Set = set()
 bedrock_models: Set = set()
 bedrock_converse_models: Set = set(BEDROCK_CONVERSE_MODELS)
+fal_ai_models: Set = set()
 fireworks_ai_models: Set = set()
 fireworks_ai_embedding_models: Set = set()
 deepinfra_models: Set = set()
@@ -660,6 +664,8 @@ def add_known_models():
             text_completion_codestral_models.add(key)
         elif value.get("litellm_provider") == "xai":
             xai_models.add(key)
+        elif value.get("litellm_provider") == "fal_ai":
+            fal_ai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
             deepseek_models.add(key)
         elif value.get("litellm_provider") == "meta_llama":
@@ -765,6 +771,9 @@ azure_llms = {
     "gpt-35-turbo": "azure/gpt-35-turbo",
     "gpt-35-turbo-16k": "azure/gpt-35-turbo-16k",
     "gpt-35-turbo-instruct": "azure/gpt-35-turbo-instruct",
+    "azure/gpt-41":"gpt-4.1", 
+    "azure/gpt-41-mini":"gpt-4.1-mini",
+    "azure/gpt-41-nano":"gpt-4.1-nano"
 }
 
 azure_embedding_models = {
@@ -807,6 +816,7 @@ model_list = list(
     | gemini_models
     | text_completion_codestral_models
     | xai_models
+    | fal_ai_models
     | deepseek_models
     | azure_ai_models
     | voyage_models
@@ -848,6 +858,7 @@ model_list = list(
     | wandb_models
     | ovhcloud_models
     | lemonade_models
+    | set(clarifai_models)
 )
 
 model_list_set = set(model_list)
@@ -888,6 +899,7 @@ models_by_provider: dict = {
     "aleph_alpha": aleph_alpha_models,
     "text-completion-codestral": text_completion_codestral_models,
     "xai": xai_models,
+    "fal_ai": fal_ai_models,
     "deepseek": deepseek_models,
     "mistral": mistral_chat_models,
     "azure_ai": azure_ai_models,
@@ -933,6 +945,7 @@ models_by_provider: dict = {
     "wandb": wandb_models,
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
     "lemonade": lemonade_models,
+    "clarifai": clarifai_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -972,6 +985,9 @@ all_embedding_models = (
 
 ####### IMAGE GENERATION MODELS ###################
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
+
+####### VIDEO GENERATION MODELS ###################
+openai_video_generation_models = ["sora-2"]
 
 from .timeout import timeout
 from .cost_calculator import completion_cost
@@ -1067,6 +1083,7 @@ from .llms.infinity.rerank.transformation import InfinityRerankConfig
 from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
 from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
+from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
 from .llms.meta_llama.chat.transformation import LlamaAPIConfig
@@ -1130,6 +1147,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import
 from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
     AmazonInvokeNovaConfig,
 )
+from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
+    AmazonQwen3Config,
+)
 from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
     AmazonAnthropicConfig,
 )
@@ -1166,6 +1186,7 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
     AmazonTitanV2Config,
 )
 from .llms.cohere.chat.transformation import CohereChatConfig
+from .llms.cohere.chat.v2_transformation import CohereV2ChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
 from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
@@ -1198,7 +1219,6 @@ from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig,
 )
 
-from .llms.snowflake.chat.transformation import SnowflakeConfig
 from .llms.gradient_ai.chat.transformation import GradientAIConfig
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
@@ -1234,7 +1254,6 @@ from .llms.cerebras.chat import CerebrasConfig
 from .llms.baseten.chat import BasetenConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
-from .llms.ai21.chat.transformation import AI21ChatConfig
 from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
 from .llms.fireworks_ai.audio_transcription.transformation import (
@@ -1287,6 +1306,7 @@ from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
 from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
 from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
 from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
+from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .main import *  # type: ignore
 from .integrations import *
@@ -1320,10 +1340,13 @@ from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .images.main import *
+from .videos.main import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
+from .ocr.main import *
+from .search.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *

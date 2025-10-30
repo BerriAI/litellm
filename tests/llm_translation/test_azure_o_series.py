@@ -18,13 +18,13 @@ from litellm import Choices, Message, ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 
 
-class TestAzureOpenAIO1(BaseOSeriesModelsTest, BaseLLMChatTest):
+class TestAzureOpenAIO3Mini(BaseOSeriesModelsTest, BaseLLMChatTest):
     def get_base_completion_call_args(self):
         return {
-            "model": "azure/o1",
-            "api_key": os.getenv("AZURE_OPENAI_O1_KEY"),
-            "api_base": "https://openai-prod-test.openai.azure.com",
-            "api_version": "2024-12-01-preview"
+            "model": "azure/o3-mini",
+            "api_key": os.getenv("AZURE_O3_API_KEY"),
+            "api_base": os.getenv("AZURE_O3_API_BASE"),
+            "api_version": "2025-01-01-preview"
         }
 
     def get_client(self):

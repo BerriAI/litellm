@@ -198,8 +198,8 @@ async def test_update_spend_logs_exponential_backoff():
 
     # Verify exponential backoff
     assert len(sleep_times) == 2  # Should have slept twice
-    assert sleep_times[0] == 1  # First retry after 2^0 seconds
-    assert sleep_times[1] == 2  # Second retry after 2^1 seconds
+    assert sleep_times[0] >= 1 and sleep_times[0] <= 2  # First retry after 2^0~2^1 seconds
+    assert sleep_times[1] >= 2 and sleep_times[1] <= 4 # Second retry after 2^1~2^2 seconds
 
 
 @pytest.mark.asyncio

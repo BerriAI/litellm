@@ -16,6 +16,7 @@ import { CopyIcon, CheckIcon } from "lucide-react";
 import { mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers";
 import { parseErrorMessage } from "../shared/errorUtils";
 import AutoRotationView from "../common_components/AutoRotationView";
+import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -107,6 +108,9 @@ export default function KeyInfoView({
         delete formValues.prompts;
       }
 
+      // Handle max budget empty string
+      formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
+
       // Handle object_permission updates
       if (formValues.vector_stores !== undefined) {
         formValues.object_permission = {
@@ -139,6 +143,11 @@ export default function KeyInfoView({
         }
         delete formValues.mcp_tool_permissions;
       }
+
+      formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
+      formValues.tpm_limit = mapEmptyStringToNull(formValues.tpm_limit);
+      formValues.rpm_limit = mapEmptyStringToNull(formValues.rpm_limit);
+      formValues.max_parallel_requests = mapEmptyStringToNull(formValues.max_parallel_requests);
 
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
@@ -630,7 +639,8 @@ export default function KeyInfoView({
                   <div>
                     <Text className="font-medium">Allowed Pass Through Routes</Text>
                     <Text>
-                      {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) && currentKeyData.metadata.allowed_passthrough_routes.length > 0
+                      {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) &&
+                      currentKeyData.metadata.allowed_passthrough_routes.length > 0
                         ? currentKeyData.metadata.allowed_passthrough_routes.map((route, index) => (
                             <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
                               {route}
