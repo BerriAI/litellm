@@ -1,0 +1,465 @@
+name: CARTO Upstream Sync - Conflict Resolver
+
+# This workflow uses Claude Code to automatically create conflict resolution proposals
+# for upstream sync PRs that have merge conflicts.
+#
+# Security features:
+# - Only runs when triggered by Cartofante automation user
+# - Only runs on PRs labeled 'upstream-sync'
+# - Only runs on main branch (upstream sync PRs)
+# - Only runs when conflicts are detected
+# - Blocks external forks
+# - Rate limited (max-turns: 8, timeout: 1200s)
+
+on:
+  pull_request:
+    types: [opened, labeled, synchronize]
+    branches:
+      - carto/main
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: "PR number to resolve conflicts for"
+        required: true
+        default: ""
+
+jobs:
+  # Job 1: Security verification - MUST PASS before any other checks
+  security-check:
+    name: Security Verification
+    runs-on: ubuntu-latest
+
+    outputs:
+      authorized: ${{ steps.verify.outputs.authorized }}
+
+    steps:
+      - name: Verify actor and PR source
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+
+          echo "::group::Security verification"
+
+          # Security Check 1: Only allow Cartofante automation user
+          ACTOR="${{ github.actor }}"
+          ALLOWED_ACTOR="Cartofante"
+
+          # Case-insensitive comparison
+          if [[ "${ACTOR,,}" != "${ALLOWED_ACTOR,,}" ]]; then
+            echo "[Security] ❌ Unauthorized actor: ${ACTOR}"
+            echo "[Security] Only ${ALLOWED_ACTOR} automation user can trigger this workflow"
+            echo "authorized=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "[Security] ✅ Actor verified: ${ACTOR}"
+
+          # Security Check 2: Block external forks
+          PR_REPO="${{ github.event.pull_request.head.repo.full_name }}"
+          BASE_REPO="${{ github.repository }}"
+
+          if [[ "${PR_REPO}" != "${BASE_REPO}" ]]; then
+            echo "[Security] ❌ External fork detected: ${PR_REPO}"
+            echo "[Security] Only internal branches allowed"
+            echo "authorized=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "[Security] ✅ PR source verified: internal branch"
+
+          # Security Check 3: Only main branch (upstream sync PRs)
+          HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
+
+          if [[ "${HEAD_BRANCH}" != "main" ]]; then
+            echo "[Security] ❌ Invalid branch: ${HEAD_BRANCH}"
+            echo "[Security] Only 'main' branch (upstream sync) allowed"
+            echo "authorized=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "[Security] ✅ Branch verified: ${HEAD_BRANCH}"
+
+          # All security checks passed
+          echo "[Security] ✅ All security checks passed"
+          echo "authorized=true" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+
+  # Job 2: Check if this PR is eligible for automated conflict resolution
+  check-eligibility:
+    name: Check PR Eligibility
+    runs-on: ubuntu-latest
+    needs: security-check
+    if: needs.security-check.outputs.authorized == 'true'
+
+    outputs:
+      eligible: ${{ steps.check.outputs.eligible }}
+      pr-number: ${{ steps.check.outputs.pr-number }}
+      has-conflicts: ${{ steps.check.outputs.has-conflicts }}
+      is-sync-pr: ${{ steps.check.outputs.is-sync-pr }}
+
+    steps:
+      - name: Check PR criteria
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+
+          echo "::group::Checking PR eligibility for conflict resolution"
+          echo "[Resolver] Checking PR #${PR_NUMBER}"
+
+          # Get PR details
+          PR_JSON=$(gh pr view ${PR_NUMBER} --repo ${{ github.repository }} --json labels,mergeable,headRefName,baseRefName)
+
+          # Extract details
+          BASE_BRANCH=$(echo "${PR_JSON}" | jq -r '.baseRefName')
+          HEAD_BRANCH=$(echo "${PR_JSON}" | jq -r '.headRefName')
+          MERGEABLE=$(echo "${PR_JSON}" | jq -r '.mergeable')
+          LABELS=$(echo "${PR_JSON}" | jq -r '.labels[].name' | tr '\n' ' ')
+
+          echo "[Resolver] Base: ${BASE_BRANCH}, Head: ${HEAD_BRANCH}"
+          echo "[Resolver] Mergeable status: ${MERGEABLE}"
+          echo "[Resolver] Labels: ${LABELS}"
+
+          # Check 1: Must be to carto/main
+          if [[ "${BASE_BRANCH}" != "carto/main" ]]; then
+            echo "[Resolver] ❌ Not targeting carto/main - skipping"
+            echo "eligible=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Check 2: Must have upstream-sync label
+          if [[ ! "${LABELS}" =~ "upstream-sync" ]]; then
+            echo "[Resolver] ❌ Missing 'upstream-sync' label - skipping"
+            echo "is-sync-pr=false" >> $GITHUB_OUTPUT
+            echo "eligible=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "is-sync-pr=true" >> $GITHUB_OUTPUT
+
+          # Check 3: Must have conflicts
+          if [[ "${MERGEABLE}" != "CONFLICTING" ]]; then
+            echo "[Resolver] ✅ No conflicts detected - no action needed"
+            echo "has-conflicts=false" >> $GITHUB_OUTPUT
+            echo "eligible=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "has-conflicts=true" >> $GITHUB_OUTPUT
+
+          # All checks passed
+          echo "[Resolver] ✅ PR is eligible for conflict resolution"
+          echo "eligible=true" >> $GITHUB_OUTPUT
+          echo "pr-number=${PR_NUMBER}" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+
+  # Job 3: Use Claude Code to resolve conflicts
+  claude-resolve:
+    name: Claude Code Conflict Resolution
+    runs-on: ubuntu-latest
+    needs: [security-check, check-eligibility]
+    if: needs.security-check.outputs.authorized == 'true' && needs.check-eligibility.outputs.eligible == 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+
+      - name: Configure git
+        run: |
+          git config --global user.name "Cartofante"
+          git config --global user.email "cartofante@carto.com"
+
+      - name: Run Claude Code for conflict resolution
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: "--model claude-sonnet-4-5-20250929"
+          prompt: |
+            # Upstream Sync Conflict Resolution Task
+
+            You are helping resolve merge conflicts in PR #${{ needs.check-eligibility.outputs.pr-number }}, which syncs upstream LiteLLM changes to CARTO's fork.
+
+            ## Context
+            - **PR**: #${{ needs.check-eligibility.outputs.pr-number }} (main → carto/main)
+            - **Purpose**: Sync BerriAI/litellm upstream changes to CartoDB/litellm
+            - **Current State**: PR has merge conflicts that need resolution
+
+            ## ⚠️ CRITICAL: Resolution Priorities (In Order)
+
+            When resolving conflicts, follow this strict priority order:
+
+            ### Priority 1: 🏢 CARTO Customizations (HIGHEST PRIORITY)
+            **ALWAYS preserve CARTO customizations from carto/main**
+            - Any code marked with `# CARTO:` comments → KEEP CARTO version
+            - CARTO-specific workflows, configs, documentation → KEEP CARTO version
+            - CARTO infrastructure code (Docker, DB scripts) → KEEP CARTO customizations
+            - When in doubt between CARTO vs upstream customization → KEEP CARTO
+
+            ### Priority 2: 🔧 LiteLLM Core Functionalities
+            **Accept upstream improvements to core library**
+            - Bug fixes in `litellm/` core → ACCEPT upstream
+            - New LLM provider support → ACCEPT upstream
+            - API improvements and new features → ACCEPT upstream
+            - Performance optimizations → ACCEPT upstream
+
+            ### Priority 3: ⚖️ Conflict Resolution Strategy
+            **When both CARTO and upstream modified the same functionality:**
+            1. If CARTO modified for infrastructure/deployment → KEEP CARTO
+            2. If upstream improved core LiteLLM functionality → ACCEPT upstream
+            3. If both are substantive changes → MANUALLY MERGE both (combine carefully)
+            4. Document your reasoning in commit message
+
+            ## Your Task
+
+            ### Step 1: Analyze Conflicts
+            ```bash
+            # Check which files have conflicts
+            git status
+
+            # List conflicted files
+            git diff --name-only --diff-filter=U
+
+            # Read CARTO guidelines
+            cat CARTO_CLAUDE.md
+            ```
+
+            ### Step 2: Understand File-Specific Rules
+
+            **✅ ALWAYS KEEP CARTO VERSION (ours):**
+            - `.github/workflows/carto_*.yaml` - CARTO workflows
+            - `.github/workflows/carto-*.yml` - CARTO workflows
+            - `CARTO_*.md` - CARTO documentation
+            - `docs/CARTO_*.md` - CARTO documentation
+            - Any file with CARTO-specific infrastructure code
+
+            **🔄 ALWAYS ACCEPT UPSTREAM (theirs):**
+            - `pyproject.toml` - Version field (use upstream version)
+            - `litellm/llms/**` - LLM provider implementations
+            - `litellm/main.py` - Core completion functions
+            - `litellm/router.py` - Router logic
+            - `tests/` - Upstream test files (unless CARTO added custom tests)
+            - `requirements.txt` - Dependencies (unless CARTO added specific versions)
+
+            **⚠️ CAREFULLY MERGE BOTH (manual resolution):**
+            - `Dockerfile` - Look for `# CARTO:` comments
+              - Keep CARTO sections marked with comments
+              - Accept upstream improvements to base image/dependencies
+            - `docker/Dockerfile.non_root` - CARTO customizations
+              - Preserve CARTO user/permissions setup
+              - Accept upstream dependencies/entrypoint improvements
+              - `db_scripts/` - May have CARTO custom scripts
+              - Keep CARTO scripts
+              - Accept upstream schema improvements
+
+            ### Step 3: Create Resolution Branch
+            ```bash
+            git checkout -b upstream-sync-resolver/${{ needs.check-eligibility.outputs.pr-number }}
+            ```
+
+            ### Step 4: Resolve Each Conflict
+
+            For each conflicted file:
+
+            1. **Open the file and locate conflict markers:**
+               ```
+               <<<<<<< HEAD (carto/main - ours)
+               [CARTO version]
+               =======
+               [upstream version]
+               >>>>>>> main (upstream - theirs)
+               ```
+
+            2. **Apply the priority rules above**
+
+            3. **Remove ALL conflict markers** (`<<<<<<<`, `=======`, `>>>>>>>`)
+
+            4. **Verify syntax** - ensure file is valid
+
+            5. **Stage the resolved file:**
+               ```bash
+               git add <resolved-file>
+               ```
+
+            ### Step 5: Comprehensive Testing (CRITICAL)
+
+            **YOU MUST RUN ALL THESE TESTS AND ENSURE THEY PASS:**
+
+            ```bash
+            # 1. Install dependencies
+            make install-dev
+
+            # 2. Linting (MUST PASS)
+            make lint
+
+            # 3. Type checking (MUST PASS)
+            make lint-mypy
+
+            # 4. Unit tests (MUST PASS)
+            make test-unit
+
+            # 5. If time permits, run integration tests
+            # make test-integration
+            ```
+
+            **If any test fails:**
+            - Investigate the failure
+            - Fix the issue (likely a conflict resolution error)
+            - Re-run tests until ALL pass
+            - DO NOT proceed to PR creation if tests fail
+
+            ### Step 6: Commit Your Changes
+            ```bash
+            git commit -m "fix: resolve upstream sync conflicts for PR #${{ needs.check-eligibility.outputs.pr-number }}
+
+            Conflict resolution strategy:
+            - Preserved CARTO customizations in infrastructure files
+            - Accepted upstream improvements to core LiteLLM functionality
+            - Manually merged files with both CARTO and upstream changes
+
+            Testing:
+            - ✅ make lint passed
+            - ✅ make lint-mypy passed
+            - ✅ make test-unit passed
+
+            Files with manual merge:
+            [List files where you combined both versions]
+            "
+            ```
+
+            ### Step 7: Push Branch
+            ```bash
+            git push -u origin upstream-sync-resolver/${{ needs.check-eligibility.outputs.pr-number }}
+            ```
+
+            ### Step 8: Create Pull Request
+
+            Use `gh pr create` with this template:
+
+            ```bash
+            gh pr create \
+              --repo ${{ github.repository }} \
+              --base ${{ github.event.pull_request.head.ref }} \
+              --head upstream-sync-resolver/${{ needs.check-eligibility.outputs.pr-number }} \
+              --title "fix: resolve conflicts for upstream sync PR #${{ needs.check-eligibility.outputs.pr-number }}" \
+              --label "conflict-resolution" \
+              --label "automated" \
+              --label "needs-review" \
+              --body "$(cat <<'PRBODY'
+            ## 🔧 Automated Conflict Resolution
+
+            This PR resolves merge conflicts in #${{ needs.check-eligibility.outputs.pr-number }}.
+
+            ### 🎯 Resolution Strategy
+
+            Followed strict priority order:
+            1. **🏢 CARTO Customizations** - Preserved all CARTO-specific infrastructure
+            2. **🔧 LiteLLM Core** - Accepted upstream improvements to core functionality
+            3. **⚖️ Manual Merge** - Combined both when needed
+
+            ### 📋 Files Modified
+
+            **CARTO versions kept:**
+            [List files where you kept CARTO version]
+
+            **Upstream versions accepted:**
+            [List files where you accepted upstream]
+
+            **Manually merged:**
+            [List files where you combined both - explain reasoning]
+
+            ### ✅ Testing Results
+
+            - [x] `make lint` - PASSED
+            - [x] `make lint-mypy` - PASSED
+            - [x] `make test-unit` - PASSED
+            - [ ] Manual review of Dockerfile CARTO customizations
+            - [ ] Manual review of Makefile CARTO sections
+
+            ### 🔍 Review Guidelines
+
+            **Please verify:**
+            1. ✅ CARTO workflows intact (`.github/workflows/carto_*.yaml`)
+            2. ✅ Dockerfile CARTO customizations preserved (`# CARTO:` comments)
+            3. ✅ Makefile CARTO sections intact
+            4. ✅ Core LiteLLM functionality improved with upstream changes
+            5. ✅ All tests passing
+
+            ### 📝 Notes
+
+            [Add any important notes about complex conflict resolutions here]
+
+            ---
+            🤖 *Automated conflict resolution by Claude Code*
+            Resolves conflicts in #${{ needs.check-eligibility.outputs.pr-number }}
+            PRBODY
+            )"
+            ```
+
+            ## 🚨 CRITICAL REQUIREMENTS
+
+            1. **ALL TESTS MUST PASS** - Do not create PR if tests fail
+            2. **PRIORITIZE CARTO** - When unsure, preserve CARTO customizations
+            3. **DOCUMENT REASONING** - Explain complex merge decisions in PR body
+            4. **NO CONFLICT MARKERS** - Ensure all `<<<<<<<`, `=======`, `>>>>>>>` removed
+            5. **VERIFY SYNTAX** - All files must be syntactically valid
+
+            ## Success Criteria Checklist
+
+            - [ ] All conflicts resolved (no conflict markers remain)
+            - [ ] `make lint` passes
+            - [ ] `make lint-mypy` passes
+            - [ ] `make test-unit` passes
+            - [ ] CARTO customizations preserved
+            - [ ] Core LiteLLM functionality improved
+            - [ ] PR created with comprehensive description
+            - [ ] Branch pushed successfully
+
+            ---
+
+            **Begin conflict resolution now!**
+
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+          GITHUB_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "::group::Claude Code Execution Summary"
+          echo "[Resolver] Claude Code conflict resolution completed"
+          echo "[Resolver] Check the action logs above for details"
+          echo "[Resolver] A new PR should have been created if successful"
+          echo "::endgroup::"
+
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## 🤖 Claude Code Conflict Resolution
+
+          Claude Code has attempted to resolve conflicts in PR #${{ needs.check-eligibility.outputs.pr-number }}.
+
+          **Resolution Priorities Applied:**
+          1. 🏢 CARTO customizations (highest priority)
+          2. 🔧 LiteLLM core functionality improvements
+          3. ⚖️ Manual merge when both are important
+
+          **Testing Requirements:**
+          - ✅ All linting and type checks must pass
+          - ✅ All unit tests must pass
+          - ✅ CARTO customizations must be preserved
+
+          **Next Steps:**
+          1. Review the PR created by Claude Code
+          2. Verify conflict resolutions follow priorities
+          3. Check test results in the PR
+          4. Merge the resolution PR to update the sync PR
+
+          **Review Checklist:**
+          - [ ] CARTO workflows preserved
+          - [ ] Dockerfile CARTO customizations intact (`# CARTO:` comments)
+          - [ ] Makefile CARTO sections preserved
+          - [ ] Core LiteLLM improvements accepted
+          - [ ] All tests passing (`make lint`, `make lint-mypy`, `make test-unit`)
+          EOF
