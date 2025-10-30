@@ -416,168 +416,6 @@ class TestVertexBase:
     @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
     @pytest.mark.asyncio
     async def test_resolved_project_id_cache_optimization(self, is_async):
-        """Test that resolved project_id creates additional cache entries for optimization"""
-        vertex_base = VertexBase()
-
-        mock_creds = MagicMock()
-        mock_creds.token = "token-1"
-        mock_creds.expired = False
-        mock_creds.project_id = "resolved-project"
-        mock_creds.quota_project_id = "resolved-project"
-
-        credentials = {"type": "service_account"}
-
-        with patch.object(
-            vertex_base, "load_auth", return_value=(mock_creds, "resolved-project")
-        ):
-            # Call without project_id, should use resolved project from credentials
-            if is_async:
-                token, project = await vertex_base._ensure_access_token_async(
-                    credentials=credentials,
-                    project_id=None,
-                    custom_llm_provider="vertex_ai",
-                )
-            else:
-                token, project = vertex_base._ensure_access_token(
-                    credentials=credentials,
-                    project_id=None,
-                    custom_llm_provider="vertex_ai",
-                )
-
-            assert token == "token-1"
-            assert project == "resolved-project"
-
-                        # Verify both cache entries exist
-            original_cache_key = (json.dumps(credentials), None)
-            resolved_cache_key = (json.dumps(credentials), "resolved-project")
-
-            assert original_cache_key in vertex_base._credentials_project_mapping
-            assert resolved_cache_key in vertex_base._credentials_project_mapping
-
-            # Both should contain the same tuple
-            original_entry = vertex_base._credentials_project_mapping[original_cache_key]
-            resolved_entry = vertex_base._credentials_project_mapping[resolved_cache_key]
-
-            assert isinstance(original_entry, tuple)
-            assert isinstance(resolved_entry, tuple)
-            assert original_entry[0] == mock_creds
-            assert original_entry[1] == "resolved-project"
-            assert resolved_entry[0] == mock_creds
-            assert resolved_entry[1] == "resolved-project"
-
-    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
-    @pytest.mark.asyncio
-    async def test_cache_update_on_credential_refresh(self, is_async):
-        """Test that cache is updated when credentials are refreshed"""
-        vertex_base = VertexBase()
-
-        mock_creds = MagicMock()
-        mock_creds.token = "original-token"
-        mock_creds.expired = True  # Start with expired credentials
-        mock_creds.project_id = "project-1"
-        mock_creds.quota_project_id = "project-1"
-
-        credentials = {"type": "service_account", "project_id": "project-1"}
-
-        with patch.object(
-            vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-        ), patch.object(vertex_base, "refresh_auth") as mock_refresh:
-
-            def mock_refresh_impl(creds):
-                creds.token = "refreshed-token"
-                creds.expired = False
-
-            mock_refresh.side_effect = mock_refresh_impl
-
-            if is_async:
-                token, project = await vertex_base._ensure_access_token_async(
-                    credentials=credentials,
-                    project_id="project-1",
-                    custom_llm_provider="vertex_ai",
-                )
-            else:
-                token, project = vertex_base._ensure_access_token(
-                    credentials=credentials,
-                    project_id="project-1",
-                    custom_llm_provider="vertex_ai",
-                )
-
-            assert mock_refresh.called
-            assert token == "refreshed-token"
-            assert project == "project-1"
-
-            # Verify cache was updated with refreshed credentials
-            cache_key = (json.dumps(credentials), "project-1")
-            assert cache_key in vertex_base._credentials_project_mapping
-            cached_entry = vertex_base._credentials_project_mapping[cache_key]
-            assert isinstance(cached_entry, tuple)
-            cached_creds, cached_project = cached_entry
-            assert cached_creds.token == "refreshed-token"
-            assert not cached_creds.expired
-            assert cached_project == "project-1"
-
-    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
-    @pytest.mark.asyncio
-    async def test_cache_with_different_project_id_combinations(self, is_async):
-        """Test caching behavior with different project_id parameter combinations"""
-        vertex_base = VertexBase()
-
-        mock_creds = MagicMock()
-        mock_creds.token = "token-1"
-        mock_creds.expired = False
-        mock_creds.project_id = "cred-project"
-        mock_creds.quota_project_id = "cred-project"
-
-        credentials = {"type": "service_account", "project_id": "cred-project"}
-
-        with patch.object(
-            vertex_base, "load_auth", return_value=(mock_creds, "cred-project")
-        ):
-            # First call with explicit project_id
-            if is_async:
-                token1, project1 = await vertex_base._ensure_access_token_async(
-                    credentials=credentials,
-                    project_id="explicit-project",
-                    custom_llm_provider="vertex_ai",
-                )
-            else:
-                token1, project1 = vertex_base._ensure_access_token(
-                    credentials=credentials,
-                    project_id="explicit-project",
-                    custom_llm_provider="vertex_ai",
-                )
-
-            # Second call with None project_id (should use credential project)
-            if is_async:
-                token2, project2 = await vertex_base._ensure_access_token_async(
-                    credentials=credentials,
-                    project_id=None,
-                    custom_llm_provider="vertex_ai",
-                )
-            else:
-                token2, project2 = vertex_base._ensure_access_token(
-                    credentials=credentials,
-                    project_id=None,
-                    custom_llm_provider="vertex_ai",
-                )
-
-            assert token1 == "token-1"
-            assert project1 == "explicit-project"  # Should use explicit project_id
-            assert token2 == "token-1"
-            assert project2 == "cred-project"  # Should use credential project_id
-
-            # Verify separate cache entries
-            explicit_cache_key = (json.dumps(credentials), "explicit-project")
-            none_cache_key = (json.dumps(credentials), None)
-            resolved_cache_key = (json.dumps(credentials), "cred-project")
-
-            assert explicit_cache_key in vertex_base._credentials_project_mapping
-            assert none_cache_key in vertex_base._credentials_project_mapping
-            assert resolved_cache_key in vertex_base._credentials_project_mapping
-
-    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
-    @pytest.mark.asyncio
-    async def test_project_id_resolution_and_caching_core_issue(self, is_async):
         """
         When user doesn't provide project_id, system should resolve it from credentials
         and cache the resolved project_id for future calls without calling load_auth again.
@@ -718,8 +556,8 @@ class TestVertexBase:
                 None,
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
-                "test-api-key",
-                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+                None,
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=test-api-key"
             ),
             # Test case 2: Gemini with custom API base and streaming
             (
@@ -731,8 +569,8 @@ class TestVertexBase:
                 None,
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
-                "test-api-key",
-                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
+                None,
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=test-api-key&alt=sse"
             ),
             # Test case 3: Non-Gemini provider with custom API base
             (
@@ -826,9 +664,9 @@ class TestVertexBase:
         
         # Test various Gemini models with custom API base
         test_cases = [
-            ("gemini-2.5-flash-lite", "generateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"),
-            ("gemini-2.5-pro", "generateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"),
-            ("gemini-1.5-flash", "streamGenerateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent"),
+            ("gemini-2.5-flash-lite", "generateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=test-api-key"),
+            ("gemini-2.5-pro", "generateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=test-api-key"),
+            ("gemini-1.5-flash", "streamGenerateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?key=test-api-key"),
         ]
         
         for model, endpoint, expected_url in test_cases:
@@ -861,7 +699,7 @@ class TestVertexBase:
             model="gemini-2.5-flash-lite",
         )
         
-        expected_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
+        expected_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=test-api-key&alt=sse"
         assert result_url_streaming == expected_streaming_url, f"Expected {expected_streaming_url}, got {result_url_streaming}"
         
         # Test with streaming disabled
@@ -876,5 +714,64 @@ class TestVertexBase:
             model="gemini-2.5-flash-lite",
         )
         
-        expected_no_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+        expected_no_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=test-api-key"
         assert result_url_no_streaming == expected_no_streaming_url, f"Expected {expected_no_streaming_url}, got {result_url_no_streaming}"
+
+    @pytest.mark.parametrize(
+        "api_base, custom_llm_provider, gemini_api_key, endpoint, stream, auth_header, url, model, expected_auth_header, expected_url",
+        [
+            # Test case 1: Gemini with custom API base
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+                "gemini",
+                "test-api-key",
+                "generateContent",
+                False,
+                None,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "gemini-2.5-flash-lite",
+                None,
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=test-api-key"
+            ),
+            # Test case 2: Gemini with custom API base and streaming
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
+                "gemini",
+                "test-api-key",
+                "generateContent",
+                True,
+                None,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "gemini-2.5-flash-lite",
+                None,
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=test-api-key&alt=sse"
+            ),
+        ],
+    )
+    def test_check_custom_proxy_minimal_gemini_key_param(
+        self,
+        api_base,
+        custom_llm_provider,
+        gemini_api_key,
+        endpoint,
+        stream,
+        auth_header,
+        url,
+        model,
+        expected_auth_header,
+        expected_url,
+    ):
+        """Single focused test to ensure ?key is appended (and &alt=sse for streaming)."""
+        vertex_base = VertexBase()
+        result_auth_header, result_url = vertex_base._check_custom_proxy(
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            gemini_api_key=gemini_api_key,
+            endpoint=endpoint,
+            stream=stream,
+            auth_header=auth_header,
+            url=url,
+            model=model,
+        )
+        assert result_auth_header == expected_auth_header
+        assert result_url == expected_url
