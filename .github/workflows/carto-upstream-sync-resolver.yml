@@ -73,28 +73,36 @@ jobs:
           fi
           echo "[Security] ✅ Actor verified: ${ACTOR}"
 
-          # Security Check 2: Block external forks
-          PR_REPO="${{ github.event.pull_request.head.repo.full_name }}"
-          BASE_REPO="${{ github.repository }}"
+          # Security Check 2: Block external forks (only for pull_request events)
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            PR_REPO="${{ github.event.pull_request.head.repo.full_name }}"
+            BASE_REPO="${{ github.repository }}"
 
-          if [[ "${PR_REPO}" != "${BASE_REPO}" ]]; then
-            echo "[Security] ❌ External fork detected: ${PR_REPO}"
-            echo "[Security] Only internal branches allowed"
-            echo "authorized=false" >> $GITHUB_OUTPUT
-            exit 0
+            if [[ "${PR_REPO}" != "${BASE_REPO}" ]]; then
+              echo "[Security] ❌ External fork detected: ${PR_REPO}"
+              echo "[Security] Only internal branches allowed"
+              echo "authorized=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "[Security] ✅ PR source verified: internal branch"
+          else
+            echo "[Security] ✅ Triggered via workflow_dispatch (manual)"
           fi
-          echo "[Security] ✅ PR source verified: internal branch"
 
           # Security Check 3: Only main branch (upstream sync PRs)
-          HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
 
-          if [[ "${HEAD_BRANCH}" != "main" ]]; then
-            echo "[Security] ❌ Invalid branch: ${HEAD_BRANCH}"
-            echo "[Security] Only 'main' branch (upstream sync) allowed"
-            echo "authorized=false" >> $GITHUB_OUTPUT
-            exit 0
+            if [[ "${HEAD_BRANCH}" != "main" ]]; then
+              echo "[Security] ❌ Invalid branch: ${HEAD_BRANCH}"
+              echo "[Security] Only 'main' branch (upstream sync) allowed"
+              echo "authorized=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "[Security] ✅ Branch verified: ${HEAD_BRANCH}"
+          else
+            echo "[Security] ✅ Manual dispatch (branch checks skipped)"
           fi
-          echo "[Security] ✅ Branch verified: ${HEAD_BRANCH}"
 
           # All security checks passed
           echo "[Security] ✅ All security checks passed"
