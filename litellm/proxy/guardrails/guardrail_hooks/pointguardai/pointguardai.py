@@ -785,3 +785,83 @@ class PointGuardAIGuardrail(CustomGuardrail):
                 "Error in PointGuardAI post_call_success_hook: %s", str(e)
             )
             return response
+
+    async def apply_guardrail(
+        self,
+        text: str,
+        language: Optional[str] = None,
+        entities: Optional[List] = None,
+    ) -> str:
+        """
+        Apply PointGuard AI guardrail to the given text.
+        
+        Args:
+            text: The text to analyze and potentially modify
+            language: Optional language parameter (not used by PointGuard AI)
+            entities: Optional entities parameter (not used by PointGuard AI)
+            
+        Returns:
+            str: The original or modified text based on PointGuard AI's response
+            
+        Raises:
+            HTTPException: If content is blocked by PointGuard AI policy
+        """
+        try:
+            # Transform text into message format that PointGuard AI expects
+            new_messages = [{"role": "user", "content": text}]
+            
+            # Make request to PointGuard AI API (input only, no response)
+            modified_content = await self.make_pointguard_api_request(
+                request_data={},  # Empty request data for standalone usage
+                new_messages=new_messages,
+                response_string=None,  # No response for input-only analysis
+            )
+            
+            # If no modifications returned, return original text
+            if modified_content is None:
+                verbose_proxy_logger.debug(
+                    "PointGuardAI apply_guardrail: No modifications made to input text"
+                )
+                return text
+            
+            # Apply modifications if present
+            if isinstance(modified_content, list) and len(modified_content) > 0:
+                verbose_proxy_logger.info(
+                    "PointGuardAI apply_guardrail: Applying %d modifications to input text", 
+                    len(modified_content)
+                )
+                
+                # Find matching modification for the input text
+                for mod in modified_content:
+                    if isinstance(mod, dict) and mod.get("originalContent") == text:
+                        # Handle null modifiedContent as content removal
+                        if mod.get("modifiedContent") is None:
+                            verbose_proxy_logger.info(
+                                "PointGuardAI apply_guardrail: Content removed by policy"
+                            )
+                            return ""
+                        else:
+                            modified_text = mod.get("modifiedContent", text)
+                            verbose_proxy_logger.info(
+                                "PointGuardAI apply_guardrail: Content modified by policy"
+                            )
+                            return modified_text
+                
+                # If no exact match found, log warning and return original
+                verbose_proxy_logger.warning(
+                    "PointGuardAI apply_guardrail: Received modifications but no content matched: %s", 
+                    modified_content
+                )
+                return text
+            
+            return text
+            
+        except HTTPException:
+            # Re-raise HTTP exceptions (blocks/violations) as-is
+            raise
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Error in PointGuardAI apply_guardrail: %s", str(e)
+            )
+            # Return original text on unexpected errors to avoid breaking the flow
+            return text
