@@ -476,6 +476,7 @@ nlp_cloud_models: Set = set()
 aleph_alpha_models: Set = set()
 bedrock_models: Set = set()
 bedrock_converse_models: Set = set(BEDROCK_CONVERSE_MODELS)
+fal_ai_models: Set = set()
 fireworks_ai_models: Set = set()
 fireworks_ai_embedding_models: Set = set()
 deepinfra_models: Set = set()
@@ -664,6 +665,8 @@ def add_known_models():
             text_completion_codestral_models.add(key)
         elif value.get("litellm_provider") == "xai":
             xai_models.add(key)
+        elif value.get("litellm_provider") == "fal_ai":
+            fal_ai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
             deepseek_models.add(key)
         elif value.get("litellm_provider") == "meta_llama":
@@ -814,6 +817,7 @@ model_list = list(
     | gemini_models
     | text_completion_codestral_models
     | xai_models
+    | fal_ai_models
     | deepseek_models
     | azure_ai_models
     | voyage_models
@@ -896,6 +900,7 @@ models_by_provider: dict = {
     "aleph_alpha": aleph_alpha_models,
     "text-completion-codestral": text_completion_codestral_models,
     "xai": xai_models,
+    "fal_ai": fal_ai_models,
     "deepseek": deepseek_models,
     "mistral": mistral_chat_models,
     "azure_ai": azure_ai_models,

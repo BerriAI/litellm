@@ -9,9 +9,9 @@
 
 import ast
 import asyncio
-import contextvars
 import base64
 import binascii
+import contextvars
 import copy
 import datetime
 import hashlib
@@ -387,7 +387,15 @@ def print_verbose(
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def load_custom_provider_entrypoints():
-    found_entry_points = tuple(entry_points().select(group="litellm"))  # type: ignore
+    # Handle both Python 3.9 (returns dict) and Python 3.10+ (returns object with select method)
+    eps = entry_points()
+    if hasattr(eps, "select"):
+        # Python 3.10+
+        found_entry_points = tuple(eps.select(group="litellm"))  # type: ignore
+    else:
+        # Python 3.9 and earlier - entry_points() returns a dict
+        found_entry_points = eps.get("litellm", ())  # type: ignore
+    
     for entry_point in found_entry_points:
         # types are ignored because of circular dependency issues importing CustomLLM and CustomLLMItem
         HandlerClass = entry_point.load()
@@ -7681,6 +7689,12 @@ class ProviderConfigManager:
             )
 
             return LiteLLMProxyImageGenerationConfig()
+        elif LlmProviders.FAL_AI == provider:
+            from litellm.llms.fal_ai.image_generation import (
+                get_fal_ai_image_generation_config,
+            )
+
+            return get_fal_ai_image_generation_config(model)
         return None
 
     @staticmethod
