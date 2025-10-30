@@ -10,7 +10,8 @@ import respx
 import litellm
 from litellm import completion
 from litellm.llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
-
+from litellm.cost_calculator import cost_per_token
+import math
 
 @pytest.fixture
 def vercel_ai_gateway_response():
@@ -236,11 +237,14 @@ def test_vercel_ai_gateway_glm46_cost_math():
     key = "vercel_ai_gateway/zai/glm-4.6"
     info = litellm.model_cost[key]
 
-    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
     prompt_cost, completion_cost = cost_per_token(
         model="vercel_ai_gateway/zai/glm-4.6",
-        usage_object=usage,
+        prompt_tokens=1000,
+        completion_tokens=500,
     )
+
+    print(prompt_cost, completion_cost)
+    print(1000 * info["input_cost_per_token"], 500 * info["output_cost_per_token"])
 
     assert math.isclose(prompt_cost, 1000 * info["input_cost_per_token"], rel_tol=1e-12)
     assert math.isclose(completion_cost, 500 * info["output_cost_per_token"], rel_tol=1e-12)
