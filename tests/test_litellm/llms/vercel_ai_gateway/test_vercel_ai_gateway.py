@@ -243,8 +243,5 @@ def test_vercel_ai_gateway_glm46_cost_math():
         completion_tokens=500,
     )
 
-    print(prompt_cost, completion_cost)
-    print(1000 * info["input_cost_per_token"], 500 * info["output_cost_per_token"])
-
     assert math.isclose(prompt_cost, 1000 * info["input_cost_per_token"], rel_tol=1e-12)
     assert math.isclose(completion_cost, 500 * info["output_cost_per_token"], rel_tol=1e-12)
