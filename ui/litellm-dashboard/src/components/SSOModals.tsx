@@ -309,7 +309,14 @@ const SSOModals: React.FC<SSOModalsProps> = ({
             <Form.Item
               label="PROXY BASE URL"
               name="proxy_base_url"
-              rules={[{ required: true, message: "Please enter the proxy base url" }]}
+              normalize={(value) => value?.trim()}
+              rules={[
+                { required: true, message: "Please enter the proxy base url" },
+                {
+                  pattern: /^https?:\/\/.+/,
+                  message: "URL must start with http:// or https://",
+                },
+              ]}
             >
               <TextInput />
             </Form.Item>
