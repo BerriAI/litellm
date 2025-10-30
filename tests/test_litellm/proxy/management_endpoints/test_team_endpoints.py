@@ -1808,17 +1808,17 @@ async def test_new_team_max_budget_exceeds_user_max_budget():
     from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
-    # Create non-admin user with end_user_max_budget set to 100.0
+    # Create non-admin user with user_max_budget set to 100.0
     non_admin_user = UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER,
         user_id="non-admin-user-123",
-        end_user_max_budget=100.0,
+        user_max_budget=100.0,
     )
 
     # Create team request with max_budget (200.0) exceeding user's limit (100.0)
     team_request = NewTeamRequest(
         team_alias="high-budget-team",
-        max_budget=200.0,  # Exceeds user's end_user_max_budget
+        max_budget=200.0,  # Exceeds user's user_max_budget
     )
 
     dummy_request = MagicMock(spec=Request)
@@ -1830,16 +1830,20 @@ async def test_new_team_max_budget_exceeds_user_max_budget():
     ) as mock_cache, patch(
         "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
     ), patch(
-        "litellm.proxy.proxy_server.create_audit_log_for_update"
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
     ) as mock_audit:
         # Setup basic mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.get_data = AsyncMock(return_value=None)
-        mock_audit.return_value = AsyncMock(return_value=MagicMock())
         
-        # The budget validation happens BEFORE trying to add members,
-        # so we shouldn't need to mock the user table operations
+        # Mock user cache to return a user object with max_budget=100.0
+        from litellm.proxy._types import LiteLLM_UserTable
+        mock_user_obj = LiteLLM_UserTable(
+            user_id="non-admin-user-123",
+            max_budget=100.0,
+        )
+        mock_cache.async_get_cache = AsyncMock(return_value=mock_user_obj)
         
         # Should raise ProxyException (HTTPException gets converted by handle_exception_on_proxy)
         with pytest.raises(ProxyException) as exc_info:
@@ -1853,14 +1857,14 @@ async def test_new_team_max_budget_exceeds_user_max_budget():
         # ProxyException stores status_code in 'code' attribute
         assert exc_info.value.code == '400'
         assert "max budget higher than user max" in str(exc_info.value.message)
-        assert "100.0" in str(exc_info.value.message)  # User's max budget should be mentioned
+        assert "100.0" in str(exc_info.value.message)  # User's user_max_budget should be mentioned
         assert LitellmUserRoles.INTERNAL_USER.value in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio
 async def test_new_team_max_budget_within_user_limit():
     """
-    Test that /team/new succeeds when max_budget is within user's end_user_max_budget.
+    Test that /team/new succeeds when max_budget is within user's user_max_budget.
     
     This ensures that users can create teams with budgets at or below their personal limit.
     """
@@ -1869,18 +1873,18 @@ async def test_new_team_max_budget_within_user_limit():
     from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
-    # Create non-admin user with end_user_max_budget set to 100.0
+    # Create non-admin user with user_max_budget set to 100.0
     non_admin_user = UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER,
         user_id="non-admin-user-456",
-        end_user_max_budget=100.0,
+        user_max_budget=100.0,
         models=[],  # Empty models list to bypass model validation
     )
 
     # Create team request with max_budget (50.0) within user's limit (100.0)
     team_request = NewTeamRequest(
         team_alias="within-budget-team",
-        max_budget=50.0,  # Within user's end_user_max_budget
+        max_budget=50.0,  # Within user's user_max_budget
     )
 
     dummy_request = MagicMock(spec=Request)
@@ -1892,7 +1896,7 @@ async def test_new_team_max_budget_within_user_limit():
     ) as mock_license, patch(
         "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
     ), patch(
-        "litellm.proxy.proxy_server.create_audit_log_for_update"
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
     ) as mock_audit:
 
         # Setup mocks
@@ -1901,7 +1905,14 @@ async def test_new_team_max_budget_within_user_limit():
         mock_prisma.jsonify_team_object = lambda db_data: db_data
         mock_prisma.get_data = AsyncMock(return_value=None)
         mock_prisma.update_data = AsyncMock()
-        mock_audit.return_value = AsyncMock(return_value=MagicMock())
+        
+        # Mock user cache to return a user object with max_budget=100.0
+        from litellm.proxy._types import LiteLLM_UserTable
+        mock_user_obj = LiteLLM_UserTable(
+            user_id="non-admin-user-456",
+            max_budget=100.0,
+        )
+        mock_cache.async_get_cache = AsyncMock(return_value=mock_user_obj)
         
         # Mock team creation
         mock_created_team = MagicMock()
