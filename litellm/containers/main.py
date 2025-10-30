@@ -21,9 +21,6 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, client
 
-# Default model for container operations - can be any provider that supports containers
-DEFAULT_CONTAINER_ENDPOINT_MODEL = "openai/gpt-4"
-
 __all__ = [
     "acreate_container",
     "adelete_container",
