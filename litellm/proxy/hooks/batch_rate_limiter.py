@@ -17,7 +17,7 @@ Quick summary:
 - async_log_success_event() fires on GET /v1/batches/{id} (batch completion)
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Union
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -27,7 +27,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import (
     _get_batch_job_input_file_usage,
     _get_file_content_as_dictionary,
-    calculate_batch_cost_and_usage,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -104,7 +103,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     ) -> None:
         """Raise HTTPException for rate limit exceeded."""
         from datetime import datetime
-        from math import floor
 
         # Find the descriptor for this status
         descriptor_index = next(
