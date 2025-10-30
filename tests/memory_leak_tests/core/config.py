@@ -8,7 +8,7 @@ Provides functions for:
 - Building test configuration dictionaries
 """
 
-from typing import Dict, Any, Callable
+from typing import Dict, Any, Callable, Optional
 
 from ..constants import (
     DEFAULT_SDK_MODEL,
@@ -28,6 +28,7 @@ from ..constants import (
     DEFAULT_TEST_STABILIZATION_TOLERANCE_MB,
     MAX_NUM_BATCHES,
     DEFAULT_SKIP_ON_HIGH_NOISE,
+    DEFAULT_CLEANUP_SNAPSHOTS_AFTER_TEST,
 )
 
 
@@ -236,7 +237,8 @@ def get_memory_test_config(
     sample_window: int = DEFAULT_ROLLING_AVERAGE_WINDOW,
     max_growth_percent: float = DEFAULT_TEST_MAX_GROWTH_PERCENT,
     stabilization_tolerance_mb: float = DEFAULT_TEST_STABILIZATION_TOLERANCE_MB,
-    skip_on_high_noise: bool = DEFAULT_SKIP_ON_HIGH_NOISE
+    skip_on_high_noise: bool = DEFAULT_SKIP_ON_HIGH_NOISE,
+    cleanup_snapshots_after_test: bool = DEFAULT_CLEANUP_SNAPSHOTS_AFTER_TEST
 ) -> Dict[str, Any]:
     """
     Get standardized memory test configuration parameters.
@@ -252,6 +254,7 @@ def get_memory_test_config(
         max_growth_percent: Maximum allowed growth percentage
         stabilization_tolerance_mb: Minimum growth to consider significant in MB
         skip_on_high_noise: Whether to skip test if measurements are too noisy
+        cleanup_snapshots_after_test: Whether to delete snapshot JSON files after test completes
     
     Returns:
         dict: Configuration parameters for memory leak tests
@@ -261,6 +264,8 @@ def get_memory_test_config(
         >>> # Use in test execution
         >>> # To run test even with high noise:
         >>> config = get_memory_test_config(skip_on_high_noise=False)
+        >>> # To cleanup snapshots after test:
+        >>> config = get_memory_test_config(cleanup_snapshots_after_test=True)
     """
     # Enforce maximum num_batches to prevent overly long test runs
     if num_batches > MAX_NUM_BATCHES:
@@ -273,6 +278,7 @@ def get_memory_test_config(
         'sample_window': sample_window,
         'max_growth_percent': max_growth_percent,
         'stabilization_tolerance_mb': stabilization_tolerance_mb,
-        'skip_on_high_noise': skip_on_high_noise
+        'skip_on_high_noise': skip_on_high_noise,
+        'cleanup_snapshots_after_test': cleanup_snapshots_after_test
     }
 

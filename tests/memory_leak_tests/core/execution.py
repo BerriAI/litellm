@@ -492,4 +492,20 @@ def analyze_and_detect_leaks(
     if module_to_verify is not None and module_id is not None:
         verify_module_id_consistency(module_to_verify, module_id, "at test end")
         print(f"\n[TEST] ✓ {module_name} ID remained consistent throughout: {module_id}", flush=True)
+    
+    # Cleanup snapshot files if configured
+    cleanup_snapshots = config.get('cleanup_snapshots_after_test', False)
+    if cleanup_snapshots and output_dir:
+        import os
+        from ..snapshot.storage import sanitize_filename
+        
+        snapshot_filename = sanitize_filename(test_name) + ".json"
+        snapshot_filepath = os.path.join(output_dir, snapshot_filename)
+        
+        if os.path.exists(snapshot_filepath):
+            try:
+                os.remove(snapshot_filepath)
+                print(f"\n[CLEANUP] Snapshot file deleted: {snapshot_filepath}", flush=True)
+            except Exception as e:
+                print(f"\n[CLEANUP WARNING] Failed to delete snapshot file {snapshot_filepath}: {e}", flush=True)
 
