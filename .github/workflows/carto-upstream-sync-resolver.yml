@@ -9,7 +9,7 @@ name: CARTO Upstream Sync - Conflict Resolver
 # - Only runs on main branch (upstream sync PRs)
 # - Only runs when conflicts are detected
 # - Blocks external forks
-# - Rate limited (max-turns: 8, timeout: 1200s)
+# - Rate limited (max-turns: 8, timeout: 1800s / 30 mins)
 
 on:
   pull_request:
@@ -22,6 +22,15 @@ on:
         description: "PR number to resolve conflicts for"
         required: true
         default: ""
+      debug:
+        description: "Enable debug logging"
+        type: boolean
+        default: false
+
+# Prevent duplicate runs on the same PR
+concurrency:
+  group: upstream-sync-resolver-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   # Job 1: Security verification - MUST PASS before any other checks
@@ -177,13 +186,20 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_args: "--model claude-sonnet-4-5-20250929"
+          claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 8 --timeout 1800 --allowed-tools Read,Write,Edit,Bash,Grep,Glob ${{ github.event.inputs.debug == 'true' && '--debug' || '' }}"
           prompt: |
             # Upstream Sync Conflict Resolution Task
 
-            You are helping resolve merge conflicts in PR #${{ needs.check-eligibility.outputs.pr-number }}, which syncs upstream LiteLLM changes to CARTO's fork.
+            ## 📚 IMPORTANT: Read Project Guidelines First
+            Before starting, read `CARTO_CLAUDE.md` to understand CARTO-specific conventions,
+            coding standards, and infrastructure patterns. This file contains essential context
+            about how CARTO customizes LiteLLM.
+
+            You are helping resolve merge conflicts in PR #${{ needs.check-eligibility.outputs.pr-number }},
+            which syncs upstream LiteLLM changes to CARTO's fork.
 
             ## Context
+            - **Project Guidelines**: See CARTO_CLAUDE.md for detailed conventions
             - **PR**: #${{ needs.check-eligibility.outputs.pr-number }} (main → carto/main)
             - **Purpose**: Sync BerriAI/litellm upstream changes to CartoDB/litellm
             - **Current State**: PR has merge conflicts that need resolution
@@ -217,14 +233,14 @@ jobs:
 
             ### Step 1: Analyze Conflicts
             ```bash
+            # FIRST: Read CARTO project guidelines
+            cat CARTO_CLAUDE.md
+
             # Check which files have conflicts
             git status
 
             # List conflicted files
             git diff --name-only --diff-filter=U
-
-            # Read CARTO guidelines
-            cat CARTO_CLAUDE.md
             ```
 
             ### Step 2: Understand File-Specific Rules
@@ -439,6 +455,13 @@ jobs:
           ## 🤖 Claude Code Conflict Resolution
 
           Claude Code has attempted to resolve conflicts in PR #${{ needs.check-eligibility.outputs.pr-number }}.
+
+          **Configuration:**
+          - Model: Sonnet 4.5
+          - Max turns: 8
+          - Timeout: 30 minutes
+          - Tools: Read, Write, Edit, Bash, Grep, Glob (restricted)
+          - Estimated cost: ~$1-4 per run
 
           **Resolution Priorities Applied:**
           1. 🏢 CARTO customizations (highest priority)
