@@ -185,6 +185,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_redis_daily_spend_update_queue_size",
     "litellm_in_memory_spend_update_queue_size",
     "litellm_redis_spend_update_queue_size",
+    "litellm_callback_logging_failure_metric",
 ]
 
 
@@ -434,6 +435,8 @@ class PrometheusMetricLabels:
     litellm_in_memory_spend_update_queue_size: List[str] = []
 
     litellm_redis_spend_update_queue_size: List[str] = []
+    
+    litellm_callback_logging_failure_metric = ["callback_name"]
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:

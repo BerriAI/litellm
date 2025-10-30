@@ -2458,10 +2458,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-            except Exception:
+            except Exception as e:
+                callback_name = self._get_callback_name(callback)
                 verbose_logger.error(
-                    f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
+                    f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging with callback={callback_name} {traceback.format_exc()}"
                 )
+                self._increment_callback_logging_failure_metric(callback_name)
                 pass
 
     def _failure_handler_helper_fn(
@@ -2793,12 +2795,34 @@ class Logging(LiteLLMLoggingBaseClass):
                         callback_func=callback,
                     )
             except Exception as e:
+                # Get callback name for prometheus metric
+                callback_name = self._get_callback_name(callback)
                 verbose_logger.exception(
                     "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure \
                         logging {}\nCallback={}".format(
-                        str(e), callback
+                        str(e), callback_name
                     )
                 )
+                # Increment prometheus metric for callback logging failure
+                self._increment_callback_logging_failure_metric(callback_name)
+
+    def _increment_callback_logging_failure_metric(self, callback_name: str):
+        """
+        Increment the prometheus metric for callback logging failures.
+        
+        Args:
+            callback_name: The name of the callback that failed
+        """
+        try:
+            for callback in litellm.callbacks or []:
+                if isinstance(callback, CustomLogger):
+                    if hasattr(callback, "increment_logging_failure_metrics"):
+                        callback.increment_logging_failure_metrics(callback_name)
+                        break 
+        except Exception as e:
+            verbose_logger.debug(
+                f"Failed to increment prometheus callback logging failure metric: {str(e)}"
+            )
 
     def _get_trace_id(self, service_name: Literal["langfuse"]) -> Optional[str]:
         """
@@ -2936,6 +2960,18 @@ class Logging(LiteLLMLoggingBaseClass):
         Returns:
             The name of the callback
         """
+        # Handle string callbacks (e.g., 's3_v2', 'dynamodb')
+        if isinstance(cb, str):
+            return cb
+        
+        # Handle CustomLogger and other class instances - get class name
+        if hasattr(cb, "__class__") and hasattr(cb.__class__, "__name__"):
+            class_name = cb.__class__.__name__
+            # Only return class name if it's a valid class (not a function/lambda)
+            if not class_name.startswith("<") and class_name not in ["function", "method"]:
+                return class_name
+        
+        # Handle callable functions
         if hasattr(cb, "__name__"):
             return cb.__name__
         if hasattr(cb, "__func__"):
