@@ -305,49 +305,49 @@ curl 'http://0.0.0.0:4000/key/generate' \
 
 | Provider                                                                            | `/chat/completions` | `/embeddings` | `/image/generations` |
 |-------------------------------------------------------------------------------------|---------------------|---------------|----------------------|
-| [OpenAI](https://docs.litellm.ai/docs/providers/openai)                             | ✅                   | ✅             | ✅                    |
-| [Meta - Llama API](https://docs.litellm.ai/docs/providers/meta_llama)              | ✅                   |               |                      |
-| [Azure](https://docs.litellm.ai/docs/providers/azure)                               | ✅                   | ✅             | ✅                    |
-| [AI/ML API](https://docs.litellm.ai/docs/providers/aiml)                            | ✅                   | ✅             | ✅                    |
-| [AWS - Sagemaker](https://docs.litellm.ai/docs/providers/aws_sagemaker)             | ✅                   | ✅             |                      |
-| [AWS - Bedrock](https://docs.litellm.ai/docs/providers/bedrock)                     | ✅                   | ✅             |                      |
-| [Google - Vertex AI](https://docs.litellm.ai/docs/providers/vertex)                 | ✅                   | ✅             | ✅                    |
+| [OpenAI (`openai`)](https://docs.litellm.ai/docs/providers/openai)                             | ✅                   | ✅             | ✅                    |
+| [Meta - Llama API (`meta_llama`)](https://docs.litellm.ai/docs/providers/meta_llama)              | ✅                   |               |                      |
+| [Azure (`azure`)](https://docs.litellm.ai/docs/providers/azure)                               | ✅                   | ✅             | ✅                    |
+| [AI/ML API (`aiml`)](https://docs.litellm.ai/docs/providers/aiml)                            | ✅                   | ✅             | ✅                    |
+| [AWS - Sagemaker (`sagemaker`)](https://docs.litellm.ai/docs/providers/aws_sagemaker)             | ✅                   | ✅             |                      |
+| [AWS - Bedrock (`bedrock`)](https://docs.litellm.ai/docs/providers/bedrock)                     | ✅                   | ✅             |                      |
+| [Google - Vertex AI (`vertex_ai`)](https://docs.litellm.ai/docs/providers/vertex)                 | ✅                   | ✅             | ✅                    |
 | [Google - PaLM](https://docs.litellm.ai/docs/providers/palm)                        | ✅                   |               |                      |
-| [Google AI Studio - Gemini](https://docs.litellm.ai/docs/providers/gemini)          | ✅                   |               |                      |
-| [Mistral AI API](https://docs.litellm.ai/docs/providers/mistral)                    | ✅                   | ✅             |                      |
-| [Cloudflare AI Workers](https://docs.litellm.ai/docs/providers/cloudflare_workers)  | ✅                   |               |                      |
-| [CompactifAI](https://docs.litellm.ai/docs/providers/compactifai)                   | ✅                   |               |                      |
-| [Cohere](https://docs.litellm.ai/docs/providers/cohere)                             | ✅                   | ✅             |                      |
-| [Anthropic](https://docs.litellm.ai/docs/providers/anthropic)                       | ✅                   |               |                      |
-| [Empower](https://docs.litellm.ai/docs/providers/empower)                           | ✅                   |               |                      |
-| [Huggingface](https://docs.litellm.ai/docs/providers/huggingface)                   | ✅                   | ✅             |                      |
-| [Replicate](https://docs.litellm.ai/docs/providers/replicate)                       | ✅                   |               |                      |
-| [Together AI](https://docs.litellm.ai/docs/providers/togetherai)                    | ✅                   |               |                      |
-| [OpenRouter](https://docs.litellm.ai/docs/providers/openrouter)                     | ✅                   |               |                      |
-| [AI21](https://docs.litellm.ai/docs/providers/ai21)                                 | ✅                   |               |                      |
-| [Baseten](https://docs.litellm.ai/docs/providers/baseten)                           | ✅                   |               |                      |
-| [VLLM](https://docs.litellm.ai/docs/providers/vllm)                                 | ✅                   |               |                      |
-| [NLP Cloud](https://docs.litellm.ai/docs/providers/nlp_cloud)                       | ✅                   |               |                      |
+| [Google AI Studio - Gemini (`gemini`)](https://docs.litellm.ai/docs/providers/gemini)          | ✅                   |               |                      |
+| [Mistral AI API (`mistral`)](https://docs.litellm.ai/docs/providers/mistral)                    | ✅                   | ✅             |                      |
+| [Cloudflare AI Workers (`cloudflare`)](https://docs.litellm.ai/docs/providers/cloudflare_workers)  | ✅                   |               |                      |
+| [CompactifAI (`compactifai`)](https://docs.litellm.ai/docs/providers/compactifai)                   | ✅                   |               |                      |
+| [Cohere (`cohere`)](https://docs.litellm.ai/docs/providers/cohere)                             | ✅                   | ✅             |                      |
+| [Anthropic (`anthropic`)](https://docs.litellm.ai/docs/providers/anthropic)                       | ✅                   |               |                      |
+| [Empower (`empower`)](https://docs.litellm.ai/docs/providers/empower)                           | ✅                   |               |                      |
+| [Huggingface (`huggingface`)](https://docs.litellm.ai/docs/providers/huggingface)                   | ✅                   | ✅             |                      |
+| [Replicate (`replicate`)](https://docs.litellm.ai/docs/providers/replicate)                       | ✅                   |               |                      |
+| [Together AI (`together_ai`)](https://docs.litellm.ai/docs/providers/togetherai)                    | ✅                   |               |                      |
+| [OpenRouter (`openrouter`)](https://docs.litellm.ai/docs/providers/openrouter)                     | ✅                   |               |                      |
+| [AI21 (`ai21`)](https://docs.litellm.ai/docs/providers/ai21)                                 | ✅                   |               |                      |
+| [Baseten (`baseten`)](https://docs.litellm.ai/docs/providers/baseten)                           | ✅                   |               |                      |
+| [VLLM (`vllm`)](https://docs.litellm.ai/docs/providers/vllm)                                 | ✅                   |               |                      |
+| [NLP Cloud (`nlp_cloud`)](https://docs.litellm.ai/docs/providers/nlp_cloud)                       | ✅                   |               |                      |
 | [Aleph Alpha](https://docs.litellm.ai/docs/providers/aleph_alpha)                   | ✅                   |               |                      |
-| [Petals](https://docs.litellm.ai/docs/providers/petals)                             | ✅                   |               |                      |
-| [Ollama](https://docs.litellm.ai/docs/providers/ollama)                             | ✅                   | ✅             |                      |
-| [DeepInfra](https://docs.litellm.ai/docs/providers/deepinfra)                       | ✅                   |               |                      |
-| [Perplexity AI](https://docs.litellm.ai/docs/providers/perplexity)                  | ✅                   |               |                      |
-| [Groq AI](https://docs.litellm.ai/docs/providers/groq)                              | ✅                   |               |                      |
-| [Deepseek](https://docs.litellm.ai/docs/providers/deepseek)                         | ✅                   |               |                      |
+| [Petals (`petals`)](https://docs.litellm.ai/docs/providers/petals)                             | ✅                   |               |                      |
+| [Ollama (`ollama`)](https://docs.litellm.ai/docs/providers/ollama)                             | ✅                   | ✅             |                      |
+| [DeepInfra (`deepinfra`)](https://docs.litellm.ai/docs/providers/deepinfra)                       | ✅                   |               |                      |
+| [Perplexity AI (`perplexity`)](https://docs.litellm.ai/docs/providers/perplexity)                  | ✅                   |               |                      |
+| [Groq AI (`groq`)](https://docs.litellm.ai/docs/providers/groq)                              | ✅                   |               |                      |
+| [Deepseek (`deepseek`)](https://docs.litellm.ai/docs/providers/deepseek)                         | ✅                   |               |                      |
 | [Anyscale](https://docs.litellm.ai/docs/providers/anyscale)                         | ✅                   |               |                      |
-| [IBM - Watsonx.ai](https://docs.litellm.ai/docs/providers/watsonx)                  | ✅                   | ✅             |                      |
-| [Voyage AI](https://docs.litellm.ai/docs/providers/voyage)                          |                     | ✅             |                      |
-| [Xinference [Xorbits Inference]](https://docs.litellm.ai/docs/providers/xinference) |                     | ✅             |                      |
-| [FriendliAI](https://docs.litellm.ai/docs/providers/friendliai)                     | ✅                   |               |                      |
-| [Galadriel](https://docs.litellm.ai/docs/providers/galadriel)                       | ✅                   |               |                      |
-| [GradientAI](https://docs.litellm.ai/docs/providers/gradient_ai)                    | ✅                   |               |                      |
-| [Novita AI](https://novita.ai/models/llm?utm_source=github_litellm&utm_medium=github_readme&utm_campaign=github_link) | ✅ |     |                      |
-| [Featherless AI](https://docs.litellm.ai/docs/providers/featherless_ai)             | ✅                   |               |                      |
-| [Nebius AI Studio](https://docs.litellm.ai/docs/providers/nebius)                   | ✅                   | ✅             |                      |
-| [Heroku](https://docs.litellm.ai/docs/providers/heroku)                             | ✅                   |               |                      |
-| [OVHCloud AI Endpoints](https://docs.litellm.ai/docs/providers/ovhcloud)            | ✅                   |               |                      |
-| [CometAPI](https://docs.litellm.ai/docs/providers/cometapi)                         | ✅                   | ✅             | ✅                    |
+| [IBM - Watsonx.ai (`watsonx`)](https://docs.litellm.ai/docs/providers/watsonx)                  | ✅                   | ✅             |                      |
+| [Voyage AI (`voyage`)](https://docs.litellm.ai/docs/providers/voyage)                          |                     | ✅             |                      |
+| [Xinference (`xinference`)](https://docs.litellm.ai/docs/providers/xinference) |                     | ✅             |                      |
+| [FriendliAI (`friendliai`)](https://docs.litellm.ai/docs/providers/friendliai)                     | ✅                   |               |                      |
+| [Galadriel (`galadriel`)](https://docs.litellm.ai/docs/providers/galadriel)                       | ✅                   |               |                      |
+| [GradientAI (`gradient_ai`)](https://docs.litellm.ai/docs/providers/gradient_ai)                    | ✅                   |               |                      |
+| [Novita AI (`novita`)](https://novita.ai/models/llm?utm_source=github_litellm&utm_medium=github_readme&utm_campaign=github_link) | ✅ |     |                      |
+| [Featherless AI (`featherless_ai`)](https://docs.litellm.ai/docs/providers/featherless_ai)             | ✅                   |               |                      |
+| [Nebius AI Studio (`nebius`)](https://docs.litellm.ai/docs/providers/nebius)                   | ✅                   | ✅             |                      |
+| [Heroku (`heroku`)](https://docs.litellm.ai/docs/providers/heroku)                             | ✅                   |               |                      |
+| [OVHCloud AI Endpoints (`ovhcloud`)](https://docs.litellm.ai/docs/providers/ovhcloud)            | ✅                   |               |                      |
+| [CometAPI (`cometapi`)](https://docs.litellm.ai/docs/providers/cometapi)                         | ✅                   | ✅             | ✅                    |
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
 
