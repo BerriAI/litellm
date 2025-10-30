@@ -57,7 +57,7 @@ client = OpenAI(
 client.files.create(
     file=wav_data,
     purpose="user_data",
-    extra_body={"custom_llm_provider": "openai"}
+    extra_headers={"custom-llm-provider": "openai"}
 )
 ```
 
@@ -71,7 +71,7 @@ client = OpenAI(
     base_url="http://0.0.0.0:4000/v1"
 )
 
-files = client.files.list(extra_body={"custom_llm_provider": "openai"})
+files = client.files.list(extra_headers={"custom-llm-provider": "openai"})
 print("files=", files)
 ```
 
@@ -85,7 +85,7 @@ client = OpenAI(
     base_url="http://0.0.0.0:4000/v1"
 )
 
-file = client.files.retrieve(file_id="file-abc123", extra_body={"custom_llm_provider": "openai"})
+file = client.files.retrieve(file_id="file-abc123", extra_headers={"custom-llm-provider": "openai"})
 print("file=", file)
 ```
 
@@ -99,7 +99,7 @@ client = OpenAI(
     base_url="http://0.0.0.0:4000/v1"
 )
 
-response = client.files.delete(file_id="file-abc123", extra_body={"custom_llm_provider": "openai"})
+response = client.files.delete(file_id="file-abc123", extra_headers={"custom-llm-provider": "openai"})
 print("delete response=", response)
 ```
 
@@ -113,7 +113,7 @@ client = OpenAI(
     base_url="http://0.0.0.0:4000/v1"
 )
 
-content = client.files.content(file_id="file-abc123", extra_body={"custom_llm_provider": "openai"})
+content = client.files.content(file_id="file-abc123", extra_headers={"custom-llm-provider": "openai"})
 print("content=", content)
 ```
 
