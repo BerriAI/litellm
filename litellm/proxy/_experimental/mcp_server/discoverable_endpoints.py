@@ -20,6 +20,55 @@ router = APIRouter(
 )
 
 
+def get_request_base_url(request: Request) -> str:
+    """
+    Get the base URL for the request, considering X-Forwarded-* headers.
+
+    When behind a proxy (like nginx), the proxy may set:
+    - X-Forwarded-Proto: The original protocol (http/https)
+    - X-Forwarded-Host: The original host (may include port)
+    - X-Forwarded-Port: The original port (if not in Host header)
+
+    Args:
+        request: FastAPI Request object
+
+    Returns:
+        The reconstructed base URL (e.g., "https://proxy.example.com")
+    """
+    base_url = str(request.base_url).rstrip("/")
+    parsed = urlparse(base_url)
+
+    # Get forwarded headers
+    x_forwarded_proto = request.headers.get("X-Forwarded-Proto")
+    x_forwarded_host = request.headers.get("X-Forwarded-Host")
+    x_forwarded_port = request.headers.get("X-Forwarded-Port")
+
+    # Start with the original scheme
+    scheme = x_forwarded_proto if x_forwarded_proto else parsed.scheme
+
+    # Handle host and port
+    if x_forwarded_host:
+        # X-Forwarded-Host may already include port (e.g., "example.com:8080")
+        if ":" in x_forwarded_host and not x_forwarded_host.startswith("["):
+            # Host includes port
+            netloc = x_forwarded_host
+        elif x_forwarded_port:
+            # Port is separate
+            netloc = f"{x_forwarded_host}:{x_forwarded_port}"
+        else:
+            # Just host, no explicit port
+            netloc = x_forwarded_host
+    else:
+        # No X-Forwarded-Host, use original netloc
+        netloc = parsed.netloc
+        if x_forwarded_port and ":" not in netloc:
+            # Add forwarded port if not already in netloc
+            netloc = f"{netloc}:{x_forwarded_port}"
+
+    # Reconstruct the URL
+    return urlunparse((scheme, netloc, parsed.path, "", "", ""))
+
+
 def encode_state_with_base_url(
     base_url: str,
     original_state: str,
@@ -107,7 +156,9 @@ async def authorize(
     # Parse it to remove any existing query
     parsed = urlparse(redirect_uri)
     base_url = urlunparse(parsed._replace(query=""))
-    request_base_url = str(request.base_url).rstrip("/")
+
+    # Get the correct base URL considering X-Forwarded-* headers
+    request_base_url = get_request_base_url(request)
 
     # Encode the base_url, original state, PKCE params, and client redirect_uri in encrypted state
     encoded_state = encode_state_with_base_url(
@@ -177,7 +228,8 @@ async def token_endpoint(
     if mcp_server.token_url is None:
         raise HTTPException(status_code=400, detail="MCP server token url is not set")
 
-    proxy_base_url = str(request.base_url).rstrip("/")
+    # Get the correct base URL considering X-Forwarded-* headers
+    proxy_base_url = get_request_base_url(request)
 
     # Build token request data
     token_data = {
@@ -251,7 +303,8 @@ async def callback(code: str, state: str):
 async def oauth_protected_resource_mcp(
     request: Request, mcp_server_name: Optional[str] = None
 ):
-    request_base_url = str(request.base_url).rstrip("/")
+    # Get the correct base URL considering X-Forwarded-* headers
+    request_base_url = get_request_base_url(request)
     return {
         "authorization_servers": [
             (
@@ -273,7 +326,8 @@ async def oauth_protected_resource_mcp(
 async def oauth_authorization_server_mcp(
     request: Request, mcp_server_name: Optional[str] = None
 ):
-    request_base_url = str(request.base_url).rstrip("/")
+    # Get the correct base URL considering X-Forwarded-* headers
+    request_base_url = get_request_base_url(request)
 
     authorization_endpoint = (
         f"{request_base_url}/{mcp_server_name}/authorize"
@@ -320,7 +374,8 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
         global_mcp_server_manager,
     )
 
-    request_base_url = str(request.base_url).rstrip("/")
+    # Get the correct base URL considering X-Forwarded-* headers
+    request_base_url = get_request_base_url(request)
 
     request_data = await _read_request_body(request=request)
     data: dict = {**request_data}
