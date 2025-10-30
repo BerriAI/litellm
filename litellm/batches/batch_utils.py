@@ -1,10 +1,15 @@
 import json
-from typing import Any, List, Literal, Tuple, Optional
+import time
+from typing import Any, List, Literal, Optional, Tuple
+
+import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.types.llms.openai import Batch
-from litellm.types.utils import CallTypes, Usage
+from litellm.types.utils import CallTypes, ModelResponse, Usage
+from litellm.utils import token_counter
 
 
 async def calculate_batch_cost_and_usage(
@@ -107,6 +112,10 @@ def calculate_vertex_ai_batch_cost_and_usage(
     """
     Calculate both cost and usage from Vertex AI batch responses
     """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
     total_cost = 0.0
     total_tokens = 0
     prompt_tokens = 0
@@ -115,14 +124,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
     for response in vertex_ai_batch_responses:
         if response.get("status") == "JOB_STATE_SUCCEEDED":  # Check if response was successful
             # Transform Vertex AI response to OpenAI format if needed
-            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-            from litellm import ModelResponse
-            from litellm.litellm_core_utils.litellm_logging import Logging
-            from litellm.types.utils import CallTypes
-            from litellm._uuid import uuid
-            import httpx
-            import time
-            
+
             # Create required arguments for the transformation method
             model_response = ModelResponse()
             
@@ -163,8 +165,9 @@ def calculate_vertex_ai_batch_cost_and_usage(
             total_cost += cost
             
             # Extract usage from the transformed response
-            if hasattr(openai_format_response, 'usage') and openai_format_response.usage:
-                usage = openai_format_response.usage
+            usage_obj = getattr(openai_format_response, 'usage', None)
+            if usage_obj:
+                usage = usage_obj
             else:
                 # Fallback: create usage from response dict
                 response_dict = openai_format_response.dict() if hasattr(openai_format_response, 'dict') else {}
@@ -278,6 +281,33 @@ def _get_batch_job_total_usage_from_file_content(
         completion_tokens=completion_tokens,
     )
 
+def _get_batch_job_input_file_usage(
+    file_content_dictionary: List[dict],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    model_name: Optional[str] = None,
+) -> Usage:
+    """
+    Count the number of tokens in the input file
+
+    Used for batch rate limiting to count the number of tokens in the input file
+    """    
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    
+    for _item in file_content_dictionary:
+        body = _item.get("body", {})
+        model = body.get("model", model_name or "")
+        messages = body.get("messages", [])
+        
+        if messages:
+            item_tokens = token_counter(model=model, messages=messages)
+            prompt_tokens += item_tokens
+        
+    return Usage(
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
 
 def _get_batch_job_usage_from_response_body(response_body: dict) -> Usage:
     """
