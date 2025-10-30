@@ -32,18 +32,18 @@ TEST_API_KEY = "sk-1234"  # API key used in test requests
 
 # Number of API requests to execute in each batch during testing
 # Larger batches = more requests before measuring memory, smoother growth patterns
-# Reduced from 200 to 100 for faster test feedback cycles
-DEFAULT_BATCH_SIZE = 100
+# Optimized to 50 for faster test execution while maintaining detection accuracy
+DEFAULT_BATCH_SIZE = 50
 
 # Number of batches to run during the measurement phase
 # More batches = longer test runtime but more confidence in leak detection
-# Reduced from 15 to 10 for faster feedback while maintaining reliability
-DEFAULT_NUM_BATCHES = 10
+# Optimized to 6 for faster feedback while maintaining statistical significance
+DEFAULT_NUM_BATCHES = 6
 
 # Number of warmup batches to run before measurement begins
 # Warmup allows caches and memory allocations to stabilize before measurement
-# Reduced from 5 to 3 for faster test startup
-DEFAULT_WARMUP_BATCHES = 3
+# Optimized to 2 for faster test startup while allowing stabilization
+DEFAULT_WARMUP_BATCHES = 1
 
 # Hard limit on number of batches to prevent excessively long test runs
 MAX_NUM_BATCHES = 15
@@ -55,8 +55,8 @@ MAX_NUM_BATCHES = 15
 
 # Window size for calculating rolling average of memory measurements
 # Smooths out noise in memory measurements for more accurate trend detection
-# Reduced from 7 to 5 to match smaller batch count (10 batches)
-DEFAULT_ROLLING_AVERAGE_WINDOW = 5
+# Set to 3 to match optimized batch count (6 batches) while maintaining smoothing
+DEFAULT_ROLLING_AVERAGE_WINDOW = 3
 
 # Maximum allowed memory growth percentage for basic test pass/fail
 # Used in get_memory_test_config() for general test configuration
@@ -75,6 +75,52 @@ DEFAULT_NUM_SAMPLES_FOR_GROWTH_ANALYSIS = 3
 # CV = (std_dev / mean) * 100. Higher CV indicates noisy/unstable measurements
 # Tests with CV > this threshold are skipped due to unreliable environment
 DEFAULT_MAX_COEFFICIENT_VARIATION = 40.0
+
+# Whether to skip tests when measurements are too noisy (high coefficient of variation)
+# Set to False to run tests even with high noise/variation
+# Useful for environments with inherent instability where you still want leak detection results
+DEFAULT_SKIP_ON_HIGH_NOISE = False
+
+# =============================================================================
+# Memory Snapshot Configuration
+# =============================================================================
+# Parameters for capturing detailed memory snapshots during test execution
+
+# Whether to capture top memory consumers after each request
+# Enabling this generates detailed memory profiling data but increases overhead
+DEFAULT_CAPTURE_TOP_CONSUMERS = True
+
+# Number of top memory consumers to capture in each snapshot
+# Higher values provide more detail but increase snapshot size
+# Optimized to 10 to reduce profiling overhead while capturing key consumers
+DEFAULT_TOP_CONSUMERS_COUNT = 10
+
+# Default directory for JSON output files containing memory snapshot data
+# Each test gets its own file: {OUTPUT_DIR}/test_name.json
+# Snapshots will be saved when capture_top_consumers is enabled
+DEFAULT_OUTPUT_DIR = "memory_snapshots"
+
+# Maximum number of request snapshots to keep per test in JSON file
+# Each entry = one request snapshot (request_id, memory stats, timestamps, etc.)
+# Older requests within each test are rotated out to prevent unbounded file growth
+# Set to 0 to keep all snapshots (not recommended for long-running tests)
+DEFAULT_MAX_SNAPSHOTS_PER_TEST = 1000
+
+# Default value for lightweight snapshot mode
+# When True, skips expensive snapshot operations (top consumers data)
+# When False, captures full snapshot details including top memory consumers
+DEFAULT_LIGHTWEIGHT_SNAPSHOT = False
+
+# Smart capture thresholds for determining when to capture detailed snapshots
+# Memory increase percentage threshold to trigger a detailed snapshot
+# Captures detailed snapshot when memory grows by more than this % since last detailed capture
+DEFAULT_MEMORY_INCREASE_THRESHOLD_PCT = 2.0
+
+# Periodic sampling interval for detailed snapshots
+# Captures a detailed snapshot every N requests regardless of memory changes
+# Ensures regular sampling even when memory is stable
+# Optimized to 25 to reduce profiling overhead while maintaining coverage
+DEFAULT_PERIODIC_SAMPLE_INTERVAL = 10
 
 # =============================================================================
 # Memory Leak Detection Thresholds
@@ -98,13 +144,39 @@ DEFAULT_LEAK_DETECTION_TAIL_SAMPLES = 5
 NEAR_ZERO_MEMORY_THRESHOLD_MB = 0.01  # 10 KB
 
 # =============================================================================
+# Significant Memory Growth Threshold
+# =============================================================================
+# Shared threshold used across multiple leak detection scenarios
+
+# Minimum percent increase to consider memory growth "significant"
+# Used for: error-induced spikes, leak source identification, etc.
+DEFAULT_SIGNIFICANT_MEMORY_GROWTH_PERCENT = 50.0
+
+# =============================================================================
+# Leaking Source Identification Configuration
+# =============================================================================
+# Parameters for identifying specific files/lines that are leaking memory
+
+# Whether to filter analysis to only litellm codebase files
+# Set to False to include all files (stdlib, dependencies, etc.)
+DEFAULT_LEAK_SOURCE_FILTER_LITELLM_ONLY = False
+
+# Minimum memory growth in MB for a source to be considered a leak
+# Sources growing less than this are filtered out
+DEFAULT_LEAK_SOURCE_MIN_GROWTH_MB = 0.1
+
+# Minimum number of batches a source must appear in to be analyzed
+# Sources appearing in fewer batches are filtered out (insufficient data)
+DEFAULT_LEAK_SOURCE_MIN_BATCHES = 3
+
+# Maximum number of leaking sources to report
+# Sorted by growth amount (MB), showing the biggest leaks first
+DEFAULT_LEAK_SOURCE_MAX_RESULTS = 10
+
+# =============================================================================
 # Error-Induced Memory Leak Detection Configuration
 # =============================================================================
 # Parameters for detecting memory leaks specifically caused by error handling
-
-# Minimum percent increase between batches to consider it a memory spike
-# Used to identify sudden memory jumps that may be caused by errors
-DEFAULT_ERROR_MEMORY_SPIKE_THRESHOLD_PERCENT = 50.0
 
 # Maximum percent variation allowed for memory to be considered "stable"
 # After an error spike, subsequent batches within this tolerance = stabilized
