@@ -25,9 +25,8 @@ from .router_callbacks.track_deployment_metrics import (
 )
 
 if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
     from litellm.router import Router as _Router
+    from opentelemetry.trace import Span as _Span
 
     LitellmRouter = _Router
     Span = Union[_Span, Any]
@@ -79,6 +78,10 @@ def _is_cooldown_required(
                 return True
 
             elif exception_status == 404:
+                return True
+
+            elif exception_status == 400:
+                # Cool down 400 Bad Request Errors (e.g., anthropic credit balance too low)
                 return True
 
             else:
