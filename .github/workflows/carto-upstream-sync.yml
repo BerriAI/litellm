@@ -55,7 +55,7 @@ jobs:
       - name: Detect new stable release (bash + gh CLI)
         id: detect-release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
         run: |
           set -eu
 
@@ -352,7 +352,7 @@ jobs:
         id: create-pr
         env:
           NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
         run: |
           set -eu
 
