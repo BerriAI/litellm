@@ -260,6 +260,61 @@ async def test_moderation_endpoint(model):
     print("moderation response: ", response)
 
 
+@pytest.mark.asyncio()
+async def test_moderation_endpoint_with_api_base():
+    """
+    Test that the moderation endpoint respects api_base configuration
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    custom_api_base = "https://us.api.openai.com/v1"
+    
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/omni-moderation-latest",
+                "litellm_params": {
+                    "model": "openai/omni-moderation-latest",
+                    "api_base": custom_api_base,
+                    "api_key": "test-key"
+                },
+            },
+        ]
+    )
+
+    # Mock the OpenAI client to verify api_base is passed
+    with patch("litellm.main.openai_chat_completions._get_openai_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.model_dump.return_value = {
+            "id": "modr-123",
+            "model": "omni-moderation-latest",
+            "results": [
+                {
+                    "flagged": False,
+                    "categories": {},
+                    "category_scores": {},
+                    "category_applied_input_types": {}
+                }
+            ]
+        }
+        mock_client.moderations.create = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_client
+        
+        response = await router.amoderation(
+            model="openai/omni-moderation-latest",
+            input="hello this is a test"
+        )
+        
+        # Verify that _get_openai_client was called with the custom api_base
+        mock_get_client.assert_called()
+        call_kwargs = mock_get_client.call_args.kwargs
+        assert call_kwargs.get("api_base") == custom_api_base, \
+            f"Expected api_base to be {custom_api_base}, but got {call_kwargs.get('api_base')}"
+        
+        print(f"✓ Moderation endpoint correctly uses api_base: {custom_api_base}")
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_aaaaatext_completion_endpoint(model_list, sync_mode):
