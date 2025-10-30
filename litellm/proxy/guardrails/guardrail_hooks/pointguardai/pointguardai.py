@@ -22,7 +22,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_helpers import (
     should_proceed_based_on_metadata,  # noqa: F401
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, PiiEntityType
 
 GUARDRAIL_NAME = "POINTGUARDAI"
 
@@ -38,8 +38,8 @@ class PointGuardAIGuardrail(CustomGuardrail):
         model_provider_name: Optional[str] = None,
         model_name: Optional[str] = None,
         guardrail_name: Optional[str] = None,
-        event_hook: Optional[str] = None,
-        default_on: Optional[bool] = False,
+        event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Any]] = None,
+        default_on: bool = False,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
@@ -59,10 +59,10 @@ class PointGuardAIGuardrail(CustomGuardrail):
             raise HTTPException(status_code=401, detail="Missing required parameter: policy_config_name")
 
         self.pointguardai_api_base = api_base or os.getenv("POINTGUARDAI_API_URL_BASE")
-        self.pointguardai_org_code = org_code or os.getenv("POINTGUARDAI_ORG_CODE", None)
-        self.pointguardai_policy_config_name = policy_config_name or os.getenv("POINTGUARDAI_CONFIG_NAME", None)
-        self.pointguardai_api_key = api_key or os.getenv("POINTGUARDAI_API_KEY", None)
-        self.pointguardai_api_email = api_email or os.getenv("POINTGUARDAI_API_EMAIL", None)
+        self.pointguardai_org_code = org_code or os.getenv("POINTGUARDAI_ORG_CODE", "")
+        self.pointguardai_policy_config_name = policy_config_name or os.getenv("POINTGUARDAI_CONFIG_NAME", "")
+        self.pointguardai_api_key = api_key or os.getenv("POINTGUARDAI_API_KEY", "")
+        self.pointguardai_api_email = api_email or os.getenv("POINTGUARDAI_API_EMAIL", "")
 
         # Set default API base if not provided
         if not self.pointguardai_api_base:
@@ -204,19 +204,19 @@ class PointGuardAIGuardrail(CustomGuardrail):
     def _check_sections_present(self, response_data: dict, new_messages: List[dict], response_string: Optional[str]) -> tuple[bool, bool]:
         """Check if input or output sections are present in response"""
         input_section_present = (
-            new_messages and len(new_messages) > 0 and
-            response_data.get("input") is not None and
-            response_data.get("input") != [] and
-            response_data.get("input") != {}
+            bool(new_messages and len(new_messages) > 0 and
+                 response_data.get("input") is not None and
+                 response_data.get("input") != [] and
+                 response_data.get("input") != {})
         )
-        
+
         output_section_present = (
-            response_string and 
-            response_data.get("output") is not None and
-            response_data.get("output") != [] and
-            response_data.get("output") != {}
+            bool(response_string and
+                 response_data.get("output") is not None and
+                 response_data.get("output") != [] and
+                 response_data.get("output") != {})
         )
-        
+
         return input_section_present, output_section_present
 
     def _extract_status_flags(self, response_data: dict, input_section_present: bool, output_section_present: bool) -> tuple[bool, bool, bool, bool]:
@@ -662,13 +662,15 @@ class PointGuardAIGuardrail(CustomGuardrail):
             # Don't raise on unexpected errors in moderation hook to avoid breaking the flow
             pass
 
+        return None
+
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         response: Union[litellm.ModelResponse, litellm.TextCompletionResponse],
-    ) -> Optional[Union[Exception, str, dict]]:
+    ):
         """
         Runs on response from LLM API call
 
@@ -790,7 +792,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
         self,
         text: str,
         language: Optional[str] = None,
-        entities: Optional[List] = None,
+        entities: Optional[List[PiiEntityType]] = None,
     ) -> str:
         """
         Apply PointGuard AI guardrail to the given text.
