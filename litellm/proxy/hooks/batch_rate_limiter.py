@@ -110,7 +110,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
              if d.get("key") == status.get("descriptor_key")),
             0
         )
-        descriptor = descriptors[descriptor_index] if descriptors else {}
+        descriptor: RateLimitDescriptor = descriptors[descriptor_index] if descriptors else {"key": "", "value": "", "rate_limit": None}
         
         now = datetime.now().timestamp()
         window_size = self.parallel_request_limiter.window_size
