@@ -41,15 +41,19 @@ Provide individual OCI credentials directly to LiteLLM. Follow the [official Ora
 - `key_file` or `key`
 - `compartment_id`
 
+This is the default method for LiteLLM AI Gateway (LLM Proxy) access to OCI GenAI models.
+
 ### Method 2: OCI SDK Signer
 Use an OCI SDK `Signer` object for authentication. This method:
 - Leverages the official [OCI SDK for signing](https://docs.oracle.com/en-us/iaas/tools/python/latest/api/signing.html)
-- Supports multiple authentication methods (API key, instance principals, workload identity, etc.)
+- Supports additional authentication methods (instance principals, workload identity, etc.)
 
 To use this method, install the OCI SDK:
 ```bash
 pip install oci
 ```
+
+This method is an alternative when using the LiteLLM SDK on Oracle Cloud Infrastructure (instances or Oracle Kubernetes Engine).
 
 ## Usage
 
