@@ -7,7 +7,6 @@ Uses Memray's Python API for programmatic memory tracking and analysis.
 
 import sys
 import os
-import tracemalloc
 
 import pytest
 
@@ -111,8 +110,7 @@ async def test_router_completion_memory_leak_with_growth_detection(clean_router,
         completion_kwargs=get_router_completion_kwargs(),
         config=config,
         module_to_verify=clean_router,
-        module_id=initial_id,
-        litellm_module=None  # Router handles its own state
+        module_id=initial_id
     )
     
     # Analyze results and detect leaks

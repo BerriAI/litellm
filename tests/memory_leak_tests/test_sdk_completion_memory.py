@@ -4,7 +4,6 @@ Memory leak tests for LiteLLM SDK completion (sync/async, streaming/non-streamin
 
 import sys
 import os
-import tracemalloc
 
 import pytest
 
@@ -62,8 +61,7 @@ async def test_completion_memory_leak_with_growth_detection(use_async, streaming
         completion_kwargs=get_completion_kwargs(api_base=FAKE_LLM_ENDPOINT),
         config=config,
         module_to_verify=litellm,
-        module_id=initial_id,
-        litellm_module=litellm
+        module_id=initial_id
     )
     
     # Analyze results and detect leaks

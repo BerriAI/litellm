@@ -334,8 +334,7 @@ async def run_measurement_phase(
     num_batches: int,
     completion_func,
     completion_kwargs: Dict[str, Any],
-    tracemalloc_module,
-    litellm_module=None
+    tracemalloc_module
 ) -> Tuple[List[float], List[int]]:
     """
     Run measurement phase and collect memory samples after each batch.
@@ -346,7 +345,6 @@ async def run_measurement_phase(
         completion_func: The completion function to call
         completion_kwargs: Keyword arguments to pass to completion_func
         tracemalloc_module: The tracemalloc module for memory tracking
-        litellm_module: Optional litellm module for state cleanup
         
     Returns:
         Tuple of:
@@ -875,8 +873,7 @@ async def run_memory_measurement_with_tracemalloc(
     completion_kwargs: Dict[str, Any],
     config: Dict[str, Any],
     module_to_verify=None,
-    module_id: Optional[int] = None,
-    litellm_module=None
+    module_id: Optional[int] = None
 ) -> Tuple[List[float], List[int]]:
     """
     Run warmup and measurement phases with tracemalloc tracking.
@@ -894,7 +891,6 @@ async def run_memory_measurement_with_tracemalloc(
         config: Test configuration from get_memory_test_config()
         module_to_verify: Optional module/object to verify ID consistency
         module_id: Expected ID of module_to_verify
-        litellm_module: Optional litellm module for state cleanup
         
     Returns:
         Tuple of (memory_samples, error_counts) from measurement phase
@@ -921,8 +917,7 @@ async def run_memory_measurement_with_tracemalloc(
             num_batches=config['num_batches'],
             completion_func=completion_func,
             completion_kwargs=completion_kwargs,
-            tracemalloc_module=tm,
-            litellm_module=litellm_module
+            tracemalloc_module=tm
         )
         
         if module_to_verify is not None and module_id is not None:
@@ -946,17 +941,16 @@ def analyze_and_detect_leaks(
     Run complete analysis phase and fail test if memory leak is detected.
     
     This high-level helper consolidates all the analysis steps:
-    1. Check measurement noise (skip if too noisy)
-    2. Print analysis header
-    3. Check if enough samples (skip if insufficient)
+    1. Print analysis header
+    2. Check if enough samples (skip if insufficient)
+    3. Check measurement noise (skip if too noisy)
     4. Prepare memory analysis (rolling average, etc.)
     5. Analyze memory growth
     6. Print growth metrics
-    7. Check measurement noise
-    8. Detect memory leaks
-    9. Fail test if leak detected or print success message
-    10. Print memory samples
-    11. Verify module ID consistency
+    7. Detect memory leaks
+    8. Fail test if leak detected or print success message
+    9. Print memory samples
+    10. Verify module ID consistency
     
     Args:
         memory_samples: List of memory measurements from measurement phase
@@ -970,15 +964,15 @@ def analyze_and_detect_leaks(
         pytest.skip: If measurements are too noisy or insufficient samples
         pytest.fail: If memory leak is detected
     """
-    # Check if measurements are too noisy for reliable leak detection
-    should_skip, skip_message = check_measurement_noise(memory_samples)
-    if should_skip:
-        pytest.skip(skip_message)
-    
     print_analysis_header()
     
     if len(memory_samples) < config['sample_window'] * 2:
         pytest.skip("Not enough samples for reliable growth analysis")
+    
+    # Check if measurements are too noisy for reliable leak detection
+    should_skip, skip_message = check_measurement_noise(memory_samples)
+    if should_skip:
+        pytest.skip(skip_message)
     
     # Calculate dynamic parameters for memory analysis
     rolling_avg, num_samples_for_avg, tail_samples = prepare_memory_analysis(

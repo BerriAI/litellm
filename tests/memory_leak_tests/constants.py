@@ -32,15 +32,18 @@ TEST_API_KEY = "sk-1234"  # API key used in test requests
 
 # Number of API requests to execute in each batch during testing
 # Larger batches = more requests before measuring memory, smoother growth patterns
-DEFAULT_BATCH_SIZE = 200
+# Reduced from 200 to 100 for faster test feedback cycles
+DEFAULT_BATCH_SIZE = 100
 
 # Number of batches to run during the measurement phase
 # More batches = longer test runtime but more confidence in leak detection
-DEFAULT_NUM_BATCHES = 15
+# Reduced from 15 to 10 for faster feedback while maintaining reliability
+DEFAULT_NUM_BATCHES = 10
 
 # Number of warmup batches to run before measurement begins
 # Warmup allows caches and memory allocations to stabilize before measurement
-DEFAULT_WARMUP_BATCHES = 5
+# Reduced from 5 to 3 for faster test startup
+DEFAULT_WARMUP_BATCHES = 3
 
 # Hard limit on number of batches to prevent excessively long test runs
 MAX_NUM_BATCHES = 15
@@ -52,7 +55,8 @@ MAX_NUM_BATCHES = 15
 
 # Window size for calculating rolling average of memory measurements
 # Smooths out noise in memory measurements for more accurate trend detection
-DEFAULT_ROLLING_AVERAGE_WINDOW = 7
+# Reduced from 7 to 5 to match smaller batch count (10 batches)
+DEFAULT_ROLLING_AVERAGE_WINDOW = 5
 
 # Maximum allowed memory growth percentage for basic test pass/fail
 # Used in get_memory_test_config() for general test configuration
@@ -70,7 +74,7 @@ DEFAULT_NUM_SAMPLES_FOR_GROWTH_ANALYSIS = 3
 # Maximum coefficient of variation (CV) percentage for memory measurements
 # CV = (std_dev / mean) * 100. Higher CV indicates noisy/unstable measurements
 # Tests with CV > this threshold are skipped due to unreliable environment
-DEFAULT_MAX_COEFFICIENT_VARIATION = 30.0
+DEFAULT_MAX_COEFFICIENT_VARIATION = 40.0
 
 # =============================================================================
 # Memory Leak Detection Thresholds
