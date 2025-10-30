@@ -220,7 +220,41 @@ curl --location --request POST 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
+## Automatic Metadata from API Keys
 
+In some cases, the requester may be unable or unaware of how to add Opik metadata to their requests. To ensure all Opik-related actions are properly tracked, LiteLLM Proxy can automatically associate metadata from a user-specific API key when none is provided in the request.
+
+### How It Works
+
+When you create an API key in LiteLLM Proxy, you can attach Opik-specific metadata to the key itself. This metadata will be automatically applied to all requests made with that key, unless the request explicitly provides its own Opik metadata (which takes precedence).
+
+
+### Usage
+
+**Step 1: Save Opik Metadata to the corresponding Api Key**
+Go to 'Virtual Keys', click on your choosen api key and edit 'Settings'.
+Now save the opik metadata as user api key metdata.
+
+<Image img={require('../../img/opik_key_metadata.png')} />
+
+**Step 2: Use the key - Opik metadata is automatically applied**
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-key-from-step-1' \
+-d '{
+  "model": "gpt-3.5-turbo",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What's the weather like in Boston today?"
+    }
+  ]
+}'
+```
+
+All requests made with this key will automatically be tracked in the "TestProject" Opik project with the specified tags, without requiring the user to pass metadata in each request.
 
 
 ## Support & Talk to Founders
