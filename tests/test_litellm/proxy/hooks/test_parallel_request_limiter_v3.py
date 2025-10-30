@@ -5,7 +5,8 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 import asyncio
 import os
 import sys
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -21,10 +22,27 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.utils import ModelResponse, Usage
 
+class TimeController:
+    def __init__(self):
+        self._current = datetime.utcnow()
+
+    def now(self) -> datetime:
+        return self._current
+
+    def advance(self, seconds: float) -> None:
+        self._current += timedelta(seconds=seconds)
+
+
+@pytest.fixture
+def time_controller(monkeypatch):
+    controller = TimeController()
+    monkeypatch.setattr(time, "time", lambda: controller.now().timestamp())
+    return controller
+
 
 @pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
-async def test_sliding_window_rate_limit_v3(monkeypatch):
+async def test_sliding_window_rate_limit_v3(monkeypatch, time_controller):
     """
     Test the sliding window rate limiting functionality
     """
@@ -34,7 +52,8 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=3)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(local_cache)
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
     )
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
@@ -103,7 +122,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
     assert "Rate limit exceeded" in str(exc_info.value.detail)
 
     # Wait for window to expire (2 seconds)
-    await asyncio.sleep(3)
+    time_controller.advance(3)
 
     print("WAITED 3 seconds")
 
@@ -116,7 +135,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rate_limiter_script_return_values_v3(monkeypatch):
+async def test_rate_limiter_script_return_values_v3(monkeypatch, time_controller):
     """
     Test that the rate limiter script returns both counter and window values correctly
     """
@@ -126,7 +145,8 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch):
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=3)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(local_cache)
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
     )
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
@@ -199,7 +219,7 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch):
     assert new_counter_value == 2, "Counter should be 2 after second request"
 
     # Wait for window to expire
-    await asyncio.sleep(3)
+    time_controller.advance(3)
 
     # Make request after window expiry
     await parallel_request_handler.async_pre_call_hook(
@@ -226,7 +246,7 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch):
 )
 @pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
-async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
+async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object, time_controller):
     """
     Test normal router call with parallel request limiter v3 for TPM rate limiting
     """
@@ -276,7 +296,8 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
         )
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(local_cache)
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
     )
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
@@ -359,7 +380,8 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
         },
         mock_response="hello",
     )
-    await asyncio.sleep(1)  # success is done in a separate thread
+    await asyncio.sleep(0)
+    time_controller.advance(1)
 
     # Verify the token count is tracked
     counter_value = await local_cache.async_get_cache(key=counter_key)
@@ -383,7 +405,7 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
         )
 
     # Wait for window to expire
-    await asyncio.sleep(3)
+    time_controller.advance(3)
 
     # Make request after window expiry
     await parallel_request_handler.async_pre_call_hook(

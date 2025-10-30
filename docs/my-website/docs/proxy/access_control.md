@@ -10,8 +10,25 @@ Role-based access control (RBAC) is based on Organizations, Teams and Internal U
 - `Organizations` are the top-level entities that contain Teams.
 - `Team` - A Team is a collection of multiple `Internal Users`
 - `Internal Users` - users that can create keys, make LLM API calls, view usage on LiteLLM. Users can be on multiple teams.
-- `Virtual Keys` - Keys are used for authentication to the LiteLLM API. Keys are tied to a `Internal User` and `Team` 
+- `Virtual Keys` - Keys are used for authentication to the LiteLLM API. Each key can optionally be associated with a `user_id`, a `team_id`, or both:
+  - **User-only key**: Has a `user_id` but no `team_id`. Tracked individually, deleted when the user is deleted.
+  - **Team key (Service Account)**: Has a `team_id` but no `user_id`. Shared by the team, not deleted when users are removed. [Learn more about service account keys](https://docs.litellm.ai/docs/proxy/virtual_keys#service-account-keys).
+  - **User + Team key**: Has both `user_id` and `team_id`. Belongs to a specific user within a team context.
 
+### When to Use Each Key Type
+
+| Key Type | Use Case | Spend Tracking | Lifecycle |
+|----------|----------|----------------|-----------|
+| **User-only** | Personal API keys for individual developers | Tracked to the user | Deleted when user is deleted |
+| **Team (Service Account)** | Production apps, CI/CD pipelines, shared services | Tracked to the team only | Persists even when team members leave |
+| **User + Team** | User working within a team context | Tracked to both user and team | Deleted when user is deleted |
+
+**Example scenarios:**
+- Use **user-only keys** for developers testing locally
+- Use **team service account keys** for your production application that shouldn't break when employees leave
+- Use **user + team keys** when you want individual accountability within a team budget
+
+---
 
 ## User Roles
 

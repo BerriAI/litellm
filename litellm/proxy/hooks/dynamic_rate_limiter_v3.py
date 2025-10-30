@@ -3,7 +3,8 @@ Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 """
 
 import os
-from typing import Dict, List, Literal, Optional, Union
+from datetime import datetime
+from typing import Callable, Dict, List, Literal, Optional, Union
 
 from fastapi import HTTPException
 
@@ -42,9 +43,15 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     - When saturated: strict priority-based limits enforced (fair)
     - Uses v3 limiter's atomic Lua scripts for race-free increments
     """
-    def __init__(self, internal_usage_cache: DualCache):
+    def __init__(
+        self,
+        internal_usage_cache: DualCache,
+        time_provider: Optional[Callable[[], datetime]] = None,
+    ):
         self.internal_usage_cache = InternalUsageCache(dual_cache=internal_usage_cache)
-        self.v3_limiter = _PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache)
+        self.v3_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+            self.internal_usage_cache, time_provider=time_provider
+        )
 
     def update_variables(self, llm_router: Router):
         self.llm_router = llm_router
