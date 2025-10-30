@@ -226,3 +226,21 @@ def test_vercel_ai_gateway_models_endpoint_failure():
 
         with pytest.raises(Exception, match="Failed to get models: Not found"):
             config.get_models()
+
+def test_vercel_ai_gateway_glm46_cost_math():
+    """Test the cost math for glm-4.6"""
+
+    with open("model_prices_and_context_window.json", "r") as f:
+        litellm.model_cost = json.load(f)
+
+    key = "vercel_ai_gateway/zai/glm-4.6"
+    info = litellm.model_cost[key]
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    prompt_cost, completion_cost = cost_per_token(
+        model="vercel_ai_gateway/zai/glm-4.6",
+        usage_object=usage,
+    )
+
+    assert math.isclose(prompt_cost, 1000 * info["input_cost_per_token"], rel_tol=1e-12)
+    assert math.isclose(completion_cost, 500 * info["output_cost_per_token"], rel_tol=1e-12)
