@@ -348,6 +348,22 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [Heroku (`heroku`)](https://docs.litellm.ai/docs/providers/heroku)                             | ✅                   |               |                      |
 | [OVHCloud AI Endpoints (`ovhcloud`)](https://docs.litellm.ai/docs/providers/ovhcloud)            | ✅                   |               |                      |
 | [CometAPI (`cometapi`)](https://docs.litellm.ai/docs/providers/cometapi)                         | ✅                   | ✅             | ✅                    |
+| [OpenAI-like (`openai_like`)](https://docs.litellm.ai/docs/providers/openai_compatible)         |                     | ✅             |                      |
+| [Custom OpenAI (`custom_openai`)](https://docs.litellm.ai/docs/providers/openai_compatible)     | ✅                   |               |                      |
+| [Text Completion OpenAI (`text-completion-openai`)](https://docs.litellm.ai/docs/providers/text_completion_openai) | ✅ |  |                      |
+| [Cohere Chat (`cohere_chat`)](https://docs.litellm.ai/docs/providers/cohere)                    | ✅                   |               |                      |
+| [Anthropic Text (`anthropic_text`)](https://docs.litellm.ai/docs/providers/anthropic)           | ✅                   |               |                      |
+| [Azure Text (`azure_text`)](https://docs.litellm.ai/docs/providers/azure)                       | ✅                   |               |                      |
+| [Azure AI (`azure_ai`)](https://docs.litellm.ai/docs/providers/azure_ai)                        | ✅                   | ✅             | ✅                    |
+| [Sagemaker Chat (`sagemaker_chat`)](https://docs.litellm.ai/docs/providers/aws_sagemaker)       | ✅                   |               |                      |
+| [Ollama Chat (`ollama_chat`)](https://docs.litellm.ai/docs/providers/ollama)                    | ✅                   |               |                      |
+| [AI21 Chat (`ai21_chat`)](https://docs.litellm.ai/docs/providers/ai21)                          | ✅                   |               |                      |
+| [Codestral (`codestral`)](https://docs.litellm.ai/docs/providers/codestral)                     | ✅                   |               |                      |
+| [Text Completion Codestral (`text-completion-codestral`)](https://docs.litellm.ai/docs/providers/codestral) | ✅ |  |                      |
+| [Watsonx Text (`watsonx_text`)](https://docs.litellm.ai/docs/providers/watsonx)                 | ✅                   |               |                      |
+| [Custom (`custom`)](https://docs.litellm.ai/docs/providers/custom_llm_server)                   | ✅                   |               |                      |
+| [LiteLLM Proxy (`litellm_proxy`)](https://docs.litellm.ai/docs/providers/litellm_proxy)         | ✅                   | ✅             | ✅                    |
+| [Hosted VLLM (`hosted_vllm`)](https://docs.litellm.ai/docs/providers/vllm)                      | ✅                   |               |                      |
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
 
