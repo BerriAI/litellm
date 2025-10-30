@@ -484,7 +484,7 @@ from litellm import completion
 
 class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
-        return {"model": "anthropic/claude-3-5-sonnet-latest"}
+        return {"model": "anthropic/claude-sonnet-4-5-20250929"}
 
     def get_base_completion_call_args_with_thinking(self) -> dict:
         return {
@@ -1256,7 +1256,7 @@ async def test_anthropic_api_max_completion_tokens(model: str):
 def test_anthropic_websearch(optional_params: dict):
     litellm._turn_on_debug()
     params = {
-        "model": "anthropic/claude-3-5-sonnet-latest",
+        "model": "anthropic/claude-sonnet-4-5-20250929",
         "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
         **optional_params,
     }
@@ -1275,7 +1275,7 @@ def test_anthropic_websearch(optional_params: dict):
 def test_anthropic_text_editor():
     litellm._turn_on_debug()
     params = {
-        "model": "anthropic/claude-3-5-sonnet-latest",
+        "model": "anthropic/claude-sonnet-4-5-20250929",
         "messages": [
             {
                 "role": "user",
@@ -1363,7 +1363,7 @@ def test_anthropic_mcp_server_responses_api(model: str):
 
 def test_anthropic_prefix_prompt():
     params = {
-        "model": "anthropic/claude-3-5-sonnet-latest",
+        "model": "anthropic/claude-sonnet-4-5-20250929",
         "messages": [
             {"role": "user", "content": "Who won the World Cup in 2022?"},
             {"role": "assistant", "content": "Argentina", "prefix": True},
@@ -1479,7 +1479,7 @@ def test_anthropic_streaming():
                 "content": "Do what you are told to do in the system prompt",
             },
         ],
-        "model": "anthropic/claude-3-5-sonnet-latest",
+        "model": "anthropic/claude-sonnet-4-5-20250929",
         "max_tokens": 7000,
         "parallel_tool_calls": False,
         "stream": True,

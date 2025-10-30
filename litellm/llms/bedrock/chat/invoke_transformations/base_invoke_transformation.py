@@ -1,7 +1,6 @@
 import copy
 import json
 import time
-import urllib.parse
 from functools import partial
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast, get_args
 
@@ -190,14 +189,16 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     ] = True  # cohere requires stream = True in inference params
                 request_data = {"prompt": prompt, **inference_params}
         elif provider == "anthropic":
-            transformed_request = litellm.AmazonAnthropicClaudeConfig().transform_request(
-                model=model,
-                messages=messages,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                headers=headers,
+            transformed_request = (
+                litellm.AmazonAnthropicClaudeConfig().transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                )
             )
-            
+
             return transformed_request
         elif provider == "nova":
             return litellm.AmazonInvokeNovaConfig().transform_request(
@@ -327,7 +328,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
                 outputText = completion_response["generation"]
             elif provider == "mistral":
-                outputText = litellm.AmazonMistralConfig.get_outputText(completion_response, model_response)
+                outputText = litellm.AmazonMistralConfig.get_outputText(
+                    completion_response, model_response
+                )
             else:  # amazon titan
                 outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:
@@ -548,48 +551,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             if provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
                 return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
-
-    def get_bedrock_model_id(
-        self,
-        optional_params: dict,
-        provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL],
-        model: str,
-    ) -> str:
-        modelId = optional_params.pop("model_id", None)
-        if modelId is not None:
-            modelId = self.encode_model_id(model_id=modelId)
-        else:
-            modelId = model
-
-        modelId = modelId.replace("invoke/", "", 1)
-        if provider == "llama" and "llama/" in modelId:
-            modelId = self._get_model_id_from_model_with_spec(modelId, spec="llama")
-        elif provider == "deepseek_r1" and "deepseek_r1/" in modelId:
-            modelId = self._get_model_id_from_model_with_spec(
-                modelId, spec="deepseek_r1"
-            )
-        return modelId
-
-    def _get_model_id_from_model_with_spec(
-        self,
-        model: str,
-        spec: str,
-    ) -> str:
-        """
-        Remove `llama` from modelID since `llama` is simply a spec to follow for custom bedrock models
-        """
-        model_id = model.replace(spec + "/", "")
-        return self.encode_model_id(model_id=model_id)
-
-    def encode_model_id(self, model_id: str) -> str:
-        """
-        Double encode the model ID to ensure it matches the expected double-encoded format.
-        Args:
-            model_id (str): The model ID to encode.
-        Returns:
-            str: The double-encoded model ID.
-        """
-        return urllib.parse.quote(model_id, safe="")
 
     def convert_messages_to_prompt(
         self, model, messages, provider, custom_prompt_dict

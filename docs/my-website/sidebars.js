@@ -432,6 +432,7 @@ const sidebars = {
             "providers/openai",
             "providers/openai/responses_api",
             "providers/openai/text_to_speech",
+            "providers/openai/videos",
           ]
         },
         "providers/text_completion_openai",
@@ -444,6 +445,7 @@ const sidebars = {
             "providers/azure/azure_responses",
             "providers/azure/azure_embedding",
             "providers/azure/azure_speech",
+            "providers/azure/videos",
           ]
         },
         {
@@ -535,6 +537,7 @@ const sidebars = {
         "providers/groq",
         "providers/deepseek",
         "providers/elevenlabs",
+        "providers/fal_ai",
         "providers/fireworks_ai",
         "providers/clarifai",
         "providers/compactifai",
@@ -714,6 +717,7 @@ const sidebars = {
           items: [
             "adding_provider/directory_structure",
             "adding_provider/new_rerank_provider",
+          ]
         },
         "extras/contributing",
         "contributing",
