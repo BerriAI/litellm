@@ -1309,6 +1309,7 @@ class Logging(LiteLLMLoggingBaseClass):
             response_cost = litellm.response_cost_calculator(
                 **response_cost_calculator_kwargs
             )
+
             verbose_logger.debug(f"response_cost: {response_cost}")
             return response_cost
         except Exception as e:  # error calculating cost

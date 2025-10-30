@@ -863,7 +863,7 @@ def completion_cost(  # noqa: PLR0915
                             "size", "1024-x-1024"
                         )  # openai default
                         quality = hidden_params.get("optional_params", {}).get(
-                            "quality", "standard"
+                            "quality", "hd"
                         )  # openai default
                         n = hidden_params.get("optional_params", {}).get(
                             "n", 1
