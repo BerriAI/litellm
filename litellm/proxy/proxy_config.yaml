@@ -21,3 +21,14 @@ search_tools:
     litellm_params:
       search_provider: exa_ai
       api_key: os.environ/EXA_API_KEY
+  
+
+
+# for /files endpoints
+files_settings:
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+
+
+litellm_settings:
+  callbacks: ["datadog"]

@@ -50,7 +50,7 @@ oai_client = OpenAI(
 file_obj = oai_client.files.create(
     file=open("batch_requests.jsonl", "rb"),
     purpose="batch",
-    extra_body={"custom_llm_provider": "vertex_ai"}
+    extra_headers={"custom-llm-provider": "vertex_ai"}
 )
 
 print(f"File uploaded with ID: {file_obj.id}")
@@ -63,9 +63,9 @@ print(f"File uploaded with ID: {file_obj.id}")
 curl --request POST \
   --url http://localhost:4000/v1/files \
   --header 'Content-Type: multipart/form-data' \
+  --header 'custom-llm-provider: vertex_ai' \
   --form purpose=batch \
-  --form file=@batch_requests.jsonl \
-  --form custom_llm_provider=vertex_ai
+  --form file=@batch_requests.jsonl
 ```
 
 </TabItem>
@@ -100,7 +100,7 @@ create_batch_response = oai_client.batches.create(
     completion_window="24h",
     endpoint="/v1/chat/completions",
     input_file_id=batch_input_file_id, # e.g. "gs://my-batch-bucket/litellm-vertex-files/publishers/google/models/gemini-2.5-flash-lite/abc123-def4-5678-9012-34567890abcd"
-    extra_body={"custom_llm_provider": "vertex_ai"}
+    extra_headers={"custom-llm-provider": "vertex_ai"}
 )
 
 print(f"Batch created with ID: {create_batch_response.id}")
@@ -113,11 +113,11 @@ print(f"Batch created with ID: {create_batch_response.id}")
 curl --request POST \
   --url http://localhost:4000/v1/batches \
   --header 'Content-Type: application/json' \
+  --header 'custom-llm-provider: vertex_ai' \
   --data '{         
     "input_file_id": "gs://my-batch-bucket/litellm-vertex-files/publishers/google/models/gemini-2.5-flash-lite/abc123-def4-5678-9012-34567890abcd",
     "endpoint": "/v1/chat/completions",
-    "completion_window": "24h",
-    "custom_llm_provider": "vertex_ai"
+    "completion_window": "24h"
 }'
 ```
 
@@ -162,7 +162,7 @@ Check the status of your batch job. The batch will progress through states: `val
 ```python showLineNumbers title="retrieve_batch.py"
 retrieved_batch = oai_client.batches.retrieve(
     batch_id=create_batch_response.id, # Created batch id, e.g. 7814463557919047680
-    extra_query={"custom_llm_provider": "vertex_ai"}
+    extra_headers={"custom-llm-provider": "vertex_ai"}
 )
 
 print(f"Batch status: {retrieved_batch.status}")
@@ -230,7 +230,7 @@ encoded_file_id = urllib.parse.quote_plus(output_file_id)
 # Get file content
 file_content = oai_client.files.content(
     file_id=encoded_file_id,
-    extra_body={"custom_llm_provider": "vertex_ai"}
+    extra_headers={"custom-llm-provider": "vertex_ai"}
 )
 
 # Process the results
