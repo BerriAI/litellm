@@ -199,9 +199,43 @@ Expected successful response:
 | Parameter | Required | Description | Default |
 |-----------|----------|-------------|---------|
 | `api_key` | Yes | Your PANW Prisma AIRS API key from Strata Cloud Manager | - |
-| `profile_name` | Yes | Security profile name configured in Strata Cloud Manager | - |
+| `profile_name` | No | Security profile name configured in Strata Cloud Manager. Optional if API key has linked profile | - |
+| `app_name` | No | Application identifier for tracking in Prisma AIRS analytics (will be prefixed with "LiteLLM-") | `LiteLLM` |
 | `api_base` | No | Custom API base URL (without /v1/scan/sync/request path) | `https://service.api.aisecurity.paloaltonetworks.com` |
 | `mode` | No | When to run the guardrail | `pre_call` |
+
+## Per-Request Metadata Overrides
+
+You can override guardrail settings on a per-request basis using the `metadata` field:
+
+```json
+{
+  "model": "gpt-4",
+  "messages": [...],
+  "metadata": {
+    "profile_name": "dev-allow-all",            // Override profile name
+    "profile_id": "uuid-here",                  // Override profile ID (takes precedence)
+    "user_ip": "192.168.1.100",                 // Track user IP
+    "app_name": "MyApp"                         // Custom app name (becomes "LiteLLM-MyApp")
+  }
+}
+```
+
+**Supported Metadata Fields:**
+
+| Field | Description | Priority |
+|-------|-------------|----------|
+| `profile_name` | PANW AI security profile name | Per-request > config |
+| `profile_id` | PANW AI security profile ID (takes precedence over profile_name) | Per-request only |
+| `user_ip` | User IP address for tracking in Prisma AIRS | Per-request only |
+| `app_name` | Application identifier (prefixed with "LiteLLM-") | Per-request > config > "LiteLLM" |
+
+:::info Profile Resolution
+- If both `profile_id` and `profile_name` are provided, PANW API uses `profile_id` (it takes precedence)
+- If no profile is specified in metadata, uses the config `profile_name`
+- If no profile is specified at all, PANW API will use the profile linked to your API key in Strata Cloud Manager
+- **Note:** If your API key is not linked to a profile, you must provide `profile_name` or `profile_id`
+:::
 
 ## Environment Variables
 
@@ -234,6 +268,43 @@ guardrails:
       api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
       profile_name: "permissive-policy"   # Lower security profile
 ```
+
+### Multiple API Keys (Multi-Tenant)
+
+For multi-tenant deployments where different customers need different PANW API keys, create separate guardrail instances:
+
+```yaml
+guardrails:
+  - guardrail_name: "panw-customer-a"
+    litellm_params:
+      guardrail: panw_prisma_airs
+      mode: "pre_call"
+      api_key: os.environ/PANW_CUSTOMER_A_KEY  # Linked to Customer A profile in SCM
+      
+  - guardrail_name: "panw-customer-b"
+    litellm_params:
+      guardrail: panw_prisma_airs
+      mode: "pre_call"
+      api_key: os.environ/PANW_CUSTOMER_B_KEY  # Linked to Customer B profile in SCM
+```
+
+Then route requests to the appropriate guardrail:
+
+```bash
+curl -X POST http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "guardrails": ["panw-customer-a"]
+  }'
+```
+
+**Use Cases:**
+- **Multi-tenant deployments**: Different customers with different security policies
+- **Environment-specific policies**: Dev/staging/prod with different API keys and profiles
+- **A/B testing**: Compare different security profiles side-by-side
 
 ### Content Masking
 

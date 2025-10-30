@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -12,11 +12,8 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     import litellm
 
     guardrail_name = guardrail.get("guardrail_name")
-    profile_name = cast(Optional[str], getattr(litellm_params, "profile_name", None))
-    
-    # Note: api_key can be None here - handler will fallback to PANW_PRISMA_AIRS_API_KEY env var
-    if not profile_name:
-        raise ValueError("PANW Prisma AIRS: profile_name is required")
+
+    # Note: api_key and profile_name can be None - handler will use env vars or API key's linked profile
     if not guardrail_name:
         raise ValueError("PANW Prisma AIRS: guardrail_name is required")
 
