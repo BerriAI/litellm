@@ -8,20 +8,20 @@ import os
 import pytest
 
 # Add parent directory to path
-sys.path.insert(0, os.path.abspath("../.."))
+sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 
-from .constants import FAKE_LLM_ENDPOINT
-from .memory_test_helpers import (
+from .. import (
     run_memory_measurement_with_tracemalloc,
     analyze_and_detect_leaks,
-    print_test_header,
     verify_module_id_consistency,
     get_completion_kwargs,
     get_completion_function,
     get_memory_test_config,
+    print_test_header,
 )
+from ..constants import FAKE_LLM_ENDPOINT
 
 
 @pytest.mark.asyncio
@@ -61,7 +61,8 @@ async def test_completion_memory_leak_with_growth_detection(use_async, streaming
         completion_kwargs=get_completion_kwargs(api_base=FAKE_LLM_ENDPOINT),
         config=config,
         module_to_verify=litellm,
-        module_id=initial_id
+        module_id=initial_id,
+        test_name=test_title  # Use the test title as the test name for organization
     )
     
     # Analyze results and detect leaks
@@ -71,5 +72,6 @@ async def test_completion_memory_leak_with_growth_detection(use_async, streaming
         config=config,
         module_to_verify=litellm,
         module_id=initial_id,
-        module_name="Module"
+        module_name="Module",
+        test_name=test_title  # Pass test name for leak source analysis
     )

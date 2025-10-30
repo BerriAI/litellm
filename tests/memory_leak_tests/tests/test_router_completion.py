@@ -1,8 +1,7 @@
 """
-Memray-based memory leak test for LiteLLM Router completion functionality.
+Memory leak tests for LiteLLM Router completion (sync/async, streaming/non-streaming).
 
 This module tests the Router API to detect memory leaks using a fake LLM endpoint.
-Uses Memray's Python API for programmatic memory tracking and analysis.
 """
 
 import sys
@@ -11,25 +10,25 @@ import os
 import pytest
 
 # Add parent directory to path
-sys.path.insert(0, os.path.abspath("../.."))
+sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm import Router
 
-from .constants import (
+from .. import (
+    run_memory_measurement_with_tracemalloc,
+    analyze_and_detect_leaks,
+    verify_module_id_consistency,
+    get_router_completion_kwargs,
+    get_router_completion_function,
+    get_memory_test_config,
+    print_test_header,
+)
+from ..constants import (
     FAKE_LLM_ENDPOINT,
     DEFAULT_ROUTER_TIMEOUT,
     DEFAULT_ROUTER_NUM_RETRIES,
     TEST_API_KEY,
     DEFAULT_SDK_MODEL,
-)
-from .memory_test_helpers import (
-    run_memory_measurement_with_tracemalloc,
-    analyze_and_detect_leaks,
-    print_test_header,
-    verify_module_id_consistency,
-    get_router_completion_kwargs,
-    get_router_completion_function,
-    get_memory_test_config,
 )
 
 
@@ -77,6 +76,7 @@ async def test_router_completion_memory_leak_with_growth_detection(use_async, st
     verify_module_id_consistency(router, initial_id, "at test start")
     
     config = get_memory_test_config()
+    
     print_test_header(title=test_title)
     completion_func = get_router_completion_function(router, use_async, streaming)
     
@@ -86,7 +86,8 @@ async def test_router_completion_memory_leak_with_growth_detection(use_async, st
         completion_kwargs=get_router_completion_kwargs(),
         config=config,
         module_to_verify=router,
-        module_id=initial_id
+        module_id=initial_id,
+        test_name=test_title  # Use the test title as the test name for organization
     )
     
     # Analyze results and detect leaks
@@ -96,6 +97,7 @@ async def test_router_completion_memory_leak_with_growth_detection(use_async, st
         config=config,
         module_to_verify=router,
         module_id=initial_id,
-        module_name="Router instance"
+        module_name="Router instance",
+        test_name=test_title  # Pass test name for leak source analysis
     )
 
