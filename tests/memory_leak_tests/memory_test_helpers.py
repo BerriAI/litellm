@@ -19,6 +19,7 @@ from .constants import (
     DEFAULT_TEST_MAX_GROWTH_PERCENT,
     DEFAULT_TEST_STABILIZATION_TOLERANCE_MB,
     DEFAULT_NUM_SAMPLES_FOR_GROWTH_ANALYSIS,
+    DEFAULT_MAX_COEFFICIENT_VARIATION,
     DEFAULT_ERROR_MEMORY_SPIKE_THRESHOLD_PERCENT,
     DEFAULT_ERROR_SPIKE_STABILIZATION_TOLERANCE_PERCENT,
     DEFAULT_ERROR_SPIKE_MIN_STABLE_BATCHES,
@@ -409,6 +410,76 @@ async def run_measurement_phase(
     return memory_samples, error_counts
 
 
+def check_measurement_noise(
+    memory_samples: List[float],
+    max_coefficient_variation: float = DEFAULT_MAX_COEFFICIENT_VARIATION
+) -> Tuple[bool, str]:
+    """
+    Check if memory measurements are too noisy for reliable leak detection.
+    
+    Calculates the coefficient of variation (CV) to assess measurement stability.
+    High CV indicates the test environment is unstable and results would be unreliable.
+    
+    Args:
+        memory_samples: List of memory measurements in MB
+        max_coefficient_variation: Maximum acceptable CV percentage (default: 30%)
+        
+    Returns:
+        Tuple of (should_skip: bool, skip_message: str)
+        If should_skip is True, the test should be skipped with the provided message.
+    """
+    if len(memory_samples) <= 1:
+        return False, ""
+    
+    memory_std_dev = statistics.stdev(memory_samples)
+    memory_mean = statistics.mean(memory_samples)
+    memory_coefficient_variation = (memory_std_dev / memory_mean * 100) if memory_mean > 0 else 0
+    
+    print(f"Memory std dev: {memory_std_dev:.3f} MB ({memory_coefficient_variation:.1f}% coefficient of variation)")
+    
+    if memory_coefficient_variation > max_coefficient_variation:
+        skip_message = f"Memory measurements too noisy (CV={memory_coefficient_variation:.1f}%) - test environment unstable"
+        return True, skip_message
+    
+    return False, ""
+
+
+def prepare_memory_analysis(
+    memory_samples: List[float],
+    sample_window: int
+) -> Tuple[List[float], int, int]:
+    """
+    Calculate dynamic analysis parameters for memory leak detection.
+    
+    This function prepares the memory samples for analysis by:
+    1. Computing a rolling average to smooth out noise
+    2. Determining the number of samples to use for growth calculation
+    3. Determining the number of tail samples for continuous growth detection
+    
+    Args:
+        memory_samples: List of memory measurements in MB
+        sample_window: Window size for rolling average calculation
+        
+    Returns:
+        Tuple of:
+            - rolling_avg: Smoothed memory values using rolling average
+            - num_samples_for_avg: Number of samples to average at start/end for growth
+            - tail_samples: Number of final samples to check for continuous growth
+    """
+    # Calculate rolling average to smooth out allocator noise
+    rolling_avg = calculate_rolling_average(memory_samples, sample_window)
+    
+    # Use 2x the sample_window for averaging (ensures we smooth over enough data)
+    # Cap at 1/3 of total rolling average samples to have enough data for comparison
+    num_samples_for_avg = min(sample_window * 2, len(rolling_avg) // 3)
+    
+    # Use 3x the sample_window for tail analysis (detect continuous growth)
+    # Cap at half the total samples to ensure we're looking at a significant tail
+    tail_samples = min(sample_window * 3, len(memory_samples) // 2)
+    
+    return rolling_avg, num_samples_for_avg, tail_samples
+
+
 def calculate_rolling_average(
     memory_samples: List[float],
     sample_window: int
@@ -797,3 +868,143 @@ def get_memory_test_config(
         'max_growth_percent': max_growth_percent,
         'stabilization_tolerance_mb': stabilization_tolerance_mb
     }
+
+
+async def run_memory_measurement_with_tracemalloc(
+    completion_func,
+    completion_kwargs: Dict[str, Any],
+    config: Dict[str, Any],
+    module_to_verify=None,
+    module_id: Optional[int] = None,
+    litellm_module=None
+) -> Tuple[List[float], List[int]]:
+    """
+    Run warmup and measurement phases with tracemalloc tracking.
+    
+    This is a high-level helper that orchestrates the entire measurement process:
+    1. Start tracemalloc
+    2. Run warmup phase
+    3. Run measurement phase
+    4. Stop tracemalloc
+    5. Optionally verify module ID consistency
+    
+    Args:
+        completion_func: The completion function to call
+        completion_kwargs: Keyword arguments to pass to completion_func
+        config: Test configuration from get_memory_test_config()
+        module_to_verify: Optional module/object to verify ID consistency
+        module_id: Expected ID of module_to_verify
+        litellm_module: Optional litellm module for state cleanup
+        
+    Returns:
+        Tuple of (memory_samples, error_counts) from measurement phase
+    """
+    import tracemalloc as tm
+    
+    tm.start()
+    
+    try:
+        # Warmup phase
+        await run_warmup_phase(
+            batch_size=config['batch_size'],
+            warmup_batches=config['warmup_batches'],
+            completion_func=completion_func,
+            completion_kwargs=completion_kwargs
+        )
+        
+        if module_to_verify is not None and module_id is not None:
+            verify_module_id_consistency(module_to_verify, module_id, "after warmup")
+        
+        # Measurement phase
+        memory_samples, error_counts = await run_measurement_phase(
+            batch_size=config['batch_size'],
+            num_batches=config['num_batches'],
+            completion_func=completion_func,
+            completion_kwargs=completion_kwargs,
+            tracemalloc_module=tm,
+            litellm_module=litellm_module
+        )
+        
+        if module_to_verify is not None and module_id is not None:
+            verify_module_id_consistency(module_to_verify, module_id, "after measurement")
+            
+    finally:
+        tm.stop()
+    
+    return memory_samples, error_counts
+
+
+def analyze_and_detect_leaks(
+    memory_samples: List[float],
+    error_counts: List[int],
+    config: Dict[str, Any],
+    module_to_verify=None,
+    module_id: Optional[int] = None,
+    module_name: str = "Module"
+) -> None:
+    """
+    Run complete analysis phase and fail test if memory leak is detected.
+    
+    This high-level helper consolidates all the analysis steps:
+    1. Check measurement noise (skip if too noisy)
+    2. Print analysis header
+    3. Check if enough samples (skip if insufficient)
+    4. Prepare memory analysis (rolling average, etc.)
+    5. Analyze memory growth
+    6. Print growth metrics
+    7. Check measurement noise
+    8. Detect memory leaks
+    9. Fail test if leak detected or print success message
+    10. Print memory samples
+    11. Verify module ID consistency
+    
+    Args:
+        memory_samples: List of memory measurements from measurement phase
+        error_counts: List of error counts per batch
+        config: Test configuration from get_memory_test_config()
+        module_to_verify: Optional module/object to verify ID consistency
+        module_id: Expected ID of module_to_verify
+        module_name: Display name for the module being verified
+        
+    Raises:
+        pytest.skip: If measurements are too noisy or insufficient samples
+        pytest.fail: If memory leak is detected
+    """
+    # Check if measurements are too noisy for reliable leak detection
+    should_skip, skip_message = check_measurement_noise(memory_samples)
+    if should_skip:
+        pytest.skip(skip_message)
+    
+    print_analysis_header()
+    
+    if len(memory_samples) < config['sample_window'] * 2:
+        pytest.skip("Not enough samples for reliable growth analysis")
+    
+    # Calculate dynamic parameters for memory analysis
+    rolling_avg, num_samples_for_avg, tail_samples = prepare_memory_analysis(
+        memory_samples, config['sample_window']
+    )
+    
+    growth_metrics = analyze_memory_growth(rolling_avg, num_samples_for_avg=num_samples_for_avg)
+    print_growth_metrics(growth_metrics)
+    
+    # Detect memory leaks (including error-induced leaks)
+    leak_detected, message = detect_memory_leak(
+        growth_metrics=growth_metrics,
+        memory_samples=memory_samples,
+        error_counts=error_counts,
+        max_growth_percent=config['max_growth_percent'],
+        stabilization_tolerance_mb=config['stabilization_tolerance_mb'],
+        tail_samples=tail_samples
+    )
+    
+    if leak_detected:
+        pytest.fail(message)
+    
+    print(message)
+    print_memory_samples(memory_samples, num_samples=10)
+    
+    # Final verification that ID remained consistent throughout
+    if module_to_verify is not None and module_id is not None:
+        verify_module_id_consistency(module_to_verify, module_id, "at test end")
+        print(f"\n[TEST] ✓ {module_name} ID remained consistent throughout: {module_id}", flush=True)

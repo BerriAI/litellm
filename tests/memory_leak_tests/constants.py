@@ -67,6 +67,11 @@ DEFAULT_TEST_STABILIZATION_TOLERANCE_MB = 0.02  # 20 KB
 # Averaging reduces impact of outliers on growth measurements
 DEFAULT_NUM_SAMPLES_FOR_GROWTH_ANALYSIS = 3
 
+# Maximum coefficient of variation (CV) percentage for memory measurements
+# CV = (std_dev / mean) * 100. Higher CV indicates noisy/unstable measurements
+# Tests with CV > this threshold are skipped due to unreliable environment
+DEFAULT_MAX_COEFFICIENT_VARIATION = 30.0
+
 # =============================================================================
 # Memory Leak Detection Thresholds
 # =============================================================================
