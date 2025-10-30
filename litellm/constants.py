@@ -1056,10 +1056,10 @@ PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 30))  # in seconds,
 
 # APScheduler Configuration - MEMORY LEAK FIX
 # These settings prevent memory leaks in APScheduler's normalize() and _apply_jitter() functions
-APSCHEDULER_COALESCE = True  # collapse many missed runs into one
-APSCHEDULER_MISFIRE_GRACE_TIME = 3600  # ignore runs older than 1 hour (was 120)
-APSCHEDULER_MAX_INSTANCES = 1  # prevent concurrent job instances
-APSCHEDULER_REPLACE_EXISTING = True  # always replace existing jobs
+APSCHEDULER_COALESCE = os.getenv("APSCHEDULER_COALESCE", "True").lower() in ["true", "1"]  # collapse many missed runs into one
+APSCHEDULER_MISFIRE_GRACE_TIME = int(os.getenv("APSCHEDULER_MISFIRE_GRACE_TIME", 3600))  # ignore runs older than 1 hour (was 120)
+APSCHEDULER_MAX_INSTANCES = int(os.getenv("APSCHEDULER_MAX_INSTANCES", 1))  # prevent concurrent job instances
+APSCHEDULER_REPLACE_EXISTING = os.getenv("APSCHEDULER_REPLACE_EXISTING", "True").lower() in ["true", "1"]  # always replace existing jobs
 
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
