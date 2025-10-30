@@ -718,8 +718,8 @@ class TestVertexBase:
                 None,
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
-                None,
-                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=test-api-key"
+                {"x-goog-api-key": "test-api-key"},
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
             ),
             # Test case 2: Gemini with custom API base and streaming
             (
@@ -731,8 +731,8 @@ class TestVertexBase:
                 None,
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
-                None,
-                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=test-api-key&alt=sse"
+                {"x-goog-api-key": "test-api-key"},
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
             ),
             # Test case 3: Non-Gemini provider with custom API base
             (
@@ -826,9 +826,9 @@ class TestVertexBase:
         
         # Test various Gemini models with custom API base
         test_cases = [
-            ("gemini-2.5-flash-lite", "generateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=test-api-key"),
-            ("gemini-2.5-pro", "generateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=test-api-key"),
-            ("gemini-1.5-flash", "streamGenerateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?key=test-api-key"),
+            ("gemini-2.5-flash-lite", "generateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"),
+            ("gemini-2.5-pro", "generateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"),
+            ("gemini-1.5-flash", "streamGenerateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent"),
         ]
         
         for model, endpoint, expected_url in test_cases:
@@ -861,7 +861,7 @@ class TestVertexBase:
             model="gemini-2.5-flash-lite",
         )
         
-        expected_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=test-api-key&alt=sse"
+        expected_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
         assert result_url_streaming == expected_streaming_url, f"Expected {expected_streaming_url}, got {result_url_streaming}"
         
         # Test with streaming disabled
@@ -876,7 +876,7 @@ class TestVertexBase:
             model="gemini-2.5-flash-lite",
         )
         
-        expected_no_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=test-api-key"
+        expected_no_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
         assert result_url_no_streaming == expected_no_streaming_url, f"Expected {expected_no_streaming_url}, got {result_url_no_streaming}"
 
     @pytest.mark.parametrize(
@@ -892,8 +892,8 @@ class TestVertexBase:
                 None,
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
-                None,
-                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=test-api-key"
+                {"x-goog-api-key": "test-api-key"},
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
             ),
             # Test case 2: Gemini with custom API base and streaming
             (
@@ -905,8 +905,8 @@ class TestVertexBase:
                 None,
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
-                None,
-                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=test-api-key&alt=sse"
+                {"x-goog-api-key": "test-api-key"},
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
             ),
         ],
     )

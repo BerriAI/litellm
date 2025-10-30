@@ -308,9 +308,7 @@ class VertexBase:
                     raise ValueError(
                         "Missing gemini_api_key, please set `GEMINI_API_KEY`"
                     )
-                # Append API key as query param for Google AI Studio auth
-                separator = "&" if "?" in url else "?"
-                url = f"{url}{separator}key={gemini_api_key}"
+                auth_header = {"x-goog-api-key": gemini_api_key}
             else:
                 url = "{}:{}".format(api_base, endpoint)
 
