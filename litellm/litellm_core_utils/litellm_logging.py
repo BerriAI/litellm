@@ -2466,7 +2466,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-            except Exception as e:
+            except Exception:
                 verbose_logger.error(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )

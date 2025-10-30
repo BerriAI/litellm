@@ -2044,97 +2044,13 @@ class BaseLLMHTTPHandler:
                     custom_llm_provider=custom_llm_provider,
                 )
             else:
-                # For non-streaming requests, return a mock OpenAI compatible response and relevant headers
-                class MockResponse:
-                    def __init__(self, json_data, status_code=200, headers=None):
-                        self._json_data = json_data
-                        self.status_code = status_code
-                        self.headers = headers or {"content-type": "application/json"}
-                    def json(self):
-                        return self._json_data
-                    @property
-                    def text(self):
-                        import json as _json
-                        return _json.dumps(self._json_data)
-                    def raise_for_status(self):
-                        pass
-
-                mock_response_json = {
-                    "id": "resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b",
-                    "object": "response",
-                    "created_at": 1741476542,
-                    "status": "completed",
-                    "error": None,
-                    "incomplete_details": None,
-                    "instructions": None,
-                    "max_output_tokens": None,
-                    "model": "gpt-4.1-2025-04-14",
-                    "output": [
-                        {
-                            "type": "message",
-                            "id": "msg_67ccd2bf17f0819081ff3bb2cf6508e60bb6a6b452d3795b",
-                            "status": "completed",
-                            "role": "assistant",
-                            "content": [
-                                {
-                                    "type": "output_text",
-                                    "text": (
-                                        "In a peaceful grove beneath a silver moon, a unicorn named Lumina discovered a hidden pool that reflected the stars. "
-                                        "As she dipped her horn into the water, the pool began to shimmer, revealing a pathway to a magical realm of endless night skies. "
-                                        "Filled with wonder, Lumina whispered a wish for all who dream to find their own hidden magic, and as she glanced back, her hoofprints sparkled like stardust."
-                                    ),
-                                    "annotations": []
-                                }
-                            ]
-                        }
-                    ],
-                    "parallel_tool_calls": True,
-                    "previous_response_id": None,
-                    "reasoning": {
-                        "effort": None,
-                        "summary": None
-                    },
-                    "store": True,
-                    "temperature": 1.0,
-                    "text": {
-                        "format": {
-                            "type": "text"
-                        }
-                    },
-                    "tool_choice": "auto",
-                    "tools": [],
-                    "top_p": 1.0,
-                    "truncation": "disabled",
-                    "usage": {
-                        "input_tokens": 36,
-                        "input_tokens_details": {
-                            "cached_tokens": 0
-                        },
-                        "output_tokens": 87,
-                        "output_tokens_details": {
-                            "reasoning_tokens": 0
-                        },
-                        "total_tokens": 123
-                    },
-                    "user": None,
-                    "metadata": {}
-                }
-
-                mock_response_headers = {
-                    "content-type": "application/json",
-                    "x-ratelimit-limit-requests": "1000",
-                    "x-ratelimit-remaining-requests": "999",
-                    "x-ratelimit-reset-requests": "60",
-                    "x-ratelimit-limit-tokens": "100000",
-                    "x-ratelimit-remaining-tokens": "99999",
-                    "x-ratelimit-reset-tokens": "60",
-                    "OpenAI-Organization": "org-mockorganization123",
-                    "Request-Id": "req-mockrequestid123"
-                }
-                response = MockResponse(
-                    json_data=mock_response_json, 
-                    status_code=200, 
-                    headers=mock_response_headers
+                # For non-streaming requests
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout
+                    or float(response_api_optional_request_params.get("timeout", 0)),
                 )
         except Exception as e:
             raise self._handle_error(
@@ -2252,103 +2168,12 @@ class BaseLLMHTTPHandler:
                 )
             else:
                 # For non-streaming, proceed as before
-                # response = await async_httpx_client.post(
-                #     url=api_base,
-                #     headers=headers,
-                #     json=data,
-                #     timeout=timeout
-                #     or float(response_api_optional_request_params.get("timeout", 0)),
-                # )
-                class MockResponse:
-                    def __init__(self, json_data, status_code=200, headers=None):
-                        self._json_data = json_data
-                        self.status_code = status_code
-                        self.headers = headers or {"content-type": "application/json"}
-                    def json(self):
-                        return self._json_data
-                    @property
-                    def text(self):
-                        import json as _json
-                        return _json.dumps(self._json_data)
-                    def raise_for_status(self):
-                        pass
-
-                mock_response_json = {
-                    "id": "resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b",
-                    "object": "response",
-                    "created_at": 1741476542,
-                    "status": "completed",
-                    "error": None,
-                    "incomplete_details": None,
-                    "instructions": None,
-                    "max_output_tokens": None,
-                    "model": "gpt-4.1-2025-04-14",
-                    "output": [
-                        {
-                            "type": "message",
-                            "id": "msg_67ccd2bf17f0819081ff3bb2cf6508e60bb6a6b452d3795b",
-                            "status": "completed",
-                            "role": "assistant",
-                            "content": [
-                                {
-                                    "type": "output_text",
-                                    "text": (
-                                        "In a peaceful grove beneath a silver moon, a unicorn named Lumina discovered a hidden pool that reflected the stars. "
-                                        "As she dipped her horn into the water, the pool began to shimmer, revealing a pathway to a magical realm of endless night skies. "
-                                        "Filled with wonder, Lumina whispered a wish for all who dream to find their own hidden magic, and as she glanced back, her hoofprints sparkled like stardust."
-                                    ),
-                                    "annotations": []
-                                }
-                            ]
-                        }
-                    ],
-                    "parallel_tool_calls": True,
-                    "previous_response_id": None,
-                    "reasoning": {
-                        "effort": None,
-                        "summary": None
-                    },
-                    "store": True,
-                    "temperature": 1.0,
-                    "text": {
-                        "format": {
-                            "type": "text"
-                        }
-                    },
-                    "tool_choice": "auto",
-                    "tools": [],
-                    "top_p": 1.0,
-                    "truncation": "disabled",
-                    "usage": {
-                        "input_tokens": 36,
-                        "input_tokens_details": {
-                            "cached_tokens": 0
-                        },
-                        "output_tokens": 87,
-                        "output_tokens_details": {
-                            "reasoning_tokens": 0
-                        },
-                        "total_tokens": 123
-                    },
-                    "user": None,
-                    "metadata": {}
-                }
-
-                mock_response_headers = {
-                    "content-type": "application/json",
-                    "x-ratelimit-limit-requests": "1000",
-                    "x-ratelimit-remaining-requests": "999",
-                    "x-ratelimit-reset-requests": "60",
-                    "x-ratelimit-limit-tokens": "100000",
-                    "x-ratelimit-remaining-tokens": "99999",
-                    "x-ratelimit-reset-tokens": "60",
-                    "OpenAI-Organization": "org-mockorganization123",
-                    "Request-Id": "req-mockrequestid123"
-                }
-                response = MockResponse(
-                    json_data=mock_response_json, 
-                    status_code=200, 
-                    headers=mock_response_headers
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout
+                    or float(response_api_optional_request_params.get("timeout", 0)),
                 )
 
         except Exception as e:
@@ -5179,37 +5004,12 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # Mock httpx response for container create
-            import types
-            class MockResponse:
-                def __init__(self, json_data, status_code=200):
-                    self._json_data = json_data
-                    self.status_code = status_code
-                    self.headers = {"content-type": "application/json"}
-                def json(self):
-                    return self._json_data
-                @property
-                def text(self):
-                    import json
-                    return json.dumps(self._json_data)
-                def raise_for_status(self):
-                    pass
-
-            import uuid
-            container_uuid = str(uuid.uuid4())
-
-            response = MockResponse({
-                "id": container_uuid,
-                "object": "container",
-                "created_at": 1747857508,
-                "status": "running",
-                "expires_after": {
-                    "anchor": "last_active_at",
-                    "minutes": 20
-                },
-                "last_active_at": 1747857508,
-                "name": "My Container"
-            })
+            response = sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
 
             return container_provider_config.transform_container_create_response(
                 raw_response=response,
@@ -5280,42 +5080,13 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # response = await async_httpx_client.post(
-            #     url=api_base,
-            #     headers=headers,
-            #     json=data,
-            #     timeout=timeout,
-            # )
-            class MockResponse:
-                def __init__(self, json_data, status_code=200):
-                    self._json_data = json_data
-                    self.status_code = status_code
-                    self.headers = {"content-type": "application/json"}
-                def json(self):
-                    return self._json_data
-                @property
-                def text(self):
-                    import json
-                    return json.dumps(self._json_data)
-                def raise_for_status(self):
-                    pass
+            response = await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
 
-            
-            import uuid
-            container_uuid = str(uuid.uuid4())
-
-            response = MockResponse({
-                "id": container_uuid,
-                "object": "container",
-                "created_at": 1747857508,
-                "status": "running",
-                "expires_after": {
-                    "anchor": "last_active_at",
-                    "minutes": 20
-                },
-                "last_active_at": 1747857508,
-                "name": "My Container"
-            })
             return container_provider_config.transform_container_create_response(
                 raw_response=response,
                 logging_obj=logging_obj,

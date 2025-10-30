@@ -575,14 +575,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         Call this method in exception handlers within your callback when logging fails.
         """
         try:
-            try:
-                from litellm_enterprise.integrations.prometheus import PrometheusLogger
-            except ImportError:
-                PrometheusLogger = None
-            
-            if PrometheusLogger is None:
-                return
-            
             import litellm
             
             all_callbacks = []
