@@ -23,12 +23,17 @@ from .common_utils import (
 )
 
 if TYPE_CHECKING:
+    from aiohttp import ClientSession
     from google.auth.credentials import Credentials as GoogleCredentialsObject
 else:
     GoogleCredentialsObject = Any
 
 
 class VertexBase:
+    # Shared aiohttp session for token refresh (reused across all instances)
+    _shared_token_refresh_session: Optional["ClientSession"] = None
+    _session_lock = asyncio.Lock()  # For thread-safe session creation
+    
     def __init__(self) -> None:
         super().__init__()
         self.access_token: Optional[str] = None
@@ -250,14 +255,62 @@ class VertexBase:
 
         credentials.refresh(Request())
 
-    async def refresh_auth_async(self, credentials: Any) -> None:
+    @classmethod
+    async def _get_or_create_token_refresh_session(cls) -> "ClientSession":
+        """
+        Get or create a persistent aiohttp session for token refresh.
+        This session is reused across all instances for efficiency.
+        
+        Returns:
+            ClientSession with auto_decompress=False for Google auth compatibility
+        """
+        from aiohttp import ClientSession
+
+        async with cls._session_lock:
+            # Check if session exists and is still valid
+            if cls._shared_token_refresh_session is None or cls._shared_token_refresh_session.closed:
+                verbose_logger.debug(
+                    "[VERTEX AUTH] Creating new persistent aiohttp session for token refresh"
+                )
+                # Create a new persistent session with proper settings
+                cls._shared_token_refresh_session = ClientSession(
+                    auto_decompress=False  # Required for Google auth library compatibility
+                )
+            else:
+                verbose_logger.debug(
+                    f"[VERTEX AUTH] Reusing persistent aiohttp session (ID: {id(cls._shared_token_refresh_session)})"
+                )
+            
+            return cls._shared_token_refresh_session
+
+    @classmethod
+    async def close_token_refresh_session(cls) -> None:
+        """
+        Close the shared token refresh session.
+        Should be called during application shutdown.
+        """
+        async with cls._session_lock:
+            if cls._shared_token_refresh_session is not None and not cls._shared_token_refresh_session.closed:
+                verbose_logger.debug(
+                    "[VERTEX AUTH] Closing persistent aiohttp session for token refresh"
+                )
+                await cls._shared_token_refresh_session.close()
+                cls._shared_token_refresh_session = None
+
+    async def refresh_auth_async(
+        self, credentials: Any
+    ) -> None:
         """
         Async version of refresh_auth using aiohttp transport.
         This makes a true async HTTP call to Google's token endpoint instead of blocking.
+        
+        Uses a persistent class-level session with auto_decompress=False (required for Google auth).
+        
+        Args:
+            credentials: The credentials object to refresh
         """
         try:
             from google.auth.transport._aiohttp_requests import Request
-            import aiohttp
         except ImportError:
             # Fallback to sync version if aiohttp not available
             verbose_logger.warning(
@@ -268,17 +321,19 @@ class VertexBase:
             credentials.refresh(Request())
             return
 
-        # Create an aiohttp session for the token request
-        async with aiohttp.ClientSession(auto_decompress=False) as session:
-            request = Request(session)
-            # Google's credentials.refresh() is sync, but the Request will use aiohttp
-            # Note: We still need to call the sync refresh method, but it will use async transport
-            await asyncio.get_event_loop().run_in_executor(
-                None, credentials.refresh, request
-            )
+        # Always use the persistent class-level session with auto_decompress=False
+        session_to_use = await self._get_or_create_token_refresh_session()
+
+        request = Request(session_to_use)
+        # Google's credentials.refresh() is sync, but the Request will use aiohttp
+        await asyncio.get_event_loop().run_in_executor(
+            None, credentials.refresh, request
+        )
 
     async def load_auth_async(
-        self, credentials: Optional[VERTEX_CREDENTIALS_TYPES], project_id: Optional[str]
+        self,
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        project_id: Optional[str],
     ) -> Tuple[Any, str]:
         """
         Async version of load_auth that uses refresh_auth_async.
@@ -844,40 +899,24 @@ class VertexBase:
         """
         Async version of _ensure_access_token.
 
-        Uses native async implementation with aiohttp if LITELLM_USE_ASYNC_VERTEX_AUTH=true,
-        otherwise falls back to asyncify wrapper for backward compatibility.
+        Uses native async implementation with aiohttp for true non-blocking token retrieval.
+        Uses a persistent class-level session with auto_decompress=False for Google auth.
+        
+        Args:
+            credentials: Vertex AI credentials
+            project_id: GCP project ID
+            custom_llm_provider: The provider type
         """
         if custom_llm_provider == "gemini":
             return "", ""
 
-        # Feature flag: Use new async implementation or fall back to old behavior
-        use_async_auth = getattr(litellm, "use_async_vertex_auth", False)
-
-        if use_async_auth:
-            verbose_logger.debug(
-                "[VERTEX AUTH] Using native async aiohttp implementation for token retrieval"
-            )
-            try:
-                return await self.get_access_token_async(
-                    credentials=credentials,
-                    project_id=project_id,
-                )
-            except Exception as e:
-                raise e
-        else:
-            # Fall back to old behavior (asyncify wrapper)
-            verbose_logger.debug(
-                "[VERTEX AUTH] Using legacy asyncify implementation for token retrieval"
-            )
-            try:
-                from litellm.litellm_core_utils.asyncify import asyncify
-
-                return await asyncify(self.get_access_token)(
-                    credentials=credentials,
-                    project_id=project_id,
-                )
-            except Exception as e:
-                raise e
+        verbose_logger.debug(
+            "[VERTEX AUTH] Using native async aiohttp implementation for token retrieval"
+        )
+        return await self.get_access_token_async(
+            credentials=credentials,
+            project_id=project_id,
+        )
 
     def set_headers(
         self, auth_header: Optional[str], extra_headers: Optional[dict]
