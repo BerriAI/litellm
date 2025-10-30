@@ -578,13 +578,13 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             import litellm
             
             all_callbacks = []
-            all_callbacks.extend(litellm.callbacks or [])
-            all_callbacks.extend(litellm._async_success_callback or [])
-            all_callbacks.extend(litellm.success_callback or [])
+            all_callbacks.extend(litellm.callbacks or [])  # type: ignore
+            all_callbacks.extend(litellm._async_success_callback or [])  # type: ignore
+            all_callbacks.extend(litellm.success_callback or [])  # type: ignore
                         
             for callback_obj in all_callbacks:
                 if hasattr(callback_obj, 'increment_callback_logging_failure'):
-                    callback_obj.increment_callback_logging_failure(callback_name=callback_name)
+                    callback_obj.increment_callback_logging_failure(callback_name=callback_name)  # type: ignore
                     break
                     
         except Exception as e:
