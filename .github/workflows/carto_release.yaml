@@ -1,4 +1,4 @@
-name: Create CARTO Release
+name: CARTO - Create Release
 
 on:
   workflow_dispatch:

@@ -1,4 +1,4 @@
-name: Deploy CartoDB Docker Image (CI)
+name: CARTO - Deploy Docker Image (CI)
 on:
   push:
     branches:
