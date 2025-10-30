@@ -6,12 +6,14 @@
 # releases from BerriAI/litellm.
 #
 # Branch Strategy:
-#   1. BerriAI/litellm:main -> CartoDB/litellm:main (sync with upstream)
-#   2. CartoDB/litellm:main -> CartoDB/litellm:carto/main (PR for CARTO production)
+#   1. BerriAI/litellm:main -> CartoDB/litellm:main (direct push with PAT)
+#   2. CartoDB/litellm:main -> CartoDB/litellm:carto/main (PR for manual review)
 #
-# The workflow runs every 8 hours to catch new releases quickly. It detects
-# new stable releases (tagged with -stable suffix), syncs main branch, and
-# creates a PR to carto/main with detailed merge information.
+# The workflow runs every 8 hours and performs two checks:
+#   - Detects new stable releases (tagged with -stable suffix) and syncs main
+#   - Creates PR to carto/main if carto/main is behind main (regardless of upstream sync)
+#
+# Uses X_GITHUB_SUPERCARTOFANTE token to allow workflow file modifications.
 
 name: CARTO - Upstream Sync
 
@@ -122,8 +124,8 @@ jobs:
       - name: Configure Git
         run: |
           set -eu
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
+          git config --global user.email "cartofante@carto.com"
+          git config --global user.name "Cartofante"
 
       - name: Sync main with upstream/main
         env:
@@ -140,7 +142,7 @@ jobs:
 
           # Merge upstream/main into main (accept all upstream changes on conflict)
           echo "[Sync] Merging upstream/main with strategy: accept upstream on conflicts"
-          git merge upstream/main --no-ff -X theirs -m "sync: merge upstream/main for ${NEW_VERSION}
+          git merge upstream/main --no-ff --no-edit -X theirs -m "sync: merge upstream/main for ${NEW_VERSION}
 
           Automatic sync from upstream BerriAI/litellm
           Preparing for ${NEW_VERSION} release
@@ -155,26 +157,58 @@ jobs:
           echo "::endgroup::"
 
   ##############################################################################
-  # Check if PR Already Exists
+  # Check if carto/main needs sync from main
   ##############################################################################
 
-  check-pr-exists:
+  check-carto-main-sync:
     runs-on: ubuntu-latest
-    name: "Check if PR already exists"
+    name: "Check if carto/main needs sync"
     needs:
-      - check-new-release
       - sync-main-branch
+    if: always() && (needs.sync-main-branch.result == 'success' || needs.sync-main-branch.result == 'skipped')
     outputs:
+      needs-sync: ${{ steps.check-sync.outputs.needs-sync }}
+      commits-behind: ${{ steps.check-sync.outputs.commits-behind }}
       pr-exists: ${{ steps.check-pr.outputs.pr-exists }}
       pr-url: ${{ steps.check-pr.outputs.pr-url }}
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if carto/main is behind main
+        id: check-sync
+        run: |
+          set -eu
+
+          echo "::group::Checking if carto/main needs sync from main"
+
+          # Fetch both branches
+          git fetch origin main
+          git fetch origin carto/main
+
+          # Count commits that carto/main is behind main
+          COMMITS_BEHIND=$(git rev-list --count origin/carto/main..origin/main 2>/dev/null || echo "0")
+
+          echo "[Sync] carto/main is ${COMMITS_BEHIND} commits behind main"
+
+          if [[ "${COMMITS_BEHIND}" -gt 0 ]]; then
+            echo "[Sync] ✅ carto/main needs sync (${COMMITS_BEHIND} commits behind)"
+            echo "needs-sync=true" >> $GITHUB_OUTPUT
+            echo "commits-behind=${COMMITS_BEHIND}" >> $GITHUB_OUTPUT
+            echo "::notice title=Sync Needed::carto/main is ${COMMITS_BEHIND} commits behind main"
+          else
+            echo "[Sync] ✅ carto/main is up to date with main"
+            echo "needs-sync=false" >> $GITHUB_OUTPUT
+            echo "commits-behind=0" >> $GITHUB_OUTPUT
+          fi
+
+          echo "::endgroup::"
 
       - name: Check for existing PR from main to carto/main
         id: check-pr
         env:
-          NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
@@ -213,9 +247,8 @@ jobs:
     name: "Create sync PR to carto/main"
     needs:
       - check-new-release
-      - sync-main-branch
-      - check-pr-exists
-    if: needs.check-pr-exists.outputs.pr-exists == 'false'
+      - check-carto-main-sync
+    if: needs.check-carto-main-sync.outputs.needs-sync == 'true' && needs.check-carto-main-sync.outputs.pr-exists == 'false'
     outputs:
       pr-url: ${{ steps.create-pr.outputs.pr-url }}
     steps:
@@ -403,7 +436,7 @@ jobs:
     needs:
       - check-new-release
       - sync-main-branch
-      - check-pr-exists
+      - check-carto-main-sync
       - create-sync-pr
     steps:
       - name: Send Slack notification
@@ -411,8 +444,10 @@ jobs:
           SLACK_CHANNEL: "C3W6342EN" # infrastructure-dev
           HAS_NEW_RELEASE: ${{ needs.check-new-release.outputs.has-new-release }}
           NEW_VERSION: ${{ needs.check-new-release.outputs.new-version }}
-          PR_EXISTS: ${{ needs.check-pr-exists.outputs.pr-exists }}
-          EXISTING_PR_URL: ${{ needs.check-pr-exists.outputs.pr-url }}
+          NEEDS_SYNC: ${{ needs.check-carto-main-sync.outputs.needs-sync }}
+          COMMITS_BEHIND: ${{ needs.check-carto-main-sync.outputs.commits-behind }}
+          PR_EXISTS: ${{ needs.check-carto-main-sync.outputs.pr-exists }}
+          EXISTING_PR_URL: ${{ needs.check-carto-main-sync.outputs.pr-url }}
           NEW_PR_URL: ${{ needs.create-sync-pr.outputs.pr-url }}
           SYNC_STATUS: ${{ needs.sync-main-branch.result }}
         run: |
@@ -430,25 +465,31 @@ jobs:
           # Determine message based on workflow results
           WORKFLOW_RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          case "${HAS_NEW_RELEASE}:${SYNC_STATUS}:${PR_EXISTS}" in
-            true:success:false)
+          # Build message based on what happened
+          case "${NEEDS_SYNC}:${PR_EXISTS}" in
+            true:false)
               if [[ -n "${NEW_PR_URL}" ]]; then
-                MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - PR created for ${NEW_VERSION}\n${NEW_PR_URL}"
+                if [[ "${HAS_NEW_RELEASE}" == "true" ]]; then
+                  MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - New release ${NEW_VERSION} detected\n• PR created: ${NEW_PR_URL}\n• Commits: ${COMMITS_BEHIND} behind"
+                else
+                  MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - PR created (carto/main was ${COMMITS_BEHIND} commits behind)\n${NEW_PR_URL}"
+                fi
               else
                 MESSAGE=":x: *LiteLLM Upstream Sync* - Workflow error (PR URL missing)\n<${WORKFLOW_RUN_URL}|View workflow run>"
               fi
               ;;
-            true:*:true)
-              MESSAGE=":information_source: *LiteLLM Upstream Sync* - PR already exists\n${EXISTING_PR_URL}"
+            true:true)
+              MESSAGE=":information_source: *LiteLLM Upstream Sync* - PR already exists (${COMMITS_BEHIND} commits behind)\n${EXISTING_PR_URL}"
               ;;
-            false:*:*)
-              MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - No new releases detected"
-              ;;
-            true:failure:*)
-              MESSAGE=":x: *LiteLLM Upstream Sync* - Failed to sync main branch with upstream\n<${WORKFLOW_RUN_URL}|View workflow run>"
+            false:*)
+              MESSAGE=":white_check_mark: *LiteLLM Upstream Sync* - carto/main is up to date with main"
               ;;
             *)
-              MESSAGE=":x: *LiteLLM Upstream Sync* - Workflow encountered an error\n<${WORKFLOW_RUN_URL}|View workflow run>"
+              if [[ "${SYNC_STATUS}" == "failure" ]]; then
+                MESSAGE=":x: *LiteLLM Upstream Sync* - Failed to sync main branch with upstream\n<${WORKFLOW_RUN_URL}|View workflow run>"
+              else
+                MESSAGE=":x: *LiteLLM Upstream Sync* - Workflow encountered an error\n<${WORKFLOW_RUN_URL}|View workflow run>"
+              fi
               ;;
           esac
 
