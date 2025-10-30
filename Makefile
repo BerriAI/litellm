@@ -1,7 +1,7 @@
 # LiteLLM Makefile
 # Simple Makefile for running tests and basic development tasks
 
-.PHONY: help test test-unit test-integration test-unit-helm lint format install-dev install-proxy-dev install-test-deps install-helm-unittest check-circular-imports check-import-safety
+.PHONY: help test test-unit test-integration test-unit-helm lint format install-dev install-proxy-dev install-test-deps install-helm-unittest check-circular-imports check-import-safety format-model-prices lint-model-prices
 
 # Default target
 help:
@@ -14,10 +14,12 @@ help:
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
 	@echo "  make format             - Apply Black code formatting"
 	@echo "  make format-check       - Check Black code formatting (matches CI)"
-	@echo "  make lint               - Run all linting (Ruff, MyPy, Black check, circular imports, import safety)"
+	@echo "  make format-model-prices - Apply model_prices_and_context_window.json files formatting"
+	@echo "  make lint               - Run all linting (Ruff, MyPy, Black check, circular imports, import safety, model pricing json)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
 	@echo "  make lint-mypy          - Run MyPy type checking only"
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
+	@echo "  make lint-model-prices  - Check model_prices_and_context_window.json files"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -57,6 +59,9 @@ format: install-dev
 format-check: install-dev
 	cd litellm && poetry run black --check . && cd ..
 
+format-model-prices: install-dev
+	poetry run python ./tests/model_prices_tests/test_model_prices_json.py --format
+
 # Linting targets
 lint-ruff: install-dev
 	cd litellm && poetry run ruff check . && cd ..
@@ -67,6 +72,9 @@ lint-mypy: install-dev
 
 lint-black: format-check
 
+lint-model-prices: install-dev
+	poetry run python ./tests/model_prices_tests/test_model_prices_json.py
+
 check-circular-imports: install-dev
 	cd litellm && poetry run python ../tests/documentation_tests/test_circular_imports.py && cd ..
 
@@ -74,7 +82,7 @@ check-import-safety: install-dev
 	poetry run python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
 # Combined linting (matches test-linting.yml workflow)
-lint: format-check lint-ruff lint-mypy check-circular-imports check-import-safety
+lint: format-check lint-ruff lint-mypy check-circular-imports check-import-safety lint-model-prices
 
 # Testing targets
 test:
