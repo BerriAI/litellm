@@ -2485,9 +2485,6 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             callback_name = self._get_callback_name(callback)
             
-            if PrometheusLogger is None:
-                return
-            
             all_callbacks = []
             all_callbacks.extend(litellm.callbacks or [])
             all_callbacks.extend(litellm._async_success_callback or [])
