@@ -134,28 +134,55 @@ jobs:
           set -eu
 
           echo "::group::Syncing main branch with upstream"
-          echo "[Sync] main should be a mirror of upstream - making it identical to upstream/main"
+          echo "[Sync] main should be a mirror of upstream - attempting merge with conflict resolution"
 
           # Add upstream remote
           git remote add upstream https://github.com/BerriAI/litellm.git || true
           git fetch upstream --tags
 
-          # Reset main to be exactly like upstream/main (mirror strategy)
-          echo "[Sync] Resetting main to match upstream/main exactly"
-          git reset --hard upstream/main
-
-          # Create merge commit for history tracking
-          echo "[Sync] Creating merge commit for tracking"
-          git commit --allow-empty -m "sync: merge upstream/main for ${NEW_VERSION}
+          # Try merge first (git-friendly approach)
+          echo "[Sync] Attempting merge with -X theirs strategy..."
+          if git merge upstream/main --no-edit -X theirs -m "sync: merge upstream/main for ${NEW_VERSION}
 
           Automatic sync from upstream BerriAI/litellm
           Preparing for ${NEW_VERSION} release
 
-          Strategy: Reset to upstream (main is a pure mirror)"
+          Strategy: Accept all upstream changes (main is a mirror)"; then
+            echo "[Sync] ✅ Merge successful"
+          else
+            # Merge failed - abort and use reset as fallback
+            echo "[Sync] ⚠️ Merge failed, using reset fallback (main is a mirror)"
+            git merge --abort || true
 
-          # Push to origin/main (force with lease for safety)
-          echo "[Sync] Force pushing updated main branch to origin..."
-          git push origin main --force-with-lease
+            # Store old commit for reference
+            OLD_COMMIT=$(git rev-parse HEAD)
+            echo "[Sync] Old HEAD: ${OLD_COMMIT}"
+
+            # Reset to upstream (mirror strategy)
+            git reset --hard upstream/main
+
+            # Create merge commit for history
+            git commit --allow-empty -m "sync: merge upstream/main for ${NEW_VERSION}
+
+          Automatic sync from upstream BerriAI/litellm
+          Preparing for ${NEW_VERSION} release
+
+          Strategy: Reset to upstream (merge conflicts required mirror reset)
+          Previous HEAD: ${OLD_COMMIT}"
+          fi
+
+          # Push to origin/main
+          echo "[Sync] Pushing updated main branch to origin..."
+
+          # Check if we need force push
+          if git merge-base --is-ancestor origin/main HEAD; then
+            # Fast-forward possible, normal push
+            git push origin main
+          else
+            # Force push needed (from reset fallback)
+            echo "[Sync] Using force-with-lease (reset was used)"
+            git push origin main --force-with-lease
+          fi
 
           echo "[Sync] ✅ main branch synced successfully"
           echo "::endgroup::"
