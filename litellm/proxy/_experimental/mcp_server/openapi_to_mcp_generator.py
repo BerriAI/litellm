@@ -3,6 +3,7 @@ This module is used to generate MCP tools from OpenAPI specs.
 """
 
 import json
+from prance import ResolvingParser
 from typing import Any, Dict, Optional
 
 import httpx
@@ -17,10 +18,10 @@ BASE_URL = ""
 HEADERS: Dict[str, str] = {}
 
 
-def load_openapi_spec(filepath: str) -> Dict[str, Any]:
-    """Load OpenAPI specification from JSON file."""
-    with open(filepath, "r") as f:
-        return json.load(f)
+def load_openapi_spec(url: str) -> Dict[str, Any]:
+    """Load OpenAPI specification from url."""
+    parser = ResolvingParser(url)
+    return parser.specification # type: ignore
 
 
 def get_base_url(spec: Dict[str, Any]) -> str:
@@ -133,14 +134,14 @@ def create_tool_function(
 
     # Create the function code as a string
     func_code = f'''
-async def tool_function({params_str}) -> str:
+async def tool_function(*args, **kwargs) -> str:
     """Dynamically generated tool function."""
     url = base_url + path
     
     # Replace path parameters
     path_param_names = {path_params}
     for param_name in path_param_names:
-        param_value = locals().get(param_name, "")
+        param_value = kwargs.get(param_name, locals().get(param_name, ""))
         if param_value:
             url = url.replace("{{" + param_name + "}}", str(param_value))
     
@@ -148,7 +149,7 @@ async def tool_function({params_str}) -> str:
     query_param_names = {query_params}
     params = {{}}
     for param_name in query_param_names:
-        param_value = locals().get(param_name, "")
+        param_value = kwargs.get(param_name, locals().get(param_name, ""))
         if param_value:
             params[param_name] = param_value
     
@@ -156,7 +157,7 @@ async def tool_function({params_str}) -> str:
     body_param_names = {body_params}
     json_body = None
     if body_param_names:
-        body_value = locals().get("body", {{}})
+        body_value = kwargs.get("body", locals().get("body", {{}}))
         if isinstance(body_value, dict):
             json_body = body_value
         elif body_value:

@@ -1,4 +1,6 @@
 # LITELLM PROXY DEPENDENCIES #
+prance==25.4.8.0
+openapi-spec-validator==0.7.2
 anyio==4.8.0 # openai + http req.
 httpx==0.28.1
 openai==1.99.5  # openai req.

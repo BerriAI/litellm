@@ -640,6 +640,7 @@ class MCPServerManager:
 
             ## HANDLE OPENAPI TOOLS
             if server.spec_path:
+                add_prefix = False
                 _tools = global_mcp_tool_registry.list_tools(tool_prefix=server.name)
                 tools = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(
                     _tools
@@ -892,7 +893,7 @@ class MCPServerManager:
         )
 
         # Get the tool from the registry
-        tool = global_mcp_tool_registry.get_tool(f"{server.name}-{tool_name}")
+        tool = global_mcp_tool_registry.get_tool(f"{tool_name}")
         if tool is None:
             # Tool not found in registry
             error_msg = f"OpenAPI tool {tool_name} not found in registry"
@@ -1234,11 +1235,11 @@ class MCPServerManager:
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:
             verbose_logger.debug(
-                f"Calling OpenAPI tool {name} directly via HTTP handler"
+                f"Calling OpenAPI tool {original_tool_name} server[{mcp_server.name}]  directly via HTTP handler"
             )
             tasks.append(
                 asyncio.create_task(
-                    self._call_openapi_tool_handler(mcp_server, name, arguments)
+                    self._call_openapi_tool_handler(mcp_server, original_tool_name, arguments)
                 )
             )
         else:
