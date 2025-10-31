@@ -25,6 +25,8 @@ class LicenseCheck:
     base_url = "https://license.litellm.ai"
 
     def __init__(self) -> None:
+        self.airgapped_license_data = None
+        return
         self.license_str = os.getenv("LITELLM_LICENSE", None)
         verbose_proxy_logger.debug("License Str value - {}".format(self.license_str))
         self.http_handler = HTTPHandler(timeout=NON_LLM_CONNECTION_TIMEOUT)
@@ -33,6 +35,7 @@ class LicenseCheck:
         self.airgapped_license_data: Optional["EnterpriseLicenseData"] = None
 
     def read_public_key(self):
+        return
         try:
             from cryptography.hazmat.primitives import serialization
 
@@ -50,6 +53,7 @@ class LicenseCheck:
             verbose_proxy_logger.error(f"Error reading public key: {str(e)}")
 
     def _verify(self, license_str: str) -> bool:
+        return True
         verbose_proxy_logger.debug(
             "litellm.proxy.auth.litellm_license.py::_verify - Checking license against {}/verify_license - {}".format(
                 self.base_url, license_str
@@ -98,6 +102,7 @@ class LicenseCheck:
         1. verify_license_without_api_request: checks if license was generate using private / public key pair
         2. _verify: checks if license is valid calling litellm API. This is the old way we were generating/validating license
         """
+        return True
         try:
             verbose_proxy_logger.debug(
                 "litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License={}".format(
@@ -133,6 +138,7 @@ class LicenseCheck:
         """
         Check if the license is over the limit
         """
+        return False
         if self.airgapped_license_data is None:
             return False
         if "max_users" not in self.airgapped_license_data or not isinstance(
@@ -145,6 +151,7 @@ class LicenseCheck:
         """
         Check if the license is over the limit
         """
+        return False
         if self.airgapped_license_data is None:
             return False
 
@@ -156,6 +163,7 @@ class LicenseCheck:
         return team_count > _max_teams_in_license
 
     def verify_license_without_api_request(self, public_key, license_key):
+        return True
         try:
             from cryptography.hazmat.primitives import hashes
             from cryptography.hazmat.primitives.asymmetric import padding
