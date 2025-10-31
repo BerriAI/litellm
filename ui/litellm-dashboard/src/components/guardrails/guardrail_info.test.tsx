@@ -1,7 +1,7 @@
-import { fireEvent, render, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import GuardrailInfoView from "./guardrail_info";
 import * as networking from "@/components/networking";
+import { fireEvent, render, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import GuardrailInfoView from "./guardrail_info";
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
