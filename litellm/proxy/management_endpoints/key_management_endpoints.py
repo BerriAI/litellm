@@ -2347,7 +2347,8 @@ async def delete_verification_tokens(
                 this is passed down to the KeyManagementEventHooks to delete the keys from the secret manager and handle audit logs
     """
     from litellm.proxy.proxy_server import prisma_client
-
+    
+    failed_tokens = []
     try:
         if prisma_client:
             tokens = [_hash_token_if_needed(token=key) for key in tokens]
@@ -2419,7 +2420,7 @@ async def delete_verification_tokens(
         hashed_token = hash_token(cast(str, key))
         user_api_key_cache.delete_cache(hashed_token)
 
-    return {"deleted_keys": deleted_tokens}, _keys_being_deleted
+    return {"deleted_keys": deleted_tokens, "failed_tokens": failed_tokens}, _keys_being_deleted
 
 
 async def delete_key_aliases(
