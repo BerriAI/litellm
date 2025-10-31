@@ -4442,6 +4442,35 @@ export const getGeneralSettingsCall = async (accessToken: string) => {
   }
 };
 
+export const getRouterSettingsCall = async (accessToken: string) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/router/settings`
+      : `/router/settings`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get router settings:", error);
+    throw error;
+  }
+};
+
 export const getPassThroughEndpointsCall = async (accessToken: string, teamId?: string | null) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/config/pass_through_endpoint` : `/config/pass_through_endpoint`;
