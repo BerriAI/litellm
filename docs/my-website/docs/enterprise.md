@@ -115,3 +115,9 @@ Pricing is based on usage. We can figure out a price that works for your team, o
 ### 4. Configure load balancing 
 
 <Image img={require('../img/litellm_hosted_ui_router.png')} />
+
+---
+
+## Feature Capabilities
+
+<a href="./evaluation" class="button button--primary button--lg">View Feature Capabilities & Evaluation Guide →</a>
