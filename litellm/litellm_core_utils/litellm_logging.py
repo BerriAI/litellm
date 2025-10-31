@@ -863,7 +863,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
                     elif callback == "sentry" and add_breadcrumb:
                         try:
-                            details_to_log = copy.deepcopy(self.model_call_details)
+                            details_to_log = self.model_call_details.copy()
                         except Exception:
                             details_to_log = self.model_call_details
                         if litellm.turn_off_message_logging:
