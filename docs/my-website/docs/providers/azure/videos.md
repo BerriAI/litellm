@@ -54,7 +54,7 @@ print(f"Initial Status: {response.status}")
 while True:
     status_response = video_status(
         video_id=response.id,
-        model="azure/sora-2"
+        custom_llm_provider="azure"
     )
     
     print(f"Current Status: {status_response.status}")
@@ -70,7 +70,7 @@ while True:
 # Download video content when ready
 video_bytes = video_content(
     video_id=response.id,
-    model="azure/sora-2"
+    custom_llm_provider="azure"
 )
 
 # Save to file
@@ -244,7 +244,7 @@ def generate_and_download_video(prompt):
     # Step 3: Download video
     video_bytes = litellm.video_content(
         video_id=video_id,
-        model="azure/sora-2"
+        custom_llm_provider="azure"
     )
     
     # Step 4: Save to file
@@ -266,7 +266,7 @@ video_file = generate_and_download_video(
 response = litellm.video_remix(
     prompt="Make the cat jump higher",
     input_reference=open("path/to/image.jpg", "rb"),  # Reference image as file object
-    model="azure/sora-2",
+    custom_llm_provider="azure"
     seconds="8"
 )
 

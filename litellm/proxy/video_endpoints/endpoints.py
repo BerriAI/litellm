@@ -10,6 +10,11 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_au
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.openai_endpoint_utils import (
+    get_custom_llm_provider_from_request_body,
+    get_custom_llm_provider_from_request_headers,
+    get_custom_llm_provider_from_request_query,
+)
 
 router = APIRouter()
 
@@ -147,6 +152,15 @@ async def video_list(
     query_params = dict(request.query_params)
     data = {"query_params": query_params}
 
+    # Extract custom_llm_provider from headers, query params, or body
+    custom_llm_provider = (
+        get_custom_llm_provider_from_request_headers(request=request)
+        or get_custom_llm_provider_from_request_query(request=request)
+        or await get_custom_llm_provider_from_request_body(request=request)
+    )
+    if custom_llm_provider:
+        data["custom_llm_provider"] = custom_llm_provider
+    print(f"🔥🔥🔥data: {data}")
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -223,6 +237,17 @@ async def video_status(
 
     # Create data with video_id
     data = {"video_id": video_id}
+
+    # Extract custom_llm_provider from headers, query params, or body
+    custom_llm_provider = (
+        get_custom_llm_provider_from_request_headers(request=request)
+        or get_custom_llm_provider_from_request_query(request=request)
+        or await get_custom_llm_provider_from_request_body(request=request)
+        or "openai"
+
+    )
+    if custom_llm_provider:
+        data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -301,6 +326,15 @@ async def video_content(
 
     # Create data with video_id
     data = {"video_id": video_id}
+
+    # Extract custom_llm_provider from headers, query params, or body
+    custom_llm_provider = (
+        get_custom_llm_provider_from_request_headers(request=request)
+        or get_custom_llm_provider_from_request_query(request=request)
+        or await get_custom_llm_provider_from_request_body(request=request)
+    )
+    if custom_llm_provider:
+        data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -394,6 +428,15 @@ async def video_remix(
     body = await request.body()
     data = orjson.loads(body)
     data["video_id"] = video_id
+
+    # Extract custom_llm_provider from headers, query params, or body
+    custom_llm_provider = (
+        get_custom_llm_provider_from_request_headers(request=request)
+        or get_custom_llm_provider_from_request_query(request=request)
+        or data.get("custom_llm_provider")
+    )
+    if custom_llm_provider:
+        data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
