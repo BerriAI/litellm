@@ -215,14 +215,20 @@ curl -X POST 'http://localhost:4000/customer/new' \
 <Tabs>
 <TabItem value="curl" label="curl">
 
-```bash
-curl -X POST 'http://localhost:4000/customer/new' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
--D '{
-    "user_id": "my-customer-id",
-    "budget_id": "my-free-tier" # 👈 KEY CHANGE
-}
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+        --header 'Content-Type: application/json' \
+        --header 'Authorization: Bearer sk-zi5onDRdHGD24v0Zdn7VBA' \
+        --data ' {
+        "model": "azure-gpt-3.5",
+        "user": "my-customer-id",
+        "messages": [
+            {
+            "role": "user",
+            "content": "what time is it"
+            }
+        ]
+        }'
 ```
 
 </TabItem>
