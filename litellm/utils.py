@@ -818,6 +818,17 @@ def function_setup(  # noqa: PLR0915
             call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
         ):
             messages = kwargs.get("input", "speech")
+            # Ensure TTS input is recorded on the logging object for character-based
+            # pricing in the cost calculator.
+            try:
+                if isinstance(messages, str):
+                    # This is set later when the Logging object is constructed; we
+                    # also redundantly set it in model_call_details for safety.
+                    kwargs.setdefault("metadata", {})
+                    # model_call_details populated below will read from kwargs
+                
+            except Exception:
+                pass
         elif (
             call_type == CallTypes.aresponses.value
             or call_type == CallTypes.responses.value

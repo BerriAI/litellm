@@ -1605,6 +1605,17 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         Returns True if the call type is recognized for logging (eg. ModelResponse, ModelResponseStream, etc.)
         """
+        # Ensure Text-to-Speech calls are recognized for logging even if the
+        # provider returns a lightweight streaming adapter instead of
+        # HttpxBinaryResponseContent. This guarantees building a
+        # standard_logging_object for TTS so downstream proxy callbacks can
+        # track spend and budgets.
+        try:
+            if self.call_type in (CallTypes.speech.value, CallTypes.aspeech.value):
+                return True
+        except Exception:
+            # If call_type is missing for any reason, fallthrough to type checks
+            pass
         if (
             isinstance(logging_result, ModelResponse)
             or isinstance(logging_result, ModelResponseStream)

@@ -63,6 +63,26 @@ openaiOSeriesConfig = OpenAIOSeriesConfig()
 openAIGPT5Config = OpenAIGPT5Config()
 
 
+class _DeferredOpenAITTSStream:
+    """
+    Opens the OpenAI streaming context only when aiter_bytes() is consumed,
+    keeping the upstream stream alive while the proxy yields chunks.
+    """
+
+    def __init__(self, client: AsyncOpenAI, request_kwargs: dict):
+        self._client = client
+        self._request_kwargs = request_kwargs
+        self._hidden_params: dict = {}
+
+    async def aiter_bytes(self, chunk_size: int = 1024):
+        async with self._client.audio.speech.with_streaming_response.create(
+            **self._request_kwargs
+        ) as streamed:
+            async for chunk in streamed.http_response.aiter_bytes(
+                chunk_size=chunk_size
+            ):
+                yield chunk
+
 class MistralEmbeddingConfig:
     """
     Reference: https://docs.mistral.ai/api/#operation/createEmbedding
@@ -1435,6 +1455,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             client=client,
         )
 
+        # For sync path, fall back to simple non-streaming create (keeps behavior for sync speech())
+        # Proxy uses async path; real streaming is handled in async_audio_speech via deferred stream.
         response = cast(OpenAI, openai_client).audio.speech.create(
             model=model,
             voice=voice,  # type: ignore
@@ -1469,14 +1491,25 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             ),
         )
 
-        response = await openai_client.audio.speech.create(
-            model=model,
-            voice=voice,  # type: ignore
-            input=input,
+        # Return a deferred streaming object so proxy can iterate without prematurely closing upstream
+        request_kwargs = {
+            "model": model,
+            "voice": voice,
+            "input": input,
             **optional_params,
-        )
+        }
+        deferred = _DeferredOpenAITTSStream(client=openai_client, request_kwargs=request_kwargs)
+        # Adapt to HttpxBinaryResponseContent interface by exposing aiter_bytes()
+        class _Adapter:
+            _hidden_params: dict = {}
 
-        return HttpxBinaryResponseContent(response=response.response)
+            async def aiter_bytes(self, chunk_size: int = 1024):
+                async def _gen():
+                    async for b in deferred.aiter_bytes(chunk_size=chunk_size):
+                        yield b
+                return _gen()
+
+        return _Adapter()  # type: ignore
 
 
 class OpenAIFilesAPI(BaseLLM):
