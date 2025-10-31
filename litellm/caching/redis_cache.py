@@ -91,6 +91,9 @@ class RedisCache(BaseCache):
         host=None,
         port=None,
         password=None,
+        ssl_certfile=None,
+        ssl_keyfile=None,
+        ssl_ca_certs=None,
         redis_flush_size: Optional[int] = 100,
         namespace: Optional[str] = None,
         startup_nodes: Optional[List] = None,  # for redis-cluster
@@ -112,6 +115,12 @@ class RedisCache(BaseCache):
             redis_kwargs["startup_nodes"] = startup_nodes
         if socket_timeout is not None:
             redis_kwargs["socket_timeout"] = socket_timeout
+        if ssl_certfile is not None:
+            redis_kwargs["ssl_certfile"] = ssl_certfile
+        if ssl_keyfile is not None:
+            redis_kwargs["ssl_keyfile"] = ssl_keyfile
+        if ssl_ca_certs is not None:
+            redis_kwargs["ssl_ca_certs"] = ssl_ca_certs
 
         ### HEALTH MONITORING OBJECT ###
         if kwargs.get("service_logger_obj", None) is not None and isinstance(
