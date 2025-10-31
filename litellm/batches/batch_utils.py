@@ -14,7 +14,7 @@ from litellm.utils import token_counter
 
 async def calculate_batch_cost_and_usage(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "gemini"],
     model_name: Optional[str] = None,
 ) -> Tuple[float, Usage, List[str]]:
     """
@@ -37,7 +37,7 @@ async def calculate_batch_cost_and_usage(
 
 async def _handle_completed_batch(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "gemini"],
     model_name: Optional[str] = None,
 ) -> Tuple[float, Usage, List[str]]:
     """Helper function to process a completed batch and handle logging"""
@@ -84,7 +84,7 @@ def _get_batch_models_from_file_content(
 
 def _batch_cost_calculator(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "gemini"] = "openai",
     model_name: Optional[str] = None,
 ) -> float:
     """
@@ -96,6 +96,12 @@ def _batch_cost_calculator(
         verbose_logger.debug("vertex_ai_total_cost=%s", batch_cost)
         return batch_cost
     
+    # Handle Gemini with specialized method
+    if custom_llm_provider == "gemini" and model_name:
+        batch_cost, _ = calculate_gemini_batch_cost_and_usage(file_content_dictionary, model_name)
+        verbose_logger.debug("gemini_total_cost=%s", batch_cost)
+        return batch_cost
+    
     # For other providers, use the existing logic
     total_cost = _get_batch_job_cost_from_file_content(
         file_content_dictionary=file_content_dictionary,
@@ -103,6 +109,99 @@ def _batch_cost_calculator(
     )
     verbose_logger.debug("total_cost=%s", total_cost)
     return total_cost
+
+
+def calculate_gemini_batch_cost_and_usage(
+    gemini_batch_responses: List[dict],
+    model_name: Optional[str] = None,
+) -> Tuple[float, Usage]:
+    """
+    Calculate both cost and usage from Gemini batch responses.
+    Supports both file-based and inline batch responses.
+    
+    Args:
+        gemini_batch_responses: List of Gemini batch response dictionaries
+        model_name: Model name for cost calculation
+        
+    Returns:
+        Tuple of (total_cost, usage)
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    
+    total_cost = 0.0
+    total_tokens = 0
+    prompt_tokens = 0
+    completion_tokens = 0
+    
+    for response_item in gemini_batch_responses:
+        # Extract the actual response object
+        # For file-based: {"response": {...}, "key": "..."}
+        # For inline: {"response": {...}}
+        response = response_item.get("response", {})
+        
+        if not response:
+            continue
+            
+        # Check if response has usageMetadata (successful response)
+        if "usageMetadata" not in response:
+            continue
+        
+        # Create required arguments for the transformation method
+        model_response = ModelResponse()
+        
+        # Ensure model_name is not None
+        actual_model_name = model_name or response.get("modelVersion", "gemini-2.5-flash")
+        
+        # Create a real LiteLLM logging object
+        logging_obj = Logging(
+            model=actual_model_name,
+            messages=[{"role": "user", "content": "batch_request"}],
+            stream=False,
+            call_type=CallTypes.aretrieve_batch,
+            start_time=time.time(),
+            litellm_call_id="batch_" + str(uuid.uuid4()),
+            function_id="batch_processing",
+            litellm_trace_id=str(uuid.uuid4()),
+            kwargs={"optional_params": {}}
+        )
+        
+        # Add the optional_params attribute that the transformation expects
+        logging_obj.optional_params = {}
+        raw_response = httpx.Response(200)
+        
+        # Transform Gemini response to OpenAI format
+        gemini_config = VertexGeminiConfig()
+        openai_format_response = gemini_config._transform_google_generate_content_to_openai_model_response(
+            completion_response=response,
+            model_response=model_response,
+            model=actual_model_name,
+            logging_obj=logging_obj,
+            raw_response=raw_response,
+        )
+        
+        # Calculate cost using existing function
+        cost = litellm.completion_cost(
+            completion_response=openai_format_response,
+            custom_llm_provider="gemini",
+            call_type=CallTypes.aretrieve_batch.value,
+        )
+        total_cost += cost
+        
+        # Extract usage from the transformed response
+        usage_obj = getattr(openai_format_response, 'usage', None)
+        if usage_obj:
+            total_tokens += usage_obj.total_tokens
+            prompt_tokens += usage_obj.prompt_tokens
+            completion_tokens += usage_obj.completion_tokens
+    
+    return total_cost, Usage(
+        total_tokens=total_tokens,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
 
 
 def calculate_vertex_ai_batch_cost_and_usage(
@@ -184,9 +283,70 @@ def calculate_vertex_ai_batch_cost_and_usage(
     )
 
 
+async def _get_gemini_batch_file_content(file_id: Optional[str]) -> List[dict]:
+    """
+    Download and parse Gemini batch output file from Files API
+    
+    Args:
+        file_id: Gemini file ID (e.g., "files/xyz")
+        
+    Returns:
+        List of response dictionaries
+    """
+    import os
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    
+    if not file_id:
+        raise ValueError("File ID is None, cannot retrieve Gemini batch file content")
+    
+    # Get Gemini API key from environment
+    gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not gemini_api_key:
+        raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY must be set to download batch files")
+    
+    # Download file from Gemini Files API
+    # Endpoint: GET https://generativelanguage.googleapis.com/v1beta/{file_id}?key={api_key}
+    base_url = os.getenv("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
+    file_url = f"{base_url}/v1beta/{file_id}"
+    
+    async_client = get_async_httpx_client()
+    
+    try:
+        response = await async_client.get(
+            file_url,
+            params={"key": gemini_api_key},
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        
+        file_metadata = response.json()
+        verbose_logger.debug(f"Gemini file metadata: {file_metadata}")
+        
+        # Get the download URI from the response
+        download_uri = file_metadata.get("uri")
+        if not download_uri:
+            raise ValueError(f"No download URI found in Gemini file response: {file_metadata}")
+        
+        # Download the actual file content
+        download_response = await async_client.get(
+            download_uri,
+            params={"key": gemini_api_key},
+            timeout=120.0,
+        )
+        download_response.raise_for_status()
+        
+        # Parse JSONL content
+        file_content = download_response.content
+        return _get_file_content_as_dictionary(file_content)
+        
+    except Exception as e:
+        verbose_logger.error(f"Error downloading Gemini batch file {file_id}: {e}")
+        raise
+
+
 async def _get_batch_output_file_content_as_dictionary(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "gemini"] = "openai",
 ) -> List[dict]:
     """
     Get the batch output file content as a list of dictionaries
@@ -195,6 +355,10 @@ async def _get_batch_output_file_content_as_dictionary(
 
     if custom_llm_provider == "vertex_ai":
         raise ValueError("Vertex AI does not support file content retrieval")
+    
+    # For Gemini, download file from Files API
+    if custom_llm_provider == "gemini":
+        return await _get_gemini_batch_file_content(batch.output_file_id)
 
     if batch.output_file_id is None:
         raise ValueError("Output file id is None cannot retrieve file content")
@@ -225,7 +389,7 @@ def _get_file_content_as_dictionary(file_content: bytes) -> List[dict]:
 
 def _get_batch_job_cost_from_file_content(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "gemini"] = "openai",
 ) -> float:
     """
     Get the cost of a batch job from the file content
@@ -253,7 +417,7 @@ def _get_batch_job_cost_from_file_content(
 
 def _get_batch_job_total_usage_from_file_content(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "gemini"] = "openai",
     model_name: Optional[str] = None,
 ) -> Usage:
     """
@@ -262,6 +426,11 @@ def _get_batch_job_total_usage_from_file_content(
     # Handle Vertex AI with specialized method
     if custom_llm_provider == "vertex_ai" and model_name:
         _, batch_usage = calculate_vertex_ai_batch_cost_and_usage(file_content_dictionary, model_name)
+        return batch_usage
+    
+    # Handle Gemini with specialized method
+    if custom_llm_provider == "gemini" and model_name:
+        _, batch_usage = calculate_gemini_batch_cost_and_usage(file_content_dictionary, model_name)
         return batch_usage
     
     # For other providers, use the existing logic
@@ -283,7 +452,7 @@ def _get_batch_job_total_usage_from_file_content(
 
 def _get_batch_job_input_file_usage(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "gemini"] = "openai",
     model_name: Optional[str] = None,
 ) -> Usage:
     """

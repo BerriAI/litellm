@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.gemini.batches.handler import GeminiBatchesAPI
 from litellm.llms.openai.openai import OpenAIBatchesAPI
 from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
 from litellm.secret_managers.main import get_secret_str
@@ -47,6 +48,7 @@ from litellm.utils import (
 openai_batches_instance = OpenAIBatchesAPI()
 azure_batches_instance = AzureBatchesAPI()
 vertex_ai_batches_instance = VertexAIBatchPrediction(gcs_bucket_name="")
+gemini_batches_instance = GeminiBatchesAPI()
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
@@ -347,7 +349,7 @@ def create_batch(
 @client
 async def aretrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "gemini"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -386,6 +388,8 @@ async def aretrieve_batch(
         raise e
 
 
+
+
 def _handle_retrieve_batch_providers_without_provider_config(
     batch_id: str,
     optional_params: GenericLiteLLMParams,
@@ -393,7 +397,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
     litellm_params: dict,
     _retrieve_batch_request: RetrieveBatchRequest,
     _is_async: bool,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "gemini"] = "openai",
 ):
     api_base: Optional[str] = None
     if custom_llm_provider == "openai":
@@ -490,9 +494,39 @@ def _handle_retrieve_batch_providers_without_provider_config(
             timeout=timeout,
             max_retries=optional_params.max_retries,
         )
+    elif custom_llm_provider == "gemini":
+        # Gemini batch retrieval via Google AI Studio API
+        api_base = (
+            optional_params.api_base
+            or litellm.api_base
+            or os.getenv("GEMINI_API_BASE")
+            or "https://generativelanguage.googleapis.com"
+        )
+        
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key
+            or os.getenv("GEMINI_API_KEY")
+            or os.getenv("GOOGLE_API_KEY")
+        )
+        
+        if not api_key:
+            raise litellm.exceptions.AuthenticationError(
+                message="No Gemini API key provided. Set GEMINI_API_KEY or GOOGLE_API_KEY environment variable.",
+                llm_provider="gemini",
+                model="gemini-batch",
+            )
+        
+        response = gemini_batches_instance.retrieve_batch(
+            _is_async=_is_async,
+            batch_id=batch_id,
+            api_base=api_base,
+            api_key=api_key,
+            timeout=timeout,
+        )
     else:
         raise litellm.exceptions.BadRequestError(
-            message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
+            message="LiteLLM doesn't support {} for 'retrieve_batch'. Only 'openai', 'azure', 'vertex_ai', 'gemini' are supported.".format(
                 custom_llm_provider
             ),
             model="n/a",
@@ -500,7 +534,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="retrieve_batch", url="https://github.com/BerriAI/litellm"),  # type: ignore
             ),
         )
     return response
@@ -509,7 +543,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
 @client
 def retrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "gemini"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
