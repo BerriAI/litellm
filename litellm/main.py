@@ -117,6 +117,7 @@ from litellm.utils import (
     get_optional_params_transcription,
     get_secret,
     get_standard_openai_params,
+    is_official_llm_provider_api_base,
     mock_completion_streaming_obj,
     pre_process_non_default_params,
     read_config_args,
@@ -4048,6 +4049,13 @@ def embedding(  # noqa: PLR0915
         api_key=api_key,
     )
 
+    official_base_url = True # Keep official working if api_base is not known
+    if api_base is not None:
+        official_base_url = is_official_llm_provider_api_base(
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+        )
+
     if dynamic_api_key is not None:
         api_key = dynamic_api_key
 
@@ -4057,6 +4065,7 @@ def embedding(  # noqa: PLR0915
         dimensions=dimensions,
         encoding_format=encoding_format,
         custom_llm_provider=custom_llm_provider,
+        official_base_url=official_base_url,
         **non_default_params,
     )
 
