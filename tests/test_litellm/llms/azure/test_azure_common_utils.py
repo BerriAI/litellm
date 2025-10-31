@@ -562,6 +562,14 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
     ):
         # Skip video call types as they don't use Azure SDK client initialization
         pytest.skip(f"Skipping {call_type.value} because Azure video calls don't use initialize_azure_sdk_client")
+    elif (
+        call_type == CallTypes.alist_containers
+        or call_type == CallTypes.aretrieve_container
+        or call_type == CallTypes.acreate_container
+        or call_type == CallTypes.adelete_container
+    ):
+        # Skip container call types as they're not supported for Azure (only OpenAI)
+        pytest.skip(f"Skipping {call_type.value} because Azure doesn't support container operations")
 
     # Mock the initialize_azure_sdk_client function
     with patch(patch_target) as mock_init_azure:
