@@ -32,6 +32,10 @@ ROUTE_ENDPOINT_MAPPING = {
     "avideo_status": "/videos/{video_id}",
     "avideo_content": "/videos/{video_id}/content",
     "avideo_remix": "/videos/{video_id}/remix",
+    "acreate_container": "/containers",
+    "alist_containers": "/containers",
+    "aretrieve_container": "/containers/{container_id}",
+    "adelete_container": "/containers/{container_id}",
 }
 
 
@@ -112,6 +116,10 @@ async def route_request(
         "avideo_status",
         "avideo_content",
         "avideo_remix",
+        "acreate_container",
+        "alist_containers",
+        "aretrieve_container",
+        "adelete_container",
     ],
 ):
     """
@@ -152,6 +160,10 @@ async def route_request(
             models = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
     elif llm_router is not None:
+        # Skip model-based routing for container operations
+        if route_type in ["acreate_container", "alist_containers", "aretrieve_container", "adelete_container"]:
+            return getattr(llm_router, f"{route_type}")(**data)
+        
         team_model_name = (
             llm_router.map_team_model(data["model"], team_id)
             if team_id is not None
@@ -194,7 +206,11 @@ async def route_request(
                 "alist_input_items",
                 "avector_store_create",
                 "avector_store_search",
-                "asearch"
+                "asearch",
+                "acreate_container",
+                "alist_containers",
+                "aretrieve_container",
+                "adelete_container",
             ]:
                 # moderation endpoint does not require `model` parameter
                 return getattr(llm_router, f"{route_type}")(**data)
