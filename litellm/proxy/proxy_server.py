@@ -2957,6 +2957,16 @@ class ProxyConfig:
                     "Error setting env variable: %s - %s", k, str(e)
                 )
         return decrypted_env_vars
+    
+    def _decrypt_db_variables(self, variables_dict: dict) -> dict:
+        """
+        Decrypts a dictionary of variables and returns them.
+        """
+        decrypted_variables = {}
+        for k, v in variables_dict.items():
+            decrypted_value = decrypt_value_helper(value=v, key=k, return_original_value=True)
+            decrypted_variables[k] = decrypted_value
+        return decrypted_variables
 
     async def _add_router_settings_from_db_config(
         self,
@@ -3386,16 +3396,16 @@ class ProxyConfig:
                     cache_settings_dict = cache_settings_json
                 
                 # Decrypt cache settings
-                decrypted_settings = self._decrypt_and_set_db_env_variables(
-                    environment_variables=cache_settings_dict,
-                    return_original_value=True
+                decrypted_settings = self._decrypt_db_variables(
+                    variables_dict=cache_settings_dict
                 )
                 
-                # Ensure type is set to redis
-                decrypted_settings["type"] = "redis"
+                # Remove redis_type if present (UI-only field, not a Cache parameter)
+                # We derive it for UI in get_cache_settings endpoint
+                cache_params = {k: v for k, v in decrypted_settings.items() if k != "redis_type"}
                 
                 # Initialize cache
-                self._init_cache(cache_params=decrypted_settings)
+                self._init_cache(cache_params=cache_params)
                 
                 verbose_proxy_logger.info(
                     "Cache settings initialized from database"
@@ -8925,7 +8935,7 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                     environment_variables=encrypted_cache_settings,
                     return_original_value=True
                 )
-                decrypted_settings["type"] = "redis"
+                # Initialize cache (frontend sends type="redis", not redis_type)
                 proxy_config._init_cache(cache_params=decrypted_settings)
 
         ### OLD LOGIC [TODO] MOVE TO DB ###
