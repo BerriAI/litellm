@@ -44,6 +44,7 @@ from .common_utils import (
     is_non_content_values_set,
 )
 from .image_handling import convert_url_to_base64
+from litellm.litellm_core_utils.schema_utils import process_schema_defs
 
 
 def default_pt(messages):
@@ -3978,12 +3979,14 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         else:
             description = name
 
-        defs = parameters.pop("$defs", {})
-        defs_copy = copy.deepcopy(defs)
-        # flatten the defs
-        for _, value in defs_copy.items():
-            unpack_defs(value, defs_copy)
-        unpack_defs(parameters, defs_copy)
+        # Process $defs based on provider support
+        # For Bedrock, we always remove $defs as they don't support them
+        parameters = process_schema_defs(
+            parameters=parameters,
+            custom_llm_provider="bedrock",
+            model="",  # Model name not available in this context
+            unpack_defs_func=unpack_defs
+        )
         tool_input_schema = BedrockToolInputSchemaBlock(
             json=BedrockToolJsonSchemaBlock(
                 type=parameters.get("type", ""),

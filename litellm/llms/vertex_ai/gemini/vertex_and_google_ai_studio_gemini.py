@@ -224,6 +224,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return False
         return True
 
+    @property
+    def supports_defs(self) -> bool:
+        """
+        Vertex AI models do not support $defs in JSON schemas, so they need to be flattened.
+        """
+        return False
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = [
             "temperature",

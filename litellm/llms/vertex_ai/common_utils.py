@@ -285,11 +285,15 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     # Get valid fields from Schema TypedDict
     valid_schema_fields = set(get_type_hints(Schema).keys())
 
-    defs = parameters.pop("$defs", {})
-    # flatten the defs
-    for name, value in defs.items():
-        unpack_defs(value, defs)
-    unpack_defs(parameters, defs)
+    # Process $defs based on provider support
+    # For Vertex AI, we always remove $defs as they don't support them
+    from litellm.litellm_core_utils.schema_utils import process_schema_defs
+    parameters = process_schema_defs(
+        parameters=parameters,
+        custom_llm_provider="vertex_ai",
+        model="",  # Model name not available in this context
+        unpack_defs_func=unpack_defs
+    )
 
     # 5. Nullable fields:
     #     * https://github.com/pydantic/pydantic/issues/1270

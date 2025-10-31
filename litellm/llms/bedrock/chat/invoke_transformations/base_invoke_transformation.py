@@ -53,6 +53,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             "stream",
         ]
 
+    @property
+    def supports_defs(self) -> bool:
+        """
+        Bedrock models do not support $defs in JSON schemas, so they need to be flattened.
+        """
+        return False
+
     def map_openai_params(
         self,
         non_default_params: dict,
