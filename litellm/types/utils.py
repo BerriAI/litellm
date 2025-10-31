@@ -676,7 +676,13 @@ class Message(OpenAIObject):
             init_values["images"] = images
 
         if thinking_blocks is not None:
-            init_values["thinking_blocks"] = thinking_blocks
+            import copy
+            valid_thinking_blocks = [
+                {k: copy.deepcopy(v) for k, v in tb.items() if v is not None}
+                for tb in thinking_blocks
+                if isinstance(tb, dict)
+            ]
+            init_values["thinking_blocks"] = valid_thinking_blocks
 
         if annotations is not None:
             init_values["annotations"] = annotations
