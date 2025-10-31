@@ -635,6 +635,7 @@ async def get_guardrail_info(guardrail_id: str):
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
+        guardrail_definition_location = "db"
         result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
@@ -642,6 +643,7 @@ async def get_guardrail_info(guardrail_id: str):
             result = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(
                 guardrail_id=guardrail_id
             )
+            guardrail_definition_location = "config"
 
         if result is None:
             raise HTTPException(
@@ -669,6 +671,7 @@ async def get_guardrail_info(guardrail_id: str):
             guardrail_info=dict(result.get("guardrail_info") or {}),
             created_at=result.get("created_at"),
             updated_at=result.get("updated_at"),
+            guardrail_definition_location=guardrail_definition_location,
         )
     except HTTPException as e:
         raise e
