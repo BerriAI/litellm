@@ -10509,6 +10509,18 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "gemini/gemini-embedding-001": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 2048,
+        "max_tokens": 2048,
+        "mode": "embedding",
+        "output_cost_per_token": 0,
+        "output_vector_size": 3072,
+        "rpm": 10000,
+        "source": "https://ai.google.dev/gemini-api/docs/embeddings#model-versions",
+        "tpm": 10000000
+    },
     "gemini/gemini-1.5-flash": {
         "input_cost_per_token": 7.5e-08,
         "input_cost_per_token_above_128k_tokens": 1.5e-07,
