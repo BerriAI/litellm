@@ -183,7 +183,7 @@ CACHE_SETTINGS_FIELDS: List[CacheSettingsField] = [
         field_type="Boolean",
         field_value=None,
         field_description="Enable SSL hostname verification",
-        field_default=True,
+        field_default=None,
         ui_field_name="SSL Check Hostname",
         redis_type=None,
     ),
