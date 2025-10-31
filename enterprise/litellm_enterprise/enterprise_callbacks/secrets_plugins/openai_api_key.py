@@ -16,4 +16,5 @@ class OpenAIApiKeyDetector(RegexBasedDetector):
 
     @property
     def denylist(self) -> list[re.Pattern]:
-        return [re.compile(r"""(sk-[a-zA-Z0-9]{5,})""")]
+        # return [re.compile(r"""(sk-[a-zA-Z0-9]{5,})""")]
+        return [re.compile(r"""(?<![a-zA-Z])(sk-[a-zA-Z0-9]{5,})(?![a-zA-Z])""")]
