@@ -1661,6 +1661,17 @@ class ImageObject(OpenAIImage):
     def __init__(self, b64_json=None, url=None, revised_prompt=None, **kwargs):
         super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)  # type: ignore
 
+    def to_dict(self):
+        d = {
+            "b64_json": self.b64_json,
+            # only include url / revised_prompt if not None
+        }
+        if self.url is not None:
+            d["url"] = self.url
+        if self.revised_prompt is not None:
+            d["revised_prompt"] = self.revised_prompt
+        return d
+        
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
@@ -1679,7 +1690,7 @@ class ImageObject(OpenAIImage):
 
     def json(self, **kwargs):  # type: ignore
         try:
-            return self.model_dump()  # noqa
+            return self.model_dump(self.to_dict(), **kwargs)  # noqa
         except Exception:
             # if using pydantic v1
             return self.dict()
