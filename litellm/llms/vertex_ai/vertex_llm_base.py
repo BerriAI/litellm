@@ -164,6 +164,47 @@ class VertexBase:
 
         return google_auth.default(scopes=scopes)
 
+    # Async credential creation methods - use OLD async credentials with NEW transport
+    def _credentials_from_authorized_user_async(self, json_obj, scopes):
+        """
+        Create async credentials from authorized user info.
+        Uses google.oauth2._credentials_async for async refresh support.
+        """
+        try:
+            from google.oauth2 import _credentials_async
+            verbose_logger.debug(
+                "[VERTEX AUTH] Creating async authorized user credentials"
+            )
+            return _credentials_async.Credentials.from_authorized_user_info(
+                json_obj, scopes=scopes
+            )
+        except (ImportError, AttributeError) as e:
+            # Fallback to sync credentials if async not available
+            verbose_logger.warning(
+                f"[VERTEX AUTH] google.oauth2._credentials_async not available ({e}), using sync credentials"
+            )
+            return self._credentials_from_authorized_user(json_obj, scopes)
+
+    def _credentials_from_service_account_async(self, json_obj, scopes):
+        """
+        Create async credentials from service account info.
+        Uses google.oauth2._service_account_async for async refresh support.
+        """
+        try:
+            from google.oauth2 import _service_account_async
+            verbose_logger.debug(
+                "[VERTEX AUTH] Creating async service account credentials"
+            )
+            return _service_account_async.Credentials.from_service_account_info(
+                json_obj, scopes=scopes
+            )
+        except (ImportError, AttributeError) as e:
+            # Fallback to sync credentials if async not available
+            verbose_logger.warning(
+                f"[VERTEX AUTH] google.oauth2._service_account_async not available ({e}), using sync credentials"
+            )
+            return self._credentials_from_service_account(json_obj, scopes)
+
     def get_default_vertex_location(self) -> str:
         return "us-central1"
 
@@ -301,34 +342,52 @@ class VertexBase:
         self, credentials: Any
     ) -> None:
         """
-        Async version of refresh_auth using aiohttp transport.
-        This makes a true async HTTP call to Google's token endpoint instead of blocking.
+        Async version of refresh_auth using OLD async credentials with OLD transport.
+        This makes a TRUE async HTTP call to Google's token endpoint without blocking.
         
-        Uses a persistent class-level session with auto_decompress=False (required for Google auth).
+        Strategy:
+        - Uses OLD async credentials (_credentials_async, _service_account_async) 
+        - With OLD transport (google.auth.transport._aiohttp_requests.Request)
+        - They are designed to work together with compatible APIs
+        - Persistent session with auto_decompress=False for Google auth compatibility
         
         Args:
-            credentials: The credentials object to refresh
+            credentials: Async credentials object with async refresh() method
         """
         try:
             from google.auth.transport._aiohttp_requests import Request
+            import inspect
         except ImportError:
             # Fallback to sync version if aiohttp not available
             verbose_logger.warning(
-                "aiohttp not available, falling back to sync token refresh"
+                "[VERTEX AUTH] aiohttp not available, falling back to sync token refresh"
             )
-            from google.auth.transport.requests import Request
-
-            credentials.refresh(Request())
+            from google.auth.transport.requests import Request as SyncRequest
+            credentials.refresh(SyncRequest())
             return
 
-        # Always use the persistent class-level session with auto_decompress=False
+        # Get persistent session with auto_decompress=False
         session_to_use = await self._get_or_create_token_refresh_session()
 
+        # Use OLD transport (compatible with OLD async credentials)
+        # Note: OLD transport Request expects session without underscore
         request = Request(session_to_use)
-        # Google's credentials.refresh() is sync, but the Request will use aiohttp
-        await asyncio.get_event_loop().run_in_executor(
-            None, credentials.refresh, request
-        )
+        
+        # Check if credentials have async refresh (OLD async credentials do!)
+        if hasattr(credentials, 'refresh') and inspect.iscoroutinefunction(credentials.refresh):
+            verbose_logger.debug(
+                "[VERTEX AUTH] Using TRUE async refresh with OLD async credentials"
+            )
+            await credentials.refresh(request)
+        else:
+            # Fallback: sync credentials, run in executor
+            verbose_logger.debug(
+                "[VERTEX AUTH] Credentials don't support async refresh, using executor fallback"
+            )
+            from google.auth.transport.requests import Request as SyncRequest
+            await asyncio.get_event_loop().run_in_executor(
+                None, credentials.refresh, SyncRequest()
+            )
 
     async def load_auth_async(
         self,
@@ -336,7 +395,10 @@ class VertexBase:
         project_id: Optional[str],
     ) -> Tuple[Any, str]:
         """
-        Async version of load_auth that uses refresh_auth_async.
+        Async version of load_auth that creates async credentials.
+        
+        Creates OLD async credentials (_credentials_async, _service_account_async)
+        which support async refresh() for TRUE async I/O without executor.
         """
         if credentials is not None:
             if isinstance(credentials, str):
@@ -383,7 +445,8 @@ class VertexBase:
                     creds = self._credentials_from_identity_pool(json_obj)
             # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
             elif "type" in json_obj and json_obj["type"] == "authorized_user":
-                creds = self._credentials_from_authorized_user(
+                # Use async credentials for authorized user
+                creds = self._credentials_from_authorized_user_async(
                     json_obj,
                     scopes=["https://www.googleapis.com/auth/cloud-platform"],
                 )
@@ -392,7 +455,8 @@ class VertexBase:
                         creds.quota_project_id
                     )  # authorized user credentials don't have a project_id, only quota_project_id
             else:
-                creds = self._credentials_from_service_account(
+                # Use async credentials for service account
+                creds = self._credentials_from_service_account_async(
                     json_obj,
                     scopes=["https://www.googleapis.com/auth/cloud-platform"],
                 )
