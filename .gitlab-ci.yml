@@ -1,0 +1,52 @@
+include:
+  - project: 'zixun-op/sharelib/gitlabci'
+    file: 
+      - templates/other/common-pipiline.yaml
+
+variables:
+  ## 全局变量
+  ## 作业控制
+  RUN_PIPELINE_INIT_DEFAULT: "yes"      #是否运行默认初始化步骤
+  RUN_PIPELINE_BUILD_DEFAULT: "no"     #是否运行默认maven编译步骤
+  RUN_PIPELINE_DOCKER_DEFAULT: "no"    #是否运行默认docker编译步骤
+  RUN_PIPELINE_DEPLOY_DEFAULT:  "no"   #是否运行默认部署编译步骤
+  RUN_DEPLOY_K8S: "no" # 是否部署k8s
+
+  #项目组别称
+  PROJECT_NAME: etools
+  APP_NAME: llm
+
+  HELM_IMAGE_REPOSITORY: $PROJECT_NAME/$APP_NAME
+  HELM_IMAGE_TAG: $CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA
+
+# 流水线控制
+workflow:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+    - !reference [.com_workflow_rules, rules]
+
+docker_litellm:
+  tags:
+    - k8s-eci
+  stage: docker
+  extends: .base_docker
+  allow_failure: false
+  # needs:
+  #   - job: init
+  #     artifacts: true
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+      when: manual
+      variables:
+        HELM_IMAGE_TAG: ${CI_COMMIT_TAG}
+  before_script:
+    - VERSION_TAG=${CI_COMMIT_TAG}
+    - DOCKER_DESTINATION=$HELM_IMAGE_REGISTRY/$PROJECT_NAME/litellm:$VERSION_TAG
+  variables:
+    KUBERNETES_POD_ANNOTATIONS_1: "k8s.aliyun.com/eci-use-specs=4-8Gi"
+    KUBERNETES_CPU_LIMIT: 4
+    KUBERNETES_MEMORY_LIMIT: 8Gi
+    # DOCKER_DESTINATION: $HELM_IMAGE_REGISTRY/$PROJECT_NAME/litellm:$VERSION_TAG
+    DOCKER_CONTEXT: "."
+    DOCKERFILE_FULLNAME: "./Dockerfile"
+    KANICO_EXTRA_ARG: "--build-arg BASE_DOMAIN=docker-group.fzzixun.com/"
