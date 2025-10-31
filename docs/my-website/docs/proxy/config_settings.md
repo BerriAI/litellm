@@ -687,6 +687,7 @@ router_settings:
 | OPENAI_BASE_URL | Base URL for OpenAI API
 | OPENAI_API_BASE | Base URL for OpenAI API. Default is https://api.openai.com/
 | OPENAI_API_KEY | API key for OpenAI services
+| OPENAI_CODE_INTERPRETER_COST_PER_SESSION | Cost per session for OpenAI Code Interpreter service (containers)
 | OPENAI_FILE_SEARCH_COST_PER_1K_CALLS | Cost per 1000 calls for OpenAI file search. Default is 0.0025
 | OPENAI_ORGANIZATION | Organization identifier for OpenAI
 | OPENID_BASE_URL | Base URL for OpenID Connect services
