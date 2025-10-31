@@ -258,6 +258,7 @@ def video_generation(  # noqa: PLR0915
 
     except Exception as e:
         raise litellm.exception_type(
+            model=model or DEFAULT_VIDEO_ENDPOINT_MODEL,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
@@ -318,6 +319,10 @@ def video_content(
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("async_call", False) is True
+
+        # Ensure custom_llm_provider is not None - default to openai if not provided
+        if custom_llm_provider is None:
+            custom_llm_provider = "openai"
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
@@ -412,11 +417,10 @@ async def avideo_content(
         loop = asyncio.get_event_loop()
         kwargs["async_call"] = True
 
-        # get custom llm provider so we can use this for mapping exceptions
+        # Ensure custom_llm_provider is not None - default to openai if not provided
+        # Video content endpoints don't require a model parameter
         if custom_llm_provider is None:
-            _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model or DEFAULT_VIDEO_ENDPOINT_MODEL, api_base=api_base
-            )
+            custom_llm_provider = "openai"
 
         func = partial(
             video_content,
@@ -589,6 +593,10 @@ def video_remix(  # noqa: PLR0915
 
             response = VideoObject(**mock_response)
             return response
+
+        # Ensure custom_llm_provider is not None - default to openai if not provided
+        if custom_llm_provider is None:
+            custom_llm_provider = "openai"
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
@@ -803,6 +811,10 @@ def video_list(  # noqa: PLR0915
             if isinstance(mock_response, str):
                 mock_response = json.loads(mock_response)
             return [VideoObject(**item) for item in mock_response]
+
+        # Ensure custom_llm_provider is not None - default to openai if not provided
+        if custom_llm_provider is None:
+            custom_llm_provider = "openai"
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
@@ -1025,6 +1037,10 @@ def video_status(  # noqa: PLR0915
 
             response = VideoObject(**mock_response)
             return response
+
+        # Ensure custom_llm_provider is not None - default to openai if not provided
+        if custom_llm_provider is None:
+            custom_llm_provider = "openai"
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)

@@ -3,7 +3,7 @@
 import orjson
 from fastapi import APIRouter, Depends, Request, Response, UploadFile, File
 from fastapi.responses import ORJSONResponse
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
@@ -150,7 +150,7 @@ async def video_list(
 
     # Read query parameters
     query_params = dict(request.query_params)
-    data = {"query_params": query_params}
+    data: Dict[str, Any] = {"query_params": query_params}
 
     # Extract custom_llm_provider from headers, query params, or body
     custom_llm_provider = (
@@ -235,7 +235,7 @@ async def video_status(
     )
 
     # Create data with video_id
-    data = {"video_id": video_id}
+    data: Dict[str, Any] = {"video_id": video_id}
 
     # Extract custom_llm_provider from headers, query params, or body
     custom_llm_provider = (
@@ -324,7 +324,7 @@ async def video_content(
     )
 
     # Create data with video_id
-    data = {"video_id": video_id}
+    data: Dict[str, Any] = {"video_id": video_id}
 
     # Extract custom_llm_provider from headers, query params, or body
     custom_llm_provider = (
