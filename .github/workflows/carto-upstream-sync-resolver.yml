@@ -175,10 +175,15 @@ jobs:
           PR_JSON=$(gh pr view ${PR_NUMBER} --repo ${{ github.repository }} --json labels,mergeable,headRefName,baseRefName)
 
           # Extract details
+          echo "${PR_JSON}"
           BASE_BRANCH=$(echo "${PR_JSON}" | jq -r '.baseRefName')
+          echo "BASE_BRANCH: ${BASE_BRANCH}"
           HEAD_BRANCH=$(echo "${PR_JSON}" | jq -r '.headRefName')
+          echo "HEAD_BRANCH: ${HEAD_BRANCH}"
           MERGEABLE=$(echo "${PR_JSON}" | jq -r '.mergeable')
+          echo "MERGEABLE: ${MERGEABLE}"
           LABELS=$(echo "${PR_JSON}" | jq -r '.labels[].name' | tr '\n' ' ')
+          echo "LABELS: ${LABELS}"
 
           echo "[Resolver] Base: ${BASE_BRANCH}, Head: ${HEAD_BRANCH}"
           echo "[Resolver] Mergeable status: ${MERGEABLE}"
@@ -200,14 +205,27 @@ jobs:
           fi
           echo "is-sync-pr=true" >> $GITHUB_OUTPUT
 
-          # Check 3: Must have conflicts
-          if [[ "${MERGEABLE}" != "CONFLICTING" ]]; then
-            echo "[Resolver] ✅ No conflicts detected - no action needed"
+          # Check 3: Must have conflicts (or manual trigger)
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Manual trigger: skip conflict check (user knows there are conflicts)
+            echo "[Resolver] ⚠️ Manual trigger - skipping conflict check (status: ${MERGEABLE})"
+            echo "[Resolver] Assuming conflicts exist (user manually triggered)"
+            echo "has-conflicts=true" >> $GITHUB_OUTPUT
+          elif [[ "${MERGEABLE}" == "CONFLICTING" ]]; then
+            # Automatic trigger: conflicts detected
+            echo "[Resolver] ⚠️ Conflicts detected (mergeable: ${MERGEABLE})"
+            echo "has-conflicts=true" >> $GITHUB_OUTPUT
+          elif [[ "${MERGEABLE}" == "UNKNOWN" ]]; then
+            # Status not computed yet - treat as potential conflict
+            echo "[Resolver] ⚠️ Mergeable status unknown - will attempt resolution"
+            echo "has-conflicts=true" >> $GITHUB_OUTPUT
+          else
+            # Clean merge - no action needed
+            echo "[Resolver] ✅ No conflicts detected (mergeable: ${MERGEABLE})"
             echo "has-conflicts=false" >> $GITHUB_OUTPUT
             echo "eligible=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-          echo "has-conflicts=true" >> $GITHUB_OUTPUT
 
           # All checks passed
           echo "[Resolver] ✅ PR is eligible for conflict resolution"
