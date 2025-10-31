@@ -2,7 +2,7 @@
 Types and field definitions for router settings management endpoints
 """
 
-from typing import Any, List
+from typing import Any, List, Optional
 
 from pydantic import BaseModel
 
@@ -13,6 +13,7 @@ class RouterSettingsField(BaseModel):
     field_value: Any
     field_description: str
     field_default: Any = None
+    options: Optional[List[str]] = None  # For fields with predefined options/enum values
 
 
 # Define all available router settings fields
@@ -23,6 +24,7 @@ ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
         field_value=None,
         field_description="Routing strategy to use for load balancing across deployments",
         field_default="simple-shuffle",
+        options=[],  # Will be populated dynamically from Router class
     ),
     RouterSettingsField(
         field_name="routing_strategy_args",
