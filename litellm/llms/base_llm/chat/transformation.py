@@ -154,6 +154,18 @@ class BaseConfig(ABC):
         """
         return False
 
+    def requires_custom_headers_validation(self) -> bool:
+        """
+        Returns True if the provider needs validate_environment to be called
+        to add custom headers before making the request.
+        
+        This is used for OpenAI-compatible providers that require special headers
+        (e.g., GitHub Copilot needs Copilot-Vision-Request for vision requests).
+        
+        Override this method in provider-specific config classes that need it.
+        """
+        return False
+
     def _add_tools_to_optional_params(self, optional_params: dict, tools: List) -> dict:
         """
         Helper util to add tools to optional_params.
