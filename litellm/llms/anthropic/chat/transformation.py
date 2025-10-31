@@ -519,6 +519,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=[hosted_web_search_tool]
                 )
+            elif param == "extra_headers":
+                optional_params["extra_headers"] = value
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
