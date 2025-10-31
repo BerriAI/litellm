@@ -14,6 +14,9 @@ import time
 import heapq
 from typing import TYPE_CHECKING, Any, List, Optional
 
+import orjson
+
+
 if TYPE_CHECKING:
     from litellm.types.caching import RedisPipelineIncrementOperation
 
@@ -214,7 +217,7 @@ class InMemoryCache(BaseCache):
                 return None
             original_cached_response = self.cache_dict[key]
             try:
-                cached_response = json.loads(original_cached_response)
+                cached_response = orjson.loads(original_cached_response)
             except Exception:
                 cached_response = original_cached_response
             return cached_response
