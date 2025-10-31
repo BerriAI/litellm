@@ -1,6 +1,7 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
+import asyncio
 import copy
 import datetime
 import json
@@ -2159,6 +2160,11 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
                     if capture_exception:  # log this error to sentry for debugging
                         capture_exception(e)
+                    # Track callback logging failures in Prometheus
+                    try:
+                        self._handle_callback_failure(callback=callback)
+                    except Exception:
+                        pass
         except Exception as e:
             verbose_logger.exception(
                 "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {}".format(
@@ -2464,7 +2470,35 @@ class Logging(LiteLLMLoggingBaseClass):
                 verbose_logger.error(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )
+                self._handle_callback_failure(callback=callback)
                 pass
+
+    def _handle_callback_failure(self, callback: Any):
+        """
+        Handle callback logging failures by incrementing Prometheus metrics.
+        
+        Works for both sync and async contexts since Prometheus counter increment is synchronous.
+        
+        Args:
+            callback: The callback that failed
+        """
+        try:
+            callback_name = self._get_callback_name(callback)
+            
+            all_callbacks = []
+            all_callbacks.extend(litellm.callbacks or [])  # type: ignore
+            all_callbacks.extend(litellm._async_success_callback or [])  # type: ignore
+            all_callbacks.extend(litellm.success_callback or [])  # type: ignore
+                        
+            for callback_obj in all_callbacks:
+                if hasattr(callback_obj, 'increment_callback_logging_failure'):
+                    callback_obj.increment_callback_logging_failure(callback_name=callback_name)  # type: ignore
+                    break  # Only increment once
+                    
+        except Exception as e:
+            verbose_logger.debug(
+                f"Error in _handle_callback_failure: {str(e)}"
+            )
 
     def _failure_handler_helper_fn(
         self, exception, traceback_exception, start_time=None, end_time=None
@@ -2801,6 +2835,10 @@ class Logging(LiteLLMLoggingBaseClass):
                         str(e), callback
                     )
                 )
+                # Track callback logging failures in Prometheus
+                asyncio.create_task(
+                    self._handle_callback_failure(callback=callback)
+                )
 
     def _get_trace_id(self, service_name: Literal["langfuse"]) -> Optional[str]:
         """
@@ -2933,11 +2971,15 @@ class Logging(LiteLLMLoggingBaseClass):
         Helper to get the name of a callback function
 
         Args:
-            cb: The callback function/string to get the name of
+            cb: The callback object/function/string to get the name of
 
         Returns:
             The name of the callback
         """
+        if isinstance(cb, str):
+            return cb
+        if hasattr(cb, "__class__"):
+            return cb.__class__.__name__
         if hasattr(cb, "__name__"):
             return cb.__name__
         if hasattr(cb, "__func__"):

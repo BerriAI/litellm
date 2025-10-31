@@ -567,3 +567,26 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         Get the proxy server request from cold storage using the object key directly.
         """
         pass
+
+    def handle_callback_failure(self, callback_name: str):
+        """
+        Handle callback logging failures by incrementing Prometheus metrics.
+        
+        Call this method in exception handlers within your callback when logging fails.
+        """
+        try:
+            import litellm
+            
+            all_callbacks = []
+            all_callbacks.extend(litellm.callbacks or [])  # type: ignore
+            all_callbacks.extend(litellm._async_success_callback or [])  # type: ignore
+            all_callbacks.extend(litellm.success_callback or [])  # type: ignore
+                        
+            for callback_obj in all_callbacks:
+                if hasattr(callback_obj, 'increment_callback_logging_failure'):
+                    callback_obj.increment_callback_logging_failure(callback_name=callback_name)  # type: ignore
+                    break
+                    
+        except Exception as e:
+            from litellm._logging import verbose_logger
+            verbose_logger.debug(f"Error in handle_callback_failure: {str(e)}")

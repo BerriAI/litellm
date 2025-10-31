@@ -239,7 +239,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             )
         except Exception as e:
             verbose_logger.exception(f"s3 Layer Error - {str(e)}")
-            pass
+            self.handle_callback_failure(callback_name="S3Logger")
 
     async def async_upload_data_to_s3(
         self, batch_logging_element: s3BatchLoggingElement
@@ -323,6 +323,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             response.raise_for_status()
         except Exception as e:
             verbose_logger.exception(f"Error uploading to s3: {str(e)}")
+            self.handle_callback_failure(callback_name="S3Logger")
 
     async def async_send_batch(self):
         """
@@ -471,6 +472,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             response.raise_for_status()
         except Exception as e:
             verbose_logger.exception(f"Error uploading to s3: {str(e)}")
+            self.handle_callback_failure(callback_name="S3Logger")
 
     async def _download_object_from_s3(self, s3_object_key: str) -> Optional[dict]:
         """
