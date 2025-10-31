@@ -10,7 +10,7 @@ This package provides tools for **detecting memory leaks in development/testing 
 - **Endpoint profiler**: Memory monitoring for development/testing
 - **Reusable components**: Used by tests in `tests/memory_leak_tests/`
 
-⚠️ **Note**: This is a **development and testing tool**. Not intended for production monitoring.
+**Note**: This is a **development and testing tool**. Not intended for production monitoring.
 
 ## Quick Start
 
@@ -30,7 +30,7 @@ pytest tests/memory_leak_tests/test_sdk_completion.py
 
 ```python
 from litellm.proxy.common_utils.memory_profiler.endpoint_profiler import (
-    EndpointProfiler, 
+    EndpointProfiler,
     profile_endpoint
 )
 
@@ -105,6 +105,7 @@ The package is organized into modular components:
 ## Key Features
 
 ### Smart Capture
+
 Captures detailed memory snapshots selectively to balance detail with performance:
 
 - **First request** - Always (baseline)
@@ -113,14 +114,18 @@ Captures detailed memory snapshots selectively to balance detail with performanc
 - **Periodic sampling** - Every N requests (configurable)
 
 ### Professional Leak Detection
+
 Uses battle-tested algorithms:
+
 - Linear regression analysis
 - Statistical significance testing
 - Error-induced leak detection
 - Variance filtering
 
 ### Modular Design
+
 Each component has a single responsibility:
+
 - Easy to test individually
 - Can be imported independently
 - Clear separation of concerns
