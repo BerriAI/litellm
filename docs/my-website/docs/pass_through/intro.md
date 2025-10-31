@@ -36,6 +36,7 @@ graph LR
 - LiteLLM handles the provider authentication internally
 - Same authentication works across all passthrough endpoints
 
+
 ### Error Handling
 
 **Provider Errors**: Forwarded directly to you with original error codes and messages
