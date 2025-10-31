@@ -181,22 +181,3 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
     litellm.logging_callback_manager.add_litellm_callback(_panw_callback)
 
     return _panw_callback
-
-
-def initialize_pointguardai(litellm_params: LitellmParams, guardrail: Guardrail):
-    from litellm.proxy.guardrails.guardrail_hooks.pointguardai import PointGuardAIGuardrail
-    
-    _pointguardai_callback = PointGuardAIGuardrail(
-        api_base=litellm_params.api_base or "",
-        api_key=litellm_params.api_key or "",
-        api_email=litellm_params.api_email or "",
-        org_code=litellm_params.org_code or "",
-        policy_config_name=litellm_params.policy_config_name or "",
-        model_provider_name=litellm_params.model_provider_name,
-        model_name=litellm_params.model_name,
-        guardrail_name=guardrail.get("guardrail_name", ""),
-        event_hook=litellm_params.mode,
-        default_on=litellm_params.default_on if litellm_params.default_on is not None else False,
-    )
-    litellm.logging_callback_manager.add_litellm_callback(_pointguardai_callback)
-    return _pointguardai_callback
