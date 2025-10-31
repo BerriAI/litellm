@@ -1,23 +1,11 @@
 import React, { useState, useEffect } from "react";
 import {
-  Card,
   Title,
-  Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
-  TableCell,
-  TableBody,
   Text,
-  Grid,
   Button,
   TextInput,
   Select as Select2,
   SelectItem,
-  Col,
-  Accordion,
-  AccordionBody,
-  AccordionHeader,
 } from "@tremor/react";
 import {
   getCallbacksCall,
@@ -38,65 +26,10 @@ interface routingStrategyArgs {
   lowest_latency_buffer?: number;
 }
 
-interface AccordionHeroProps {
-  selectedStrategy: string | null;
-  strategyArgs: routingStrategyArgs;
-  paramExplanation: { [key: string]: string };
-}
-
 const defaultLowestLatencyArgs: routingStrategyArgs = {
   ttl: 3600,
   lowest_latency_buffer: 0,
 };
-
-const AccordionHero: React.FC<AccordionHeroProps> = ({ selectedStrategy, strategyArgs, paramExplanation }) => (
-  <Accordion>
-    <AccordionHeader className="text-sm font-medium text-tremor-content-strong dark:text-dark-tremor-content-strong">
-      Routing Strategy Specific Args
-    </AccordionHeader>
-    <AccordionBody>
-      {selectedStrategy == "latency-based-routing" ? (
-        <Card>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableHeaderCell>Setting</TableHeaderCell>
-                <TableHeaderCell>Value</TableHeaderCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {Object.entries(strategyArgs).map(([param, value]) => (
-                <TableRow key={param}>
-                  <TableCell>
-                    <Text>{param}</Text>
-                    <p
-                      style={{
-                        fontSize: "0.65rem",
-                        color: "#808080",
-                        fontStyle: "italic",
-                      }}
-                      className="mt-1"
-                    >
-                      {paramExplanation[param]}
-                    </p>
-                  </TableCell>
-                  <TableCell>
-                    <TextInput
-                      name={param}
-                      defaultValue={typeof value === "object" ? JSON.stringify(value, null, 2) : value.toString()}
-                    />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
-      ) : (
-        <Text>No specific settings</Text>
-      )}
-    </AccordionBody>
-  </Accordion>
-);
 
 const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, userID, modelData }) => {
   const [routerSettings, setRouterSettings] = useState<{ [key: string]: any }>({});
@@ -122,6 +55,10 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
         delete router_settings["model_group_retry_policy"];
       }
       setRouterSettings(router_settings);
+      // Set initial selected strategy
+      if (router_settings.routing_strategy) {
+        setSelectedStrategy(router_settings.routing_strategy);
+      }
     });
     getRouterSettingsCall(accessToken).then((data) => {
       console.log("router settings from API", data);
@@ -237,83 +174,129 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
   }
 
   return (
-    <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-      <Title>Router Settings</Title>
-      <Card>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableHeaderCell>Setting</TableHeaderCell>
-              <TableHeaderCell>Value</TableHeaderCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {Object.entries(routerSettings)
-              .filter(
-                ([param, value]) =>
-                  param != "fallbacks" &&
-                  param != "context_window_fallbacks" &&
-                  param != "routing_strategy_args",
-              )
-              .map(([param, value]) => (
-                <TableRow key={param}>
-                  <TableCell>
-                    <Text>{routerFieldsMetadata[param]?.ui_field_name || param}</Text>
-                    <p
-                      style={{
-                        fontSize: "0.65rem",
-                        color: "#808080",
-                        fontStyle: "italic",
-                      }}
-                      className="mt-1"
-                    >
-                      {routerFieldsMetadata[param]?.field_description || ""}
+    <div className="w-full space-y-8 py-2">
+      {/* Routing Strategy - Hero Section */}
+      {routerSettings.routing_strategy && (
+        <div className="space-y-3 max-w-3xl">
+          <div>
+            <h3 className="text-sm font-medium text-gray-900">
+              {routerFieldsMetadata["routing_strategy"]?.ui_field_name || "Routing Strategy"}
+            </h3>
+            <p className="text-xs text-gray-500 mt-1">
+              {routerFieldsMetadata["routing_strategy"]?.field_description || ""}
+            </p>
+          </div>
+          <Select2
+            value={selectedStrategy || routerSettings.routing_strategy}
+            onValueChange={setSelectedStrategy}
+            className="w-full max-w-md"
+          >
+            {availableRoutingStrategies.map((strategy) => (
+              <SelectItem key={strategy} value={strategy}>
+                <span className="font-mono text-sm">{strategy}</span>
+              </SelectItem>
+            ))}
+          </Select2>
+        </div>
+      )}
+
+      {/* Divider */}
+      <div className="border-t border-gray-200" />
+
+      {/* Strategy-Specific Args - Show immediately after strategy if latency-based */}
+      {selectedStrategy === "latency-based-routing" && (
+        <>
+          <div className="space-y-6">
+            <div className="max-w-3xl">
+              <h3 className="text-sm font-medium text-gray-900">Latency-Based Configuration</h3>
+              <p className="text-xs text-gray-500 mt-1">Fine-tune latency-based routing behavior</p>
+            </div>
+            
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">
+              {Object.entries(
+                routerSettings["routing_strategy_args"] || defaultLowestLatencyArgs
+              ).map(([param, value]) => (
+                <div key={param} className="space-y-2">
+                  <label className="block">
+                    <span className="text-xs font-medium text-gray-700 uppercase tracking-wide">
+                      {param.replace(/_/g, " ")}
+                    </span>
+                    <p className="text-xs text-gray-500 mt-0.5 mb-2">
+                      {paramExplanation[param] || ""}
                     </p>
-                  </TableCell>
-                  <TableCell>
-                    {param == "routing_strategy" ? (
-                      <Select2
-                        defaultValue={value}
-                        className="w-full max-w-md"
-                        onValueChange={setSelectedStrategy}
-                      >
-                        {availableRoutingStrategies.map((strategy) => (
-                          <SelectItem key={strategy} value={strategy}>
-                            {strategy}
-                          </SelectItem>
-                        ))}
-                      </Select2>
-                    ) : (
-                      <TextInput
-                        name={param}
-                        defaultValue={
-                          typeof value === "object" ? JSON.stringify(value, null, 2) : value.toString()
-                        }
-                      />
-                    )}
-                  </TableCell>
-                </TableRow>
+                    <TextInput
+                      name={param}
+                      defaultValue={typeof value === "object" ? JSON.stringify(value, null, 2) : value?.toString()}
+                      className="font-mono text-sm w-full"
+                    />
+                  </label>
+                </div>
               ))}
-          </TableBody>
-        </Table>
-        <AccordionHero
-          selectedStrategy={selectedStrategy}
-          strategyArgs={
-            routerSettings &&
-            routerSettings["routing_strategy_args"] &&
-            Object.keys(routerSettings["routing_strategy_args"]).length > 0
-              ? routerSettings["routing_strategy_args"]
-              : defaultLowestLatencyArgs
-          }
-          paramExplanation={paramExplanation}
-        />
-      </Card>
-      <Col>
-        <Button className="mt-2" onClick={() => handleSaveChanges(routerSettings)}>
+            </div>
+          </div>
+          
+          <div className="border-t border-gray-200" />
+        </>
+      )}
+
+      {/* Other Settings */}
+      <div className="space-y-6">
+        <div className="max-w-3xl">
+          <h3 className="text-sm font-medium text-gray-900">Reliability & Retries</h3>
+          <p className="text-xs text-gray-500 mt-1">Configure retry logic and failure handling</p>
+        </div>
+        
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">
+          {Object.entries(routerSettings)
+            .filter(
+              ([param, value]) =>
+                param != "fallbacks" &&
+                param != "context_window_fallbacks" &&
+                param != "routing_strategy_args" &&
+                param != "routing_strategy",
+            )
+            .map(([param, value]) => (
+              <div key={param} className="space-y-2">
+                <label className="block">
+                  <span className="text-xs font-medium text-gray-700 uppercase tracking-wide">
+                    {routerFieldsMetadata[param]?.ui_field_name || param}
+                  </span>
+                  <p className="text-xs text-gray-500 mt-0.5 mb-2">
+                    {routerFieldsMetadata[param]?.field_description || ""}
+                  </p>
+                  <TextInput
+                    name={param}
+                    defaultValue={
+                      typeof value === "object" ? JSON.stringify(value, null, 2) : value?.toString() || ""
+                    }
+                    placeholder="—"
+                    className="font-mono text-sm w-full"
+                  />
+                </label>
+              </div>
+            ))}
+        </div>
+      </div>
+
+      {/* Actions - Sticky at bottom */}
+      <div className="border-t border-gray-200 pt-6 flex justify-end gap-3">
+        <Button 
+          variant="secondary"
+          size="sm"
+          onClick={() => window.location.reload()}
+          className="text-sm"
+        >
+          Reset
+        </Button>
+        <Button 
+          size="sm"
+          onClick={() => handleSaveChanges(routerSettings)}
+          className="text-sm font-medium"
+        >
           Save Changes
         </Button>
-      </Col>
-    </Grid>
+      </div>
+    </div>
   );
 };
 
