@@ -4,13 +4,11 @@ import sys
 import unittest.mock as mock
 from unittest.mock import patch
 
+from enterprise.litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger
 import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath("../../.."))
-from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
-    BaseEmailLogger,
-)
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEvent,
     SendKeyCreatedEmailEvent,
@@ -19,6 +17,13 @@ from litellm_enterprise.types.enterprise_callbacks.send_emails import (
 from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
 from litellm.proxy._types import Litellm_EntityType, WebhookEvent
 
+
+@pytest.fixture(autouse=True)
+def no_invitation_wait(monkeypatch):
+    async def _noop(self):
+        return None
+
+    monkeypatch.setattr(BaseEmailLogger, "_wait_for_invitation_creation", _noop)
 
 @pytest.fixture
 def base_email_logger():

@@ -204,6 +204,13 @@ class OpikLogger(CustomBatchLogger):
         # Update litellm_opik_metadata with opik metadata from requester
         standard_logging_metadata = standard_logging_object.get("metadata", {}) or {}
         requester_metadata = standard_logging_metadata.get("requester_metadata", {}) or {}
+
+        # If requester_metadata is empty, try to get it from user_api_key_auth_metadata saved in api key
+        if not requester_metadata:
+            requester_metadata = standard_logging_metadata.get(
+                "user_api_key_auth_metadata", {}
+            ) or {}
+
         requester_opik_metadata = requester_metadata.get("opik", {}) or {}
         litellm_opik_metadata.update(requester_opik_metadata)
 

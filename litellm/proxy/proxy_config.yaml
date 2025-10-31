@@ -9,12 +9,26 @@ model_list:
       model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
       aws_region_name: us-west-2
       custom_llm_provider: bedrock
+    
 
-
-guardrails:
-  - guardrail_name: "bedrock-pre-guard"
+# like MCPs/vector stores
+search_tools:
+  - search_tool_name: litellm-search
     litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
-      mode: "pre_call"
-      guardrailIdentifier: ff6ujrregl1q
-      guardrailVersion: "DRAFT"
+      search_provider: perplexity
+      api_key: os.environ/PERPLEXITYAI_API_KEY
+  - search_tool_name: exa-search
+    litellm_params:
+      search_provider: exa_ai
+      api_key: os.environ/EXA_API_KEY
+  
+
+
+# for /files endpoints
+files_settings:
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+
+
+litellm_settings:
+  callbacks: ["datadog"]

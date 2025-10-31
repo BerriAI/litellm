@@ -34,7 +34,22 @@ from litellm.proxy.health_check import (
 #### Health ENDPOINTS ####
 
 router = APIRouter()
-services = Union[Literal["slack_budget_alerts", "langfuse", "slack", "openmeter", "webhook", "email", "braintrust", "datadog", "generic_api", "arize"], str]
+services = Union[
+    Literal[
+        "slack_budget_alerts",
+        "langfuse",
+        "slack",
+        "openmeter",
+        "webhook",
+        "email",
+        "braintrust",
+        "datadog",
+        "generic_api",
+        "arize",
+    ],
+    str,
+]
+
 
 @router.get(
     "/test",
@@ -617,41 +632,42 @@ async def shared_health_check_status_endpoint(
 ):
     """
     Get the status of shared health check coordination across pods.
-    
+
     Returns information about Redis connectivity, lock status, and cache status.
     """
-    from litellm.proxy.proxy_server import use_shared_health_check, redis_usage_cache
-    
+    from litellm.proxy.proxy_server import redis_usage_cache, use_shared_health_check
+
     if not use_shared_health_check:
         return {
             "shared_health_check_enabled": False,
-            "message": "Shared health check is not enabled"
+            "message": "Shared health check is not enabled",
         }
-    
+
     if redis_usage_cache is None:
         return {
             "shared_health_check_enabled": True,
             "redis_available": False,
-            "message": "Redis is not configured"
+            "message": "Redis is not configured",
         }
-    
+
     try:
-        from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
-        
+        from litellm.proxy.health_check_utils.shared_health_check_manager import (
+            SharedHealthCheckManager,
+        )
+
         shared_health_manager = SharedHealthCheckManager(
             redis_cache=redis_usage_cache,
         )
-        
+
         health_status = await shared_health_manager.get_health_check_status()
-        return {
-            "shared_health_check_enabled": True,
-            "status": health_status
-        }
+        return {"shared_health_check_enabled": True, "status": health_status}
     except Exception as e:
         verbose_proxy_logger.error(f"Error getting shared health check status: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to retrieve shared health check status: {str(e)}"},
+            status_code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": f"Failed to retrieve shared health check status: {str(e)}"
+            },
         )
 
 
@@ -815,6 +831,28 @@ async def health_readiness():
                     index_info = "index does not exist - error: " + str(e)
                 cache_type = {"type": cache_type, "index_info": index_info}
 
+        # build license metadata
+        try:
+            from litellm.proxy.proxy_server import _license_check  # type: ignore
+
+            license_available: bool = _license_check.is_premium() if _license_check else False
+            license_expiration: Optional[str] = None
+
+            if getattr(_license_check, "airgapped_license_data", None):
+                license_expiration = _license_check.airgapped_license_data.get(  # type: ignore[arg-type]
+                    "expiration_date"
+                )
+
+            license_metadata = {
+                "license": {
+                    "has_license": license_available,
+                    "expiration_date": license_expiration,
+                }
+            }
+        except Exception:
+            # fail closed: don't let license check break readiness
+            license_metadata = {"license": {"has_license": False, "expiration_date": None}}
+
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
             db_health_status = await _db_health_readiness_check()
@@ -825,6 +863,7 @@ async def health_readiness():
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                **license_metadata,
                 **db_health_status,
             }
         else:
@@ -835,6 +874,7 @@ async def health_readiness():
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                **license_metadata,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
@@ -910,6 +950,8 @@ async def test_model_connection(
             "batch",
             "rerank",
             "realtime",
+            "responses",
+            "ocr",
         ]
     ] = fastapi.Body("chat", description="The mode to test the model with"),
     litellm_params: Dict = fastapi.Body(

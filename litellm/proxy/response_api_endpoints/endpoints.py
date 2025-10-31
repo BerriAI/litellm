@@ -17,6 +17,11 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
 )
+@router.post(
+    "/openai/v1/responses",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
 async def responses_api(
     request: Request,
     fastapi_response: Response,
@@ -87,6 +92,11 @@ async def responses_api(
 )
 @router.get(
     "/responses/{response_id}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+@router.get(
+    "/openai/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
 )
@@ -162,6 +172,11 @@ async def get_response(
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
 )
+@router.delete(
+    "/openai/v1/responses/{response_id}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
 async def delete_response(
     response_id: str,
     request: Request,
@@ -234,6 +249,11 @@ async def delete_response(
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
 )
+@router.get(
+    "/openai/v1/responses/{response_id}/input_items",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
 async def get_response_input_items(
     response_id: str,
     request: Request,
@@ -294,6 +314,11 @@ async def get_response_input_items(
 )
 @router.post(
     "/responses/{response_id}/cancel",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+@router.post(
+    "/openai/v1/responses/{response_id}/cancel",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
 )

@@ -602,15 +602,15 @@ print(response)
 
 Use this if you want to control which LiteLLM-specific fields are logged as tags by the LiteLLM proxy. By default LiteLLM Proxy logs no LiteLLM-specific fields
 
-| LiteLLM specific field    | Description                                                                             | Example Value                                  |
-|---------------------------|-----------------------------------------------------------------------------------------|------------------------------------------------|
-| `cache_hit`               | Indicates whether a cache hit occurred (True) or not (False)                            | `true`, `false`                                |
-| `cache_key`               | The Cache key used for this request                                                     | `d2b758c****`                                  |
-| `proxy_base_url`          | The base URL for the proxy server, the value of env var `PROXY_BASE_URL` on your server | `https://proxy.example.com`                    |
-| `user_api_key_alias`      | An alias for the LiteLLM Virtual Key.                                                   | `prod-app1`                                    |
-| `user_api_key_user_id`    | The unique ID associated with a user's API key.                                         | `user_123`, `user_456`                         |
-| `user_api_key_user_email` | The email associated with a user's API key.                                             | `user@example.com`, `admin@example.com`        |
-| `user_api_key_team_alias` | An alias for a team associated with an API key.                                         | `team_alpha`, `dev_team`                       |
+| LiteLLM specific field    | Description                                                                             | Example Value                           |
+| ------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------- |
+| `cache_hit`               | Indicates whether a cache hit occurred (True) or not (False)                            | `true`, `false`                         |
+| `cache_key`               | The Cache key used for this request                                                     | `d2b758c****`                           |
+| `proxy_base_url`          | The base URL for the proxy server, the value of env var `PROXY_BASE_URL` on your server | `https://proxy.example.com`             |
+| `user_api_key_alias`      | An alias for the LiteLLM Virtual Key.                                                   | `prod-app1`                             |
+| `user_api_key_user_id`    | The unique ID associated with a user's API key.                                         | `user_123`, `user_456`                  |
+| `user_api_key_user_email` | The email associated with a user's API key.                                             | `user@example.com`, `admin@example.com` |
+| `user_api_key_team_alias` | An alias for a team associated with an API key.                                         | `team_alpha`, `dev_team`                |
 
 
 **Usage**
@@ -1111,10 +1111,10 @@ Log LLM Logs to [Google Cloud Storage Buckets](https://cloud.google.com/storage?
 :::
 
 
-| Property | Details |
-|----------|---------|
-| Description | Log LLM Input/Output to cloud storage buckets |
-| Load Test Benchmarks | [Benchmarks](https://docs.litellm.ai/docs/benchmarks) |
+| Property                     | Details                                                        |
+| ---------------------------- | -------------------------------------------------------------- |
+| Description                  | Log LLM Input/Output to cloud storage buckets                  |
+| Load Test Benchmarks         | [Benchmarks](https://docs.litellm.ai/docs/benchmarks)          |
 | Google Docs on Cloud Storage | [Google Cloud Storage](https://cloud.google.com/storage?hl=en) |
 
 
@@ -1196,8 +1196,8 @@ Log LLM Logs/SpendLogs to [Google Cloud Storage PubSub Topic](https://cloud.goog
 :::
 
 
-| Property | Details |
-|----------|---------|
+| Property    | Details                                                            |
+| ----------- | ------------------------------------------------------------------ |
 | Description | Log LiteLLM `SpendLogs Table` to Google Cloud Storage PubSub Topic |
 
 When to use `gcs_pubsub`?
@@ -1388,10 +1388,10 @@ On s3 bucket, you will see the object key as `my-test-path/my-team-alias/...`
 ## AWS SQS
 
 
-| Property | Details |
-|----------|---------|
-| Description | Log LLM Input/Output to AWS SQS Queue |
-| AWS Docs on SQS | [AWS SQS](https://aws.amazon.com/sqs/) |
+| Property             | Details                                                                               |
+| -------------------- | ------------------------------------------------------------------------------------- |
+| Description          | Log LLM Input/Output to AWS SQS Queue                                                 |
+| AWS Docs on SQS      | [AWS SQS](https://aws.amazon.com/sqs/)                                                |
 | Fields Logged to SQS | LiteLLM [Standard Logging Payload is logged for each LLM call](../proxy/logging_spec) |
 
 
@@ -1415,18 +1415,26 @@ AWS_REGION_NAME = ""
 
 ```yaml
 model_list:
- - model_name: gpt-4o
+  - model_name: gpt-4o
     litellm_params:
       model: gpt-4o
+
 litellm_settings:
   callbacks: ["aws_sqs"]
+
   aws_sqs_callback_params:
-    sqs_queue_url: https://sqs.us-west-2.amazonaws.com/123456789012/my-queue   # AWS SQS Queue URL
-    sqs_region_name: us-west-2              # AWS Region Name for SQS
-    sqs_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # use os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for SQS
-    sqs_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for SQS
-    sqs_batch_size: 10  # [OPTIONAL] Number of messages to batch before sending (default: 10)
-    sqs_flush_interval: 30  # [OPTIONAL] Time in seconds to wait before flushing batch (default: 30)
+    # --- 🧱 Required Parameters ---
+    sqs_queue_url: https://sqs.us-west-2.amazonaws.com/123456789012/my-queue
+    # The AWS SQS Queue URL to which LiteLLM will send log events.
+
+    sqs_region_name: us-west-2
+    # AWS Region for your SQS queue (e.g., us-east-1, eu-central-1, etc.)
+    
+    # --- Logging Controls ---
+    sqs_strip_base64_files: true
+    # If true, LiteLLM will remove or redact base64-encoded binary data (e.g., PDFs, images, audio)
+    # from logged messages to avoid large payloads. SQS has a 1 MB payload size limit.
+
 ```
 
 **Step 3**: Start the proxy, make a test request
@@ -1465,9 +1473,9 @@ Log LLM Logs to [Azure Data Lake Storage](https://learn.microsoft.com/en-us/azur
 :::
 
 
-| Property | Details |
-|----------|---------|
-| Description | Log LLM Input/Output to Azure Blob Storage (Bucket) |
+| Property                        | Details                                                                                                         |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Description                     | Log LLM Input/Output to Azure Blob Storage (Bucket)                                                             |
 | Azure Docs on Data Lake Storage | [Azure Data Lake Storage](https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction) |
 
 
@@ -1966,9 +1974,9 @@ This is an Enterprise only feature [Get Started with Enterprise here](https://gi
 
 :::
 
-| Property | Details |
-|----------|---------|
-| Description | Log LLM Input/Output to a custom API endpoint |
+| Property       | Details                                                                                                                                                    |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Description    | Log LLM Input/Output to a custom API endpoint                                                                                                              |
 | Logged Payload | `List[StandardLoggingPayload]` LiteLLM logs a list of [`StandardLoggingPayload` objects](https://docs.litellm.ai/docs/proxy/logging_spec) to your endpoint |
 
 
@@ -1995,10 +2003,10 @@ litellm_settings:
 
 2. Set Environment Variables for the custom API endpoint
 
-| Environment Variable | Details | Required |
-|----------|---------|----------|
-| `GENERIC_LOGGER_ENDPOINT` | The endpoint + route we should send callback logs to | Yes |
-| `GENERIC_LOGGER_HEADERS` | Optional: Set headers to be sent to the custom API endpoint | No, this is optional |
+| Environment Variable      | Details                                                     | Required             |
+| ------------------------- | ----------------------------------------------------------- | -------------------- |
+| `GENERIC_LOGGER_ENDPOINT` | The endpoint + route we should send callback logs to        | Yes                  |
+| `GENERIC_LOGGER_HEADERS`  | Optional: Set headers to be sent to the custom API endpoint | No, this is optional |
 
 ```shell showLineNumbers title=".env"
 GENERIC_LOGGER_ENDPOINT="https://webhook-test.com/30343bc33591bc5e6dc44217ceae3e0a"
@@ -2428,6 +2436,7 @@ export SENTRY_DSN="your-sentry-dsn"
 # Optional: Configure Sentry sampling rates
 export SENTRY_API_SAMPLE_RATE="1.0"  # Controls what percentage of errors are sent (default: 1.0 = 100%)
 export SENTRY_API_TRACE_RATE="1.0"   # Controls what percentage of transactions are sampled for performance monitoring (default: 1.0 = 100%)
+export SENTRY_ENVIRONMENT="development" # Controls the Sentry Environment (default: production)
 ```
 
 ```yaml 
