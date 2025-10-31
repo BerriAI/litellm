@@ -160,7 +160,6 @@ async def video_list(
     )
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
-    print(f"🔥🔥🔥data: {data}")
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
