@@ -9,10 +9,10 @@ import {
   getCallbacksCall,
   setCallbacksCall,
   getRouterSettingsCall,
-} from "./networking";
-import NotificationsManager from "./molecules/notifications_manager";
-import RoutingStrategySelector from "./router_settings/RoutingStrategySelector";
-import TagFilteringToggle from "./router_settings/TagFilteringToggle";
+} from "../networking";
+import NotificationsManager from "../molecules/notifications_manager";
+import RoutingStrategySelector from "./RoutingStrategySelector";
+import TagFilteringToggle from "./TagFilteringToggle";
 
 interface RouterSettingsProps {
   accessToken: string | null;
