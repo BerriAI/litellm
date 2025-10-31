@@ -279,7 +279,7 @@ jobs:
         with:
           github_token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 8 --timeout 1800 --allowed-tools Read,Write,Edit,Bash,Grep,Glob ${{ github.event.inputs.debug == 'true' && '--debug' || '' }}"
+          claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 10 --allowed-tools Read,Write,Edit,Bash,Grep,Glob ${{ github.event.inputs.debug == 'true' && '--debug' || '' }}"
           prompt: |
             # Upstream Sync Conflict Resolution Task
 
