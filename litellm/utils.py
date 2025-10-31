@@ -2559,7 +2559,7 @@ def _map_openai_size_to_vertex_ai_aspect_ratio(size: Optional[str]) -> str:
     )  # Default to square if size not recognized
 
 
-def get_optional_params_image_gen(
+def get_optional_params_image_gen(  # noqa: PLR0915
     model: Optional[str] = None,
     n: Optional[int] = None,
     quality: Optional[str] = None,
@@ -2612,14 +2612,17 @@ def get_optional_params_image_gen(
     )
     optional_params: Dict[str, Any] = {}
 
+    invalid_params = []
     ## raise exception if non-default value passed for non-openai/azure embedding calls
     def _check_valid_arg(supported_params):
+        nonlocal invalid_params
         if len(non_default_params.keys()) > 0:
             keys = list(non_default_params.keys())
             for k in keys:
                 if (
                     litellm.drop_params is True or drop_params is True
                 ) and k not in supported_params:  # drop the unsupported non-default values
+                    invalid_params.append(k)
                     non_default_params.pop(k, None)
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
@@ -2688,7 +2691,7 @@ def get_optional_params_image_gen(
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider or "",
         openai_params=openai_params,
-        additional_drop_params=additional_drop_params,
+        additional_drop_params=(additional_drop_params or []) + invalid_params,
     )
     # remove keys with None or empty dict/list values to avoid sending empty payloads
     optional_params = {
