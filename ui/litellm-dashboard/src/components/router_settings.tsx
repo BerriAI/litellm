@@ -4,8 +4,6 @@ import {
   Text,
   Button,
   TextInput,
-  Select as Select2,
-  SelectItem,
 } from "@tremor/react";
 import {
   getCallbacksCall,
@@ -13,6 +11,8 @@ import {
   getRouterSettingsCall,
 } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
+import RoutingStrategySelector from "./router_settings/RoutingStrategySelector";
+import TagFilteringToggle from "./router_settings/TagFilteringToggle";
 
 interface RouterSettingsProps {
   accessToken: string | null;
@@ -36,6 +36,8 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(null);
   const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
   const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
+  const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
+  const [enableTagFiltering, setEnableTagFiltering] = useState<boolean>(false);
 
   // Param explanations for routing strategy args (these are dynamic based on strategy)
   let paramExplanation: { [key: string]: string } = {
@@ -60,30 +62,44 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
         setSelectedStrategy(router_settings.routing_strategy);
       }
     });
-    getRouterSettingsCall(accessToken).then((data) => {
-      console.log("router settings from API", data);
-      if (data.fields) {
-        // Build metadata map for easy lookup
-        const fieldsMap: { [key: string]: any } = {};
-        data.fields.forEach((field: any) => {
-          fieldsMap[field.field_name] = {
-            ui_field_name: field.ui_field_name,
-            field_description: field.field_description,
-            options: field.options,
-          };
-        });
-        setRouterFieldsMetadata(fieldsMap);
-        
-        // Extract routing strategies from the routing_strategy field's options
-        const routingStrategyField = data.fields.find(
-          (field: any) => field.field_name === "routing_strategy"
-        );
-        if (routingStrategyField?.options) {
-          setAvailableRoutingStrategies(routingStrategyField.options);
+      getRouterSettingsCall(accessToken).then((data) => {
+        console.log("router settings from API", data);
+        if (data.fields) {
+          // Build metadata map for easy lookup
+          const fieldsMap: { [key: string]: any } = {};
+          data.fields.forEach((field: any) => {
+            fieldsMap[field.field_name] = {
+              ui_field_name: field.ui_field_name,
+              field_description: field.field_description,
+              options: field.options,
+              link: field.link,
+            };
+          });
+          setRouterFieldsMetadata(fieldsMap);
+          
+          // Extract routing strategies from the routing_strategy field's options
+          const routingStrategyField = data.fields.find(
+            (field: any) => field.field_name === "routing_strategy"
+          );
+          if (routingStrategyField?.options) {
+            setAvailableRoutingStrategies(routingStrategyField.options);
+          }
+
+          // Store routing strategy descriptions
+          if (data.routing_strategy_descriptions) {
+            setRoutingStrategyDescriptions(data.routing_strategy_descriptions);
+          }
+
+          // Set enable_tag_filtering value
+          const tagFilteringField = data.fields.find(
+            (field: any) => field.field_name === "enable_tag_filtering"
+          );
+          if (tagFilteringField?.field_value !== null && tagFilteringField?.field_value !== undefined) {
+            setEnableTagFiltering(tagFilteringField.field_value);
+          }
         }
-      }
-    });
-  }, [accessToken, userRole, userID]);
+      });
+    }, [accessToken, userRole, userID]);
 
   const handleSaveChanges = (router_settings: any) => {
     if (!accessToken) {
@@ -122,16 +138,24 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
       return v;
     };
 
-    const updatedVariables = Object.fromEntries(
-      Object.entries(router_settings)
-        .map(([key, value]) => {
-          if (key !== "routing_strategy_args" && key !== "routing_strategy") {
-            const inputEl = document.querySelector(`input[name="${key}"]`) as HTMLInputElement | null;
-            const parsed = parseInputValue(key, inputEl?.value, value);
-            return [key, parsed];
-          } else if (key === "routing_strategy") {
-            return [key, selectedStrategy];
-          } else if (key === "routing_strategy_args" && selectedStrategy === "latency-based-routing") {
+      // Add enable_tag_filtering to router_settings before processing
+      const settingsToUpdate = {
+        ...router_settings,
+        enable_tag_filtering: enableTagFiltering,
+      };
+
+      const updatedVariables = Object.fromEntries(
+        Object.entries(settingsToUpdate)
+          .map(([key, value]) => {
+            if (key !== "routing_strategy_args" && key !== "routing_strategy" && key !== "enable_tag_filtering") {
+              const inputEl = document.querySelector(`input[name="${key}"]`) as HTMLInputElement | null;
+              const parsed = parseInputValue(key, inputEl?.value, value);
+              return [key, parsed];
+            } else if (key === "routing_strategy") {
+              return [key, selectedStrategy];
+            } else if (key === "enable_tag_filtering") {
+              return [key, enableTagFiltering];
+            } else if (key === "routing_strategy_args" && selectedStrategy === "latency-based-routing") {
             let setRoutingStrategyArgs: routingStrategyArgs = {};
 
             const lowestLatencyBufferElement = document.querySelector(
@@ -173,37 +197,38 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     return null;
   }
 
-  return (
-    <div className="w-full space-y-8 py-2">
-      {/* Routing Strategy - Hero Section */}
-      {routerSettings.routing_strategy && (
-        <div className="space-y-3 max-w-3xl">
-          <div>
-            <h3 className="text-sm font-medium text-gray-900">
-              {routerFieldsMetadata["routing_strategy"]?.ui_field_name || "Routing Strategy"}
-            </h3>
-            <p className="text-xs text-gray-500 mt-1">
-              {routerFieldsMetadata["routing_strategy"]?.field_description || ""}
-            </p>
+    return (
+      <div className="w-full space-y-8 py-2">
+        {/* Routing Settings Section */}
+        <div className="space-y-6">
+          <div className="max-w-3xl">
+            <h3 className="text-sm font-medium text-gray-900">Routing Settings</h3>
+            <p className="text-xs text-gray-500 mt-1">Configure how requests are routed to deployments</p>
           </div>
-          <Select2
-            value={selectedStrategy || routerSettings.routing_strategy}
-            onValueChange={setSelectedStrategy}
-            className="w-full max-w-md"
-          >
-            {availableRoutingStrategies.map((strategy) => (
-              <SelectItem key={strategy} value={strategy}>
-                <span className="font-mono text-sm">{strategy}</span>
-              </SelectItem>
-            ))}
-          </Select2>
+          
+          {/* Routing Strategy */}
+          {routerSettings.routing_strategy && (
+            <RoutingStrategySelector
+              selectedStrategy={selectedStrategy || routerSettings.routing_strategy}
+              availableStrategies={availableRoutingStrategies}
+              routingStrategyDescriptions={routingStrategyDescriptions}
+              routerFieldsMetadata={routerFieldsMetadata}
+              onStrategyChange={setSelectedStrategy}
+            />
+          )}
+
+          {/* Tag Filtering */}
+          <TagFilteringToggle
+            enabled={enableTagFiltering}
+            routerFieldsMetadata={routerFieldsMetadata}
+            onToggle={setEnableTagFiltering}
+          />
         </div>
-      )}
 
-      {/* Divider */}
-      <div className="border-t border-gray-200" />
+        {/* Divider */}
+        <div className="border-t border-gray-200" />
 
-      {/* Strategy-Specific Args - Show immediately after strategy if latency-based */}
+        {/* Strategy-Specific Args - Show immediately after strategy if latency-based */}
       {selectedStrategy === "latency-based-routing" && (
         <>
           <div className="space-y-6">
@@ -253,7 +278,8 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
                 param != "fallbacks" &&
                 param != "context_window_fallbacks" &&
                 param != "routing_strategy_args" &&
-                param != "routing_strategy",
+                param != "routing_strategy" &&
+                param != "enable_tag_filtering",
             )
             .map(([param, value]) => (
               <div key={param} className="space-y-2">
