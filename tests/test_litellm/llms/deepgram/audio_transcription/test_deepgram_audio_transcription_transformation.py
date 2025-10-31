@@ -58,13 +58,13 @@ def test_audio_file_handling(fixture_name, request):
         optional_params={},
         litellm_params={},
     )
-    
+
     # Check that result is AudioTranscriptionRequestData
     assert isinstance(result, AudioTranscriptionRequestData)
-    
+
     # Check that data matches expected output
     assert result.data == expected_output
-    
+
     # Check that files is None for Deepgram (binary data)
     assert result.files is None
 
@@ -201,4 +201,40 @@ def test_get_complete_url_with_string_values():
     assert "tier=enhanced" in url
     assert "version=latest" in url
     assert "punctuate=true" in url
+    assert url.startswith("https://api.deepgram.com/v1/listen?")
+
+
+def test_get_complete_url_with_detect_language():
+    """Test URL generation with detect_language parameter"""
+    handler = DeepgramAudioTranscriptionConfig()
+    url = handler.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="nova-2",
+        optional_params={"detect_language": True},
+        litellm_params={},
+    )
+    expected_url = "https://api.deepgram.com/v1/listen?model=nova-2&detect_language=true"
+    assert url == expected_url
+
+
+def test_get_complete_url_with_detect_language_and_other_params():
+    """Test URL generation with detect_language and other parameters"""
+    handler = DeepgramAudioTranscriptionConfig()
+    url = handler.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="nova-2",
+        optional_params={
+            "detect_language": True,
+            "punctuate": True,
+            "diarize": False,
+        },
+        litellm_params={},
+    )
+    # URL should contain all parameters
+    assert "model=nova-2" in url
+    assert "detect_language=true" in url
+    assert "punctuate=true" in url
+    assert "diarize=false" in url
     assert url.startswith("https://api.deepgram.com/v1/listen?")
