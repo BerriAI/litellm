@@ -7,7 +7,6 @@ This is currently in development and not yet ready for production.
 import binascii
 import os
 from datetime import datetime
-from math import floor
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -1137,9 +1136,23 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             if response["overall_code"] == "OVER_LIMIT":
                 # Find which descriptor hit the limit
-                for i, status in enumerate(response["statuses"]):
+                for status in response["statuses"]:
                     if status["code"] == "OVER_LIMIT":
-                        descriptor = descriptors[floor(i / 2)]
+                        # Use descriptor_key from status instead of index mapping
+                        descriptor_key = status["descriptor_key"]
+
+                        # Find the corresponding descriptor by key
+                        matching_descriptor = None
+                        for desc in descriptors:
+                            if desc["key"] == descriptor_key:
+                                matching_descriptor = desc
+                                break
+
+                        if matching_descriptor is None:
+                            # Fallback if we can't find the descriptor
+                            descriptor_value = "unknown"
+                        else:
+                            descriptor_value = matching_descriptor["value"]
 
                         # Calculate reset time (window_start + window_size)
                         now = self._get_current_time().timestamp()
@@ -1156,7 +1169,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         current_limit = status["current_limit"]
 
                         detail = (
-                            f"Rate limit exceeded for {descriptor['key']}: {descriptor['value']}. "
+                            f"Rate limit exceeded for {descriptor_key}: {descriptor_value}. "
                             f"Limit type: {rate_limit_type}. "
                             f"Current limit: {current_limit}, Remaining: {remaining_display}. "
                             f"Limit resets at: {reset_time_formatted}"
@@ -1476,9 +1489,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         from litellm.types.caching import RedisPipelineIncrementOperation
 
         try:
-            litellm_parent_otel_span: Union[Span, None] = (
-                _get_parent_otel_span_from_kwargs(kwargs)
-            )
+            litellm_parent_otel_span: Union[
+                Span, None
+            ] = _get_parent_otel_span_from_kwargs(kwargs)
             litellm_metadata = kwargs["litellm_params"]["metadata"]
             user_api_key = (
                 litellm_metadata.get("user_api_key") if litellm_metadata else None

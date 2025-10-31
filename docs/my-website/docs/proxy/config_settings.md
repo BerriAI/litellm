@@ -361,6 +361,10 @@ router_settings:
 | AIOHTTP_TRUST_ENV | Flag to enable aiohttp trust environment. When this is set to True, aiohttp will respect HTTP(S)_PROXY env vars. **Default is False**
 | AIOHTTP_TTL_DNS_CACHE | DNS cache time-to-live for aiohttp in seconds. **Default is 300**
 | ALLOWED_EMAIL_DOMAINS | List of email domains allowed for access
+| APSCHEDULER_COALESCE | Whether to combine multiple pending executions of a job into one. **Default is False**
+| APSCHEDULER_MAX_INSTANCES | Maximum number of concurrent instances of each job. **Default is 1**
+| APSCHEDULER_MISFIRE_GRACE_TIME | Grace time in seconds for misfired jobs. **Default is 1**
+| APSCHEDULER_REPLACE_EXISTING | Whether to replace existing jobs with the same ID. **Default is False**
 | ARIZE_API_KEY | API key for Arize platform integration
 | ARIZE_SPACE_KEY | Space key for Arize platform
 | ARGILLA_BATCH_SIZE | Batch size for Argilla logging
