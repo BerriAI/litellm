@@ -431,6 +431,7 @@ router_settings:
 | CLOUDZERO_TIMEZONE | Timezone for date handling (default: UTC)
 | CONFIG_FILE_PATH | File path for configuration file
 | CONFIDENT_API_KEY | API key for DeepEval integration
+| CUSTOM_PROMPT_PROMPT_ID_CHECK | Set to false if you don't want your custom prompt to skip checking for a prompt_id, see issue [#11366](https://github.com/BerriAI/litellm/issues/11366)
 | CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
 | CONFIDENT_API_KEY | API key for Confident AI (Deepeval) Logging service
 | COHERE_API_BASE | Base URL for Cohere API. Default is https://api.cohere.com

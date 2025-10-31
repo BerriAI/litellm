@@ -225,6 +225,7 @@ additional_details: Optional[Dict[str, str]] = {}
 local_cache: Optional[Dict[str, str]] = {}
 last_fetched_at = None
 last_fetched_at_keys = None
+CUSTOM_PROMPT_PROMPT_ID_CHECK = os.getenv("CUSTOM_PROMPT_PROMPT_ID_CHECK", "true").lower() == "true"
 
 
 ####
@@ -544,7 +545,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             return True
 
-        return False
+        return CUSTOM_PROMPT_PROMPT_ID_CHECK
 
     def _should_run_prompt_management_hooks_without_prompt_id(
         self,
