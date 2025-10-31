@@ -43,16 +43,16 @@ class ExceptionCheckers:
         """
         if not isinstance(error_str, str):
             return False
-        
+
         if "429" in error_str or "rate limit" in error_str.lower():
             return True
-        
+
         #######################################
         # Mistral API returns this error string
         #########################################
         if "service tier capacity exceeded" in error_str.lower():
             return True
-        
+
         return False
 
     @staticmethod
@@ -68,6 +68,7 @@ class ExceptionCheckers:
             "model's maximum context limit",
             "is longer than the model's context length",
             "input tokens exceed the configured limit",
+            "input length and `max_tokens` exceed context limit",
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:
