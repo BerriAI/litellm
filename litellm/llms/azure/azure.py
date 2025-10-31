@@ -1110,7 +1110,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     "base_model"
                 )
 
-            data = {"model": model, "prompt": prompt, **optional_params}
+            # Azure image generation API doesn't support extra_body parameter
+            extra_body = optional_params.pop("extra_body", {})
+            flattened_params = {**optional_params, **extra_body}
+            
+            data = {"model": model, "prompt": prompt, **flattened_params}
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):
                 raise AzureOpenAIError(
