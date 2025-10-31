@@ -740,9 +740,27 @@ class Logging(LiteLLMLoggingBaseClass):
     def _get_masked_api_base(self, api_base: str) -> str:
         if "key=" in api_base:
             # Find the position of "key=" in the string
-            key_index = api_base.find("key=") + 4
-            # Mask the last 5 characters after "key="
-            masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
+            key_start = api_base.find("key=") + 4
+            
+            # Find the end of the key value (either end of string or next query parameter)
+            key_end = len(api_base)
+            next_param = api_base.find("&", key_start)
+            if next_param != -1:
+                key_end = next_param
+            
+            # Extract the key value
+            key_value = api_base[key_start:key_end]
+            
+            # Only mask if key is longer than 8 characters to show some context
+            if len(key_value) > 8:
+                # Show first 2 and last 2 characters, mask the middle
+                masked_key = key_value[:2] + "*" * (len(key_value) - 4) + key_value[-2:]
+            else:
+                # For short keys, mask everything except first character
+                masked_key = key_value[:1] + "*" * (len(key_value) - 1) if len(key_value) > 1 else "*" * len(key_value)
+            
+            # Reconstruct the URL with masked key
+            masked_api_base = api_base[:key_start] + masked_key + api_base[key_end:]
         else:
             masked_api_base = api_base
         return str(masked_api_base)
