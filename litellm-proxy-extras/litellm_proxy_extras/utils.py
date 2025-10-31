@@ -10,12 +10,109 @@ from pathlib import Path
 from typing import Optional
 
 from litellm_proxy_extras._logging import logger
+from litellm.caching.redis_cache import RedisCache
 
 
 def str_to_bool(value: Optional[str]) -> bool:
     if value is None:
         return False
     return value.lower() in ("true", "1", "t", "y", "yes")
+
+class MigrationLockManager:
+    """Redis-based lock manager for database migrations"""
+
+    MIGRATION_LOCK_KEY = "migration_lock"
+    LOCK_TTL_SECONDS = 300  # 5 minutes TTL
+
+    def __init__(self, redis_cache: Optional[RedisCache] = None):
+        self.redis_cache = redis_cache
+        self.lock_acquired = False
+        self.pod_id = f"pod_{os.getpid()}_{int(time.time())}"
+
+    def _get_redis_lock_key(self) -> str:
+        """Get Redis lock key for migration"""
+        return f"migration_lock:{self.MIGRATION_LOCK_KEY}"
+
+    def acquire_lock(self) -> bool:
+        """Acquire migration lock"""
+        if self.redis_cache is None:
+            logger.warning("Redis cache is not available, running migration without lock protection")
+            self.lock_acquired = True
+            return True
+
+        try:
+            lock_key = self._get_redis_lock_key()
+
+            # Redis SET with NX (only if not exists) and EX (expiration)
+            acquired = self.redis_cache.set_cache(
+                key=lock_key,
+                value=self.pod_id,
+                nx=True,
+                ttl=self.LOCK_TTL_SECONDS
+            )
+
+            if acquired:
+                self.lock_acquired = True
+                logger.info(f"Migration lock acquired by pod {self.pod_id}")
+                return True
+            else:
+                logger.info("Migration lock is already held by another pod")
+                return False
+
+        except Exception as e:
+            logger.warning(f"Failed to acquire migration lock: {e}")
+            return False
+
+    def wait_for_lock_release(self, check_interval: int = 5, max_wait: int = 300) -> bool:
+        """Wait for another process to release the lock"""
+        if self.redis_cache is None:
+            logger.warning("Redis cache is not available, cannot wait for lock")
+            return False
+
+        logger.info(f"Waiting for migration lock to be released (max {max_wait}s)...")
+        start_time = time.time()
+
+        while time.time() - start_time < max_wait:
+            # Try to acquire lock using the public acquire_lock method
+            if self.acquire_lock():
+                logger.info(f"Migration lock acquired after waiting by pod {self.pod_id}")
+                return True
+
+            time.sleep(check_interval)
+
+        logger.warning(f"Failed to acquire migration lock within {max_wait} seconds")
+        return False
+
+    def release_lock(self):
+        """Release migration lock"""
+        if not self.lock_acquired or self.redis_cache is None:
+            return
+
+        try:
+            lock_key = self._get_redis_lock_key()
+
+            # Verify current pod owns the lock
+            current_value = self.redis_cache.get_cache(lock_key)
+            if current_value and str(current_value) == self.pod_id:
+                self.redis_cache.delete_cache(lock_key)
+                logger.info(f"Migration lock released by pod {self.pod_id}")
+            else:
+                logger.warning(f"Pod {self.pod_id} cannot release lock (not owner)")
+
+        except Exception as e:
+            logger.warning(f"Failed to release migration lock: {e}")
+        finally:
+            self.lock_acquired = False
+
+    def __enter__(self):
+        """Context manager entry - acquire lock when entering with statement"""
+        self.acquire_lock()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - release lock when exiting with statement"""
+        self.release_lock()
+
 
 
 class ProxyExtrasDBManager:
@@ -234,19 +331,46 @@ class ProxyExtrasDBManager:
                     )
 
     @staticmethod
-    def setup_database(use_migrate: bool = False) -> bool:
+    def setup_database(use_migrate: bool = False, redis_cache: Optional[RedisCache] = None) -> bool:
         """
         Set up the database using either prisma migrate or prisma db push
-        Uses migrations from litellm-proxy-extras package
+        Uses migrations from litellm-proxy-extras package.
+        In multi-instance environment, use redis lock to prevent concurrent execution.
 
         Args:
             schema_path (str): Path to the Prisma schema file
             use_migrate (bool): Whether to use prisma migrate instead of db push
+            redis_cache: Redis cache instance for distributed locking
 
         Returns:
             bool: True if setup was successful, False otherwise
         """
         schema_path = ProxyExtrasDBManager._get_prisma_dir() + "/schema.prisma"
+
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            logger.error("DATABASE_URL environment variable is not set")
+            return False
+
+        # Use MigrationLockManager to prevent concurrent migration execution
+        with MigrationLockManager(redis_cache) as lock_manager:
+            # Lock is already acquired in __enter__, check if it was successful
+            if not lock_manager.lock_acquired:
+                # Cannot acquire lock, another process is running migration
+                logger.info("Another pod is running migration, waiting for completion...")
+
+                # Wait for other process to complete migration
+                if not lock_manager.wait_for_lock_release():
+                    logger.error("Failed to acquire migration lock after waiting")
+                    return False
+
+            # Successfully acquired lock, proceed with migration
+            logger.info("Acquired migration lock, proceeding with migration")
+            return ProxyExtrasDBManager._execute_migration(use_migrate, schema_path)
+
+    @staticmethod
+    def _execute_migration(use_migrate: bool, schema_path: str) -> bool:
+        """Execute the actual migration"""
         for attempt in range(4):
             original_dir = os.getcwd()
             migrations_dir = ProxyExtrasDBManager._get_prisma_dir()
