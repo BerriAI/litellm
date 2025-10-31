@@ -147,6 +147,7 @@ def get_logging_payload(  # noqa: PLR0915
 ) -> SpendLogsPayload:
     from litellm.proxy.proxy_server import general_settings, master_key
 
+    original_response_obj = response_obj
     if kwargs is None:
         kwargs = {}
     if response_obj is None or (
@@ -307,6 +308,22 @@ def get_logging_payload(  # noqa: PLR0915
         )
 
     try:
+        _res = _get_response_for_spend_logs_payload(standard_logging_payload)
+        if (original_response_obj is not None 
+            and mcp_namespaced_tool_name is not None 
+            and standard_logging_payload is not None 
+            and not standard_logging_payload.get("response", {})
+            and isinstance(original_response_obj, list) 
+            and len(original_response_obj) > 0
+        ):
+            # for mcp tool response
+            _res = json.dumps({
+                "mcp_tool_response": [
+                    m.model_dump()
+                    if isinstance(m, BaseModel) else str(m)
+                    for m in original_response_obj
+                ]
+            })
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
             call_type=call_type or "",
@@ -337,7 +354,7 @@ def get_logging_payload(  # noqa: PLR0915
             messages=_get_messages_for_spend_logs_payload(
                 standard_logging_payload=standard_logging_payload, metadata=metadata
             ),
-            response=_get_response_for_spend_logs_payload(standard_logging_payload),
+            response=_res,
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
                 metadata=metadata, litellm_params=litellm_params
             ),
