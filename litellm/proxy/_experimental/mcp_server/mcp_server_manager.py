@@ -7,6 +7,7 @@ This is a Proxy
 """
 
 import asyncio
+import contextlib
 import datetime
 import hashlib
 import json
@@ -665,7 +666,7 @@ class MCPServerManager:
             verbose_logger.warning(
                 f"Failed to get tools from server {server.name}: {str(e)}"
             )
-            return []
+            raise
         finally:
             if client:
                 try:
@@ -689,43 +690,64 @@ class MCPServerManager:
 
         async def _list_tools_task():
             try:
-                await client.connect()
-
-                tools = await client.list_tools()
-                verbose_logger.debug(f"Tools from {server_name}: {tools}")
-                return tools
-            except asyncio.CancelledError:
-                verbose_logger.warning(f"Client operation cancelled for {server_name}")
-                return []
-            except Exception as e:
-                verbose_logger.warning(
-                    f"Client operation failed for {server_name}: {str(e)}"
-                )
-                return []
-            finally:
                 try:
-                    await client.disconnect()
-                except Exception:
-                    pass
+                    await client.connect()
+                except asyncio.CancelledError as e:
+                    verbose_logger.warning(
+                        f"Client operation cancelled for {server_name}: {str(e)}"
+                    )
+                    raise asyncio.CancelledError(
+                        f"Connection error while listing tools from {server_name}"
+                    )
+                except Exception as e:
+                    verbose_logger.warning(
+                        f"Client operation failed for {server_name}: {str(e)}"
+                    )
+                    raise Exception(
+                        "Connection error while listing tools from {server_name} : {str(e)}"
+                    )
+
+                try:
+                    tools = await client.list_tools()
+                    verbose_logger.debug(f"Tools from {server_name}: {tools}")
+                    return tools
+                except asyncio.CancelledError as e:
+                    verbose_logger.warning(
+                        f"Failed to list tools from {server_name}: {str(e)}"
+                    )
+                    raise asyncio.CancelledError(
+                        f"Failed to list tools from {server_name}: {str(e)}"
+                    )
+                except Exception as e:
+                    verbose_logger.warning(
+                        f"Failed to list tools from {server_name}: {str(e)}"
+                    )
+                    raise Exception("list_tools error: {asyncio.CancelledError}")
+            finally:
+                with contextlib.suppress(asyncio.CancelledError):
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
 
         try:
             return await asyncio.wait_for(_list_tools_task(), timeout=30.0)
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as e:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
-            return []
-        except asyncio.CancelledError:
+            raise Exception(f"{str(e)}")
+        except asyncio.CancelledError as e:
             verbose_logger.warning(
                 f"Task cancelled while listing tools from {server_name}"
             )
-            return []
+            raise Exception(f"{str(e)}")
         except ConnectionError as e:
             verbose_logger.warning(
                 f"Connection error while listing tools from {server_name}: {str(e)}"
             )
-            return []
+            raise
         except Exception as e:
             verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
-            return []
+            raise
 
     def _create_prefixed_tools(
         self, tools: List[MCPTool], server: MCPServer, add_prefix: bool = True
