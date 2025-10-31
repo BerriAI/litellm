@@ -627,6 +627,10 @@ class Router:
         if self.alerting_config is not None:
             self._initialize_alerting()
 
+        # --- Lifecycle additions (minimal) ---
+        # Track closed state for idempotent teardown
+        self._closed: bool = False
+
         self.initialize_assistants_endpoint()
         self.initialize_router_endpoints()
         self.apply_default_settings()
@@ -673,6 +677,49 @@ class Router:
                 litellm.logging_callback_manager.remove_callback_from_list_by_object(
                     litellm.callbacks, callback, require_self=False
                 )
+
+    # ------------------------------
+    # Public Lifecycle API
+    # ------------------------------
+    def close(self) -> None:
+        """
+        Deterministically tear down Router hooks/callbacks.
+
+        Minimal and idempotent: marks closed and unhooks callbacks so short‑lived
+        scripts/tests exit cleanly without lingering Router-managed globals.
+        """
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        # Unhook router-specific callbacks from global managers
+        try:
+            self.discard()
+        except Exception:
+            pass
+
+    async def aclose(self) -> None:
+        """
+        Async variant of close(). Provided for symmetry.
+        """
+        self.close()
+
+    # ------------------------------
+    # Context Manager Support
+    # ------------------------------
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            self.close()
+        finally:
+            return False  # propagate exceptions
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.aclose()
 
     @staticmethod
     def _create_redis_cache(
