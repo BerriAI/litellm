@@ -8,7 +8,10 @@ Provides functions for:
 """
 
 import gc
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 
 def force_gc() -> None:
@@ -67,7 +70,7 @@ def cleanup_litellm_state(litellm_module) -> None:
         try:
             litellm_module.in_memory_llm_clients_cache.flush_cache()
         except Exception as e:
-            print(f"[CLEANUP] Warning: Could not flush client cache: {e}", flush=True)
+            logger.warning(f"Could not flush client cache: {e}")
     
     # Step 2: Clear logging worker queue (prevents log accumulation)
     if hasattr(litellm_module, 'litellm_core_utils'):
@@ -75,7 +78,7 @@ def cleanup_litellm_state(litellm_module) -> None:
             from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
             asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
         except Exception as e:
-            print(f"[CLEANUP] Warning: Could not clear logging queue: {e}", flush=True)
+            logger.warning(f"Could not clear logging queue: {e}")
     
     # Step 3: Force garbage collection before reload
     # Ensures old objects are cleaned up before module reloads
@@ -90,7 +93,7 @@ def cleanup_litellm_state(litellm_module) -> None:
     try:
         importlib.reload(litellm_module)
     except Exception as e:
-        print(f"[CLEANUP] Error: Module reload failed: {e}", flush=True)
+        logger.error(f"Module reload failed: {e}")
         raise  # Fail loudly if reload fails - this is critical for test isolation
     
     # Step 5: Force garbage collection after reload

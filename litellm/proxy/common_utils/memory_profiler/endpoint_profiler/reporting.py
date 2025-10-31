@@ -34,41 +34,41 @@ def print_analysis_report(analysis: Dict[str, Any], endpoint_name: str) -> None:
         >>> analysis = analyze_endpoint_memory(profiles)
         >>> print_analysis_report(analysis, "chat_completions")
     """
-    print("\n" + "="*SEPARATOR_WIDTH)
-    print(f"ENDPOINT MEMORY ANALYSIS: {endpoint_name}")
-    print("="*SEPARATOR_WIDTH)
+    print("\n" + "="*SEPARATOR_WIDTH)  # noqa: T201
+    print(f"ENDPOINT MEMORY ANALYSIS: {endpoint_name}")  # noqa: T201
+    print("="*SEPARATOR_WIDTH)  # noqa: T201
     
     if 'error' in analysis:
-        print(f"Error: {analysis['error']}\n")
+        print(f"Error: {analysis['error']}\n")  # noqa: T201
         return
     
-    print(f"Total Requests Analyzed: {analysis['total_requests']}")
+    print(f"Total Requests Analyzed: {analysis['total_requests']}")  # noqa: T201
     
     # Print growth metrics
     if 'growth_metrics' in analysis:
         metrics = analysis['growth_metrics']
-        print(f"\nMemory Growth:")
-        print(f"  Initial Average: {metrics['initial_avg']:.3f} MB")
-        print(f"  Final Average:   {metrics['final_avg']:.3f} MB")
-        print(f"  Growth:          {metrics['growth']:.3f} MB ({metrics['growth_percent']:.1f}%)")
+        print("\nMemory Growth:")  # noqa: T201
+        print(f"  Initial Average: {metrics['initial_avg']:.3f} MB")  # noqa: T201
+        print(f"  Final Average:   {metrics['final_avg']:.3f} MB")  # noqa: T201
+        print(f"  Growth:          {metrics['growth']:.3f} MB ({metrics['growth_percent']:.1f}%)")  # noqa: T201
     
     # Print leak detection results
-    print(f"\n{'='*SEPARATOR_WIDTH}")
+    print(f"\n{'='*SEPARATOR_WIDTH}")  # noqa: T201
     if analysis.get('leak_detected', False):
-        print("MEMORY LEAK DETECTED")
-        print("="*SEPARATOR_WIDTH)
-        print(f"Message: {analysis.get('leak_message', 'Unknown')}")
-        print("\nRecommendations:")
-        print("  - Review memory-consuming code paths")
-        print("  - Check for unbounded caches or collections")
-        print("  - Verify proper cleanup of resources")
-        print("  - Run detailed analysis on this endpoint")
+        print("MEMORY LEAK DETECTED")  # noqa: T201
+        print("="*SEPARATOR_WIDTH)  # noqa: T201
+        print(f"Message: {analysis.get('leak_message', 'Unknown')}")  # noqa: T201
+        print("\nRecommendations:")  # noqa: T201
+        print("  - Review memory-consuming code paths")  # noqa: T201
+        print("  - Check for unbounded caches or collections")  # noqa: T201
+        print("  - Verify proper cleanup of resources")  # noqa: T201
+        print("  - Run detailed analysis on this endpoint")  # noqa: T201
     else:
-        print("NO MEMORY LEAK DETECTED")
-        print("="*SEPARATOR_WIDTH)
-        print(f"Message: {analysis.get('leak_message', 'Memory appears stable')}")
+        print("NO MEMORY LEAK DETECTED")  # noqa: T201
+        print("="*SEPARATOR_WIDTH)  # noqa: T201
+        print(f"Message: {analysis.get('leak_message', 'Memory appears stable')}")  # noqa: T201
     
-    print("="*SEPARATOR_WIDTH + "\n")
+    print("="*SEPARATOR_WIDTH + "\n")  # noqa: T201
 
 
 def print_loading_info(profile_file: str, profile_count: int) -> None:
@@ -82,8 +82,8 @@ def print_loading_info(profile_file: str, profile_count: int) -> None:
     Example:
         >>> print_loading_info("endpoint_profiles/chat.json", 100)
     """
-    print(f"\nLoading profile data from: {profile_file}")
-    print(f"Loaded {profile_count} profile entries\n")
+    print(f"\nLoading profile data from: {profile_file}")  # noqa: T201
+    print(f"Loaded {profile_count} profile entries\n")  # noqa: T201
 
 
 def print_error(error_message: str) -> None:
@@ -96,5 +96,5 @@ def print_error(error_message: str) -> None:
     Example:
         >>> print_error("File not found")
     """
-    print(f"Error: {error_message}\n")
+    print(f"Error: {error_message}\n")  # noqa: T201
 

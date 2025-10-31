@@ -8,7 +8,7 @@ Provides functions for:
 - Building test configuration dictionaries
 """
 
-from typing import Dict, Any, Callable, Optional
+from typing import Dict, Any, Callable
 
 from ..constants import (
     DEFAULT_SDK_MODEL,

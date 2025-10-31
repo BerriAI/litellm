@@ -139,15 +139,15 @@ def analyze_top_memory_consumers(profiles: List[Dict[str, Any]], top_n: int = DE
     memory_by_location = aggregate_memory_by_location(profiles)
     sorted_locations = get_top_memory_consumers(memory_by_location, top_n)
     
-    print("\n" + "="*SEPARATOR_WIDTH)
-    print(f"TOP {top_n} MEMORY-CONSUMING LOCATIONS (Aggregated)")
-    print("="*SEPARATOR_WIDTH)
-    print(f"{'Rank':<6} {'Total (MB)':<12} {'Max (MB)':<12} {'Avg (MB)':<12} {'Samples':<10} {'Location'}")
-    print("-"*SEPARATOR_WIDTH)
+    print("\n" + "="*SEPARATOR_WIDTH)  # noqa: T201
+    print(f"TOP {top_n} MEMORY-CONSUMING LOCATIONS (Aggregated)  # noqa: T201")
+    print("="*SEPARATOR_WIDTH)  # noqa: T201
+    print(f"{'Rank':<6} {'Total (MB)  # noqa: T201':<12} {'Max (MB)':<12} {'Avg (MB)':<12} {'Samples':<10} {'Location'}")
+    print("-"*SEPARATOR_WIDTH)  # noqa: T201
     
     for rank, (location, data) in enumerate(sorted_locations, 1):
         avg_mb = data['total_mb'] / data['count']
-        print(f"{rank:<6} {data['total_mb']:<12.3f} {data['max_mb']:<12.3f} {avg_mb:<12.3f} {data['count']:<10} {location}")
+        print(f"{rank:<6} {data['total_mb']:<12.3f} {data['max_mb']:<12.3f} {avg_mb:<12.3f} {data['count']:<10} {location}")  # noqa: T201
     
-    print("="*SEPARATOR_WIDTH + "\n")
+    print("="*SEPARATOR_WIDTH + "\n")  # noqa: T201
 

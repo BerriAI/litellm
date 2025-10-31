@@ -440,18 +440,18 @@ def print_profile_summary(endpoint: str, buffer: ProfileBuffer) -> None:
     stats = buffer.get_profile_stats(endpoint)
     
     if not stats:
-        print(f"\n[INFO] No profile data found for endpoint: {endpoint}")
+        print(f"\n[INFO] No profile data found for endpoint: {endpoint}")  # noqa: T201
         return
     
-    print(f"\n{'='*80}")
-    print(f"PROFILE SUMMARY: {endpoint}")
-    print(f"{'='*80}")
-    print(f"Total Requests: {stats['total_requests']}")
-    print(f"Average Latency: {stats['avg_latency']:.6f}s")
-    print(f"Max Latency: {stats['max_latency']:.6f}s")
-    print(f"Min Latency: {stats['min_latency']:.6f}s")
-    print(f"Average Memory: {stats['avg_memory']:.3f} MB")
-    print(f"Error Rate: {stats['error_rate']:.2f}%")
-    print(f"File Size: {stats.get('file_size_mb', 0):.3f} MB")
-    print(f"{'='*80}\n")
+    print(f"\n{'='*80}")  # noqa: T201
+    print(f"PROFILE SUMMARY: {endpoint}")  # noqa: T201
+    print(f"{'='*80}")  # noqa: T201
+    print(f"Total Requests: {stats['total_requests']}")  # noqa: T201
+    print(f"Average Latency: {stats['avg_latency']:.6f}s")  # noqa: T201
+    print(f"Max Latency: {stats['max_latency']:.6f}s")  # noqa: T201
+    print(f"Min Latency: {stats['min_latency']:.6f}s")  # noqa: T201
+    print(f"Average Memory: {stats['avg_memory']:.3f} MB")  # noqa: T201
+    print(f"Error Rate: {stats['error_rate']:.2f}%")  # noqa: T201
+    print(f"File Size: {stats.get('file_size_mb', 0)  # noqa: T201:.3f} MB")
+    print(f"{'='*80}\n")  # noqa: T201
 

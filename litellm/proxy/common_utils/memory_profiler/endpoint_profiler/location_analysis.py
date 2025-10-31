@@ -164,24 +164,24 @@ def analyze_memory_growth_by_location(profiles: List[Dict[str, Any]], top_n: int
     sorted_growth = get_top_growing_locations(growth_data, top_n)
     
     if not sorted_growth:
-        print("\n" + "="*SEPARATOR_WIDTH)
-        print("MEMORY GROWTH BY LOCATION")
-        print("="*SEPARATOR_WIDTH)
-        print("No locations with multiple samples found for analysis.")
-        print("="*SEPARATOR_WIDTH + "\n")
+        print("\n" + "="*SEPARATOR_WIDTH)  # noqa: T201
+        print("MEMORY GROWTH BY LOCATION")  # noqa: T201
+        print("="*SEPARATOR_WIDTH)  # noqa: T201
+        print("No locations with multiple samples found for analysis.")  # noqa: T201
+        print("="*SEPARATOR_WIDTH + "\n")  # noqa: T201
         return
     
-    print("\n" + "="*SEPARATOR_WIDTH)
-    print(f"TOP {top_n} LOCATIONS BY MEMORY GROWTH (First → Last)")
-    print("="*SEPARATOR_WIDTH)
-    print(f"{'Rank':<6} {'Growth (MB)':<14} {'Growth %':<12} {'Range (MB)':<20} {'Samples':<10} {'Location'}")
-    print("-"*SEPARATOR_WIDTH)
+    print("\n" + "="*SEPARATOR_WIDTH)  # noqa: T201
+    print(f"TOP {top_n} LOCATIONS BY MEMORY GROWTH (First → Last)  # noqa: T201")
+    print("="*SEPARATOR_WIDTH)  # noqa: T201
+    print(f"{'Rank':<6} {'Growth (MB)  # noqa: T201':<14} {'Growth %':<12} {'Range (MB)':<20} {'Samples':<10} {'Location'}")
+    print("-"*SEPARATOR_WIDTH)  # noqa: T201
     
     for rank, data in enumerate(sorted_growth, 1):
         range_str = f"{data['min_mb']:.2f} → {data['max_mb']:.2f}"
         location = data['location']
         
-        print(f"{rank:<6} {data['growth_mb']:<14.3f} {data['growth_percent']:<12.1f} {range_str:<20} {data['sample_count']:<10} {location}")
+        print(f"{rank:<6} {data['growth_mb']:<14.3f} {data['growth_percent']:<12.1f} {range_str:<20} {data['sample_count']:<10} {location}")  # noqa: T201
     
-    print("="*SEPARATOR_WIDTH + "\n")
+    print("="*SEPARATOR_WIDTH + "\n")  # noqa: T201
 

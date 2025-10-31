@@ -13,10 +13,6 @@ Imports common utilities from parent memory profiler module for consistency.
 import re
 from typing import Any, Dict, List
 
-# Import common utilities from parent memory_profiler module
-from ..utils.conversions import bytes_to_mb
-from ..core.cleanup import force_gc
-
 
 
 def sanitize_endpoint_name(endpoint: str) -> str:

@@ -60,10 +60,6 @@ Analysis:
 # profiler.py re-exports from profiler_core.py and decorator.py
 from .profiler import EndpointProfiler, profile_endpoint
 
-# Core profiler components (can be imported directly if needed)
-from .profiler_core import EndpointProfiler as _EndpointProfilerCore
-from .decorator import profile_endpoint as _profile_endpoint_decorator
-
 # Storage utilities
 from .storage import ProfileBuffer
 

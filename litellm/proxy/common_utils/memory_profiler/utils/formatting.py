@@ -24,9 +24,9 @@ def print_analysis_header(title: str = "Memory Growth Analysis") -> None:
         Custom Analysis
         ======================================================================
     """
-    print("\n" + "="*70)
-    print(f"{title}")
-    print("="*70)
+    print("\n" + "="*70)  # noqa: T201
+    print(f"{title}")  # noqa: T201
+    print("="*70)  # noqa: T201
 
 
 def print_test_header(title: str = "Memory Leak Detection Test") -> None:
@@ -43,9 +43,9 @@ def print_test_header(title: str = "Memory Leak Detection Test") -> None:
         My Test
         ======================================================================
     """
-    print("\n" + "="*70)
-    print(f"{title}")
-    print("="*70)
+    print("\n" + "="*70)  # noqa: T201
+    print(f"{title}")  # noqa: T201
+    print("="*70)  # noqa: T201
 
 
 def print_growth_metrics(growth_metrics: Dict[str, float]) -> None:
@@ -68,9 +68,9 @@ def print_growth_metrics(growth_metrics: Dict[str, float]) -> None:
         Final avg:   12.30 MB
         Growth:      1.80 MB (17.1%)
     """
-    print(f"Initial avg: {growth_metrics['initial_avg']:.2f} MB")
-    print(f"Final avg:   {growth_metrics['final_avg']:.2f} MB")
-    print(f"Growth:      {growth_metrics['growth']:.2f} MB "
+    print(f"Initial avg: {growth_metrics['initial_avg']:.2f} MB")  # noqa: T201
+    print(f"Final avg:   {growth_metrics['final_avg']:.2f} MB")  # noqa: T201
+    print(f"Growth:      {growth_metrics['growth']:.2f} MB "  # noqa: T201
           f"({growth_metrics['growth_percent']:.1f}%)")
 
 
@@ -89,6 +89,6 @@ def print_memory_samples(memory_samples: List[float], num_samples: int = 10) -> 
         ======================================================================
     """
     samples_str = [f'{m:.2f}MB' for m in memory_samples[-num_samples:]]
-    print(f"Samples (last {num_samples}): {samples_str}")
-    print("="*70)
+    print(f"Samples (last {num_samples}): {samples_str}")  # noqa: T201
+    print("="*70)  # noqa: T201
 

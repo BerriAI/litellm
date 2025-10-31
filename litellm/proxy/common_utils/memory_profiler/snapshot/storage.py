@@ -86,10 +86,10 @@ def save_buffered_snapshots_to_json(
             with open(output_file, 'r') as f:
                 existing_data = json.load(f)
                 if not isinstance(existing_data, list):
-                    print(f"[WARNING] Unexpected JSON format in {output_file}, creating new file")
+                    print(f"[WARNING] Unexpected JSON format in {output_file}, creating new file")  # noqa: T201
                     existing_data = []
         except (json.JSONDecodeError, IOError) as e:
-            print(f"[WARNING] Could not load existing JSON file {output_file}: {e}. Creating new file.")
+            print(f"[WARNING] Could not load existing JSON file {output_file}: {e}. Creating new file.")  # noqa: T201
             existing_data = []
     
     # Append buffered data
@@ -100,14 +100,14 @@ def save_buffered_snapshots_to_json(
         requests_to_remove = len(existing_data) - max_snapshots_per_test
         existing_data = existing_data[-max_snapshots_per_test:]
         print(f"[INFO] Rotated out {requests_to_remove} old request snapshots for test '{test_name}', "
-              f"keeping {max_snapshots_per_test} most recent requests")
+              f"keeping {max_snapshots_per_test} most recent requests")  # noqa: T201
     
     # Save to file using compact format (no indentation) to reduce file size
     try:
         with open(output_file, 'w') as f:
             json.dump(existing_data, f, separators=(',', ':'))
     except IOError as e:
-        print(f"[ERROR] Could not save to JSON file {output_file}: {e}")
+        print(f"[ERROR] Could not save to JSON file {output_file}: {e}")  # noqa: T201
 
 
 def get_snapshot_file_info(output_file: str) -> Optional[Dict[str, Any]]:
@@ -131,7 +131,7 @@ def get_snapshot_file_info(output_file: str) -> Optional[Dict[str, Any]]:
     Example:
         >>> info = get_snapshot_file_info("memory_snapshots/test_async.json")
         >>> if info:
-        ...     print(f"Total entries: {info['total_entries']}")
+        ...     print(f"Total entries: {info['total_entries']}")  # noqa: T201
     """
     if not os.path.exists(output_file):
         return None
@@ -174,7 +174,7 @@ def get_snapshot_file_info(output_file: str) -> Optional[Dict[str, Any]]:
             'date_range': date_range
         }
     except (json.JSONDecodeError, IOError) as e:
-        print(f"[ERROR] Could not read snapshot file: {e}")
+        print(f"[ERROR] Could not read snapshot file: {e}")  # noqa: T201
         return None
 
 
@@ -233,7 +233,7 @@ def print_final_snapshot_summary(
         if smart_capture:
             capture_info = f" ({file_info['detailed_entries']} detailed, {file_info['lightweight_entries']} lightweight)"
         
-        print(f"\n[INFO] Memory snapshots for test '{test_name}' saved to: {output_file}")
-        print(f"       Total requests captured: {file_info['total_entries']}{capture_info}")
-        print(f"       File size: {file_info['file_size_mb']} MB")
+        print(f"\n[INFO] Memory snapshots for test '{test_name}' saved to: {output_file}")  # noqa: T201
+        print(f"       Total requests captured: {file_info['total_entries']}{capture_info}")  # noqa: T201
+        print(f"       File size: {file_info['file_size_mb']} MB")  # noqa: T201
 

@@ -19,6 +19,108 @@ from ..constants import (
 )
 
 
+def _check_batch_stabilization(
+    memory_samples: List[float],
+    batch_idx: int,
+    curr_memory: float,
+    stabilization_tolerance_percent: float,
+    min_stable_batches: int
+) -> Tuple[bool, bool, float]:
+    """
+    Check if memory stabilized after a spike.
+    
+    Returns:
+        Tuple of (has_enough_batches, is_stable, max_variation)
+    """
+    batches_after_spike = len(memory_samples) - (batch_idx + 1)
+    
+    if batches_after_spike < min_stable_batches:
+        return False, False, 0
+    
+    subsequent_batches = memory_samples[batch_idx + 1:batch_idx + 1 + min_stable_batches]
+    is_stable = True
+    max_variation = 0
+    
+    for next_memory in subsequent_batches:
+        variation_percent = abs((next_memory - curr_memory) / curr_memory * 100)
+        max_variation = max(max_variation, variation_percent)
+        if variation_percent > stabilization_tolerance_percent:
+            is_stable = False
+    
+    return True, is_stable, max_variation
+
+
+def _build_stabilized_spikes_message(
+    error_spike_batches: List[int],
+    memory_samples: List[float],
+    error_counts: List[int],
+    min_stable_batches: int
+) -> str:
+    """Build message for stabilized error-induced spikes."""
+    spike_details = []
+    for batch_num in error_spike_batches:
+        batch_idx = batch_num - 1
+        prev_memory = memory_samples[batch_idx - 1]
+        curr_memory = memory_samples[batch_idx]
+        percent_increase = ((curr_memory - prev_memory) / prev_memory) * 100
+        errors = error_counts[batch_idx]
+        
+        batches_after = len(memory_samples) - (batch_idx + 1)
+        if batches_after >= min_stable_batches:
+            stable_batches = memory_samples[batch_idx + 1:batch_idx + 1 + min_stable_batches]
+            avg_after = sum(stable_batches) / len(stable_batches)
+            stabilization_info = f" → stabilized at {avg_after:.2f} MB"
+        else:
+            stabilization_info = " (insufficient batches after spike to confirm stabilization)"
+        
+        spike_details.append(
+            f"  • Batch {batch_num}: {prev_memory:.2f} MB → {curr_memory:.2f} MB "
+            f"(+{percent_increase:.1f}%) with {errors} error(s){stabilization_info}"
+        )
+    
+    return (
+        f"ERROR-INDUCED MEMORY LEAK DETECTED\n"
+        f"\n"
+        f"Memory spikes occurred in batch(es) with errors and did not fully recover:\n"
+        f"{chr(10).join(spike_details)}\n"
+        f"\n"
+        f"This indicates that error handling is not properly releasing resources.\n"
+        f"Check error paths for unreleased connections, buffers, or cached data."
+    )
+
+
+def _build_non_stabilized_spikes_message(
+    non_stabilized_spikes: List[Dict],
+    has_stabilized: bool
+) -> str:
+    """Build message for non-stabilized error spikes."""
+    non_stable_details = []
+    for spike in non_stabilized_spikes:
+        next_mems = ", ".join([f"{m:.2f}" for m in spike['next_batches'][:3]])
+        non_stable_details.append(
+            f"  • Batch {spike['batch']}: {spike['prev_memory']:.2f} MB → {spike['curr_memory']:.2f} MB "
+            f"(+{spike['percent_increase']:.1f}%) with {spike['errors']} error(s)\n"
+            f"    Next batches: {next_mems} MB (variation {spike['max_variation']:.1f}%, did NOT stabilize)"
+        )
+    
+    if has_stabilized:
+        return (
+            f"\n"
+            f"NOTE: Additional error spikes detected but memory did NOT stabilize:\n"
+            f"{chr(10).join(non_stable_details)}\n"
+            f"\n"
+            f"These spikes show continued growth after the error, suggesting a continuous\n"
+            f"memory leak pattern rather than error-induced stabilization."
+        )
+    else:
+        return (
+            f"Error spikes detected with continued growth:\n"
+            f"{chr(10).join(non_stable_details)}\n"
+            f"\n"
+            f"These error-related spikes did not stabilize, indicating a continuous leak."
+        )
+
+
 def detect_error_induced_memory_leak(
     memory_samples: List[float],
     error_counts: List[int],
@@ -67,41 +169,27 @@ def detect_error_induced_memory_leak(
         
         # Check if this batch has a significant spike AND errors
         if percent_increase >= error_spike_threshold_percent and curr_errors > 0:
-            # Now verify that memory stabilized after the spike
-            # Check batches after this spike to see if they stayed at similar level
-            batches_after_spike = len(memory_samples) - (i + 1)
+            has_enough, is_stable, max_variation = _check_batch_stabilization(
+                memory_samples, i, curr_memory, stabilization_tolerance_percent, min_stable_batches
+            )
             
-            if batches_after_spike >= min_stable_batches:
-                # Check if subsequent batches are stable (within tolerance of spike level)
-                subsequent_batches = memory_samples[i + 1:i + 1 + min_stable_batches]
-                
-                # Check if all subsequent batches are within tolerance of the spike level
-                is_stable = True
-                max_variation = 0
-                for next_memory in subsequent_batches:
-                    variation_percent = abs((next_memory - curr_memory) / curr_memory * 100)
-                    max_variation = max(max_variation, variation_percent)
-                    if variation_percent > stabilization_tolerance_percent:
-                        is_stable = False
-                
-                # Categorize based on stabilization
-                if is_stable:
-                    error_spike_batches.append(i + 1)  # Convert to 1-indexed for display
-                else:
-                    # Track spikes that didn't stabilize
-                    non_stabilized_spikes.append({
-                        'batch': i + 1,
-                        'prev_memory': prev_memory,
-                        'curr_memory': curr_memory,
-                        'percent_increase': percent_increase,
-                        'errors': curr_errors,
-                        'max_variation': max_variation,
-                        'next_batches': subsequent_batches
-                    })
-            else:
+            if not has_enough:
                 # Not enough batches after spike to verify stabilization
-                # Still flag it but note this in the message
                 error_spike_batches.append(i + 1)
+            elif is_stable:
+                error_spike_batches.append(i + 1)
+            else:
+                # Track spikes that didn't stabilize
+                subsequent_batches = memory_samples[i + 1:i + 1 + min_stable_batches]
+                non_stabilized_spikes.append({
+                    'batch': i + 1,
+                    'prev_memory': prev_memory,
+                    'curr_memory': curr_memory,
+                    'percent_increase': percent_increase,
+                    'errors': curr_errors,
+                    'max_variation': max_variation,
+                    'next_batches': subsequent_batches
+                })
     
     # Build message based on what we found
     message_parts = []
@@ -109,69 +197,14 @@ def detect_error_induced_memory_leak(
     found_non_stabilized = len(non_stabilized_spikes) > 0
     
     if found_stabilized:
-        # Build detailed message for stabilized spikes
-        spike_details = []
-        for batch_num in error_spike_batches:
-            batch_idx = batch_num - 1  # Convert back to 0-indexed
-            prev_memory = memory_samples[batch_idx - 1]
-            curr_memory = memory_samples[batch_idx]
-            percent_increase = ((curr_memory - prev_memory) / prev_memory) * 100
-            errors = error_counts[batch_idx]
-            
-            # Check stabilization info
-            batches_after = len(memory_samples) - (batch_idx + 1)
-            if batches_after >= min_stable_batches:
-                # Calculate average of stable batches
-                stable_batches = memory_samples[batch_idx + 1:batch_idx + 1 + min_stable_batches]
-                avg_after = sum(stable_batches) / len(stable_batches)
-                stabilization_info = f" → stabilized at {avg_after:.2f} MB"
-            else:
-                stabilization_info = f" (insufficient batches after spike to confirm stabilization)"
-            
-            spike_details.append(
-                f"  • Batch {batch_num}: {prev_memory:.2f} MB → {curr_memory:.2f} MB "
-                f"(+{percent_increase:.1f}%) with {errors} error(s){stabilization_info}"
-            )
-        
-        message_parts.append(
-            f"ERROR-INDUCED MEMORY LEAK DETECTED\n"
-            f"\n"
-            f"Memory spikes occurred in batch(es) with errors and did not fully recover:\n"
-            f"{chr(10).join(spike_details)}\n"
-            f"\n"
-            f"This indicates that error handling is not properly releasing resources.\n"
-            f"Check error paths for unreleased connections, buffers, or cached data."
-        )
+        message_parts.append(_build_stabilized_spikes_message(
+            error_spike_batches, memory_samples, error_counts, min_stable_batches
+        ))
     
     if found_non_stabilized:
-        # Add information about non-stabilized spikes
-        non_stable_details = []
-        for spike in non_stabilized_spikes:
-            next_mems = ", ".join([f"{m:.2f}" for m in spike['next_batches'][:3]])
-            non_stable_details.append(
-                f"  • Batch {spike['batch']}: {spike['prev_memory']:.2f} MB → {spike['curr_memory']:.2f} MB "
-                f"(+{spike['percent_increase']:.1f}%) with {spike['errors']} error(s)\n"
-                f"    Next batches: {next_mems} MB (variation {spike['max_variation']:.1f}%, did NOT stabilize)"
-            )
-        
-        if found_stabilized:
-            message_parts.append(
-                f"\n"
-                f"NOTE: Additional error spikes detected but memory did NOT stabilize:\n"
-                f"{chr(10).join(non_stable_details)}\n"
-                f"\n"
-                f"These spikes show continued growth after the error, suggesting a continuous\n"
-                f"memory leak pattern rather than error-induced stabilization."
-            )
-        else:
-            message_parts.append(
-                f"Error spikes detected with continued growth:\n"
-                f"{chr(10).join(non_stable_details)}\n"
-                f"\n"
-                f"Memory continues to grow after error rather than stabilizing.\n"
-                f"This suggests a continuous memory leak pattern that may have been\n"
-                f"triggered by the error. Check both error paths AND ongoing operations."
-            )
+        message_parts.append(_build_non_stabilized_spikes_message(
+            non_stabilized_spikes, found_stabilized
+        ))
     
     if not found_stabilized and not found_non_stabilized:
         return False, "", []

@@ -9,8 +9,11 @@ Provides high-level functions for:
 - Analyzing results and detecting leaks
 """
 
+import logging
 from typing import List, Dict, Any, Tuple, Optional
 import pytest
+
+logger = logging.getLogger(__name__)
 
 from ..analysis.detection import detect_memory_leak
 from ..analysis.growth import (
@@ -81,7 +84,7 @@ async def execute_single_request(
         if hasattr(response, 'error') and response.error:
             error_message = str(response.error)
             if current_batch_errors < max_errors_to_print:
-                print(f"[BATCH {batch + 1} WARNING] Request {req_idx + 1} returned error: {response.error} (continuing...)")
+                logger.warning(f"Batch {batch + 1}: Request {req_idx + 1} returned error: {response.error} (continuing...)")
             del response
             return True, error_message
         
@@ -91,7 +94,7 @@ async def execute_single_request(
     except Exception as e:
         error_message = str(e)
         if current_batch_errors < max_errors_to_print:
-            print(f"[BATCH {batch + 1} WARNING] Request {req_idx + 1} failed: {str(e)} (continuing...)")
+            logger.warning(f"Batch {batch + 1}: Request {req_idx + 1} failed: {str(e)} (continuing...)")
         return True, error_message
 
 
@@ -117,7 +120,7 @@ async def run_warmup_phase(
     """
     import inspect
     
-    print("Warming up...")
+    logger.info("Warming up...")
     error_count = 0
     is_async = inspect.iscoroutinefunction(completion_func)
     
@@ -133,18 +136,18 @@ async def run_warmup_phase(
                 # Check for error indicators in response
                 if hasattr(response, 'error') and response.error:
                     error_count += 1
-                    print(f"[WARMUP WARNING] Request {req_idx + 1} in batch {batch_idx + 1} returned error: {response.error} (continuing...)")
+                    logger.warning(f"Warmup: Request {req_idx + 1} in batch {batch_idx + 1} returned error: {response.error} (continuing...)")
                 del response
             except Exception as e:
                 error_count += 1
-                print(f"[WARMUP WARNING] Request {req_idx + 1} in batch {batch_idx + 1} failed: {str(e)} (continuing...)")
+                logger.warning(f"Warmup: Request {req_idx + 1} in batch {batch_idx + 1} failed: {str(e)} (continuing...)")
                 # Continue to next request
                 continue
         force_gc()
     
     if error_count > 0:
-        print(f"\n[WARMUP INFO] Completed with {error_count} errors (non-fatal, continuing with test)")
-    print("Warm-up complete. Starting measured phase...\n")
+        logger.info(f"Warmup completed with {error_count} errors (non-fatal, continuing with test)")
+    logger.info("Warm-up complete. Starting measured phase...")
 
 
 async def run_measurement_phase(
@@ -289,11 +292,11 @@ async def run_measurement_phase(
         error_counts.append(batch_errors)
         
         error_suffix = f" | Errors: {batch_errors}" if batch_errors > 0 else ""
-        print(f"Batch {batch + 1}/{num_batches}: "
-              f"Current={current_mb:.2f} MB | Peak={peak_mb:.2f} MB{error_suffix}")
+        logger.info(f"Batch {batch + 1}/{num_batches}: "
+                   f"Current={current_mb:.2f} MB | Peak={peak_mb:.2f} MB{error_suffix}")
     
     if total_errors > 0:
-        print(f"\n[MEASUREMENT INFO] Completed with {total_errors} total errors (non-fatal, memory data collected)")
+        logger.info(f"Measurement completed with {total_errors} total errors (non-fatal, memory data collected)")
     
     # Print final summary of captured snapshots
     if capture_top_consumers and output_dir:
@@ -442,9 +445,9 @@ def analyze_and_detect_leaks(
     if should_skip and skip_on_high_noise:
         pytest.skip(skip_message)
     elif should_skip and not skip_on_high_noise:
-        print(f"WARNING: {skip_message}")
-        print("Continuing test despite high noise (skip_on_high_noise=False)")
-        print("Results may be unreliable due to measurement instability\n")
+        logger.warning(f"{skip_message}")
+        logger.warning("Continuing test despite high noise (skip_on_high_noise=False)")
+        logger.warning("Results may be unreliable due to measurement instability")
     
     # Calculate dynamic parameters for memory analysis
     rolling_avg, num_samples_for_avg, tail_samples = prepare_memory_analysis(
@@ -485,13 +488,13 @@ def analyze_and_detect_leaks(
         )
         pytest.fail(message)
     
-    print(message)
+    logger.info(message)
     print_memory_samples(memory_samples, num_samples=10)
     
     # Final verification that ID remained consistent throughout
     if module_to_verify is not None and module_id is not None:
         verify_module_id_consistency(module_to_verify, module_id, "at test end")
-        print(f"\n[TEST] ✓ {module_name} ID remained consistent throughout: {module_id}", flush=True)
+        logger.info(f"{module_name} ID remained consistent throughout: {module_id}")
     
     # Cleanup snapshot files if configured
     cleanup_snapshots = config.get('cleanup_snapshots_after_test', False)
@@ -505,7 +508,7 @@ def analyze_and_detect_leaks(
         if os.path.exists(snapshot_filepath):
             try:
                 os.remove(snapshot_filepath)
-                print(f"\n[CLEANUP] Snapshot file deleted: {snapshot_filepath}", flush=True)
+                logger.info(f"Snapshot file deleted: {snapshot_filepath}")
             except Exception as e:
-                print(f"\n[CLEANUP WARNING] Failed to delete snapshot file {snapshot_filepath}: {e}", flush=True)
+                logger.warning(f"Failed to delete snapshot file {snapshot_filepath}: {e}")
 

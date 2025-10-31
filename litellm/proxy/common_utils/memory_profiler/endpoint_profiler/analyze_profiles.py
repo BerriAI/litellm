@@ -25,7 +25,6 @@ from typing import Any, Dict, Optional
 # Import from specialized modules
 from .data_loading import load_profile_data
 from .memory_analysis import analyze_endpoint_memory
-from .consumer_analysis import analyze_top_memory_consumers
 from .location_analysis import analyze_memory_growth_by_location
 from .reporting import print_analysis_report, print_loading_info, print_error
 
@@ -114,15 +113,15 @@ def main():
     import sys
     
     if len(sys.argv) < 2:
-        print("Usage: python -m litellm.proxy.common_utils.memory_profiler.endpoint_profiler.analyze_profiles <profile_file.json> [--growth N]")
-        print("\nOptions:")
-        print("  --growth N    Show top N locations by memory growth (default: 20)")
-        print("\nExamples:")
-        print("  # Show default growth analysis (top 20)")
-        print("  python -m litellm.proxy.common_utils.memory_profiler.endpoint_profiler.analyze_profiles endpoint_profiles/chat_completions.json")
-        print("\n  # Show top 30 growing locations")
-        print("  python -m litellm.proxy.common_utils.memory_profiler.endpoint_profiler.analyze_profiles endpoint_profiles/chat_completions.json --growth 30")
-        print("\nNote: Run from the project root directory")
+        print("Usage: python -m litellm.proxy.common_utils.memory_profiler.endpoint_profiler.analyze_profiles <profile_file.json> [--growth N]")  # noqa: T201
+        print("\nOptions:")  # noqa: T201
+        print("  --growth N    Show top N locations by memory growth (default: 20)")  # noqa: T201
+        print("\nExamples:")  # noqa: T201
+        print("  # Show default growth analysis (top 20)")  # noqa: T201
+        print("  python -m litellm.proxy.common_utils.memory_profiler.endpoint_profiler.analyze_profiles endpoint_profiles/chat_completions.json")  # noqa: T201
+        print("\n  # Show top 30 growing locations")  # noqa: T201
+        print("  python -m litellm.proxy.common_utils.memory_profiler.endpoint_profiler.analyze_profiles endpoint_profiles/chat_completions.json --growth 30")  # noqa: T201
+        print("\nNote: Run from the project root directory")  # noqa: T201
         sys.exit(1)
     
     profile_file = sys.argv[1]

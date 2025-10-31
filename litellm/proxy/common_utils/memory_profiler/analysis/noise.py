@@ -5,10 +5,13 @@ Provides functions to assess measurement stability and determine
 if the test environment is too unstable for reliable leak detection.
 """
 
+import logging
 import statistics
 from typing import List, Tuple
 
 from ..constants import DEFAULT_MAX_COEFFICIENT_VARIATION
+
+logger = logging.getLogger(__name__)
 
 
 def check_measurement_noise(
@@ -42,7 +45,7 @@ def check_measurement_noise(
     memory_mean = statistics.mean(memory_samples)
     memory_coefficient_variation = (memory_std_dev / memory_mean * 100) if memory_mean > 0 else 0
     
-    print(f"Memory std dev: {memory_std_dev:.3f} MB ({memory_coefficient_variation:.1f}% coefficient of variation)")
+    logger.info(f"Memory std dev: {memory_std_dev:.3f} MB ({memory_coefficient_variation:.1f}% coefficient of variation)")
     
     if memory_coefficient_variation > max_coefficient_variation:
         skip_message = f"Memory measurements too noisy (CV={memory_coefficient_variation:.1f}%) - test environment unstable"

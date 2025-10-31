@@ -9,12 +9,15 @@ Provides functions for:
 """
 
 import json
+import logging
 import os
 import re
 from typing import Dict, List, Tuple, Optional, Any
 from collections import defaultdict
 
 from ..snapshot.storage import sanitize_filename
+
+logger = logging.getLogger(__name__)
 from ..constants import (
     DEFAULT_LEAK_SOURCE_FILTER_LITELLM_ONLY,
     DEFAULT_LEAK_SOURCE_MIN_GROWTH_MB,
@@ -266,7 +269,7 @@ def load_snapshot_file(output_dir: str, test_name: str) -> Optional[List[Dict[st
         
         return data
     except (json.JSONDecodeError, IOError) as e:
-        print(f"[ERROR] Could not load snapshot file {output_file}: {e}")
+        logger.error(f"Could not load snapshot file {output_file}: {e}")
         return None
 
 
@@ -326,14 +329,14 @@ def print_leaking_sources_report(
         test_name: Name of the test (for display)
     """
     if not leaking_sources:
-        print("\n[LEAK ANALYSIS] No specific leaking sources identified above threshold.")
+        print("\n[LEAK ANALYSIS] No specific leaking sources identified above threshold.")  # noqa: T201
         return
     
-    print("\n" + "=" * 80)
-    print("MEMORY LEAK SOURCE ANALYSIS")
-    print("=" * 80)
-    print(f"Test: {test_name}")
-    print(f"Found {len(leaking_sources)} leaking source(s) with significant growth:\n")
+    print("\n" + "=" * 80)  # noqa: T201
+    print("MEMORY LEAK SOURCE ANALYSIS")  # noqa: T201
+    print("=" * 80)  # noqa: T201
+    print(f"Test: {test_name}")  # noqa: T201
+    print(f"Found {len(leaking_sources)} leaking source(s) with significant growth:\n")  # noqa: T201
     
     for i, source in enumerate(leaking_sources, 1):
         file_path = source['file_path']
@@ -351,20 +354,20 @@ def print_leaking_sources_report(
         if growth_percent > 999.0:
             growth_pct_str += "+"
         
-        print(f"{i}. {file_path}:{line_number}")
-        print(f"   Growth: {growth_mb:.3f} MB ({growth_pct_str})")
-        print(f"   Batch {first_batch}: {first_size:.3f} MB → Batch {last_batch}: {last_size:.3f} MB")
-        print(f"   Tracked across {num_batches} batch(es)")
-        print()
+        print(f"{i}. {file_path}:{line_number}")  # noqa: T201
+        print(f"   Growth: {growth_mb:.3f} MB ({growth_pct_str})")  # noqa: T201
+        print(f"   Batch {first_batch}: {first_size:.3f} MB → Batch {last_batch}: {last_size:.3f} MB")  # noqa: T201
+        print(f"   Tracked across {num_batches} batch(es)")  # noqa: T201
+        print()  # noqa: T201
     
-    print("=" * 80)
-    print("RECOMMENDATION: Investigate the above files/lines for memory leaks.")
-    print("Look for:")
-    print("  • Objects not being properly released")
-    print("  • Caches growing unbounded")
-    print("  • Event listeners/callbacks not being cleaned up")
-    print("  • Circular references preventing garbage collection")
-    print("=" * 80 + "\n")
+    print("=" * 80)  # noqa: T201
+    print("RECOMMENDATION: Investigate the above files/lines for memory leaks.")  # noqa: T201
+    print("Look for:")  # noqa: T201
+    print("  • Objects not being properly released")  # noqa: T201
+    print("  • Caches growing unbounded")  # noqa: T201
+    print("  • Event listeners/callbacks not being cleaned up")  # noqa: T201
+    print("  • Circular references preventing garbage collection")  # noqa: T201
+    print("=" * 80 + "\n")  # noqa: T201
 
 
 def analyze_and_report_leaking_sources(
@@ -399,8 +402,7 @@ def analyze_and_report_leaking_sources(
     )
     
     if leaking_sources is None:
-        print(f"\n[LEAK ANALYSIS] Could not load snapshot data for test '{test_name}'")
-        print("[LEAK ANALYSIS] Make sure capture_top_consumers was enabled during the test.")
+        logger.warning(f"Could not load snapshot data for test '{test_name}'. Make sure capture_top_consumers was enabled during the test.")
         return
     
     print_leaking_sources_report(leaking_sources, test_name)
