@@ -263,6 +263,9 @@ from litellm.proxy.management_endpoints.cost_tracking_settings import (
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
 )
+from litellm.proxy.management_endpoints.router_settings_endpoints import (
+    router as router_settings_router,
+)
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
@@ -1070,6 +1073,7 @@ celery_fn = None  # Redis Queue for handling requests
 # Global variables for model cost map reload scheduling
 scheduler = None
 last_model_cost_map_reload = None
+
 
 ### DB WRITER ###
 db_writer_client: Optional[AsyncHTTPHandler] = None
@@ -3335,6 +3339,28 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
+        if self._should_load_db_object(object_type="sso_settings"):
+            await self._init_sso_settings_in_db(prisma_client=prisma_client)
+
+    async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize SSO settings from database into the router on startup.
+        """
+        
+        try:
+            sso_settings = await prisma_client.db.litellm_ssoconfig.find_unique(
+                where={"id": "sso_config"}
+            )
+            if sso_settings is not None:
+                # Capitalize all keys in sso_settings dictionary
+                uppercase_sso_settings = {key.upper(): value for key, value in sso_settings.sso_settings.items()}
+                self._decrypt_and_set_db_env_variables(environment_variables=uppercase_sso_settings)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - {}".format(
+                    str(e)
+                )
+            )   
 
     async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
         """
@@ -10017,6 +10043,7 @@ app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(tag_management_router)
 app.include_router(cost_tracking_settings_router)
+app.include_router(router_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)

@@ -50,7 +50,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
     ) -> dict:
         prompt = _transform_prompt(messages=messages)
 
-        if not model.startswith("accounts/"):
+        if not model.startswith("accounts/") and "#" not in model:
             model = f"accounts/fireworks/models/{model}"
 
         data = {
