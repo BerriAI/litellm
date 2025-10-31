@@ -131,9 +131,11 @@ mcp_servers:
   # HTTP Streamable Server
   deepwiki_mcp:
     url: "https://mcp.deepwiki.com/mcp"
+    transport: "http"
   # SSE Server
   zapier_mcp:
     url: "https://actions.zapier.com/mcp/sk-akxxxxx/sse"
+    transport: "sse"
   
   # Standard Input/Output (stdio) Server - CircleCI Example
   circleci_mcp:
@@ -143,6 +145,26 @@ mcp_servers:
     env:
       CIRCLECI_TOKEN: "your-circleci-token"
       CIRCLECI_BASE_URL: "https://circleci.com"
+  
+  # OpenAPI Specification Example
+  # Create a spec file (e.g., api_spec.json) with your OpenAPI specification
+  # Example spec file content:
+  # {
+  #   "openapi": "3.0.0",
+  #   "info": {
+  #     "title": "My API",
+  #     "version": "1.0.0"
+  #   },
+  #   "servers": [{"url": "https://api.example.com"}],
+  #   "paths": {
+  #     "/users": {
+  #       "get": {
+  #         "summary": "Get users",
+  #         "responses": {"200": {"description": "Success"}}
+  #       }
+  #     }
+  #   }
+  # }
   
   # Full configuration with all optional fields
   my_http_server:
@@ -157,12 +179,13 @@ mcp_servers:
 - **Server Name**: Use any descriptive name for your MCP server (e.g., `zapier_mcp`, `deepwiki_mcp`, `circleci_mcp`)
 - **Alias**: This name will be prefilled with the server name with "_" replacing spaces, else edit it to be the prefix in tool names
 - **URL**: The endpoint URL for your MCP server (required for HTTP/SSE transports)
-- **Transport**: Optional transport type (defaults to `sse`)
+- **Transport**: **Required** transport type
   - `sse` - SSE (Server-Sent Events) transport
   - `http` - Streamable HTTP transport
   - `stdio` - Standard Input/Output transport
 - **Command**: The command to execute for stdio transport (required for stdio)
-- **Args**: Array of arguments to pass to the command (optional for stdio)
+- **Args**: Array of arguments to pass to the command (required for stdio)
+- **Spec Path**: Path to OpenAPI specification file (required for stdio)
 - **Env**: Environment variables to set for the stdio process (optional for stdio)
 - **Description**: Optional description for the server
 - **Auth Type**: Optional authentication type. Supported values:
@@ -183,12 +206,14 @@ Examples for each auth type:
 mcp_servers:
   api_key_example:
     url: "https://my-mcp-server.com/mcp"
+    transport: "http"
     auth_type: "api_key"
     auth_value: "abc123"        # headers={"X-API-Key": "abc123"}
 
   # NEW – OAuth 2.0 Client Credentials (v1.77.5)
   oauth2_example:
     url: "https://my-mcp-server.com/mcp"
+    transport: "http"
     auth_type: "oauth2"         # 👈 KEY CHANGE
     authorization_url: "https://my-mcp-server.com/oauth/authorize" # optional for client-credentials
     token_url: "https://my-mcp-server.com/oauth/token"             # required
@@ -198,22 +223,26 @@ mcp_servers:
 
   bearer_example:
     url: "https://my-mcp-server.com/mcp"
+    transport: "http"
     auth_type: "bearer_token"
     auth_value: "abc123"        # headers={"Authorization": "Bearer abc123"}
 
   basic_example:
     url: "https://my-mcp-server.com/mcp"
+    transport: "http"
     auth_type: "basic"
     auth_value: "dXNlcjpwYXNz"  # headers={"Authorization": "Basic dXNlcjpwYXNz"}
 
   custom_auth_example:
     url: "https://my-mcp-server.com/mcp"
+    transport: "http"
     auth_type: "authorization"
     auth_value: "Token example123"  # headers={"Authorization": "Token example123"}
 
   # Example with extra headers forwarding
   github_mcp:
     url: "https://api.githubcopilot.com/mcp"
+    transport: "sse"
     auth_type: "bearer_token"
     auth_value: "ghp_example_token"
     extra_headers: ["custom_key", "x-custom-header"]  # These headers will be forwarded from client
@@ -291,12 +320,14 @@ mcp_servers:
   # OpenAPI Spec Example - Petstore API
   petstore_mcp:
     url: "https://petstore.swagger.io/v2"
+    transport: "http"
     spec_path: "/path/to/openapi.json"
     auth_type: "none"
   
   # OpenAPI Spec with API Key Authentication
   my_api_mcp:
     url: "http://0.0.0.0:8090"
+    transport: "http"
     spec_path: "/path/to/openapi.json"
     auth_type: "api_key"
     auth_value: "your-api-key-here"
@@ -304,6 +335,7 @@ mcp_servers:
   # OpenAPI Spec with Bearer Token
   secured_api_mcp:
     url: "https://api.example.com"
+    transport: "http"
     spec_path: "/path/to/openapi.json" 
     auth_type: "bearer_token"
     auth_value: "your-bearer-token"
@@ -313,11 +345,15 @@ mcp_servers:
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `url` | Yes | The base URL of your API endpoint |
-| `spec_path` | Yes | Path or URL to your OpenAPI specification file (JSON or YAML) |
+| `transport` | Yes | Transport type: `http`, `sse`, or `stdio` |
+| `url` | Yes (for http/sse) | The base URL of your API endpoint |
+| `command` | Yes (for stdio) | The command to execute for stdio transport |
+| `args` | Yes (for stdio) | Array of arguments to pass to the command |
+| `spec_path` | Yes (for stdio) | Path or URL to your OpenAPI specification file (JSON or YAML) |
 | `auth_type` | No | Authentication type: `none`, `api_key`, `bearer_token`, `basic`, `authorization` |
 | `auth_value` | No | Authentication value (required if `auth_type` is set) |
 | `description` | No | Optional description for the MCP server |
+| `env` | No | Environment variables to set for the stdio process |
 | `allowed_tools` | No | List of specific tools to allow (see [MCP Tool Filtering](#mcp-tool-filtering)) |
 | `disallowed_tools` | No | List of specific tools to block (see [MCP Tool Filtering](#mcp-tool-filtering)) |
 
@@ -473,6 +509,7 @@ Use `allowed_tools` to specify exactly which tools users can access. All other t
 mcp_servers:
   github_mcp:
     url: "https://api.githubcopilot.com/mcp"
+    transport: "sse"
     auth_type: oauth2
     authorization_url: https://github.com/login/oauth/authorize
     token_url: https://github.com/login/oauth/access_token
@@ -497,6 +534,7 @@ Use `disallowed_tools` to block specific tools. All other tools will be availabl
 mcp_servers:
   github_mcp:
     url: "https://api.githubcopilot.com/mcp"
+    transport: "sse"
     auth_type: oauth2
     authorization_url: https://github.com/login/oauth/authorize
     token_url: https://github.com/login/oauth/access_token
@@ -609,6 +647,7 @@ With the configuration above, here's how requests would be handled:
 mcp_servers:
   github_mcp:
     url: "https://api.githubcopilot.com/mcp"
+    transport: "sse"
     auth_type: oauth2
     authorization_url: https://github.com/login/oauth/authorize
     token_url: https://github.com/login/oauth/access_token
@@ -1022,6 +1061,7 @@ Configure `extra_headers` in your MCP server configuration to specify which head
 mcp_servers:
   github_mcp:
     url: "https://api.githubcopilot.com/mcp"
+    transport: "sse"
     auth_type: "bearer_token"
     auth_value: "ghp_default_token"
     extra_headers: ["custom_key", "x-custom-header", "Authorization"]
@@ -1215,6 +1255,7 @@ This configuration is currently available on the config.yaml, with UI support co
 mcp_servers:
   github_mcp:
     url: "https://api.githubcopilot.com/mcp"
+    transport: "sse"
     auth_type: oauth2
     authorization_url: https://github.com/login/oauth/authorize
     token_url: https://github.com/login/oauth/access_token
