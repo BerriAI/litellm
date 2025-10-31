@@ -51,6 +51,15 @@ async def close_litellm_async_clients():
             except Exception:
                 # Silently ignore errors during cleanup
                 pass
+    
+    # Close Vertex AI token refresh session
+    try:
+        from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+        
+        await VertexBase.close_token_refresh_session()
+    except Exception:
+        # Silently ignore errors during cleanup
+        pass
 
 
 def register_async_client_cleanup():

@@ -38,6 +38,8 @@ class TestVertexBase:
         # Test case 1: Ensure credentials match project
         with patch.object(
             vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+        ), patch.object(
+            vertex_base, "load_auth_async", return_value=(mock_creds, "project-1")
         ):
             if is_async:
                 token, project = await vertex_base._ensure_access_token_async(
@@ -57,6 +59,8 @@ class TestVertexBase:
         # Test case 2: Allow using credentials from different project
         with patch.object(
             vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+        ), patch.object(
+            vertex_base, "load_auth_async", return_value=(mock_creds, "project-1")
         ):
             if is_async:
                 result = await vertex_base._ensure_access_token_async(
@@ -87,6 +91,8 @@ class TestVertexBase:
         # Test initial credential load and caching
         with patch.object(
             vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+        ), patch.object(
+            vertex_base, "load_auth_async", return_value=(mock_creds, "project-1")
         ):
             # First call should load credentials
             if is_async:
@@ -133,13 +139,18 @@ class TestVertexBase:
 
         with patch.object(
             vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-        ), patch.object(vertex_base, "refresh_auth") as mock_refresh:
+        ), patch.object(
+            vertex_base, "load_auth_async", return_value=(mock_creds, "project-1")
+        ), patch.object(vertex_base, "refresh_auth") as mock_refresh, patch.object(
+            vertex_base, "refresh_auth_async"
+        ) as mock_refresh_async:
 
             def mock_refresh_impl(creds):
                 creds.token = "refreshed-token"
                 creds.expired = False
 
             mock_refresh.side_effect = mock_refresh_impl
+            mock_refresh_async.side_effect = mock_refresh_impl
 
             if is_async:
                 token, project = await vertex_base._ensure_access_token_async(
@@ -154,7 +165,11 @@ class TestVertexBase:
                     custom_llm_provider="vertex_ai",
                 )
 
-            assert mock_refresh.called
+            # Check the appropriate mock based on async/sync
+            if is_async:
+                assert mock_refresh_async.called
+            else:
+                assert mock_refresh.called
             assert token == "refreshed-token"
             assert not mock_creds.expired
 
@@ -200,13 +215,16 @@ class TestVertexBase:
         with patch.object(
             vertex_base, "_credentials_from_authorized_user", return_value=mock_creds
         ) as mock_credentials_from_authorized_user, patch.object(
-            vertex_base, "refresh_auth"
-        ) as mock_refresh:
+            vertex_base, "_credentials_from_authorized_user_async", return_value=mock_creds
+        ) as mock_credentials_from_authorized_user_async, patch.object(vertex_base, "refresh_auth") as mock_refresh, patch.object(
+            vertex_base, "refresh_auth_async"
+        ) as mock_refresh_async:
 
             def mock_refresh_impl(creds):
                 creds.token = "refreshed-token"
 
             mock_refresh.side_effect = mock_refresh_impl
+            mock_refresh_async.side_effect = mock_refresh_impl
 
             # 1. Test that authorized_user-style credentials are correctly handled and uses quota_project_id
             if is_async:
@@ -222,7 +240,11 @@ class TestVertexBase:
                     custom_llm_provider="vertex_ai",
                 )
 
-            assert mock_credentials_from_authorized_user.called
+            # Verify the appropriate method was called
+            if is_async:
+                assert mock_credentials_from_authorized_user_async.called
+            else:
+                assert mock_credentials_from_authorized_user.called
             assert token == "refreshed-token"
             assert project == quota_project_id
 
@@ -263,14 +285,15 @@ class TestVertexBase:
 
         with patch.object(
             vertex_base, "_credentials_from_identity_pool", return_value=mock_creds
-        ) as mock_credentials_from_identity_pool, patch.object(
-            vertex_base, "refresh_auth"
-        ) as mock_refresh:
+        ) as mock_credentials_from_identity_pool, patch.object(vertex_base, "refresh_auth") as mock_refresh, patch.object(
+            vertex_base, "refresh_auth_async"
+        ) as mock_refresh_async:
 
             def mock_refresh_impl(creds):
                 creds.token = "refreshed-token"
 
             mock_refresh.side_effect = mock_refresh_impl
+            mock_refresh_async.side_effect = mock_refresh_impl
 
             if is_async:
                 token, _ = await vertex_base._ensure_access_token_async(
@@ -310,14 +333,15 @@ class TestVertexBase:
 
         with patch.object(
             vertex_base, "_credentials_from_identity_pool_with_aws", return_value=mock_creds
-        ) as mock_credentials_from_identity_pool_with_aws, patch.object(
-            vertex_base, "refresh_auth"
-        ) as mock_refresh:
+        ) as mock_credentials_from_identity_pool_with_aws, patch.object(vertex_base, "refresh_auth") as mock_refresh, patch.object(
+            vertex_base, "refresh_auth_async"
+        ) as mock_refresh_async:
 
             def mock_refresh_impl(creds):
                 creds.token = "refreshed-token"
 
             mock_refresh.side_effect = mock_refresh_impl
+            mock_refresh_async.side_effect = mock_refresh_impl
 
             if is_async:
                 token, _ = await vertex_base._ensure_access_token_async(
@@ -351,6 +375,8 @@ class TestVertexBase:
 
         with patch.object(
             vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+        ), patch.object(
+            vertex_base, "load_auth_async", return_value=(mock_creds, "project-1")
         ):
             if is_async:
                 token, project = await vertex_base._ensure_access_token_async(
@@ -429,6 +455,8 @@ class TestVertexBase:
 
         with patch.object(
             vertex_base, "load_auth", return_value=(mock_creds, "resolved-project")
+        ), patch.object(
+            vertex_base, "load_auth_async", return_value=(mock_creds, "resolved-project")
         ):
             # Call without project_id, should use resolved project from credentials
             if is_async:
@@ -481,13 +509,18 @@ class TestVertexBase:
 
         with patch.object(
             vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-        ), patch.object(vertex_base, "refresh_auth") as mock_refresh:
+        ), patch.object(
+            vertex_base, "load_auth_async", return_value=(mock_creds, "project-1")
+        ), patch.object(vertex_base, "refresh_auth") as mock_refresh, patch.object(
+            vertex_base, "refresh_auth_async"
+        ) as mock_refresh_async:
 
             def mock_refresh_impl(creds):
                 creds.token = "refreshed-token"
                 creds.expired = False
 
             mock_refresh.side_effect = mock_refresh_impl
+            mock_refresh_async.side_effect = mock_refresh_impl
 
             if is_async:
                 token, project = await vertex_base._ensure_access_token_async(
@@ -502,7 +535,11 @@ class TestVertexBase:
                     custom_llm_provider="vertex_ai",
                 )
 
-            assert mock_refresh.called
+            # Check the appropriate mock based on async/sync
+            if is_async:
+                assert mock_refresh_async.called
+            else:
+                assert mock_refresh.called
             assert token == "refreshed-token"
             assert project == "project-1"
 
@@ -532,6 +569,8 @@ class TestVertexBase:
 
         with patch.object(
             vertex_base, "load_auth", return_value=(mock_creds, "cred-project")
+        ), patch.object(
+            vertex_base, "load_auth_async", return_value=(mock_creds, "cred-project")
         ):
             # First call with explicit project_id
             if is_async:
@@ -595,7 +634,9 @@ class TestVertexBase:
 
         with patch.object(
             vertex_base, "load_auth", return_value=(mock_creds, "resolved-from-credentials")
-        ) as mock_load_auth:
+        ) as mock_load_auth_sync, patch.object(
+            vertex_base, "load_auth_async", return_value=(mock_creds, "resolved-from-credentials")
+        ) as mock_load_auth_async:
 
             # First call: User provides NO project_id, should resolve from credentials
             if is_async:
@@ -612,6 +653,7 @@ class TestVertexBase:
                 )
 
             # Should have called load_auth once to resolve project_id
+            mock_load_auth = mock_load_auth_async if is_async else mock_load_auth_sync
             assert mock_load_auth.call_count == 1
             assert token1 == "token-from-creds"
             assert project1 == "resolved-from-credentials"
@@ -878,3 +920,428 @@ class TestVertexBase:
         
         expected_no_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
         assert result_url_no_streaming == expected_no_streaming_url, f"Expected {expected_no_streaming_url}, got {result_url_no_streaming}"
+
+    @pytest.mark.asyncio
+    async def test_async_auth_uses_async_methods(self):
+        """Test that async auth uses load_auth_async and refresh_auth_async (now the default)"""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "async-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "async-project"
+        mock_creds.quota_project_id = "async-project"
+
+        credentials = {"type": "service_account", "project_id": "async-project"}
+
+        with patch.object(
+            vertex_base, "load_auth_async", return_value=(mock_creds, "async-project")
+        ) as mock_load_auth_async, patch.object(
+            vertex_base, "load_auth"
+        ) as mock_load_auth_sync:
+
+            token, project = await vertex_base.get_access_token_async(
+                credentials=credentials,
+                project_id="async-project",
+            )
+
+            # Verify async method was called
+            assert mock_load_auth_async.called
+            # Verify sync method was NOT called
+            assert not mock_load_auth_sync.called
+            assert token == "async-token"
+            assert project == "async-project"
+
+    @pytest.mark.asyncio
+    async def test_refresh_auth_async_with_aiohttp(self):
+        """Test that refresh_auth_async uses aiohttp when available"""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.expired = True
+        mock_creds.token = None
+
+        async def mock_refresh(request):
+            # Simulate successful token refresh (ASYNC function)
+            mock_creds.token = "refreshed-async-token"
+            mock_creds.expired = False
+
+        # Make refresh an async coroutine (simulating async credentials)
+        mock_creds.refresh = mock_refresh
+
+        # Call refresh_auth_async
+        await vertex_base.refresh_auth_async(mock_creds)
+
+        # Verify credentials were refreshed
+        assert mock_creds.token == "refreshed-async-token"
+        assert not mock_creds.expired
+
+    @pytest.mark.asyncio
+    async def test_load_auth_async_service_account(self):
+        """Test load_auth_async with service account credentials creates async credentials"""
+        vertex_base = VertexBase()
+
+        credentials = {
+            "type": "service_account",
+            "project_id": "test-project",
+            "client_email": "test@test-project.iam.gserviceaccount.com",
+        }
+
+        mock_creds = MagicMock()
+        mock_creds.token = "loaded-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "test-project"
+
+        # Patch the ASYNC credential creation method
+        with patch.object(
+            vertex_base, "_credentials_from_service_account_async", return_value=mock_creds
+        ) as mock_service_account_async, patch.object(
+            vertex_base, "refresh_auth_async"
+        ) as mock_refresh_async:
+
+            async def mock_refresh_impl(creds):
+                creds.token = "async-refreshed-token"
+                creds.expired = False
+
+            mock_refresh_async.side_effect = mock_refresh_impl
+
+            creds, project = await vertex_base.load_auth_async(
+                credentials=credentials,
+                project_id="test-project"
+            )
+
+            # Verify ASYNC service account method was called
+            assert mock_service_account_async.called
+            # Verify async refresh was called
+            assert mock_refresh_async.called
+            assert creds.token == "async-refreshed-token"
+            assert project == "test-project"
+
+    @pytest.mark.asyncio
+    async def test_async_token_refresh_when_expired(self):
+        """Test that expired tokens are refreshed using async method"""
+        vertex_base = VertexBase()
+
+        # Create expired credentials
+        mock_creds = MagicMock()
+        mock_creds.token = "old-token"
+        mock_creds.expired = True
+        mock_creds.project_id = "test-project"
+        mock_creds.quota_project_id = "test-project"
+
+        credentials = {"type": "service_account", "project_id": "test-project"}
+
+        with patch.object(
+            vertex_base, "load_auth_async", return_value=(mock_creds, "test-project")
+        ) as mock_load_auth_async, patch.object(
+            vertex_base, "refresh_auth_async"
+        ) as mock_refresh_async:
+
+            async def mock_refresh_impl(creds):
+                creds.token = "refreshed-async-token"
+                creds.expired = False
+
+            mock_refresh_async.side_effect = mock_refresh_impl
+
+            token, project = await vertex_base.get_access_token_async(
+                credentials=credentials,
+                project_id="test-project",
+            )
+
+            # Verify refresh_auth_async was called for expired credentials
+            assert mock_refresh_async.called
+            assert token == "refreshed-async-token"
+            assert not mock_creds.expired
+            assert project == "test-project"
+
+    @pytest.mark.asyncio
+    async def test_async_caching_with_new_implementation(self):
+        """Test that credential caching works correctly with async implementation"""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "cached-async-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "cached-project"
+        mock_creds.quota_project_id = "cached-project"
+
+        credentials = {"type": "service_account", "project_id": "cached-project"}
+
+        with patch.object(
+            vertex_base, "load_auth_async", return_value=(mock_creds, "cached-project")
+        ) as mock_load_auth_async:
+
+            # First call - should load credentials
+            token1, project1 = await vertex_base.get_access_token_async(
+                credentials=credentials,
+                project_id="cached-project",
+            )
+
+            assert mock_load_auth_async.call_count == 1
+            assert token1 == "cached-async-token"
+
+            # Second call - should use cached credentials
+            token2, project2 = await vertex_base.get_access_token_async(
+                credentials=credentials,
+                project_id="cached-project",
+            )
+
+            # Should still be only 1 call (used cache)
+            assert mock_load_auth_async.call_count == 1
+            assert token2 == "cached-async-token"
+            assert project2 == "cached-project"
+
+            # Verify cache entry exists
+            cache_key = (json.dumps(credentials), "cached-project")
+            assert cache_key in vertex_base._credentials_project_mapping
+
+    @pytest.mark.asyncio
+    async def test_async_and_sync_share_same_cache(self):
+        """Test that async and sync implementations share the same credential cache"""
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "shared-cache-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "shared-project"
+        mock_creds.quota_project_id = "shared-project"
+
+        credentials = {"type": "service_account", "project_id": "shared-project"}
+
+        with patch.object(
+            vertex_base, "load_auth_async", return_value=(mock_creds, "shared-project")
+        ) as mock_load_auth_async, patch.object(
+            vertex_base, "load_auth", return_value=(mock_creds, "shared-project")
+        ) as mock_load_auth_sync:
+
+            # First call with async
+            token1, project1 = await vertex_base.get_access_token_async(
+                credentials=credentials,
+                project_id="shared-project",
+            )
+
+            assert mock_load_auth_async.call_count == 1
+            assert token1 == "shared-cache-token"
+
+            # Second call with sync (should use same cache)
+            token2, project2 = vertex_base.get_access_token(
+                credentials=credentials,
+                project_id="shared-project",
+            )
+
+            # Should NOT call load_auth because cache was populated by async call
+            assert mock_load_auth_sync.call_count == 0
+            assert token2 == "shared-cache-token"
+            assert project2 == "shared-project"
+
+    @pytest.mark.asyncio
+    async def test_load_auth_async_authorized_user(self):
+        """Test load_auth_async with authorized user credentials creates async credentials"""
+        vertex_base = VertexBase()
+
+        credentials = {
+            "type": "authorized_user",
+            "client_id": "test-client-id",
+            "client_secret": "test-secret",
+            "refresh_token": "test-refresh-token",
+            "quota_project_id": "test-quota-project",
+        }
+
+        mock_creds = MagicMock()
+        mock_creds.token = "authorized-user-token"
+        mock_creds.expired = False
+        mock_creds.quota_project_id = "test-quota-project"
+
+        # Patch the ASYNC credential creation method
+        with patch.object(
+            vertex_base, "_credentials_from_authorized_user_async", return_value=mock_creds
+        ) as mock_authorized_user_async, patch.object(
+            vertex_base, "refresh_auth_async"
+        ) as mock_refresh_async:
+
+            async def mock_refresh_impl(creds):
+                creds.token = "refreshed-authorized-token"
+
+            mock_refresh_async.side_effect = mock_refresh_impl
+
+            creds, project = await vertex_base.load_auth_async(
+                credentials=credentials,
+                project_id=None
+            )
+
+            # Verify ASYNC authorized user method was called
+            assert mock_authorized_user_async.called
+            # Verify async refresh was called
+            assert mock_refresh_async.called
+            assert creds.token == "refreshed-authorized-token"
+            # Should use quota_project_id when project_id is None
+            assert project == "test-quota-project"
+
+    @pytest.mark.asyncio
+    async def test_async_credentials_with_old_transport(self):
+        """
+        Test that async credentials use OLD transport for TRUE async refresh.
+        This verifies the implementation: OLD async credentials + OLD transport (compatible).
+        """
+        vertex_base = VertexBase()
+
+        # Create mock async credentials (simulating _credentials_async or _service_account_async)
+        mock_creds = MagicMock()
+        mock_creds.token = "initial-token"
+        mock_creds.expired = True
+        
+        # Track whether refresh was called and what request type was used
+        refresh_called = []
+        
+        async def async_refresh(request):
+            """Simulates async refresh method from google.oauth2._credentials_async"""
+            refresh_called.append({
+                'request_type': type(request).__name__,
+                'has_session': hasattr(request, 'session') or hasattr(request, '_session')
+            })
+            mock_creds.token = "async-refreshed-token"
+            mock_creds.expired = False
+        
+        # Make refresh a coroutine to simulate async credentials
+        mock_creds.refresh = async_refresh
+        
+        # Call refresh_auth_async
+        await vertex_base.refresh_auth_async(mock_creds)
+        
+        # Verify async refresh was called
+        assert len(refresh_called) == 1, "Async refresh should be called once"
+        assert refresh_called[0]['request_type'] == 'Request', "Should use Request from OLD transport"
+        assert refresh_called[0]['has_session'], "Request should have session"
+        assert mock_creds.token == "async-refreshed-token"
+        assert not mock_creds.expired
+        
+        print(f"✅ Async credentials used with OLD transport (google.auth.transport._aiohttp_requests)")
+        
+        # Cleanup
+        await VertexBase.close_token_refresh_session()
+
+    @pytest.mark.asyncio
+    async def test_persistent_session_reuse_across_multiple_refreshes(self):
+        """
+        Test that the same aiohttp session is reused across multiple token refreshes.
+        This verifies the session pooling optimization.
+        """
+        import aiohttp
+        from unittest.mock import MagicMock
+        
+        # Close any existing session to start fresh
+        await VertexBase.close_token_refresh_session()
+        
+        # Track session IDs captured during refresh
+        session_ids = []
+        
+        # Create a mock credentials object with ASYNC refresh
+        mock_creds = MagicMock()
+        mock_creds.token = "test-token"
+        mock_creds.expired = True
+        
+        async def mock_refresh(request):
+            # Capture the session ID each time refresh is called (ASYNC function)
+            # Note: OLD transport google.auth.transport._aiohttp_requests.Request uses 'session' attribute
+            session = getattr(request, 'session', None) or getattr(request, '_session', None)
+            if session:
+                session_ids.append(id(session))
+            mock_creds.token = f"refreshed-token-{len(session_ids)}"
+        
+        # Make refresh an async coroutine (simulating async credentials)
+        mock_creds.refresh = mock_refresh
+        
+        vertex_base = VertexBase()
+        
+        # Perform multiple token refreshes
+        await vertex_base.refresh_auth_async(mock_creds)
+        await vertex_base.refresh_auth_async(mock_creds)
+        await vertex_base.refresh_auth_async(mock_creds)
+        
+        # Verify all refreshes used the SAME session instance
+        assert len(session_ids) == 3, f"Expected 3 refreshes, got {len(session_ids)}"
+        assert session_ids[0] == session_ids[1] == session_ids[2], \
+            f"Session IDs should be identical, got: {session_ids}"
+        
+        print(f"✅ All 3 refreshes used the same session (ID: {session_ids[0]})")
+        
+        # Verify the session has the correct settings
+        session = await VertexBase._get_or_create_token_refresh_session()
+        assert isinstance(session, aiohttp.ClientSession)
+        assert session._auto_decompress is False, "Session should have auto_decompress=False"
+        assert not session.closed, "Session should still be open"
+        
+        print(f"✅ Session has auto_decompress=False: {session._auto_decompress is False}")
+        
+        # Test cleanup
+        await VertexBase.close_token_refresh_session()
+        assert session.closed, "Session should be closed after cleanup"
+        
+        print(f"✅ Session properly closed after cleanup")
+        
+        # Verify new session is created after cleanup
+        new_session = await VertexBase._get_or_create_token_refresh_session()
+        assert id(new_session) != id(session), "New session should be created after cleanup"
+        assert not new_session.closed, "New session should be open"
+        
+        print(f"✅ New session created after cleanup (old ID: {id(session)}, new ID: {id(new_session)})")
+        
+        # Cleanup for next test
+        await VertexBase.close_token_refresh_session()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_token_refresh_uses_same_session(self):
+        """
+        Test that concurrent token refreshes all use the same session.
+        This verifies thread-safety of session creation.
+        """
+        import asyncio
+        import time
+        from unittest.mock import MagicMock
+        
+        # Close any existing session to start fresh
+        await VertexBase.close_token_refresh_session()
+        
+        # Track session IDs from concurrent requests
+        session_ids = []
+        
+        async def refresh_and_track(vertex_base, creds, index):
+            await vertex_base.refresh_auth_async(creds)
+            session = await VertexBase._get_or_create_token_refresh_session()
+            session_ids.append((index, id(session)))
+        
+        # Create multiple vertex base instances (simulating multiple concurrent requests)
+        vertex_bases = [VertexBase() for _ in range(5)]
+        
+        # Create mock credentials for each
+        mock_creds_list = []
+        for i in range(5):
+            mock_creds = MagicMock()
+            mock_creds.token = f"test-token-{i}"
+            mock_creds.expired = True
+            
+            async def mock_refresh(request):
+                # Simulate network delay (ASYNC function)
+                await asyncio.sleep(0.01)
+                mock_creds.token = "refreshed"
+            
+            # Make refresh an async coroutine (simulating async credentials)
+            mock_creds.refresh = mock_refresh
+            mock_creds_list.append(mock_creds)
+        
+        # Run all refreshes concurrently
+        await asyncio.gather(*[
+            refresh_and_track(vb, creds, i) 
+            for i, (vb, creds) in enumerate(zip(vertex_bases, mock_creds_list))
+        ])
+        
+        # All concurrent requests should have used the SAME session
+        assert len(session_ids) == 5, f"Expected 5 concurrent requests, got {len(session_ids)}"
+        unique_sessions = set(sid for _, sid in session_ids)
+        assert len(unique_sessions) == 1, \
+            f"All concurrent requests should use same session, got {len(unique_sessions)} unique sessions"
+        
+        print(f"✅ All 5 concurrent requests used the same session (ID: {list(unique_sessions)[0]})")
+        
+        # Cleanup
+        await VertexBase.close_token_refresh_session()

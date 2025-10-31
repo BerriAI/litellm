@@ -400,6 +400,8 @@ allowed_fails: int = 3
 num_retries_per_request: Optional[
     int
 ] = None  # for the request overall (incl. fallbacks + model retries)
+
+
 ####### SECRET MANAGERS #####################
 secret_manager_client: Optional[
     Any
