@@ -9,7 +9,7 @@ import ProviderSpecificFields from "./provider_specific_fields";
 import AdvancedSettings from "./advanced_settings";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
 import type { Team } from "../key_team_helpers/key_list";
-import { CredentialItem, getGuardrailsList, modelAvailableCall } from "../networking";
+import { CredentialItem, getGuardrailsList, modelAvailableCall, tagListCall } from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
 import { TEST_MODES } from "./add_model_modes";
 import { Row, Col } from "antd";
@@ -18,6 +18,7 @@ import TeamDropdown from "../common_components/team_dropdown";
 import { all_admin_roles } from "@/utils/roles";
 import AddAutoRouterTab from "./add_auto_router_tab";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
+import { Tag } from "../tag_management/types";
 
 interface AddModelTabProps {
   form: FormInstance; // For the Add Model tab
@@ -63,6 +64,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   // Using a unique ID to force the ConnectionErrorDisplay to remount and run a fresh test
   const [connectionTestId, setConnectionTestId] = useState<string>("");
 
@@ -78,6 +80,19 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
     };
 
     fetchGuardrails();
+  }, [accessToken]);
+
+  useEffect(() => {
+    const fetchTags = async () => {
+      try {
+        const response = await tagListCall(accessToken);
+        setTagsList(response);
+      } catch (error) {
+        console.error("Failed to fetch tags:", error);
+      }
+    };
+
+    fetchTags();
   }, [accessToken]);
 
   // Test connection when button is clicked
@@ -349,6 +364,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     setShowAdvancedSettings={setShowAdvancedSettings}
                     teams={teams}
                     guardrailsList={guardrailsList}
+                    tagsList={tagsList}
                   />
 
                   <div className="flex justify-between items-center mb-4">
