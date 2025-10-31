@@ -186,7 +186,7 @@ This helper will check the provider's endpoint for valid models.
 
 Currently implemented for:
 - OpenAI (if OPENAI_API_KEY is set)
-- Fireworks AI (if FIREWORKS_AI_API_KEY is set)
+- Fireworks AI (if FIREWORKS_API_KEY is set)
 - LiteLLM Proxy (if LITELLM_PROXY_API_KEY is set)
 - Gemini (if GEMINI_API_KEY is set)
 - XAI (if XAI_API_KEY is set)   

@@ -5622,7 +5622,7 @@ def validate_environment(  # noqa: PLR0915
             ):
                 keys_in_environment = True
             else:
-                missing_keys.append("FIREWORKS_AI_API_KEY")
+                missing_keys.append("FIREWORKS_API_KEY")
         elif custom_llm_provider == "cloudflare":
             if "CLOUDFLARE_API_KEY" in os.environ and (
                 "CLOUDFLARE_ACCOUNT_ID" in os.environ
