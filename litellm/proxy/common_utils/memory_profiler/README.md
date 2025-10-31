@@ -1,37 +1,44 @@
-# Memory Leak Tests Library
+# Memory Profiler Library
+
+A comprehensive library for memory leak detection and profiling during development and testing.
 
 ## What is This?
 
-A comprehensive library for detecting and monitoring memory leaks in LiteLLM:
+This package provides tools for **detecting memory leaks in development/testing environments**:
 
-- **Testing Framework**: Automated tests that check if LiteLLM is leaking memory
-- **Live Profiler**: Production server endpoint monitoring and profiling
+- **Core utilities**: Memory analysis, leak detection, and snapshot management
+- **Endpoint profiler**: Memory monitoring for development/testing
+- **Reusable components**: Used by tests in `tests/memory_leak_tests/`
 
-Memory leaks can crash your server, this library helps you catch them early.
+⚠️ **Note**: This is a **development and testing tool**. Not intended for production monitoring.
 
 ## Quick Start
 
-### Testing (Automated)
+### For Testing
+
+This package is used by memory leak tests in `tests/memory_leak_tests/`.
 
 ```bash
-# Run all tests
+# Run memory leak tests
 pytest tests/memory_leak_tests/
 
 # Run specific test
 pytest tests/memory_leak_tests/test_sdk_completion.py
-pytest tests/memory_leak_tests/test_router_completion.py
 ```
 
-### Profiling (Production Server)
+### For Development Profiling
 
 ```python
-from litellm.proxy.common_utils.memory_profiler.endpoint_profiler import EndpointProfiler, profile_endpoint
+from litellm.proxy.common_utils.memory_profiler.endpoint_profiler import (
+    EndpointProfiler, 
+    profile_endpoint
+)
 
-# Initialize at server startup
+# Initialize for development/testing
 profiler = EndpointProfiler.get_instance(enabled=True, sampling_rate=1.0)
 await profiler.start_auto_flush()
 
-# Decorate your endpoints
+# Decorate endpoints to profile during development
 @profile_endpoint()
 async def chat_completions(request: Request):
     return {"response": "data"}
@@ -42,67 +49,15 @@ python -m litellm.proxy.common_utils.memory_profiler.endpoint_profiler endpoint_
 
 See `endpoint_profiler/README.md` for complete profiler documentation.
 
-## What Gets Tested
+## Package Structure
 
-- **SDK tests**: `litellm.completion()` and `litellm.acompletion()`
-- **Router tests**: `Router.completion()` and `Router.acompletion()`
-- **Live profiling**: Production server endpoint monitoring via `profiler/` module
-- Both sync/async and streaming/non-streaming modes
-
-## How It Works
-
-1. **Warmup** (2 batches): Let caches stabilize
-2. **Measurement** (6 batches): Run requests and measure memory
-3. **Analysis**: Check if memory grows or stays stable
-
-Each batch = 50 API requests to a fake LLM endpoint.
-
-**Performance**: Each test now runs **400 total requests** (optimized from 1,300) with smart snapshot capture to balance speed and accuracy.
-
-## Reading Results
-
-**Good (No Leak)**
-
-```
-Memory Growth Analysis
-Initial avg: 15.23 MB
-Final avg:   15.45 MB
-Growth:      0.22 MB (1.4%)
-
-Memory stabilized — no leak detected
-```
-
-**Bad (Leak Detected)**
-
-```
-Memory Growth Analysis
-Initial avg: 15.23 MB
-Final avg:   20.87 MB
-Growth:      5.64 MB (37.0%)
-
-Memory grew by 37.0% (>25% threshold) — possible leak
-```
-
-**Error-Induced Leak**
-
-```
-ERROR-INDUCED MEMORY LEAK DETECTED
-
-Memory spikes occurred in batch(es) with errors and did not fully recover:
-  • Batch 5: 15.23 MB → 23.45 MB (+54.0%) with 12 error(s) → stabilized at 23.50 MB
-
-This indicates that error handling is not properly releasing resources.
-```
-
-## Files
-
-The codebase is organized into modular components:
+The package is organized into modular components:
 
 ### Core Modules
 
 - `constants.py` - Configuration (batch size, thresholds, smart capture settings)
 - `core/` - Core execution logic
-  - `execution.py` - Main test execution engine
+  - `execution.py` - Test execution engine
   - `config.py` - Configuration management
   - `cleanup.py` - Resource cleanup utilities
 
@@ -121,9 +76,9 @@ The codebase is organized into modular components:
   - `capture.py` - Smart memory snapshot capturing
   - `storage.py` - Snapshot persistence
 
-### Live Server Profiling
+### Development Profiler
 
-- `endpoint_profiler/` - Production endpoint memory monitoring (modular design)
+- `endpoint_profiler/` - Endpoint memory monitoring for development/testing
   - **Profiler modules (modular)**:
     - `profiler_core.py` - EndpointProfiler singleton class
     - `decorator.py` - profile_endpoint decorator
@@ -141,128 +96,146 @@ The codebase is organized into modular components:
   - `constants.py` - Configuration constants
   - `README.md` - Complete profiler documentation
 
-### Test Suites
-
-- `tests/` - Actual test files
-  - `test_sdk_completion.py` - SDK completion tests
-  - `test_router_completion.py` - Router completion tests
-
 ### Utilities
 
 - `utils/` - Helper functions
   - `conversions.py` - Data type conversions
   - `formatting.py` - Output formatting
 
-## Adjusting Tests
+## Key Features
 
-Edit `constants.py`:
+### Smart Capture
+Captures detailed memory snapshots selectively to balance detail with performance:
+
+- **First request** - Always (baseline)
+- **On errors** - Always (to debug error-related leaks)
+- **Memory increases** - When memory grows by >2% (configurable)
+- **Periodic sampling** - Every N requests (configurable)
+
+### Professional Leak Detection
+Uses battle-tested algorithms:
+- Linear regression analysis
+- Statistical significance testing
+- Error-induced leak detection
+- Variance filtering
+
+### Modular Design
+Each component has a single responsibility:
+- Easy to test individually
+- Can be imported independently
+- Clear separation of concerns
+
+## Configuration
+
+Edit `constants.py` to adjust test parameters:
 
 ```python
-# Execution speed controls (current optimized values)
+# Execution speed controls
 DEFAULT_NUM_BATCHES = 6                              # Number of measurement batches
 DEFAULT_BATCH_SIZE = 50                              # Requests per batch
 DEFAULT_WARMUP_BATCHES = 2                           # Warmup batches before measurement
 DEFAULT_LEAK_DETECTION_MAX_GROWTH_PERCENT = 25.0    # Leak detection threshold
 
-# Smart capture configuration (controls snapshot frequency)
+# Smart capture configuration
 DEFAULT_MEMORY_INCREASE_THRESHOLD_PCT = 2.0          # Capture when memory grows by >2%
 DEFAULT_PERIODIC_SAMPLE_INTERVAL = 25                # Capture every 25 requests
 DEFAULT_TOP_CONSUMERS_COUNT = 10                     # Top memory consumers to track
 ```
 
-**For even faster tests** (less confidence):
+## Usage Examples
+
+### Running Tests
 
 ```python
-DEFAULT_NUM_BATCHES = 4
-DEFAULT_BATCH_SIZE = 30
-DEFAULT_WARMUP_BATCHES = 1
-DEFAULT_PERIODIC_SAMPLE_INTERVAL = 50
+from litellm.proxy.common_utils.memory_profiler import (
+    run_memory_measurement_with_tracemalloc,
+    analyze_and_detect_leaks,
+    get_memory_test_config,
+)
+
+# Configure and run test
+config = get_memory_test_config(batch_size=50, num_batches=6)
+memory_samples, error_counts = await run_memory_measurement_with_tracemalloc(...)
+analyze_and_detect_leaks(memory_samples, error_counts, config)
 ```
 
-## Smart Capture Configuration
-
-Tests capture detailed memory snapshots (including top memory consumers) selectively to balance detail with performance:
-
-**When detailed snapshots are captured:**
-
-1. **First request** - Always (baseline)
-2. **On errors** - Always (to debug error-related leaks)
-3. **Memory increases** - When memory grows by more than `DEFAULT_MEMORY_INCREASE_THRESHOLD_PCT` (default 2%)
-4. **Periodic sampling** - Every `DEFAULT_PERIODIC_SAMPLE_INTERVAL` requests (default 100)
-
-**Between these events**, lightweight snapshots are captured (basic metrics only, no expensive profiling).
-
-**Tuning Smart Capture:**
+### Memory Analysis
 
 ```python
-# More sensitive (catches smaller leaks, more snapshots, larger files)
-DEFAULT_MEMORY_INCREASE_THRESHOLD_PCT = 1.0
-DEFAULT_PERIODIC_SAMPLE_INTERVAL = 50
+from litellm.proxy.common_utils.memory_profiler import (
+    analyze_memory_growth,
+    detect_memory_leak,
+)
 
-# Less sensitive (fewer snapshots, smaller files, may miss small leaks)
-DEFAULT_MEMORY_INCREASE_THRESHOLD_PCT = 5.0
-DEFAULT_PERIODIC_SAMPLE_INTERVAL = 200
+# Analyze memory samples
+growth_metrics = analyze_memory_growth(rolling_avg, num_samples)
+leak_detected, message = detect_memory_leak(growth_metrics, memory_samples, error_counts)
 ```
 
-**When to adjust:**
+### Endpoint Profiling (Development)
 
-- **Lower threshold**: Testing code prone to small, gradual leaks (more sensitive detection)
-- **Higher threshold**: Long-running tests where file size is a concern (faster, less data)
-- **Shorter interval**: Critical paths where you want comprehensive coverage (slower, more snapshots)
-- **Longer interval**: Stable code where periodic verification is sufficient (faster, recommended)
+```python
+from litellm.proxy.common_utils.memory_profiler.endpoint_profiler import (
+    analyze_profile_file,
+    load_profile_data,
+)
 
-**Performance Impact:**
+# Load and analyze profile data
+profiles = load_profile_data("endpoint_profiles/chat_completions.json")
+analysis = analyze_profile_file("endpoint_profiles/chat_completions.json")
 
-- `PERIODIC_SAMPLE_INTERVAL = 10`: ~130 detailed snapshots per test (slower, comprehensive)
-- `PERIODIC_SAMPLE_INTERVAL = 25`: ~16 detailed snapshots per test (current, balanced)
-- `PERIODIC_SAMPLE_INTERVAL = 50`: ~8 detailed snapshots per test (faster, less detail)
+if analysis.get('leak_detected'):
+    print(f"Leak detected: {analysis['leak_message']}")
+```
 
-## Performance Optimizations
+### Custom Analysis Workflow
 
-The tests are optimized for speed while maintaining leak detection accuracy:
+```python
+from litellm.proxy.common_utils.memory_profiler.endpoint_profiler import (
+    load_profile_data,
+    analyze_endpoint_memory,
+    analyze_top_memory_consumers,
+    analyze_memory_growth_by_location,
+)
 
-- **400 requests per test** (2 warmup + 6 measurement batches × 50 requests)
-- **Smart snapshot capture** - detailed profiling only every 25 requests (not every request)
-- **Reduced profiling overhead** - tracks top 10 consumers (not 20)
+# Load data
+profiles = load_profile_data("endpoint_profiles/chat.json")
+
+# Run specific analyses
+memory_analysis = analyze_endpoint_memory(profiles)
+analyze_top_memory_consumers(profiles, top_n=10)
+analyze_memory_growth_by_location(profiles, top_n=20)
+```
+
+## How Memory Tests Work
+
+1. **Warmup** (2 batches): Let caches stabilize
+2. **Measurement** (6 batches): Run requests and measure memory
+3. **Analysis**: Check if memory grows or stays stable
+
+Each batch = 50 API requests. Total: 400 requests per test (optimized for speed).
+
+## Documentation
+
+- `endpoint_profiler/README.md` - Complete endpoint profiler documentation
+- `analysis/README.md` - Detailed analysis algorithms documentation
+- Individual module docstrings - Inline documentation
+
+## Performance
+
+- **400 requests per test** (optimized from 1,300)
+- **Smart snapshot capture** - detailed profiling only when needed
 - **~69% faster** than previous configuration
+- Test suite runs in ~5-8 minutes
 
-**Approximate test duration:**
+## Best Practices for Testing
 
-- Single test variant: ~30-60 seconds
-- All 4 variants (per test file): ~2-4 minutes
-- Full test suite: ~5-8 minutes
+1. **Run tests regularly** - Catch memory leaks early in development
+2. **Use in CI/CD** - Automate memory leak detection
+3. **Profile during development** - Use endpoint profiler to investigate issues
+4. **Tune for your tests** - Adjust batch sizes and thresholds in constants.py
+5. **Close other apps** - Reduce noise in measurements
 
-## Common Issues
+## Version
 
-**Test takes too long to run**
-
-- Current: 400 requests per test (already optimized)
-- Further reduction: Edit `constants.py` and reduce `DEFAULT_NUM_BATCHES` (try 4) or `DEFAULT_BATCH_SIZE` (try 30)
-- Warning: Too few requests may miss slow memory leaks
-
-**Test is flaky or skips with "too noisy" message**
-
-- Problem: Other processes on your machine are using memory, making measurements unreliable
-- Fix: Close other applications or run on a quieter machine
-- Note: Test auto-skips if measurements vary by more than 40%. To adjust, change `DEFAULT_MAX_COEFFICIENT_VARIATION` in `constants.py`
-
-**Need to test against your own endpoint**
-
-- Problem: Tests use a fake endpoint by default
-- Fix: Edit `FAKE_LLM_ENDPOINT` in `constants.py` to point to your server
-
-## Debugging Tips
-
-If a test fails, check:
-
-1. Unreleased resources (HTTP connections, file handles)
-2. Error handling cleanup
-3. Callbacks creating closures with large objects
-4. Unbounded caches
-
-## Key Terms
-
-- **Batch**: Group of API requests
-- **Warmup**: Initial batches to stabilize before measurement
-- **Rolling Average**: Smooths measurement noise
-- **Growth Percentage**: Memory increase from start to end
+`__version__ = "1.0.0"`
