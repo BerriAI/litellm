@@ -321,3 +321,46 @@ class TestOpenAIContainerTransformation:
         # None values should be included as None
         assert data["expires_after"] is None
         assert data["file_ids"] is None
+
+    def test_container_create_response_includes_cost(self):
+        """Test that container create response includes code interpreter cost calculation."""
+        from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import StandardBuiltInToolCostTracking
+        
+        # Mock HTTP response
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "id": "cntr_cost_test",
+            "object": "container",
+            "created_at": 1747857508,
+            "status": "running",
+            "expires_after": {"anchor": "last_active_at", "minutes": 20},
+            "last_active_at": 1747857508,
+            "name": "Cost Test Container"
+        }
+        
+        # Transform the response
+        container = self.config.transform_container_create_response(
+            raw_response=mock_response,
+            logging_obj=self.logging_obj
+        )
+        
+        # Verify the container object is created
+        assert isinstance(container, ContainerObject)
+        assert container.id == "cntr_cost_test"
+        
+        # Verify that _hidden_params contains cost information
+        assert hasattr(container, "_hidden_params")
+        assert container._hidden_params is not None
+        assert "additional_headers" in container._hidden_params
+        assert "llm_provider-x-litellm-response-cost" in container._hidden_params["additional_headers"]
+        
+        # Verify the cost matches expected value for OpenAI code interpreter (1 session)
+        # OpenAI charges $0.03 per code interpreter session
+        expected_cost = StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(
+            sessions=1,
+            provider="openai"
+        )
+        actual_cost = container._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"]
+        
+        assert actual_cost == expected_cost
+        assert actual_cost == 0.03  # OpenAI code interpreter costs $0.03 per session
