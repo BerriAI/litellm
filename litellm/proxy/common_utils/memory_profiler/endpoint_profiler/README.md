@@ -11,7 +11,7 @@ The Memory Leak Profiler monitors memory usage of proxy endpoints to detect leak
 1. **Lean & Focused**: Memory profiling only - no CPU/timing bloat
 2. **Smart Capture**: Detailed snapshots only when needed (errors, growth, periodic sampling)
 3. **Efficient I/O**: Buffered writes to avoid disk I/O on every request
-4. **Professional Detection**: Reuses battle-tested algorithms from `tests.memory_leak_tests`
+4. **Professional Detection**: Reuses battle-tested algorithms from parent `memory_profiler` module
 5. **Production-Ready**: Thread-safe, async-friendly, automatic rotation
 
 ## Architecture
@@ -46,12 +46,15 @@ The Memory Leak Profiler monitors memory usage of proxy endpoints to detect leak
               └──────────┬──────────┘
                          │
                          ▼
-              ┌────────────────────────┐
-              │ Analysis (analyze.py)  │
-              │ • Leak detection       │
-              │ • Growth analysis      │
-              │ • Top consumers        │
-              └────────────────────────┘
+              ┌──────────────────────────────────────┐
+              │     Analysis (Modular System)        │
+              │ • analyze_profiles.py (orchestrator) │
+              │ • data_loading.py (load data)        │
+              │ • memory_analysis.py (detect leaks)  │
+              │ • consumer_analysis.py (consumers)   │
+              │ • location_analysis.py (growth)      │
+              │ • reporting.py (output)              │
+              └──────────────────────────────────────┘
 ```
 
 ## Key Components
@@ -68,7 +71,7 @@ The Memory Leak Profiler monitors memory usage of proxy endpoints to detect leak
   - Detailed: First request, errors, memory spikes (>2%), periodic (every 25th)
   - Lightweight: All other requests (minimal overhead)
 - Uses `tracemalloc` for precise memory tracking
-- Reuses `tests.memory_leak_tests.snapshot` when available
+- Reuses parent `memory_profiler.snapshot` module
 
 ### 3. **storage.py** - Efficient I/O
 
@@ -77,12 +80,16 @@ The Memory Leak Profiler monitors memory usage of proxy endpoints to detect leak
 - Automatic rotation (keeps last 10,000 profiles per endpoint)
 - Async writes to avoid blocking
 
-### 4. **analyze_profiles.py** - Leak Detection
+### 4. **Analysis Modules** - Modular Leak Detection
 
-- Memory growth trend analysis
-- Professional leak detection using `tests.memory_leak_tests.analysis`
-- Top memory consumers aggregation
-- Statistical analysis (mean, median, percentiles)
+The analysis system is split into focused modules for better maintainability:
+
+- **analyze_profiles.py**: Main orchestration - coordinates analysis workflow
+- **data_loading.py**: Profile data loading from JSON files
+- **memory_analysis.py**: Core memory growth and leak detection (uses parent module algorithms)
+- **consumer_analysis.py**: Top memory consumers aggregation and reporting
+- **location_analysis.py**: Memory growth by code location tracking
+- **reporting.py**: Formatted output and report generation
 
 ### 5. **utils.py** - Helper Functions
 
@@ -97,12 +104,87 @@ The Memory Leak Profiler monitors memory usage of proxy endpoints to detect leak
 - Smart capture thresholds
 - File paths and rotation settings
 
+## Modular Analysis System
+
+The analysis subsystem is designed with modularity and single responsibility in mind:
+
+### Module Responsibilities
+
+1. **data_loading.py** - Data Input Layer
+
+   - Load profile data from JSON files
+   - Extract and parse request IDs
+   - Sort profiles chronologically
+   - Pure functions with no side effects
+
+2. **memory_analysis.py** - Core Analysis Engine
+
+   - Extract memory samples from profiles
+   - Detect memory leaks using parent module algorithms
+   - Calculate rolling averages and growth metrics
+   - Returns structured analysis results
+
+3. **consumer_analysis.py** - Resource Consumption Analysis
+
+   - Parse file:line locations from tracemalloc data
+   - Aggregate memory usage by location
+   - Find top memory-consuming code locations
+   - Generate aggregated statistics
+
+4. **location_analysis.py** - Temporal Growth Analysis
+
+   - Track memory usage per location over time
+   - Calculate growth metrics (first → last)
+   - Identify locations with significant growth
+   - Detect code paths with memory accumulation
+
+5. **reporting.py** - Output Formatting Layer
+
+   - Format analysis results for display
+   - Print leak detection reports
+   - Display growth metrics and recommendations
+   - Consistent formatting across all outputs
+
+6. **analyze_profiles.py** - Orchestration Layer
+   - Coordinates the analysis workflow
+   - Combines results from specialized modules
+   - Provides CLI entry point
+   - Minimal logic - delegates to specialized modules
+
+### Benefits of Modular Design
+
+- **Single Responsibility**: Each module has one clear purpose
+- **Testability**: Easy to unit test individual functions
+- **Maintainability**: Changes are isolated to specific modules
+- **Reusability**: Functions can be imported independently
+- **Readability**: Smaller files are easier to understand
+- **Extensibility**: New analysis types can be added as new modules
+
+### Usage Examples
+
+```python
+# Use high-level orchestration
+from litellm.proxy.common_utils.memory_profiler.endpoint_profiler import analyze_profile_file
+results = analyze_profile_file("endpoint_profiles/chat.json")
+
+# Or use individual modules for custom analysis
+from litellm.proxy.common_utils.memory_profiler.endpoint_profiler import (
+    load_profile_data,
+    analyze_endpoint_memory,
+    analyze_top_memory_consumers,
+)
+
+profiles = load_profile_data("endpoint_profiles/chat.json")
+memory_analysis = analyze_endpoint_memory(profiles)
+analyze_top_memory_consumers(profiles, top_n=10)
+```
+
 ## How It Works
 
 ### 1. **Initialization** (Server Startup)
 
 ```python
-from tests.memory_leak_tests.profiler import EndpointProfiler
+from litellm.proxy.common_utils.memory_profiler.endpoint_profiler import EndpointProfiler
 
 profiler = EndpointProfiler.get_instance(
     enabled=True,
@@ -146,7 +228,7 @@ async def chat_completions(request: Request):
 ### 4. **Analysis** (Post-Collection)
 
 ```python
-from tests.memory_leak_tests.profiler import analyze_profile_file
+from litellm.proxy.common_utils.memory_profiler.endpoint_profiler import analyze_profile_file
 
 analysis = analyze_profile_file("endpoint_profiles/chat_completions.json")
 
@@ -262,7 +344,7 @@ profiler.buffer.clear_all()
 ### Load and Analyze
 
 ```python
-from tests.memory_leak_tests.profiler import (
+from litellm.proxy.common_utils.memory_profiler.endpoint_profiler import (
     load_profile_data,
     analyze_endpoint_memory,
 )
@@ -296,10 +378,10 @@ Analyze profile files directly from the command line:
 
 ```bash
 # Basic analysis with default settings (shows top 20 growing locations)
-python -m tests.memory_leak_tests.profiler endpoint_profiles/chat_completions.json
+python -m litellm.proxy.common_utils.memory_profiler.endpoint_profiler endpoint_profiles/chat_completions.json
 
 # Show top 30 locations by memory growth
-python -m tests.memory_leak_tests.profiler endpoint_profiles/chat_completions.json --growth 30
+python -m litellm.proxy.common_utils.memory_profiler.endpoint_profiler endpoint_profiles/chat_completions.json --growth 30
 ```
 
 The command-line tool provides:
@@ -311,20 +393,20 @@ The command-line tool provides:
 
 ## Leak Detection Algorithm
 
-Uses professional algorithms from `tests.memory_leak_tests.analysis.detection`:
+Uses professional algorithms from parent `memory_profiler.analysis.detection` module:
 
 1. **Linear Regression**: Fit trend line to memory over requests
 2. **Statistical Significance**: R² > 0.7, p-value < 0.05
 3. **Growth Rate Threshold**: > 0.01 MB/request
 4. **Variance Check**: Exclude high variance (unstable)
 
-## Integration with Memory Leak Tests
+## Integration with Parent Memory Profiler Module
 
-The profiler reuses battle-tested code from `tests.memory_leak_tests`:
+The endpoint profiler reuses battle-tested code from parent `memory_profiler` module:
 
-- **Capture logic**: `tests.memory_leak_tests.snapshot.capture`
-- **Analysis algorithms**: `tests.memory_leak_tests.analysis.detection`
-- **Utilities**: `tests.memory_leak_tests.utils.formatting`
+- **Capture logic**: `memory_profiler.snapshot.capture`
+- **Analysis algorithms**: `memory_profiler.analysis.detection`
+- **Utilities**: `memory_profiler.utils` and `memory_profiler.core`
 
 This ensures consistency between testing and production monitoring.
 

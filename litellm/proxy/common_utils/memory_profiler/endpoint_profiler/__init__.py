@@ -62,11 +62,45 @@ from .profiler import EndpointProfiler, profile_endpoint
 # Storage utilities
 from .storage import ProfileBuffer
 
-# Analysis utilities
+# Analysis utilities (main orchestration)
 from .analyze_profiles import (
-    analyze_endpoint_memory,
     analyze_profile_file,
+)
+
+# Data loading utilities
+from .data_loading import (
     load_profile_data,
+    extract_request_number,
+    sort_profiles_by_request_id,
+)
+
+# Memory analysis utilities
+from .memory_analysis import (
+    analyze_endpoint_memory,
+    extract_memory_samples,
+)
+
+# Consumer analysis utilities
+from .consumer_analysis import (
+    analyze_top_memory_consumers,
+    aggregate_memory_by_location,
+    get_top_memory_consumers,
+    parse_file_location,
+)
+
+# Location analysis utilities
+from .location_analysis import (
+    analyze_memory_growth_by_location,
+    track_location_memory_over_time,
+    calculate_location_growth,
+    get_top_growing_locations,
+)
+
+# Reporting utilities
+from .reporting import (
+    print_analysis_report,
+    print_loading_info,
+    print_error,
 )
 
 # Capture utilities (for advanced usage)
@@ -106,10 +140,34 @@ __all__ = [
     "profile_endpoint",
     "ProfileBuffer",
     
-    # Analysis functions
-    "analyze_endpoint_memory",
+    # Analysis functions (main orchestration)
     "analyze_profile_file",
+    
+    # Data loading
     "load_profile_data",
+    "extract_request_number",
+    "sort_profiles_by_request_id",
+    
+    # Memory analysis
+    "analyze_endpoint_memory",
+    "extract_memory_samples",
+    
+    # Consumer analysis
+    "analyze_top_memory_consumers",
+    "aggregate_memory_by_location",
+    "get_top_memory_consumers",
+    "parse_file_location",
+    
+    # Location analysis
+    "analyze_memory_growth_by_location",
+    "track_location_memory_over_time",
+    "calculate_location_growth",
+    "get_top_growing_locations",
+    
+    # Reporting
+    "print_analysis_report",
+    "print_loading_info",
+    "print_error",
     
     # Capture functions (advanced)
     "capture_memory_snapshot",

@@ -1,45 +1,22 @@
 """
-Command-line entry point for memory leak analysis.
+Command-line entry point for endpoint memory profile analysis.
 
 This allows running the analyzer as:
-    python -m tests.memory_leak_tests.profiler <profile_file.json>
+    python -m litellm.proxy.common_utils.memory_profiler.endpoint_profiler <profile_file.json>
 
 Instead of:
-    python -m tests.memory_leak_tests.profiler.analyze_profiles <profile_file.json>
+    python -m litellm.proxy.common_utils.memory_profiler.endpoint_profiler.analyze_profiles <profile_file.json>
+
+The modular analysis system provides:
+- Data loading (data_loading.py)
+- Memory analysis (memory_analysis.py)
+- Consumer analysis (consumer_analysis.py)
+- Location analysis (location_analysis.py)
+- Reporting (reporting.py)
+- Orchestration (analyze_profiles.py)
 """
 
-import sys
-from .analyze_profiles import analyze_profile_file
-
-
-def main():
-    """Main entry point for command-line analysis."""
-    if len(sys.argv) < 2:
-        print("Usage: python -m tests.memory_leak_tests.profiler <profile_file.json> [--growth N]")
-        print("\nOptions:")
-        print("  --growth N    Show top N locations by memory growth (default: 20)")
-        print("\nExamples:")
-        print("  # Show default growth analysis (top 20)")
-        print("  python -m tests.memory_leak_tests.profiler endpoint_profiles/chat_completions.json")
-        print("\n  # Show top 30 growing locations")
-        print("  python -m tests.memory_leak_tests.profiler endpoint_profiles/chat_completions.json --growth 30")
-        print("\nNote: Run from the project root directory")
-        sys.exit(1)
-    
-    profile_file = sys.argv[1]
-    growth_n = 20  # Default
-    
-    # Parse arguments
-    i = 2
-    while i < len(sys.argv):
-        if sys.argv[i] == '--growth' and i + 1 < len(sys.argv):
-            growth_n = int(sys.argv[i + 1])
-            i += 2
-        else:
-            i += 1
-    
-    analyze_profile_file(profile_file, show_growth=growth_n)
-
+from .analyze_profiles import main
 
 if __name__ == '__main__':
     main()

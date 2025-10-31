@@ -123,11 +123,19 @@ The codebase is organized into modular components:
 
 ### Live Server Profiling
 
-- `profiler/` - Production endpoint memory monitoring
+- `endpoint_profiler/` - Production endpoint memory monitoring (modular design)
   - `profiler.py` - EndpointProfiler and decorators for live monitoring
   - `capture.py` - Request-level memory capture
   - `storage.py` - Profile buffering and persistence
-  - `analyze_profiles.py` - Profile analysis and leak detection
+  - **Analysis modules (modular)**:
+    - `analyze_profiles.py` - Main orchestration layer
+    - `data_loading.py` - Profile data loading utilities
+    - `memory_analysis.py` - Core leak detection and growth analysis
+    - `consumer_analysis.py` - Top memory consumers analysis
+    - `location_analysis.py` - Memory growth by code location
+    - `reporting.py` - Formatted output and reports
+  - `utils.py` - Helper functions
+  - `constants.py` - Configuration constants
   - `README.md` - Complete profiler documentation
 
 ### Test Suites
