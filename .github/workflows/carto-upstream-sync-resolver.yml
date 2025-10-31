@@ -9,7 +9,7 @@ name: CARTO Upstream Sync - Conflict Resolver
 # - Only runs on main branch (upstream sync PRs)
 # - Only runs when conflicts are detected
 # - Blocks external forks
-# - Rate limited (max-turns: 100, job timeout: 90 mins)
+# - Rate limited (max-turns: 250, job timeout: 90 mins)
 
 on:
   pull_request:
@@ -263,10 +263,10 @@ jobs:
           echo "head-ref=${HEAD_REF}" >> $GITHUB_OUTPUT
           echo "[Resolver] Will checkout branch: ${HEAD_REF}"
 
-      - name: Checkout repository
+      - name: Checkout repository (base branch - target of PR)
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.pr-info.outputs.head-ref }}
+          ref: ${{ steps.pr-info.outputs.base-ref }}
           fetch-depth: 0
           token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
 
@@ -275,7 +275,56 @@ jobs:
           git config --global user.name "Cartofante"
           git config --global user.email "cartofante@carto.com"
 
+      - name: Attempt merge to create conflicts
+        run: |
+          echo "::group::Attempting merge of ${{ steps.pr-info.outputs.head-ref }} into ${{ steps.pr-info.outputs.base-ref }}"
+
+          # Fetch the head branch
+          git fetch origin ${{ steps.pr-info.outputs.head-ref }}:${{ steps.pr-info.outputs.head-ref }}
+
+          # Attempt merge (will fail if conflicts exist)
+          if git merge ${{ steps.pr-info.outputs.head-ref }} --no-commit --no-ff; then
+            echo "[Resolver] ✅ Clean merge - no conflicts found"
+            echo "[Resolver] This PR should be mergeable without Claude's help"
+            git merge --abort || true
+            exit 1
+          else
+            echo "[Resolver] ⚠️ Conflicts detected - Claude will resolve them"
+            echo "[Resolver] Conflicted files:"
+            git diff --name-only --diff-filter=U
+          fi
+
+          echo "::endgroup::"
+
+      - name: Comment on original PR - Starting
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+        run: |
+          gh pr comment ${{ needs.check-eligibility.outputs.pr-number }} \
+            --repo ${{ github.repository }} \
+            --body "$(cat <<'EOF'
+          ## 🤖 Automated Conflict Resolution Started
+
+          Claude Code is now resolving conflicts for this PR.
+
+          **Process:**
+          1. 🔍 Analyzing conflicts in all files
+          2. 📋 Reading CARTO customization guidelines
+          3. ⚖️ Applying resolution priorities (CARTO first, then upstream)
+          4. ✏️ Resolving conflicts file by file
+          5. 🧪 Running tests (lint, mypy, unit tests)
+          6. 🔀 Creating resolution PR
+
+          **Status:** In progress...
+
+          _This process may take 30-90 minutes for large PRs._
+
+          [View workflow run →](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          EOF
+          )"
+
       - name: Run Claude Code for conflict resolution
+        id: claude-run
         uses: anthropics/claude-code-action@v1
         with:
           github_token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
@@ -290,14 +339,31 @@ jobs:
             coding standards, and infrastructure patterns. This file contains essential context
             about how CARTO customizes LiteLLM.
 
-            You are helping resolve merge conflicts in PR #${{ needs.check-eligibility.outputs.pr-number }},
-            which syncs upstream LiteLLM changes to CARTO's fork.
+            ## Branch Strategy & Your Context
+
+            ```
+            upstream/main          → BerriAI's development branch (may be unstable)
+                    ↓
+                  main             → Mirrors upstream/main (pure upstream copy)
+                    ↓ (merge with conflicts)
+                carto/main         → Production branch (stable + CARTO mods) < YOU ARE HERE
+                    ↓
+                feature/*          → Development branches
+            ```
+
+            **What happened:**
+            1. `main` branch was synced from upstream BerriAI/litellm
+            2. PR #${{ needs.check-eligibility.outputs.pr-number }} was created: `main → carto/main`
+            3. Merge attempt failed due to conflicts (CARTO customizations vs upstream changes)
+            4. You are now on `carto/main` branch with `main` already merged (in conflicted state)
+
+            **Your task:** Resolve the conflicts and create a resolution PR back to `carto/main`
 
             ## Context
+            - **Current branch**: `carto/main` (with conflicted merge from `main`)
             - **Project Guidelines**: See CARTO_CLAUDE.md for detailed conventions
-            - **PR**: #${{ needs.check-eligibility.outputs.pr-number }} (main → carto/main)
-            - **Purpose**: Sync BerriAI/litellm upstream changes to CartoDB/litellm
-            - **Current State**: PR has merge conflicts that need resolution
+            - **Original PR**: #${{ needs.check-eligibility.outputs.pr-number }} (main → carto/main)
+            - **Your mission**: Resolve conflicts, create PR: `upstream-sync-resolver/{{ needs.check-eligibility.outputs.pr-number }} → carto/main`
 
             ## ⚠️ CRITICAL: Resolution Priorities (In Order)
 
@@ -326,16 +392,20 @@ jobs:
 
             ## Your Task
 
-            ### Step 1: Analyze Conflicts
+            ### Step 1: Verify Current State & Read Guidelines
             ```bash
             # FIRST: Read CARTO project guidelines
             cat CARTO_CLAUDE.md
 
-            # Check which files have conflicts
+            # Verify you're on carto/main with conflicted merge
             git status
+            # Should show: "You have unmerged paths" or similar
 
-            # List conflicted files
+            # List all conflicted files
             git diff --name-only --diff-filter=U
+
+            # Review a sample conflict (optional)
+            # git diff <conflicted-file>
             ```
 
             ### Step 2: Understand File-Specific Rules
@@ -366,36 +436,42 @@ jobs:
               - Keep CARTO scripts
               - Accept upstream schema improvements
 
-            ### Step 3: Create Resolution Branch
+            ### Step 2: Create Resolution Branch (from conflicted state)
             ```bash
+            # Create branch from current conflicted state
             git checkout -b upstream-sync-resolver/${{ needs.check-eligibility.outputs.pr-number }}
             ```
 
-            ### Step 4: Resolve Each Conflict
+            ### Step 3: Resolve Each Conflict
 
             For each conflicted file:
 
             1. **Open the file and locate conflict markers:**
                ```
-               <<<<<<< HEAD (carto/main - ours)
-               [CARTO version]
+               <<<<<<< HEAD (current: carto/main with CARTO customizations)
+               [CARTO version - this is what's currently in carto/main]
                =======
-               [upstream version]
-               >>>>>>> main (upstream - theirs)
+               [upstream version - this is what's coming from main branch]
+               >>>>>>> main (or commit hash - upstream changes)
                ```
 
             2. **Apply the priority rules above**
+               - Keep CARTO infrastructure customizations
+               - Accept upstream core functionality improvements
+               - Manually merge when both are important
 
             3. **Remove ALL conflict markers** (`<<<<<<<`, `=======`, `>>>>>>>`)
 
-            4. **Verify syntax** - ensure file is valid
+            4. **Verify syntax** - ensure file is valid (use linter if needed)
 
             5. **Stage the resolved file:**
                ```bash
                git add <resolved-file>
                ```
 
-            ### Step 5: Comprehensive Testing (CRITICAL)
+            6. **Repeat for all conflicted files** until `git status` shows no unmerged paths
+
+            ### Step 4: Comprehensive Testing (CRITICAL)
 
             **YOU MUST RUN ALL THESE TESTS AND ENSURE THEY PASS:**
 
@@ -422,7 +498,7 @@ jobs:
             - Re-run tests until ALL pass
             - DO NOT proceed to PR creation if tests fail
 
-            ### Step 6: Commit Your Changes
+            ### Step 5: Commit Your Changes
             ```bash
             git commit -m "fix: resolve upstream sync conflicts for PR #${{ needs.check-eligibility.outputs.pr-number }}
 
@@ -441,19 +517,21 @@ jobs:
             "
             ```
 
-            ### Step 7: Push Branch
+            ### Step 6: Push Branch
             ```bash
             git push -u origin upstream-sync-resolver/${{ needs.check-eligibility.outputs.pr-number }}
             ```
 
-            ### Step 8: Create Pull Request
+            ### Step 7: Create Pull Request
+
+            **CRITICAL: PR must target carto/main (base branch)**
 
             Use `gh pr create` with this template:
 
             ```bash
             gh pr create \
               --repo ${{ github.repository }} \
-              --base ${{ steps.pr-info.outputs.head-ref }} \
+              --base ${{ steps.pr-info.outputs.base-ref }} \
               --head upstream-sync-resolver/${{ needs.check-eligibility.outputs.pr-number }} \
               --title "fix: resolve conflicts for upstream sync PR #${{ needs.check-eligibility.outputs.pr-number }}" \
               --label "conflict-resolution" \
@@ -502,6 +580,19 @@ jobs:
             ### 📝 Notes
 
             [Add any important notes about complex conflict resolutions here]
+
+            ### 🔄 What Happens After Merge
+
+            **When this PR is merged into `carto/main`:**
+            1. ✅ All upstream changes from `main` will be in `carto/main` (with conflicts resolved)
+            2. ✅ CARTO customizations will be preserved
+            3. ❌ **Close PR #${{ needs.check-eligibility.outputs.pr-number }}** - it becomes redundant (changes already merged)
+            4. 🎉 Upstream sync complete!
+
+            **Branch flow:**
+            ```
+            upstream → main (mirror) → carto/main (via this PR)
+            ```
 
             ---
             🤖 *Automated conflict resolution by Claude Code*
@@ -553,10 +644,10 @@ jobs:
 
           **Configuration:**
           - Model: Sonnet 4.5
-          - Max turns: 100 (generous - timeout is real limit)
+          - Max turns: 250 (very generous - timeout is real limit)
           - Job timeout: 90 minutes (workflow-level)
           - Tools: Read, Write, Edit, Bash, Grep, Glob (restricted)
-          - Estimated cost: Limited by 90-min timeout (~$3-8 max)
+          - Estimated cost: Limited by 90-min timeout (~$3-10 max)
 
           **Resolution Priorities Applied:**
           1. 🏢 CARTO customizations (highest priority)
@@ -581,3 +672,137 @@ jobs:
           - [ ] Core LiteLLM improvements accepted
           - [ ] All tests passing (`make lint`, `make lint-mypy`, `make test-unit`)
           EOF
+
+      - name: Comment on original PR - Completion
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+        run: |
+          # Determine if Claude succeeded or failed
+          if [ "${{ steps.claude-run.outcome }}" == "success" ]; then
+            # Try to find the resolution PR that Claude created
+            RESOLUTION_PR=$(gh pr list \
+              --repo ${{ github.repository }} \
+              --head upstream-sync-resolver/${{ needs.check-eligibility.outputs.pr-number }} \
+              --json number,url \
+              --jq '.[0].url' || echo "")
+
+            if [ -n "${RESOLUTION_PR}" ]; then
+              # Success with PR created
+              gh pr comment ${{ needs.check-eligibility.outputs.pr-number }} \
+                --repo ${{ github.repository }} \
+                --body "$(cat <<EOF
+          ## ✅ Conflict Resolution Complete
+
+          Claude Code has successfully resolved conflicts and created a resolution PR.
+
+          **Resolution PR:** ${RESOLUTION_PR}
+
+          **Next Steps:**
+          1. Review the resolution PR
+          2. Verify CARTO customizations are preserved
+          3. Check that all tests pass
+          4. Merge the resolution PR to update this PR
+
+          **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+          )"
+            else
+              # Success but no PR found (might still be creating)
+              gh pr comment ${{ needs.check-eligibility.outputs.pr-number }} \
+                --repo ${{ github.repository }} \
+                --body "$(cat <<EOF
+          ## ⚠️ Conflict Resolution Status
+
+          Claude Code completed execution, but no resolution PR was found yet.
+
+          This might mean:
+          - PR is still being created
+          - No conflicts were found
+          - Check the workflow logs for details
+
+          **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+          )"
+            fi
+          else
+            # Failure
+            gh pr comment ${{ needs.check-eligibility.outputs.pr-number }} \
+              --repo ${{ github.repository }} \
+              --body "$(cat <<EOF
+          ## ❌ Conflict Resolution Failed
+
+          Claude Code encountered an error while resolving conflicts.
+
+          **Please check:**
+          - Workflow logs for error details
+          - May need manual conflict resolution
+          - Consider adjusting max-turns or timeout if job was interrupted
+
+          **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          **Manual Resolution Steps:**
+          1. Checkout main branch locally
+          2. Create resolution branch
+          3. Resolve conflicts following CARTO_CLAUDE.md guidelines
+          4. Run tests and create PR
+          EOF
+          )"
+          fi
+
+      - name: Close original PR (conflicts now resolved via resolution PR)
+        if: steps.claude-run.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+        run: |
+          # Check if resolution PR was created
+          RESOLUTION_PR=$(gh pr list \
+            --repo ${{ github.repository }} \
+            --head upstream-sync-resolver/${{ needs.check-eligibility.outputs.pr-number }} \
+            --json number,url \
+            --jq '.[0].url' || echo "")
+
+          if [ -n "${RESOLUTION_PR}" ]; then
+            RESOLUTION_PR_NUMBER=$(gh pr list \
+              --repo ${{ github.repository }} \
+              --head upstream-sync-resolver/${{ needs.check-eligibility.outputs.pr-number }} \
+              --json number \
+              --jq '.[0].number' || echo "")
+
+            echo "[Resolver] ✅ Resolution PR found: ${RESOLUTION_PR}"
+            echo "[Resolver] 🚫 Closing original PR #${{ needs.check-eligibility.outputs.pr-number }} (superseded by resolution PR)"
+
+            # Add final comment before closing
+            gh pr comment ${{ needs.check-eligibility.outputs.pr-number }} \
+              --repo ${{ github.repository }} \
+              --body "$(cat <<EOF
+          ## 🔒 PR Closed - Superseded by Resolution PR
+
+          This PR has been automatically closed because conflicts have been resolved in a separate PR.
+
+          **✅ Resolution PR:** #${RESOLUTION_PR_NUMBER} (${RESOLUTION_PR})
+
+          **Why was this closed?**
+          - Conflicts were resolved by Claude Code in the resolution PR
+          - Merging the resolution PR will bring all changes into \`carto/main\`
+          - This PR becomes redundant once resolution PR is merged
+          - Prevents confusion about which PR to merge
+
+          **Next Steps:**
+          1. ✅ Review and merge the resolution PR: #${RESOLUTION_PR_NUMBER}
+          2. 🎉 All upstream changes will be in \`carto/main\` (sync complete!)
+
+          ---
+          🤖 *Automatically closed by [carto-upstream-sync-resolver](https://github.com/${{ github.repository }}/actions/workflows/carto-upstream-sync-resolver.yml)*
+          EOF
+          )"
+
+            # Close the PR
+            gh pr close ${{ needs.check-eligibility.outputs.pr-number }} \
+              --repo ${{ github.repository }} \
+              --comment "Conflicts resolved via #${RESOLUTION_PR_NUMBER}"
+
+            echo "[Resolver] ✅ Original PR #${{ needs.check-eligibility.outputs.pr-number }} closed successfully"
+          else
+            echo "[Resolver] ⚠️ No resolution PR found - keeping original PR open"
+          fi

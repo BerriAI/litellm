@@ -367,42 +367,54 @@ jobs:
           - [CARTO Release Process](./docs/CARTO_RELEASE_PROCESS.md) - Full sync and release process
           - [CARTO Customizations](./CARTO_CLAUDE.md) - CARTO-specific modifications
 
-          ### 🔧 Conflict Resolution (if needed)
+          ### 🔧 Conflict Resolution
 
-          If this PR has conflicts:
+          **If this PR has conflicts, there are two options:**
 
-          1. **Pull the branch locally:**
+          #### Option 1: Automated Claude Code Resolution (Recommended)
+
+          The [carto-upstream-sync-resolver](https://github.com/CartoDB/litellm/actions/workflows/carto-upstream-sync-resolver.yml) workflow will automatically trigger when conflicts are detected.
+
+          **It will:**
+          1. 🤖 Detect conflicts in this PR
+          2. 🔀 Checkout \`carto/main\` and merge \`main\` into it
+          3. ✏️ Resolve conflicts following CARTO priority rules
+          4. ✅ Run all tests (\`make lint\`, \`make lint-mypy\`, \`make test-unit\`)
+          5. 📝 Create a resolution PR: \`upstream-sync-resolver/<PR-number> → carto/main\`
+
+          **What you need to do:**
+          1. Review the resolution PR created by Claude Code
+          2. Verify CARTO customizations are preserved
+          3. Merge the resolution PR into \`carto/main\`
+          4. **Close this PR** (changes already merged via resolution PR)
+
+          #### Option 2: Manual Resolution
+
+          If you prefer manual resolution or Claude fails:
+
+          1. **Checkout and merge locally:**
             \`\`\`bash
             git fetch origin
-            git checkout main
-            git pull origin main
-            \`\`\`
-
-          2. **Merge into carto/main locally:**
-            \`\`\`bash
             git checkout carto/main
             git pull origin carto/main
-            git merge main
+            git merge main  # Creates conflicts
             \`\`\`
 
-          3. **Review conflicts:**
-            \`\`\`bash
-            git status
-            git diff
-            \`\`\`
+          2. **Resolve conflicts following guidelines above**
 
-          4. **Resolve conflicts following guidelines above**
-
-          5. **Test your changes:**
+          3. **Test your changes:**
             \`\`\`bash
             make lint
+            make lint-mypy
             make test-unit
             \`\`\`
 
-          6. **Push resolved changes:**
+          4. **Push resolved changes:**
             \`\`\`bash
             git push origin carto/main
             \`\`\`
+
+          5. **Close this PR** (changes already in carto/main)
 
           ---
 
