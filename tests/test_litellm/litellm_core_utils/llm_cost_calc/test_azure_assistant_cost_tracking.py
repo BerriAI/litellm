@@ -7,6 +7,7 @@ Tests cost calculation for Azure's new assistant features:
 - Computer Use (token-based pricing)
 - Vector Store (storage-based pricing)
 """
+import os
 import pytest
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -22,6 +23,18 @@ import litellm
 
 class TestAzureAssistantCostTracking:
     """Test suite for Azure assistant features cost tracking."""
+    
+    @pytest.fixture(autouse=True)
+    def setup_method(self):
+        """Set up test environment to use local model cost map."""
+        # Force use of local model cost map for CI/CD consistency
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        
+        yield
+        
+        # Cleanup not strictly necessary but good practice
+        # Don't delete env var as other tests might need it
 
     def test_azure_file_search_cost_calculation(self):
         """Test Azure file search cost calculation with storage-based pricing."""
