@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Button } from "@tremor/react";
+import { Button, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import {
   getCacheSettingsCall,
   testCacheConnectionCall,
@@ -7,7 +7,8 @@ import {
 } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import RedisTypeSelector from "./RedisTypeSelector";
-import CacheFieldGroup from "./CacheFieldGroup";
+import CacheFieldRenderer from "./CacheFieldRenderer";
+import { gatherFormValues, groupFieldsByCategory } from "./cacheSettingsUtils";
 
 interface CacheSettingsProps {
   accessToken: string | null;
@@ -64,7 +65,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken, userRole, us
 
     setIsTesting(true);
     try {
-      const testSettings = gatherFormValues();
+      const testSettings = gatherFormValues(fields, redisType);
       const result = await testCacheConnectionCall(accessToken, testSettings);
       
       if (result.status === "success") {
@@ -87,7 +88,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken, userRole, us
 
     setIsSaving(true);
     try {
-      const settingsToSave = gatherFormValues();
+      const settingsToSave = gatherFormValues(fields, redisType);
       await updateCacheSettingsCall(accessToken, settingsToSave);
       NotificationsManager.success("Cache settings updated successfully");
       // Reload settings to reflect saved values
@@ -100,89 +101,18 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken, userRole, us
     }
   };
 
-  const gatherFormValues = (): { [key: string]: any } => {
-    const values: { [key: string]: any } = {
-      redis_type: redisType,
-    };
-
-    // Iterate through all fields from backend
-    fields.forEach((field) => {
-      // Skip redis_type as we handle it separately
-      if (field.field_name === "redis_type") {
-        return;
-      }
-
-      // Check if field should be shown for current redis type
-      if (!shouldShowField(field)) {
-        return;
-      }
-
-      const fieldName = field.field_name;
-      let value: any = null;
-
-      if (field.field_type === "Boolean") {
-        const checkboxEl = document.querySelector(`input[name="${fieldName}"]`) as HTMLInputElement | null;
-        if (checkboxEl?.checked !== undefined) {
-          value = checkboxEl.checked;
-        }
-      } else if (field.field_type === "List") {
-        const textareaEl = document.querySelector(`textarea[name="${fieldName}"]`) as HTMLTextAreaElement | null;
-        if (textareaEl?.value) {
-          try {
-            value = JSON.parse(textareaEl.value);
-          } catch (e) {
-            console.error(`Invalid JSON for ${fieldName}:`, e);
-          }
-        }
-      } else {
-        const inputEl = document.querySelector(`input[name="${fieldName}"]`) as HTMLInputElement | null;
-        if (inputEl?.value) {
-          const trimmedValue = inputEl.value.trim();
-          if (trimmedValue !== "") {
-            if (field.field_type === "Integer") {
-              const num = Number(trimmedValue);
-              if (!isNaN(num)) value = num;
-            } else if (field.field_type === "Float") {
-              const num = Number(trimmedValue);
-              if (!isNaN(num)) value = num;
-            } else {
-              value = trimmedValue;
-            }
-          }
-        }
-      }
-
-      if (value !== null && value !== undefined) {
-        values[fieldName] = value;
-      }
-    });
-
-    return values;
-  };
-
-  const shouldShowField = (field: any): boolean => {
-    // Show field if it applies to all types (redis_type is null/undefined) or to current selected type
-    if (field.redis_type === null || field.redis_type === undefined) {
-      return true;
-    }
-    
-    return field.redis_type === redisType;
-  };
-
   if (!accessToken) {
     return null;
   }
 
-  // Group fields by redis_type for better organization
-  const commonFields = fields.filter(f => !f.redis_type || f.redis_type === null);
-  const clusterFields = fields.filter(f => f.redis_type === "cluster");
-  const sentinelFields = fields.filter(f => f.redis_type === "sentinel");
-  const gcpFields = fields.filter(f => 
-    f.field_name === "gcp_service_account" || 
-    f.field_name === "gcp_ssl_ca_certs" || 
-    f.field_name === "ssl_cert_reqs" || 
-    f.field_name === "ssl_check_hostname"
-  );
+  const {
+    basicFields,
+    sslFields,
+    cacheManagementFields,
+    gcpFields,
+    clusterFields,
+    sentinelFields,
+  } = groupFieldsByCategory(fields, redisType);
 
   return (
     <div className="w-full space-y-8 py-2">
@@ -199,42 +129,130 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken, userRole, us
           onTypeChange={setRedisType}
         />
 
-        {/* Common Fields */}
-        <CacheFieldGroup
-          title="Configuration"
-          fields={commonFields}
-          cacheSettings={cacheSettings}
-          redisType={redisType}
-        />
+        {/* Basic Fields */}
+        <div className="space-y-6 pt-4 border-t border-gray-200">
+          <h4 className="text-sm font-medium text-gray-900">Connection Settings</h4>
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+            {basicFields.map((field: any) => {
+              if (!field) return null;
+              const currentValue = cacheSettings[field.field_name] ?? field.field_default ?? "";
+              return (
+                <CacheFieldRenderer
+                  key={field.field_name}
+                  field={field}
+                  currentValue={currentValue}
+                />
+              );
+            })}
+          </div>
+        </div>
 
-        {/* Cluster-specific Fields */}
-        {redisType === "cluster" && (
-          <CacheFieldGroup
-            title="Cluster Configuration"
-            fields={clusterFields}
-            cacheSettings={cacheSettings}
-            redisType={redisType}
-            gridCols="grid-cols-1 gap-6"
-          />
+        {/* Redis Type-Specific Fields */}
+        {redisType === "cluster" && clusterFields.length > 0 && (
+          <div className="space-y-6 pt-4 border-t border-gray-200">
+            <h4 className="text-sm font-medium text-gray-900">Cluster Configuration</h4>
+            <div className="grid grid-cols-1 gap-6">
+              {clusterFields.map((field: any) => {
+                const currentValue = cacheSettings[field.field_name] ?? field.field_default ?? "";
+                return (
+                  <CacheFieldRenderer
+                    key={field.field_name}
+                    field={field}
+                    currentValue={currentValue}
+                  />
+                );
+              })}
+            </div>
+          </div>
         )}
 
-        {/* Sentinel-specific Fields */}
-        {redisType === "sentinel" && (
-          <CacheFieldGroup
-            title="Sentinel Configuration"
-            fields={sentinelFields}
-            cacheSettings={cacheSettings}
-            redisType={redisType}
-          />
+        {redisType === "sentinel" && sentinelFields.length > 0 && (
+          <div className="space-y-6 pt-4 border-t border-gray-200">
+            <h4 className="text-sm font-medium text-gray-900">Sentinel Configuration</h4>
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+              {sentinelFields.map((field: any) => {
+                const currentValue = cacheSettings[field.field_name] ?? field.field_default ?? "";
+                return (
+                  <CacheFieldRenderer
+                    key={field.field_name}
+                    field={field}
+                    currentValue={currentValue}
+                  />
+                );
+              })}
+            </div>
+          </div>
         )}
 
-        {/* GCP IAM Fields */}
-        <CacheFieldGroup
-          title="GCP IAM Authentication (Optional)"
-          fields={gcpFields}
-          cacheSettings={cacheSettings}
-          redisType={redisType}
-        />
+        {/* Advanced Settings Accordion */}
+        <Accordion className="mt-4">
+          <AccordionHeader>
+            <span className="text-sm font-medium text-gray-900">Advanced Settings</span>
+          </AccordionHeader>
+          <AccordionBody>
+            <div className="space-y-6">
+              {/* SSL Settings */}
+              {sslFields.length > 0 && (
+                <div className="space-y-4">
+                  <h5 className="text-sm font-medium text-gray-700">SSL Settings</h5>
+                  <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    {sslFields.map((field: any) => {
+                      if (!field) return null;
+                      const currentValue = cacheSettings[field.field_name] ?? field.field_default ?? "";
+                      return (
+                        <CacheFieldRenderer
+                          key={field.field_name}
+                          field={field}
+                          currentValue={currentValue}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Cache Management */}
+              {cacheManagementFields.length > 0 && (
+                <div className="space-y-4 pt-4 border-t border-gray-200">
+                  <h5 className="text-sm font-medium text-gray-700">Cache Management</h5>
+                  <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    {cacheManagementFields.map((field: any) => {
+                      if (!field) return null;
+                      const currentValue = cacheSettings[field.field_name] ?? field.field_default ?? "";
+                      return (
+                        <CacheFieldRenderer
+                          key={field.field_name}
+                          field={field}
+                          currentValue={currentValue}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* GCP Authentication */}
+              {gcpFields.length > 0 && (
+                <div className="space-y-4 pt-4 border-t border-gray-200">
+                  <h5 className="text-sm font-medium text-gray-700">GCP Authentication</h5>
+                  <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    {gcpFields.map((field: any) => {
+                      if (!field) return null;
+                      const currentValue = cacheSettings[field.field_name] ?? field.field_default ?? "";
+                      return (
+                        <CacheFieldRenderer
+                          key={field.field_name}
+                          field={field}
+                          currentValue={currentValue}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </AccordionBody>
+        </Accordion>
       </div>
 
       {/* Actions */}
