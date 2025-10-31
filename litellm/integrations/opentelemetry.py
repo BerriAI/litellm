@@ -775,52 +775,61 @@ class OpenTelemetry(CustomLogger):
         if standard_logging_payload is None:
             return
 
-        guardrail_information = standard_logging_payload.get("guardrail_information")
-        if guardrail_information is None:
+        guardrail_information_data = standard_logging_payload.get("guardrail_information")
+        if not guardrail_information_data:
             return
 
-        start_time_float = guardrail_information.get("start_time")
-        end_time_float = guardrail_information.get("end_time")
-        start_time_datetime = datetime.now()
-        if start_time_float is not None:
-            start_time_datetime = datetime.fromtimestamp(start_time_float)
-        end_time_datetime = datetime.now()
-        if end_time_float is not None:
-            end_time_datetime = datetime.fromtimestamp(end_time_float)
+        guardrail_information_list = [
+            information
+            for information in guardrail_information_data
+            if isinstance(information, dict)
+        ]
+
+        if not guardrail_information_list:
+            return
 
         otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
-        guardrail_span = otel_tracer.start_span(
-            name="guardrail",
-            start_time=self._to_ns(start_time_datetime),
-            context=context,
-        )
+        for guardrail_information in guardrail_information_list:
+            start_time_float = guardrail_information.get("start_time")
+            end_time_float = guardrail_information.get("end_time")
+            start_time_datetime = datetime.now()
+            if start_time_float is not None:
+                start_time_datetime = datetime.fromtimestamp(start_time_float)
+            end_time_datetime = datetime.now()
+            if end_time_float is not None:
+                end_time_datetime = datetime.fromtimestamp(end_time_float)
 
-        self.safe_set_attribute(
-            span=guardrail_span,
-            key="guardrail_name",
-            value=guardrail_information.get("guardrail_name"),
-        )
-
-        self.safe_set_attribute(
-            span=guardrail_span,
-            key="guardrail_mode",
-            value=guardrail_information.get("guardrail_mode"),
-        )
-
-        # Set masked_entity_count directly without conversion
-        masked_entity_count = guardrail_information.get("masked_entity_count")
-        if masked_entity_count is not None:
-            guardrail_span.set_attribute(
-                "masked_entity_count", safe_dumps(masked_entity_count)
+            guardrail_span = otel_tracer.start_span(
+                name="guardrail",
+                start_time=self._to_ns(start_time_datetime),
+                context=context,
             )
 
-        self.safe_set_attribute(
-            span=guardrail_span,
-            key="guardrail_response",
-            value=guardrail_information.get("guardrail_response"),
-        )
+            self.safe_set_attribute(
+                span=guardrail_span,
+                key="guardrail_name",
+                value=guardrail_information.get("guardrail_name"),
+            )
 
-        guardrail_span.end(end_time=self._to_ns(end_time_datetime))
+            self.safe_set_attribute(
+                span=guardrail_span,
+                key="guardrail_mode",
+                value=guardrail_information.get("guardrail_mode"),
+            )
+
+            masked_entity_count = guardrail_information.get("masked_entity_count")
+            if masked_entity_count is not None:
+                guardrail_span.set_attribute(
+                    "masked_entity_count", safe_dumps(masked_entity_count)
+                )
+
+            self.safe_set_attribute(
+                span=guardrail_span,
+                key="guardrail_response",
+                value=guardrail_information.get("guardrail_response"),
+            )
+
+            guardrail_span.end(end_time=self._to_ns(end_time_datetime))
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode

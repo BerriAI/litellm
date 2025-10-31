@@ -51,7 +51,7 @@ def _get_spend_logs_metadata(
     vector_store_request_metadata: Optional[
         List[StandardLoggingVectorStoreRequest]
     ] = None,
-    guardrail_information: Optional[StandardLoggingGuardrailInformation] = None,
+    guardrail_information: Optional[list[StandardLoggingGuardrailInformation]] = None,
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
     cold_storage_object_key: Optional[str] = None,
@@ -95,9 +95,9 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata["vector_store_request_metadata"] = (
-        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
-    )
+    clean_metadata[
+        "vector_store_request_metadata"
+    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information

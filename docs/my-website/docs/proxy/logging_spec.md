@@ -91,7 +91,7 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 | `applied_guardrails` | `Optional[List[str]]` | List of applied guardrail names |
 | `usage_object` | `Optional[dict]` | Raw usage object from the LLM provider |
 | `cold_storage_object_key` | `Optional[str]` | S3/GCS object key for cold storage retrieval |
-| `guardrail_information` | `Optional[StandardLoggingGuardrailInformation]` | Guardrail information |
+| `guardrail_information` | `Optional[list[StandardLoggingGuardrailInformation]]` | Guardrail information |
 
 
 ## StandardLoggingVectorStoreRequest
@@ -170,7 +170,7 @@ A literal type with two possible values:
 | `guardrail_mode`      | `Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]` | Guardrail mode                                                                                                                                                            |
 | `guardrail_request`   | `Optional[dict]` | Guardrail request                                                                                                                                                         |
 | `guardrail_response`  | `Optional[Union[dict, str, List[dict]]]` | Guardrail response                                                                                                                                                        |
-| `guardrail_status`    | `Literal["success", "failure", "blocked"]` | Guardrail execution status: `success` = no violations detected, `blocked` = content blocked/modified due to policy violations, `failure` = technical error or API failure |
+| `guardrail_status`    | `Literal["success", "guardrail_intervened", "guardrail_failed_to_respond"]` | Guardrail execution status: `success` = no violations detected, `blocked` = content blocked/modified due to policy violations, `failure` = technical error or API failure |
 | `start_time`          | `Optional[float]` | Start time of the guardrail                                                                                                                                               |
 | `end_time`            | `Optional[float]` | End time of the guardrail                                                                                                                                                 |
 | `duration`            | `Optional[float]` | Duration of the guardrail in seconds                                                                                                                                      |
