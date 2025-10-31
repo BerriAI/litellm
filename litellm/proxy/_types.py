@@ -571,6 +571,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/daily/activity",
         "/tag/daily/activity",
         "/tag/list",
+        "/global/spend/tags",
     ] + info_routes
 
     # All routes accesible by an Org Admin
