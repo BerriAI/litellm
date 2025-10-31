@@ -75,15 +75,15 @@ jobs:
 
           # Security Check 2: Verify branch flow (main → carto/main)
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            # Automatic trigger: validate PR directly
-            PR_REPO="${{ github.event.pull_request.head.repo.full_name }}"
-            BASE_REPO="${{ github.repository }}"
+            # Automatic trigger: validate PR directly from event
             HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
             BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+            HEAD_REPO="${{ github.event.pull_request.head.repo.full_name }}"
+            BASE_REPO="${{ github.repository }}"
 
-            # Check fork
-            if [[ "${PR_REPO}" != "${BASE_REPO}" ]]; then
-              echo "[Security] ❌ External fork detected: ${PR_REPO}"
+            # Check fork - head repo must match base repo
+            if [[ "${HEAD_REPO}" != "${BASE_REPO}" ]]; then
+              echo "[Security] ❌ External fork detected: ${HEAD_REPO}"
               echo "[Security] Only internal branches allowed"
               echo "authorized=false" >> $GITHUB_OUTPUT
               exit 0
@@ -110,14 +110,15 @@ jobs:
             echo "[Security] Manual dispatch for PR #${PR_NUMBER}"
 
             # Fetch PR details
-            PR_JSON=$(gh pr view ${PR_NUMBER} --repo ${{ github.repository }} --json headRefName,baseRefName,headRepository)
+            PR_JSON=$(gh pr view ${PR_NUMBER} --repo ${{ github.repository }} --json headRefName,baseRefName,headRepositoryOwner,isCrossRepository)
             HEAD_BRANCH=$(echo "${PR_JSON}" | jq -r '.headRefName')
             BASE_BRANCH=$(echo "${PR_JSON}" | jq -r '.baseRefName')
-            PR_REPO=$(echo "${PR_JSON}" | jq -r '.headRepository.nameWithOwner')
+            IS_FORK=$(echo "${PR_JSON}" | jq -r '.isCrossRepository')
 
-            # Check fork
-            if [[ "${PR_REPO}" != "${{ github.repository }}" ]]; then
-              echo "[Security] ❌ External fork detected: ${PR_REPO}"
+            # Check fork - isCrossRepository is true for external forks
+            if [[ "${IS_FORK}" == "true" ]]; then
+              REPO_OWNER=$(echo "${PR_JSON}" | jq -r '.headRepositoryOwner.login')
+              echo "[Security] ❌ External fork detected from: ${REPO_OWNER}"
               echo "[Security] Only internal branches allowed"
               echo "authorized=false" >> $GITHUB_OUTPUT
               exit 0
