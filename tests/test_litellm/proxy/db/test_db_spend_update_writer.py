@@ -343,3 +343,48 @@ async def test_update_tag_db_without_prisma_client():
     )
 
     assert writer.spend_update_queue.add_update.call_count == 0
+
+@pytest.mark.asyncio
+async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_id():
+    """
+    Test that add_spend_log_transaction_to_daily_tag_transaction correctly processes request_id.
+    This tests that request_id is included in the DailyTagSpendTransaction for the LiteLLM_DailyTagSpend table.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+    
+    request_id = "test-request-id-123"
+    payload = {
+        "request_id": request_id,
+        "request_tags": '["prod-tag", "test-tag"]',
+        "user": "test-user",
+        "startTime": "2024-01-01T00:00:00",
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "spend": 0.05,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    # Mock the add_update method to capture what's being added
+    original_add_update = writer.daily_tag_spend_update_queue.add_update
+    writer.daily_tag_spend_update_queue.add_update = AsyncMock()
+
+    await writer.add_spend_log_transaction_to_daily_tag_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+    )
+
+    # Should be called twice (once for each tag)
+    assert writer.daily_tag_spend_update_queue.add_update.call_count == 2
+    
+    # Check that request_id is included in both transactions
+    for call in writer.daily_tag_spend_update_queue.add_update.call_args_list:
+        transaction_dict = call[1]["update"]
+        # Each transaction should have one key with the format tag_date_api_key_model_provider
+        for key, transaction in transaction_dict.items():
+            assert transaction["request_id"] == request_id, f"request_id should be {request_id} but got {transaction.get('request_id')}"
