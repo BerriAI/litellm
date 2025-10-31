@@ -93,10 +93,20 @@ async def get_cache_settings(
                     cache_settings_dict = cache_settings_json
                 
                 # Decrypt environment variables
-                decrypted_settings = proxy_config._decrypt_and_set_db_env_variables(
-                    environment_variables=cache_settings_dict,
-                    return_original_value=True
+                decrypted_settings = proxy_config._decrypt_db_variables(
+                    variables_dict=cache_settings_dict
                 )
+                
+                # Derive redis_type for UI based on settings
+                # UI uses redis_type to show/hide fields, backend only stores 'type'
+                if decrypted_settings.get("type") == "redis":
+                    if decrypted_settings.get("redis_startup_nodes"):
+                        decrypted_settings["redis_type"] = "cluster"
+                    elif decrypted_settings.get("sentinel_nodes"):
+                        decrypted_settings["redis_type"] = "sentinel"
+                    else:
+                        decrypted_settings["redis_type"] = "node"
+                
                 current_values = decrypted_settings
         
         # Update field values with current values
@@ -132,33 +142,30 @@ async def test_cache_connection(
     """
     Test cache connection with provided credentials.
     
-    This endpoint creates a temporary cache instance, tests the connection,
-    and returns the result without persisting the settings.
+    Creates a temporary cache instance and uses its test_connection method
+    to verify the credentials work without affecting global state.
     """
     from litellm import Cache
     
     try:
         cache_settings = request.cache_settings.copy()
+        verbose_proxy_logger.debug("Testing cache connection with settings: %s", cache_settings)
         
-        # Ensure type is set to redis
-        cache_settings["type"] = "redis"
+        # Only support Redis for now
+        if cache_settings.get("type") != "redis":
+            return CacheTestResponse(
+                status="failed",
+                message="Only Redis cache type is currently supported for testing",
+            )
         
         # Create temporary cache instance
         temp_cache = Cache(**cache_settings)
         
-        # Test connection by pinging
-        ping_result = await temp_cache.ping()
+        # Use the cache's test_connection method
+        result = await temp_cache.cache.test_connection()
         
-        if ping_result:
-            return CacheTestResponse(
-                status="success",
-                message="Cache connection test successful",
-            )
-        else:
-            return CacheTestResponse(
-                status="failed",
-                message="Cache ping returned False",
-            )
+        return CacheTestResponse(**result)
+            
     except Exception as e:
         verbose_proxy_logger.error(
             f"Error testing cache connection: {str(e)}"
@@ -210,10 +217,7 @@ async def update_cache_settings(
     try:
         cache_settings = request.cache_settings.copy()
         
-        # Ensure type is set to redis
-        cache_settings["type"] = "redis"
-        
-        # Encrypt sensitive fields
+        # Encrypt sensitive fields (keep redis_type for storage)
         encrypted_settings = proxy_config._encrypt_env_variables(
             environment_variables=cache_settings
         )
@@ -233,16 +237,12 @@ async def update_cache_settings(
         )
         
         # Reinitialize cache with new settings
-        # Decrypt for initialization (proxy_config._init_cache handles decryption internally)
-        decrypted_settings = proxy_config._decrypt_and_set_db_env_variables(
-            environment_variables=encrypted_settings,
-            return_original_value=True
+        # Decrypt for initialization
+        decrypted_settings = proxy_config._decrypt_db_variables(
+            variables_dict=encrypted_settings
         )
         
-        # Ensure type is set to redis
-        decrypted_settings["type"] = "redis"
-        
-        # Initialize cache
+        # Initialize cache (frontend sends type="redis", not redis_type)
         proxy_config._init_cache(cache_params=decrypted_settings)
         
         return {
