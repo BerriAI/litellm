@@ -17,6 +17,7 @@ from litellm.constants import (
     AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS,
     AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY,
 )
+import litellm
 
 
 class TestAzureAssistantCostTracking:
@@ -59,7 +60,10 @@ class TestAzureAssistantCostTracking:
             sessions=5,
             provider="azure",
         )
-        expected_cost = 5 * AZURE_CODE_INTERPRETER_COST_PER_SESSION  # $0.15
+        # Read expected cost from model cost map (azure/container)
+        azure_container_info = litellm.model_cost.get("azure/container", {})
+        cost_per_session = azure_container_info.get("code_interpreter_cost_per_session", 0.03)
+        expected_cost = 5 * cost_per_session  # $0.15
         assert cost == expected_cost, f"Expected {expected_cost}, got {cost}"
 
     def test_azure_code_interpreter_zero_sessions(self):
@@ -179,7 +183,11 @@ class TestAzureAssistantCostTracking:
     def test_constants_loaded_correctly(self):
         """Test that Azure pricing constants are loaded with expected values."""
         assert AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY == 0.1
-        assert AZURE_CODE_INTERPRETER_COST_PER_SESSION == 0.03
+        
+        # Code interpreter cost is now in model cost map
+        azure_container_info = litellm.model_cost.get("azure/container", {})
+        assert azure_container_info.get("code_interpreter_cost_per_session") == 0.03
+        
         assert AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS == 3.0
         assert AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS == 12.0
         assert AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY == 0.1
