@@ -141,7 +141,6 @@ class OpenTelemetry(CustomLogger):
         meter_provider: Optional[Any] = None,
         **kwargs,
     ):
-
         if config is None:
             config = OpenTelemetryConfig.from_env()
 
@@ -203,13 +202,14 @@ class OpenTelemetry(CustomLogger):
             # Check if a TracerProvider is already set globally (e.g., by Langfuse SDK)
             try:
                 from opentelemetry.trace import ProxyTracerProvider
+
                 existing_provider = trace.get_tracer_provider()
 
                 # If an actual provider exists (not the default proxy), use it
                 if not isinstance(existing_provider, ProxyTracerProvider):
                     verbose_logger.debug(
                         "OpenTelemetry: Using existing TracerProvider: %s",
-                        type(existing_provider).__name__
+                        type(existing_provider).__name__,
                     )
                     tracer_provider = existing_provider
                     # Don't call set_tracer_provider to preserve existing context
@@ -223,7 +223,7 @@ class OpenTelemetry(CustomLogger):
                 # Fallback: create a new provider if something goes wrong
                 verbose_logger.debug(
                     "OpenTelemetry: Exception checking existing provider, creating new one: %s",
-                    str(e)
+                    str(e),
                 )
                 tracer_provider = TracerProvider(resource=_get_litellm_resource())
                 tracer_provider.add_span_processor(self._get_span_processor())
@@ -232,7 +232,7 @@ class OpenTelemetry(CustomLogger):
             # Tracer provider explicitly provided (e.g., for testing)
             verbose_logger.debug(
                 "OpenTelemetry: Using provided TracerProvider: %s",
-                type(tracer_provider).__name__
+                type(tracer_provider).__name__,
             )
             trace.set_tracer_provider(tracer_provider)
 
@@ -514,9 +514,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params")
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params")
 
         if not standard_callback_dynamic_params:
             return None
@@ -775,7 +775,9 @@ class OpenTelemetry(CustomLogger):
         if standard_logging_payload is None:
             return
 
-        guardrail_information_data = standard_logging_payload.get("guardrail_information")
+        guardrail_information_data = standard_logging_payload.get(
+            "guardrail_information"
+        )
         if not guardrail_information_data:
             return
 
@@ -850,10 +852,10 @@ class OpenTelemetry(CustomLogger):
         )
         span.set_status(Status(StatusCode.ERROR))
         self.set_attributes(span, kwargs, response_obj)
-        
+
         # Record exception information using OTEL standard method
         self._record_exception_on_span(span=span, kwargs=kwargs)
-        
+
         span.end(end_time=self._to_ns(end_time))
 
         # Create span for guardrail information
@@ -865,7 +867,7 @@ class OpenTelemetry(CustomLogger):
     def _record_exception_on_span(self, span: Span, kwargs: dict):
         """
         Record exception information on the span using OTEL standard methods.
-        
+
         This extracts error information from StandardLoggingPayload and:
         1. Uses span.record_exception() for the actual exception object (OTEL standard)
         2. Sets structured error attributes from StandardLoggingPayloadErrorInformation
@@ -875,22 +877,22 @@ class OpenTelemetry(CustomLogger):
 
             # Get the exception object if available
             exception = kwargs.get("exception")
-            
+
             # Record the exception using OTEL's standard method
             if exception is not None:
                 span.record_exception(exception)
-            
+
             # Get StandardLoggingPayload for structured error information
             standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
                 "standard_logging_object"
             )
-            
+
             if standard_logging_payload is None:
                 return
-            
+
             # Extract error_information from StandardLoggingPayload
             error_information = standard_logging_payload.get("error_information")
-            
+
             if error_information is None:
                 # Fallback to error_str if error_information is not available
                 error_str = standard_logging_payload.get("error_str")
@@ -901,7 +903,7 @@ class OpenTelemetry(CustomLogger):
                         value=error_str,
                     )
                 return
-            
+
             # Set structured error attributes from StandardLoggingPayloadErrorInformation
             if error_information.get("error_code"):
                 self.safe_set_attribute(
@@ -909,35 +911,35 @@ class OpenTelemetry(CustomLogger):
                     key=ErrorAttributes.ERROR_CODE,
                     value=error_information["error_code"],
                 )
-            
+
             if error_information.get("error_class"):
                 self.safe_set_attribute(
                     span=span,
                     key=ErrorAttributes.ERROR_TYPE,
                     value=error_information["error_class"],
                 )
-            
+
             if error_information.get("error_message"):
                 self.safe_set_attribute(
                     span=span,
                     key=ErrorAttributes.ERROR_MESSAGE,
                     value=error_information["error_message"],
                 )
-            
+
             if error_information.get("llm_provider"):
                 self.safe_set_attribute(
                     span=span,
                     key=ErrorAttributes.ERROR_LLM_PROVIDER,
                     value=error_information["llm_provider"],
                 )
-            
+
             if error_information.get("traceback"):
                 self.safe_set_attribute(
                     span=span,
                     key=ErrorAttributes.ERROR_STACK_TRACE,
                     value=error_information["traceback"],
                 )
-        
+
         except Exception as e:
             verbose_logger.exception(
                 "OpenTelemetry: Error recording exception on span: %s", str(e)
@@ -1372,12 +1374,16 @@ class OpenTelemetry(CustomLogger):
 
         # Priority 1: Explicit parent span from metadata
         if parent_otel_span is not None:
-            verbose_logger.debug("OpenTelemetry: Using explicit parent span from metadata")
+            verbose_logger.debug(
+                "OpenTelemetry: Using explicit parent span from metadata"
+            )
             return trace.set_span_in_context(parent_otel_span), parent_otel_span
 
         # Priority 2: HTTP traceparent header
         if traceparent is not None:
-            verbose_logger.debug("OpenTelemetry: Using traceparent header for context propagation")
+            verbose_logger.debug(
+                "OpenTelemetry: Using traceparent header for context propagation"
+            )
             carrier = {"traceparent": traceparent}
             return TraceContextTextMapPropagator().extract(carrier=carrier), None
 
@@ -1390,16 +1396,20 @@ class OpenTelemetry(CustomLogger):
                     verbose_logger.debug(
                         "OpenTelemetry: Using active span from global context: %s (trace_id=%s, span_id=%s, is_recording=%s)",
                         current_span,
-                        format(span_context.trace_id, '032x'),
-                        format(span_context.span_id, '016x'),
-                        current_span.is_recording()
+                        format(span_context.trace_id, "032x"),
+                        format(span_context.span_id, "016x"),
+                        current_span.is_recording(),
                     )
                     return context.get_current(), current_span
         except Exception as e:
-            verbose_logger.debug("OpenTelemetry: Error getting current span: %s", str(e))
+            verbose_logger.debug(
+                "OpenTelemetry: Error getting current span: %s", str(e)
+            )
 
         # Priority 4: No parent context
-        verbose_logger.debug("OpenTelemetry: No parent context found, creating root span")
+        verbose_logger.debug(
+            "OpenTelemetry: No parent context found, creating root span"
+        )
         return None, None
 
     def _get_span_processor(self, dynamic_headers: Optional[dict] = None):
