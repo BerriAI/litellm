@@ -385,7 +385,8 @@ class TestSnowFlakeCompletion:
         response = litellm.completion(
             f"snowflake/{self.model_name}",
             messages=self.messages,
-            pat_key="xxxxx",
+            api_key="xxxxx",
+            key_type="PAT",
             account_id="AAAA-BBBB",
         )
         assert len(response.choices) == 1

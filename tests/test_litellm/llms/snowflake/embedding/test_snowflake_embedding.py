@@ -56,7 +56,8 @@ def test_snowflake_pat_key_account_id(mock_post):
     response = litellm.embedding(
         f"snowflake/{model_name}",
         input=["document"],
-        pat_key="xxxxx",
+        api_key="xxxxx",
+        key_type="PAT",
         account_id="AAAA-BBBB",
     )
     assert len(response.data) == 1

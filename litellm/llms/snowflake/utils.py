@@ -93,8 +93,8 @@ class SnowflakeBaseConfig:
 
         auth_type = "KEYPAIR_JWT"
 
-        if "pat_key" in optional_params:
-            api_key = optional_params.pop("pat_key")
+        key_type = optional_params.pop("key_type", None)
+        if key_type == "PAT":
             auth_type = "PROGRAMMATIC_ACCESS_TOKEN"
 
         if api_key is None:
