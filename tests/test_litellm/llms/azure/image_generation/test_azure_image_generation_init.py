@@ -40,7 +40,7 @@ def test_azure_image_generation_flattens_extra_body():
     Azure's image generation API doesn't support the extra_body parameter,
     so we need to flatten any parameters in extra_body to the top level.
     
-    This test verifies the fix for: https://github.com/BerriAI/litellm/issues/...
+    This test verifies the fix for: https://github.com/BerriAI/litellm/issues/16059
     Where partial_images and stream parameters were incorrectly sent in extra_body.
     """
     # Test 1: Verify get_optional_params_image_gen puts extra params in extra_body
