@@ -161,7 +161,12 @@ jobs:
         run: |
           set -eu
 
-          PR_NUMBER="${{ github.event.pull_request.number }}"
+          # Get PR number based on trigger type
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          else
+            PR_NUMBER="${{ github.event.inputs.pr-number }}"
+          fi
 
           echo "::group::Checking PR eligibility for conflict resolution"
           echo "[Resolver] Checking PR #${PR_NUMBER}"
@@ -218,10 +223,27 @@ jobs:
     if: needs.security-check.outputs.authorized == 'true' && needs.check-eligibility.outputs.eligible == 'true'
 
     steps:
+      - name: Get PR head branch
+        id: pr-info
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+        run: |
+          # Get head ref based on trigger type
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            HEAD_REF="${{ github.event.pull_request.head.ref }}"
+          else
+            # For workflow_dispatch, fetch from PR
+            PR_NUMBER="${{ needs.check-eligibility.outputs.pr-number }}"
+            HEAD_REF=$(gh pr view ${PR_NUMBER} --repo ${{ github.repository }} --json headRefName --jq '.headRefName')
+          fi
+
+          echo "head-ref=${HEAD_REF}" >> $GITHUB_OUTPUT
+          echo "[Resolver] Will checkout branch: ${HEAD_REF}"
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: ${{ steps.pr-info.outputs.head-ref }}
           fetch-depth: 0
           token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
 
@@ -406,7 +428,7 @@ jobs:
             ```bash
             gh pr create \
               --repo ${{ github.repository }} \
-              --base ${{ github.event.pull_request.head.ref }} \
+              --base ${{ steps.pr-info.outputs.head-ref }} \
               --head upstream-sync-resolver/${{ needs.check-eligibility.outputs.pr-number }} \
               --title "fix: resolve conflicts for upstream sync PR #${{ needs.check-eligibility.outputs.pr-number }}" \
               --label "conflict-resolution" \
