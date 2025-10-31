@@ -27,7 +27,8 @@ workflow:
 
 docker_litellm:
   tags:
-    - k8s-eci
+    # - k8s-eci
+    - k8s-hk
   stage: docker
   extends: .base_docker
   allow_failure: false
