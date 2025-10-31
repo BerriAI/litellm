@@ -265,6 +265,26 @@ litellm_settings:
 </TabItem>
 </Tabs>
 
+### MCP Server UI Authentication
+
+To add authentication to your MCP Server in the UI:
+
+1. When creating an MCP Server, select the authentication type you want to use.
+
+<Image 
+  img={require('../img/mcp_auth_dropdown.png')}
+  style={{width: '40%', display: 'block', margin: '0'}}
+/>
+
+2. Save your MCP server settings and navigate to it by selecting it from the MCP Server list.
+
+3. Select MCP Tools and click the "Add Auth" button.
+
+<Image 
+  img={require('../img/mcp_auth_input.png')}
+  style={{width: '40%', display: 'block', margin: '0'}}
+/>
+
 ## Converting OpenAPI Specs to MCP Servers
 
 LiteLLM can automatically convert OpenAPI specifications into MCP servers, allowing you to expose any REST API as MCP tools. This is useful when you have existing APIs with OpenAPI/Swagger documentation and want to make them available as MCP tools.
