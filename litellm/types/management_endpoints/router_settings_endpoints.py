@@ -2,7 +2,7 @@
 Types and field definitions for router settings management endpoints
 """
 
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -15,6 +15,18 @@ class RouterSettingsField(BaseModel):
     field_default: Any = None
     options: Optional[List[str]] = None  # For fields with predefined options/enum values
     ui_field_name: str  # User-friendly display name
+    link: Optional[str] = None  # Documentation link for the field
+
+
+# Routing strategy descriptions
+ROUTING_STRATEGY_DESCRIPTIONS: Dict[str, str] = {
+    "simple-shuffle": "Randomly picks a deployment from the list. Simple and fast.",
+    "least-busy": "Routes to the deployment with the lowest number of ongoing requests.",
+    "usage-based-routing": "Routes to the deployment with the lowest TPM (Tokens Per Minute) usage.",
+    "latency-based-routing": "Routes to the deployment with the lowest latency over a sliding window.",
+    "cost-based-routing": "Routes to the deployment with the lowest cost per token.",
+    "usage-based-routing-v2": "Improved version of usage-based routing with better tracking.",
+}
 
 
 # Define all available router settings fields
@@ -168,9 +180,10 @@ ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
         field_name="enable_tag_filtering",
         field_type="Boolean",
         field_value=None,
-        field_description="Enable filtering deployments by tags",
+        field_description="Enable tag-based routing to route requests based on tags. Useful for implementing free/paid tiers or team-based model access control.",
         field_default=False,
         ui_field_name="Enable Tag Filtering",
+        link="https://docs.litellm.ai/docs/proxy/tag_routing",
     ),
     RouterSettingsField(
         field_name="disable_cooldowns",

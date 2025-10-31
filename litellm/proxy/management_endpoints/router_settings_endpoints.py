@@ -18,6 +18,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.router import Router
 from litellm.types.management_endpoints import (
     ROUTER_SETTINGS_FIELDS,
+    ROUTING_STRATEGY_DESCRIPTIONS,
     RouterSettingsField,
 )
 
@@ -30,6 +31,9 @@ class RouterSettingsResponse(BaseModel):
     )
     current_values: Dict[str, Any] = Field(
         description="Current values of router settings"
+    )
+    routing_strategy_descriptions: Dict[str, str] = Field(
+        description="Descriptions for each routing strategy option"
     )
 
 
@@ -78,7 +82,7 @@ async def get_router_settings(
         # Get router settings fields from types file
         router_fields = [field.model_copy(deep=True) for field in ROUTER_SETTINGS_FIELDS]
         
-        # Populate routing_strategy field with available options
+        # Populate routing_strategy field with available options and descriptions
         for field in router_fields:
             if field.field_name == "routing_strategy":
                 field.options = available_routing_strategies
@@ -108,6 +112,7 @@ async def get_router_settings(
         return RouterSettingsResponse(
             fields=router_fields,
             current_values=current_values,
+            routing_strategy_descriptions=ROUTING_STRATEGY_DESCRIPTIONS,
         )
     except Exception as e:
         verbose_proxy_logger.error(
