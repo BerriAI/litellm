@@ -266,6 +266,9 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
+from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+    router as cache_settings_router,
+)
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
@@ -3341,6 +3344,8 @@ class ProxyConfig:
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
         if self._should_load_db_object(object_type="sso_settings"):
             await self._init_sso_settings_in_db(prisma_client=prisma_client)
+        if self._should_load_db_object(object_type="cache_settings"):
+            await self._init_cache_settings_in_db(prisma_client=prisma_client)
 
     async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
         """
@@ -3358,6 +3363,46 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - {}".format(
+                    str(e)
+                )
+            )   
+
+    async def _init_cache_settings_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize cache settings from database into the router on startup.
+        """
+        import json
+        
+        try:
+            cache_config = await prisma_client.db.litellm_cacheconfig.find_unique(
+                where={"id": "cache_config"}
+            )
+            if cache_config is not None and cache_config.cache_settings:
+                # Parse cache settings JSON
+                cache_settings_json = cache_config.cache_settings
+                if isinstance(cache_settings_json, str):
+                    cache_settings_dict = json.loads(cache_settings_json)
+                else:
+                    cache_settings_dict = cache_settings_json
+                
+                # Decrypt cache settings
+                decrypted_settings = self._decrypt_and_set_db_env_variables(
+                    environment_variables=cache_settings_dict,
+                    return_original_value=True
+                )
+                
+                # Ensure type is set to redis
+                decrypted_settings["type"] = "redis"
+                
+                # Initialize cache
+                self._init_cache(cache_params=decrypted_settings)
+                
+                verbose_proxy_logger.info(
+                    "Cache settings initialized from database"
+                )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_cache_settings_in_db - {}".format(
                     str(e)
                 )
             )   
@@ -8857,6 +8902,31 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                         "update": {"param_value": v},
                     },
                 )
+            elif k == "cache_settings":
+                import json
+                # Encrypt cache settings before saving
+                encrypted_cache_settings = proxy_config._encrypt_env_variables(
+                    environment_variables=v
+                )
+                await prisma_client.db.litellm_cacheconfig.upsert(
+                    where={"id": "cache_config"},
+                    data={
+                        "create": {
+                            "id": "cache_config",
+                            "cache_settings": json.dumps(encrypted_cache_settings),
+                        },
+                        "update": {
+                            "cache_settings": json.dumps(encrypted_cache_settings),
+                        },
+                    },
+                )
+                # Reinitialize cache with new settings
+                decrypted_settings = proxy_config._decrypt_and_set_db_env_variables(
+                    environment_variables=encrypted_cache_settings,
+                    return_original_value=True
+                )
+                decrypted_settings["type"] = "redis"
+                proxy_config._init_cache(cache_params=decrypted_settings)
 
         ### OLD LOGIC [TODO] MOVE TO DB ###
 
@@ -10044,6 +10114,7 @@ app.include_router(model_management_router)
 app.include_router(tag_management_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
+app.include_router(cache_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
