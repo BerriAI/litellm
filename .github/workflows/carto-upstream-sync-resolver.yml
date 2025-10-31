@@ -32,6 +32,10 @@ concurrency:
   group: upstream-sync-resolver-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: false
 
+permissions:
+  contents: write      
+  pull-requests: write
+
 jobs:
   # Job 1: Security verification - MUST PASS before any other checks
   security-check:
@@ -273,6 +277,7 @@ jobs:
       - name: Run Claude Code for conflict resolution
         uses: anthropics/claude-code-action@v1
         with:
+          github_token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 8 --timeout 1800 --allowed-tools Read,Write,Edit,Bash,Grep,Glob ${{ github.event.inputs.debug == 'true' && '--debug' || '' }}"
           prompt: |
