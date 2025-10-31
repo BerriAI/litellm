@@ -18,14 +18,14 @@ Memory leaks can crash your server, this library helps you catch them early.
 pytest tests/memory_leak_tests/
 
 # Run specific test
-pytest tests/memory_leak_tests/tests/test_sdk_completion.py
-pytest tests/memory_leak_tests/tests/test_router_completion.py
+pytest tests/memory_leak_tests/test_sdk_completion.py
+pytest tests/memory_leak_tests/test_router_completion.py
 ```
 
 ### Profiling (Production Server)
 
 ```python
-from tests.memory_leak_tests.profiler import EndpointProfiler, profile_endpoint
+from litellm.proxy.common_utils.memory_profiler.endpoint_profiler import EndpointProfiler, profile_endpoint
 
 # Initialize at server startup
 profiler = EndpointProfiler.get_instance(enabled=True, sampling_rate=1.0)
@@ -37,10 +37,10 @@ async def chat_completions(request: Request):
     return {"response": "data"}
 
 # Analyze collected profiles
-python -m tests.memory_leak_tests.profiler endpoint_profiles/chat_completions.json
+python -m litellm.proxy.common_utils.memory_profiler.endpoint_profiler endpoint_profiles/chat_completions.json
 ```
 
-See `profiler/README.md` for complete profiler documentation.
+See `endpoint_profiler/README.md` for complete profiler documentation.
 
 ## What Gets Tested
 
