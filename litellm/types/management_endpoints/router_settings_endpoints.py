@@ -22,9 +22,9 @@ class RouterSettingsField(BaseModel):
 ROUTING_STRATEGY_DESCRIPTIONS: Dict[str, str] = {
     "simple-shuffle": "Randomly picks a deployment from the list. Simple and fast.",
     "least-busy": "Routes to the deployment with the lowest number of ongoing requests.",
-    "usage-based-routing": "Routes to the deployment with the lowest TPM (Tokens Per Minute) usage.",
     "latency-based-routing": "Routes to the deployment with the lowest latency over a sliding window.",
     "cost-based-routing": "Routes to the deployment with the lowest cost per token.",
+    "usage-based-routing": "Routes to the deployment with the lowest TPM (Tokens Per Minute) usage. (deprecated)",
     "usage-based-routing-v2": "Improved version of usage-based routing with better tracking.",
 }
 
