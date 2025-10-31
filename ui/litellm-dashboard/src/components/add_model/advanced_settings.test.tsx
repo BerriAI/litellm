@@ -1,7 +1,6 @@
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AdvancedSettings from "./advanced_settings";
-import { Tag } from "../tag_management/types";
 
 describe("AdvancedSettings", () => {
   beforeEach(() => {
