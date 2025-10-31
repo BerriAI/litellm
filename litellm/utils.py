@@ -1758,8 +1758,25 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
     return _return_openai_tokenizer(model)
 
 
+
 def _return_openai_tokenizer(model: str) -> SelectTokenizerResponse:
-    return {"type": "openai_tokenizer", "tokenizer": encoding}
+    from litellm.litellm_core_utils.token_counter import _fix_model_name
+
+    model_to_use = _fix_model_name(model)
+
+    try:
+        # Special case: GPT-4o uses o200k_base
+        if "gpt-4o" in model_to_use:
+            tiktoken_encoding = tiktoken.get_encoding("o200k_base")
+        else:
+            # Use tiktoken's model-specific encoding
+            tiktoken_encoding = tiktoken.encoding_for_model(model_to_use)
+    except KeyError:
+        # Fallback to cl100k_base for unknown models
+        verbose_logger.debug(f"Warning: model {model} not found. Using cl100k_base encoding.")
+        tiktoken_encoding = tiktoken.get_encoding("cl100k_base")
+
+    return {"type": "openai_tokenizer", "tokenizer": tiktoken_encoding}
 
 
 def _return_huggingface_tokenizer(model: str) -> Optional[SelectTokenizerResponse]:

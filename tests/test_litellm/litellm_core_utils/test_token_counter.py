@@ -262,6 +262,31 @@ def test_encoding_and_decoding():
 # test_encoding_and_decoding()
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-4o",
+        "gpt-3.5-turbo",
+        "gpt-35-turbo",  # Azure naming
+        "claude-3-opus-20240229",
+        "command-nightly",
+        "mistral/mistral-tiny",
+    ],
+)
+def test_encode_token_counter_consistency(model):
+    sample_text = "Hellö World, this is my input string! My name is ishaan CTO"
+    
+    # Get token count from token_counter
+    counter_tokens = token_counter(model=model, text=sample_text)
+    
+    # Get token count from encode
+    encoded_tokens = encode(model=model, text=sample_text)
+    encode_token_count = len(encoded_tokens)
+    
+    assert counter_tokens == encode_token_count, f"Got={counter_tokens}, Expected={encode_token_count}, Params={'model': {model}}"
+
+# test_encode_decode_token_counter_consistency()
+
 def test_gpt_vision_token_counting():
     messages = [
         {
