@@ -3947,6 +3947,13 @@ class ProxyStartupEvent:
             proxy_batch_write_at - 3, proxy_batch_write_at + 3
         )  # random interval, so multiple workers avoid batch writing at the same time
 
+        # zixun
+        from litellm.proxy.zx.zx_endpoints import (
+            jobs as zx_jobs,
+        )
+        for job in zx_jobs:
+            job(scheduler)
+
         ### RESET BUDGET ###
         if general_settings.get("disable_reset_budget", False) is False:
             budget_reset_job = ResetBudgetJob(
@@ -9793,6 +9800,13 @@ async def get_routes():
 
 #     return {"token": token}
 
+
+# zixun
+from litellm.proxy.zx.zx_endpoints import (
+    routers as zx_routers,
+)
+for zx_router in zx_routers:
+    app.include_router(zx_router)
 
 app.include_router(router)
 app.include_router(response_router)
