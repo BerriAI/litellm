@@ -401,8 +401,6 @@ num_retries_per_request: Optional[
     int
 ] = None  # for the request overall (incl. fallbacks + model retries)
 
-#### VERTEX AI AUTH ####
-# Native async aiohttp is now the default for Vertex AI token retrieval
 
 ####### SECRET MANAGERS #####################
 secret_manager_client: Optional[
