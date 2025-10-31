@@ -301,8 +301,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 }
 ```
 
-## Supported Providers ([Docs](https://docs.litellm.ai/docs/providers))
-
+## Supported Providers ([Website Supported Models](https://models.litellm.ai/) | [Docs](https://docs.litellm.ai/docs/providers))
 
 | Provider                                                                            | `/chat/completions` | `/messages` | `/responses` | `/embeddings` | `/image/generations` | `/audio/transcriptions` | `/audio/speech` | `/moderations` | `/batches` | `/rerank` |
 |-------------------------------------------------------------------------------------|---------------------|-------------|--------------|---------------|----------------------|-------------------------|-----------------|----------------|-----------|-----------|
