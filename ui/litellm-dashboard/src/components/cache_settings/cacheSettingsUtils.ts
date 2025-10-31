@@ -51,12 +51,12 @@ export const groupFieldsByCategory = (fields: any[], redisType: string) => {
 
 export const gatherFormValues = (fields: any[], redisType: string): { [key: string]: any } => {
   const values: { [key: string]: any } = {
-    redis_type: redisType,
+    type: "redis", // Cache class accepts 'type' parameter (LiteLLMCacheType enum)
   };
 
   // Iterate through all fields from backend
   fields.forEach((field) => {
-    // Skip redis_type as we handle it separately
+    // Skip redis_type - it's UI-only, not sent to backend
     if (field.field_name === "redis_type") {
       return;
     }
