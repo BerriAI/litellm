@@ -64,6 +64,11 @@ class AnthropicCodeExecutionTool(TypedDict, total=False):
     name: Required[Literal["code_execution"]]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
+class AnthropicMemoryTool(TypedDict, total=False):
+    type: Required[Literal["memory_20250818"]]
+    name: Required[Literal["memory"]]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
 
 AllAnthropicToolsValues = Union[
     AnthropicComputerTool,
@@ -71,6 +76,7 @@ AllAnthropicToolsValues = Union[
     AnthropicMessagesTool,
     AnthropicWebSearchTool,
     AnthropicCodeExecutionTool,
+    AnthropicMemoryTool,
 ]
 
 
@@ -514,3 +520,4 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     Known beta header values for Anthropic.
     """
     WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"
+    CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
