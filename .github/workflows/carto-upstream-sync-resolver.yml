@@ -9,7 +9,7 @@ name: CARTO Upstream Sync - Conflict Resolver
 # - Only runs on main branch (upstream sync PRs)
 # - Only runs when conflicts are detected
 # - Blocks external forks
-# - Rate limited (max-turns: 8, timeout: 1800s / 30 mins)
+# - Rate limited (max-turns: 100, job timeout: 90 mins)
 
 on:
   pull_request:
@@ -241,6 +241,7 @@ jobs:
   claude-resolve:
     name: Claude Code Conflict Resolution
     runs-on: ubuntu-latest
+    timeout-minutes: 90  # Job timeout is the real limit (not max-turns)
     needs: [security-check, check-eligibility]
     if: needs.security-check.outputs.authorized == 'true' && needs.check-eligibility.outputs.eligible == 'true'
 
@@ -279,7 +280,8 @@ jobs:
         with:
           github_token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 10 --allowed-tools Read,Write,Edit,Bash,Grep,Glob ${{ github.event.inputs.debug == 'true' && '--debug' || '' }}"
+          show_full_output: true
+          claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 250 --allowed-tools Read,Write,Edit,Bash,Grep,Glob ${{ github.event.inputs.debug == 'true' && '--debug' || '' }}"
           prompt: |
             # Upstream Sync Conflict Resolution Task
 
@@ -551,10 +553,10 @@ jobs:
 
           **Configuration:**
           - Model: Sonnet 4.5
-          - Max turns: 8
-          - Timeout: 30 minutes
+          - Max turns: 100 (generous - timeout is real limit)
+          - Job timeout: 90 minutes (workflow-level)
           - Tools: Read, Write, Edit, Bash, Grep, Glob (restricted)
-          - Estimated cost: ~$1-4 per run
+          - Estimated cost: Limited by 90-min timeout (~$3-8 max)
 
           **Resolution Priorities Applied:**
           1. 🏢 CARTO customizations (highest priority)
