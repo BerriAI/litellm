@@ -2,7 +2,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# Docker, Deployment
+# Docker, Helm, Terraform
 
 You can find the Dockerfile to build litellm proxy [here](https://github.com/BerriAI/litellm/blob/main/Dockerfile)
 
@@ -195,7 +195,7 @@ docker run \
 
 s/o [Nicholas Cecere](https://www.linkedin.com/in/nicholas-cecere-24243549/) for his LiteLLM User Management Terraform
 
-👉 [Go here for Terraform](https://github.com/ncecere/terraform-litellm-user-mgmt)
+👉 [Go here for Terraform](https://github.com/BerriAI/terraform-provider-litellm)
 
 ### Kubernetes
 
