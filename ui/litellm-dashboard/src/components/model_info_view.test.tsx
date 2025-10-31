@@ -127,53 +127,120 @@ describe("ModelInfoView", () => {
     supported_openai_params: ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"],
   };
 
-  it("should render the model info view", async () => {
-    const { getByText } = render(
-      <ModelInfoView
-        modelId="123"
-        onClose={() => {}}
-        modelData={modelData}
-        accessToken="123"
-        userID="123"
-        userRole="Admin"
-        editModel={false}
-        setEditModalVisible={() => {}}
-        setSelectedModel={() => {}}
-        onModelUpdate={() => {}}
-        modelAccessGroups={[]}
-      />,
-    );
-    await waitFor(() => {
-      expect(getByText("Model Settings")).toBeInTheDocument();
+  describe("Edit Model", () => {
+    it("should render the model info view", async () => {
+      const { getByText } = render(
+        <ModelInfoView
+          modelId="123"
+          onClose={() => {}}
+          modelData={modelData}
+          accessToken="123"
+          userID="123"
+          userRole="Admin"
+          editModel={false}
+          setEditModalVisible={() => {}}
+          setSelectedModel={() => {}}
+          onModelUpdate={() => {}}
+          modelAccessGroups={[]}
+        />,
+      );
+      await waitFor(() => {
+        expect(getByText("Model Settings")).toBeInTheDocument();
+      });
+    });
+
+    it("should not render an edit model button if the model is not a DB model", async () => {
+      const nonDbModelData = {
+        ...modelData,
+        model_info: {
+          ...modelData.model_info,
+          db_model: false,
+        },
+      };
+
+      const { queryByText } = render(
+        <ModelInfoView
+          modelId="123"
+          onClose={() => {}}
+          modelData={nonDbModelData}
+          accessToken="123"
+          userID="123"
+          userRole="Admin"
+          editModel={false}
+          setEditModalVisible={() => {}}
+          setSelectedModel={() => {}}
+          onModelUpdate={() => {}}
+          modelAccessGroups={[]}
+        />,
+      );
+      await waitFor(() => {
+        expect(queryByText("Edit Model")).not.toBeInTheDocument();
+      });
+    });
+
+    it("should render tags in the edit model", async () => {
+      const { getByText } = render(
+        <ModelInfoView
+          modelId="123"
+          onClose={() => {}}
+          modelData={modelData}
+          accessToken="123"
+          userID="123"
+          userRole="Admin"
+          editModel={true}
+          setEditModalVisible={() => {}}
+          setSelectedModel={() => {}}
+          onModelUpdate={() => {}}
+          modelAccessGroups={[]}
+        />,
+      );
+      await waitFor(() => {
+        expect(getByText("Tags")).toBeInTheDocument();
+      });
     });
   });
 
-  it("should not render an edit model button if the model is not a DB model", async () => {
-    const nonDbModelData = {
-      ...modelData,
-      model_info: {
-        ...modelData.model_info,
-        db_model: false,
-      },
-    };
+  describe("View Model", () => {
+    it("should render the model info view", async () => {
+      const { getByText } = render(
+        <ModelInfoView
+          modelId="123"
+          onClose={() => {}}
+          modelData={modelData}
+          accessToken="123"
+          userID="123"
+          userRole="Admin"
+          editModel={false}
+          setEditModalVisible={() => {}}
+          setSelectedModel={() => {}}
+          onModelUpdate={() => {}}
+          modelAccessGroups={[]}
+        />,
+      );
+      await waitFor(() => {
+        expect(getByText("Model Settings")).toBeInTheDocument();
+      });
+    });
 
-    const { queryByText } = render(
-      <ModelInfoView
-        modelId="123"
-        onClose={() => {}}
-        modelData={nonDbModelData}
-        accessToken="123"
-        userID="123"
-        userRole="Admin"
-        editModel={false}
-        setEditModalVisible={() => {}}
-        setSelectedModel={() => {}}
-        onModelUpdate={() => {}}
-        modelAccessGroups={[]}
-      />,
-    );
-    await waitFor(() => {
-      expect(queryByText("Edit Model")).not.toBeInTheDocument();
+    it("should render tags in the view model", async () => {
+      const { getByText } = render(
+        <ModelInfoView
+          modelId="123"
+          onClose={() => {}}
+          modelData={modelData}
+          accessToken="123"
+          userID="123"
+          userRole="Admin"
+          editModel={false}
+          setEditModalVisible={() => {}}
+          setSelectedModel={() => {}}
+          onModelUpdate={() => {}}
+          modelAccessGroups={[]}
+        />,
+      );
+      await waitFor(() => {
+        expect(getByText("Tags")).toBeInTheDocument();
+      });
     });
   });
 });
