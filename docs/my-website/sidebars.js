@@ -294,6 +294,7 @@ const sidebars = {
             "proxy/managed_batches",
           ]
         },
+        "containers",
         {
           type: "category",
           label: "/chat/completions",

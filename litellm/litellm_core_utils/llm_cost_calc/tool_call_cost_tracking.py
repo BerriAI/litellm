@@ -618,8 +618,12 @@ class StandardBuiltInToolCostTracking:
             from litellm.constants import AZURE_CODE_INTERPRETER_COST_PER_SESSION
 
             return sessions * AZURE_CODE_INTERPRETER_COST_PER_SESSION
+        
+        elif provider == "openai":
+            from litellm.constants import OPENAI_CODE_INTERPRETER_COST_PER_SESSION
 
-        # OpenAI doesn't charge separately for code interpreter yet
+            return sessions * OPENAI_CODE_INTERPRETER_COST_PER_SESSION
+
         return 0.0
 
     @staticmethod
