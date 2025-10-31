@@ -1,0 +1,66 @@
+%YAML 1.1
+---
+name: zixun
+version: 0.0.1
+schema: v1
+
+allowAnonymousTelemetry: false
+
+model_defaults: &model_defaults
+  provider: openai
+  apiBase: "<SERVER_URL>/v1"
+  apiKey: "<API_KEY>"
+
+models:
+  - name: Anthropic Claude 3.5 Haiku
+    <<: *model_defaults
+    model: claude-3.5-haiku
+    capabilities:
+      - tool_use
+  - name: Anthropic Claude 3.5 Sonnet
+    <<: *model_defaults
+    model: claude-3.5-sonnet
+    capabilities:
+      - tool_use
+      - image_input
+  - name: Anthropic Claude 3.7 Sonnet
+    <<: *model_defaults
+    model: claude-3.7-sonnet
+    capabilities:
+      - tool_use
+      - image_input
+  - name: OpenAI GPT-4o
+    <<: *model_defaults
+    model: gpt-4o
+    capabilities:
+      - tool_use
+      - image_input
+  - name: OpenAI GPT-4o mini
+    <<: *model_defaults
+    model: gpt-4o-mini
+    capabilities:
+      - tool_use
+      - image_input
+    roles:
+      - autocomplete
+
+# mcpServers:
+#   - name: server-everything
+#     command: npx
+#     args:
+#       - -y
+#       - "@modelcontextprotocol/server-everything"
+#     env: {}
+
+data:
+  - name: DevelopmentData
+    destination: "<SERVER_URL>/zx/continue_plugin/dev_data"
+    schema: 0.2.0
+    level: all
+    # level: noCode
+    # events:
+    #   - autocomplete
+    #   - chatInteraction
+    requestOptions:
+      headers:
+        utoken: "<UTOKEN>"

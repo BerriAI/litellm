@@ -220,7 +220,7 @@ async def cli_get_config(token: Annotated[str | None, Header()] = None):
     if store is None:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    with open(os.path.join('/app', 'llm_config.json'), 'r') as file:
+    with open(os.path.join('/app/zx', 'llm_config.json'), 'r') as file:
         llm_config = json.load(file)
     return llm_config
 
@@ -250,7 +250,7 @@ async def cli_get_config_yaml(token: Annotated[str | None, Header()] = None):
         }
     litellm_user_id = litellm_user_info.user_id
 
-    with open(os.path.join('/app', 'llm_config_zixun.yaml'), 'r', encoding='utf-8') as file:
+    with open(os.path.join('/app/zx', 'llm_config_zixun.yaml'), 'r', encoding='utf-8') as file:
         content = file.read()
     return {
         "data": content.replace('<UTOKEN>', litellm_user_id)

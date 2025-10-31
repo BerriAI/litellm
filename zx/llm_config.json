@@ -1,0 +1,38 @@
+{
+    "continue": {
+        "allowAnonymousTelemetry": false,
+        "models": [
+            {
+                "title": "zx",
+                "provider": "openai",
+                "model": "AUTODETECT",
+                "apiKey": "",
+                "apiBase": ""
+            }
+        ],
+        "tabAutocompleteModel": {
+            "title": "zx GPT-4o mini",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "apiKey": "",
+            "apiBase": ""
+        },
+        "customCommands": [
+            {
+                "name": "zx.test",
+                "prompt": "{{{ input }}}\n\nWrite a comprehensive set of unit tests for the selected code. It should setup, run tests that check for correctness including important edge cases, and teardown. Ensure that the tests are complete and sophisticated. Give the tests just as chat output, don't edit any file.",
+                "description": "生成测试代码"
+            },
+            {
+                "name": "zx.create_table",
+                "prompt": "{{{ input }}}\n\n生成以上说明的建表语句，默认包含创建时间、创建人、修改时间和修改人。所有字段都需要的注释",
+                "description": "生成建表语句"
+            },
+            {
+                "name": "zx.uml",
+                "prompt": "{{{ input }}}\n\n使用Mermaid画流程图",
+                "description": "Mermaid文本绘图"
+            }
+        ]
+    }
+}
