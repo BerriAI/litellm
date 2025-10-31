@@ -2512,6 +2512,52 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     }'
 ```
 
+## Helicone
+
+We will use the `--config` to set 
+
+ - `litellm.success_callback = ["helicone_v2"]`
+
+**Step 1** Set Helicone API key
+
+```shell
+HELICONE_API_KEY = "your-helicone-api-key"
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["helicone_v2"]
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+
+```
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "which llm are you"
+        }
+    ]
+    }'
+```
 
 <!-- ## (BETA) Moderation with Azure Content Safety
 

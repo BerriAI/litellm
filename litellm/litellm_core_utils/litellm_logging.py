@@ -133,6 +133,7 @@ from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from ..integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
+from ..integrations.helicone_v2 import HeliconeLogger as HeliconeV2Logger
 from ..integrations.humanloop import HumanloopLogger
 from ..integrations.lago import LagoLogger
 from ..integrations.langfuse.langfuse import LangFuseLogger
@@ -3715,6 +3716,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             gitlab_logger = GitLabPromptManager(gitlab_config=gitlab_config)
             _in_memory_loggers.append(gitlab_logger)
             return gitlab_logger  # type: ignore
+        elif logging_integration == "helicone_v2":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, HeliconeV2Logger):
+                    return callback  # type: ignore
+
+            _helicone_v2_logger = HeliconeV2Logger()
+            _in_memory_loggers.append(_helicone_v2_logger)
+            return _helicone_v2_logger  # type: ignore
         return None
     except Exception as e:
         verbose_logger.exception(

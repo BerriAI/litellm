@@ -24,6 +24,7 @@ from litellm.integrations.deepeval import DeepEvalLogger
 from litellm.integrations.galileo import GalileoObserve
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
+from litellm.integrations.helicone_v2 import HeliconeLogger
 from litellm.integrations.humanloop import HumanloopLogger
 from litellm.integrations.lago import LagoLogger
 from litellm.integrations.langfuse.langfuse_prompt_management import (
@@ -96,6 +97,7 @@ class CustomLoggerRegistry:
         "gitlab": GitLabPromptManager,
         "cloudzero": CloudZeroLogger,
         "posthog": PostHogLogger,
+        "helicone_v2": HeliconeLogger
     }
 
     try:
