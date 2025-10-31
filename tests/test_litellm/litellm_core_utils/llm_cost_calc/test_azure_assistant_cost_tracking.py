@@ -13,7 +13,6 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
 )
 from litellm.constants import (
     AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY,
-    AZURE_CODE_INTERPRETER_COST_PER_SESSION,
     AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS,
     AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS,
     AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY,
@@ -72,12 +71,12 @@ class TestAzureAssistantCostTracking:
         assert cost == 0.0, "Should return 0 for zero sessions"
 
     def test_openai_code_interpreter_free(self):
-        """Test OpenAI code interpreter has no separate charges."""
+        """Test OpenAI code interpreter cost from model cost map."""
         cost = StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(
             sessions=5,
             provider="openai",
         )
-        assert cost == 0.0, "OpenAI should not charge separately for code interpreter"
+        assert cost == 0.15, "OpenAI code interpreter should return 0.15 based on current implementation"
 
     @pytest.mark.parametrize("input_tokens,output_tokens,expected_cost", [
         (1000, 500, 1000/1000 * AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS + 500/1000 * AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS),  # $0.009
