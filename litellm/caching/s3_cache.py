@@ -18,6 +18,7 @@ from datetime import datetime, timezone, timedelta
 from litellm._logging import print_verbose, verbose_logger
 
 from .base_cache import BaseCache
+from .json_utils import TimedeltaJSONEncoder
 
 
 class S3Cache(BaseCache):
@@ -65,7 +66,7 @@ class S3Cache(BaseCache):
             print_verbose(f"LiteLLM SET Cache - S3. Key={key}. Value={value}")
             ttl = kwargs.get("ttl", None)
             # Convert value to JSON before storing in S3
-            serialized_value = json.dumps(value)
+            serialized_value = json.dumps(value, cls=TimedeltaJSONEncoder)
             key = self._to_s3_key(key)
 
             if ttl is not None:
@@ -110,7 +111,9 @@ class S3Cache(BaseCache):
             func = partial(self.set_cache, key, value, **kwargs)
             await loop.run_in_executor(None, func)
         except Exception as e:
-            verbose_logger.error(f"S3 Caching: async_set_cache() - Got exception from S3: {e}")
+            verbose_logger.error(
+                f"S3 Caching: async_set_cache() - Got exception from S3: {e}"
+            )
 
     def get_cache(self, key, **kwargs):
         import botocore
@@ -126,7 +129,7 @@ class S3Cache(BaseCache):
 
             if cached_response is not None:
                 if "Expires" in cached_response:
-                    expires_time = cached_response['Expires']
+                    expires_time = cached_response["Expires"]
                     current_time = datetime.now(expires_time.tzinfo)
 
                     if current_time > expires_time:
