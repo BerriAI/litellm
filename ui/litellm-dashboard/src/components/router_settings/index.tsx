@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from "react";
 import {
-  Title,
-  Text,
   Button,
   TextInput,
 } from "@tremor/react";
@@ -13,6 +11,8 @@ import {
 import NotificationsManager from "../molecules/notifications_manager";
 import RoutingStrategySelector from "./RoutingStrategySelector";
 import TagFilteringToggle from "./TagFilteringToggle";
+import LatencyBasedConfiguration from "./LatencyBasedConfiguration";
+import ReliabilityRetriesSection from "./ReliabilityRetriesSection";
 
 interface RouterSettingsProps {
   accessToken: string | null;
@@ -26,11 +26,6 @@ interface routingStrategyArgs {
   lowest_latency_buffer?: number;
 }
 
-const defaultLowestLatencyArgs: routingStrategyArgs = {
-  ttl: 3600,
-  lowest_latency_buffer: 0,
-};
-
 const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, userID, modelData }) => {
   const [routerSettings, setRouterSettings] = useState<{ [key: string]: any }>({});
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(null);
@@ -38,13 +33,6 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
   const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
   const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
   const [enableTagFiltering, setEnableTagFiltering] = useState<boolean>(false);
-
-  // Param explanations for routing strategy args (these are dynamic based on strategy)
-  let paramExplanation: { [key: string]: string } = {
-    ttl: "Sliding window to look back over when calculating the average latency of a deployment. Default - 1 hour (in seconds).",
-    lowest_latency_buffer:
-      "Shuffle between deployments within this % of the lowest latency. Default - 0 (i.e. always pick lowest latency).",
-  };
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -229,80 +217,17 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
         <div className="border-t border-gray-200" />
 
         {/* Strategy-Specific Args - Show immediately after strategy if latency-based */}
-      {selectedStrategy === "latency-based-routing" && (
-        <>
-          <div className="space-y-6">
-            <div className="max-w-3xl">
-              <h3 className="text-sm font-medium text-gray-900">Latency-Based Configuration</h3>
-              <p className="text-xs text-gray-500 mt-1">Fine-tune latency-based routing behavior</p>
-            </div>
-            
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">
-              {Object.entries(
-                routerSettings["routing_strategy_args"] || defaultLowestLatencyArgs
-              ).map(([param, value]) => (
-                <div key={param} className="space-y-2">
-                  <label className="block">
-                    <span className="text-xs font-medium text-gray-700 uppercase tracking-wide">
-                      {param.replace(/_/g, " ")}
-                    </span>
-                    <p className="text-xs text-gray-500 mt-0.5 mb-2">
-                      {paramExplanation[param] || ""}
-                    </p>
-                    <TextInput
-                      name={param}
-                      defaultValue={typeof value === "object" ? JSON.stringify(value, null, 2) : value?.toString()}
-                      className="font-mono text-sm w-full"
-                    />
-                  </label>
-                </div>
-              ))}
-            </div>
-          </div>
-          
-          <div className="border-t border-gray-200" />
-        </>
-      )}
+        {selectedStrategy === "latency-based-routing" && (
+          <LatencyBasedConfiguration
+            routingStrategyArgs={routerSettings["routing_strategy_args"]}
+          />
+        )}
 
-      {/* Other Settings */}
-      <div className="space-y-6">
-        <div className="max-w-3xl">
-          <h3 className="text-sm font-medium text-gray-900">Reliability & Retries</h3>
-          <p className="text-xs text-gray-500 mt-1">Configure retry logic and failure handling</p>
-        </div>
-        
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">
-          {Object.entries(routerSettings)
-            .filter(
-              ([param, value]) =>
-                param != "fallbacks" &&
-                param != "context_window_fallbacks" &&
-                param != "routing_strategy_args" &&
-                param != "routing_strategy" &&
-                param != "enable_tag_filtering",
-            )
-            .map(([param, value]) => (
-              <div key={param} className="space-y-2">
-                <label className="block">
-                  <span className="text-xs font-medium text-gray-700 uppercase tracking-wide">
-                    {routerFieldsMetadata[param]?.ui_field_name || param}
-                  </span>
-                  <p className="text-xs text-gray-500 mt-0.5 mb-2">
-                    {routerFieldsMetadata[param]?.field_description || ""}
-                  </p>
-                  <TextInput
-                    name={param}
-                    defaultValue={
-                      typeof value === "object" ? JSON.stringify(value, null, 2) : value?.toString() || ""
-                    }
-                    placeholder="—"
-                    className="font-mono text-sm w-full"
-                  />
-                </label>
-              </div>
-            ))}
-        </div>
-      </div>
+        {/* Other Settings */}
+        <ReliabilityRetriesSection
+          routerSettings={routerSettings}
+          routerFieldsMetadata={routerFieldsMetadata}
+        />
 
       {/* Actions - Sticky at bottom */}
       <div className="border-t border-gray-200 pt-6 flex justify-end gap-3">
