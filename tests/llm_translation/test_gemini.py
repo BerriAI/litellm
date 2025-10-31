@@ -404,6 +404,116 @@ def test_gemini_imagen_models_use_predict_endpoint():
         assert "parameters" in request_data
 
 
+def test_vertex_gemini_image_preview_routes_generate_content():
+    """Vertex AI gemini-2.5-flash-image-preview should call :generateContent with Gemini payload."""
+    from unittest.mock import MagicMock, patch
+
+    mock_response_payload = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "inlineData": {
+                                "data": "vertex_test_base64",
+                                "mimeType": "image/png",
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    with patch(
+        "litellm.llms.vertex_ai.image_generation.image_generation_handler.VertexImageGeneration._ensure_access_token",
+        return_value=("fake-token", "test-project"),
+    ), patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
+    ) as mock_post:
+        mock_http_response = MagicMock()
+        mock_http_response.status_code = 200
+        mock_http_response.json.return_value = mock_response_payload
+        mock_post.return_value = mock_http_response
+
+        response = litellm.image_generation(
+            model="vertex_ai/gemini-2.5-flash-image-preview",
+            prompt="Generate a vertex test image",
+            vertex_project="test-project",
+            vertex_location="us-central1",
+        )
+
+        assert response is not None
+        assert response.data is not None
+        assert len(response.data) == 1
+        assert getattr(response.data[0], "b64_json", None) == "vertex_test_base64"
+
+        mock_post.assert_called_once()
+        called_kwargs = mock_post.call_args.kwargs
+        called_url = called_kwargs.get("url") or mock_post.call_args.args[0]
+        assert called_url is not None
+        assert ":generateContent" in called_url
+        assert "gemini-2.5-flash-image-preview" in called_url
+
+        request_payload = called_kwargs.get("json")
+        assert request_payload is not None
+        assert "contents" in request_payload
+        assert request_payload["contents"][0]["parts"][0]["text"] == "Generate a vertex test image"
+        assert request_payload["generationConfig"]["responseModalities"] == [
+            "IMAGE",
+            "TEXT",
+        ]
+
+
+def test_vertex_imagen_models_still_use_predict_endpoint():
+    """Vertex Imagen models must continue using :predict payload."""
+    from unittest.mock import MagicMock, patch
+
+    mock_response_payload = {
+        "predictions": [
+            {
+                "bytesBase64Encoded": "vertex_imagen_base64",
+            }
+        ]
+    }
+
+    with patch(
+        "litellm.llms.vertex_ai.image_generation.image_generation_handler.VertexImageGeneration._ensure_access_token",
+        return_value=("fake-token", "test-project"),
+    ), patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
+    ) as mock_post:
+        mock_http_response = MagicMock()
+        mock_http_response.status_code = 200
+        mock_http_response.json.return_value = mock_response_payload
+        mock_post.return_value = mock_http_response
+
+        response = litellm.image_generation(
+            model="vertex_ai/imagen-3.0-generate-001",
+            prompt="Generate a vertex imagen test image",
+            vertex_project="test-project",
+            vertex_location="us-central1",
+        )
+
+        assert response is not None
+        assert response.data is not None
+        assert len(response.data) == 1
+        assert getattr(response.data[0], "b64_json", None) == "vertex_imagen_base64"
+
+        mock_post.assert_called_once()
+        called_kwargs = mock_post.call_args.kwargs
+        called_url = called_kwargs.get("url") or mock_post.call_args.args[0]
+        assert called_url is not None
+        assert ":predict" in called_url
+        assert ":generateContent" not in called_url
+
+        request_payload = called_kwargs.get("data")
+        assert request_payload is not None
+        parsed_payload = json.loads(request_payload)
+        assert parsed_payload["instances"][0]["prompt"] == "Generate a vertex imagen test image"
+        assert parsed_payload["parameters"]["sampleCount"] == 1
+
+
 def test_gemini_thinking():
     litellm._turn_on_debug()
     from litellm.types.utils import Message, CallTypes
