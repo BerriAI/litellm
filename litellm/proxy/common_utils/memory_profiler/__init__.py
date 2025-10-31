@@ -120,7 +120,7 @@ from .constants import (
 )
 
 # Profiler (for live server monitoring)
-from .profiler import (
+from .endpoint_profiler import (
     EndpointProfiler,
     profile_endpoint,
     analyze_profile_file,
