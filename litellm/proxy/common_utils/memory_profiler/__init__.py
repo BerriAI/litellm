@@ -7,6 +7,7 @@ using tracemalloc, with support for:
 - **Analysis**: Memory growth analysis and leak detection algorithms
 - **Core**: Testing framework (cleanup, configuration, execution orchestration)
 - **Snapshot**: Memory snapshot capture and storage system
+- **Profiler**: Live server profiling and endpoint memory monitoring
 - **Utils**: Shared utilities for conversions and output formatting
 - **Constants**: Centralized configuration constants
 
@@ -46,6 +47,7 @@ analyze_and_detect_leaks(memory_samples, error_counts, config)
 - `analysis/` - Memory analysis and leak detection
 - `core/` - Core testing framework
 - `snapshot/` - Snapshot capture and storage
+- `profiler/` - Live server profiling and endpoint monitoring
 - `tests/` - Test suite implementations
 - `utils/` - Shared utilities
 - `constants.py` - Configuration constants
@@ -117,6 +119,15 @@ from .constants import (
     DEFAULT_PERIODIC_SAMPLE_INTERVAL,
 )
 
+# Profiler (for live server monitoring)
+from .profiler import (
+    EndpointProfiler,
+    profile_endpoint,
+    analyze_profile_file,
+    load_profile_data,
+    analyze_endpoint_memory,
+)
+
 __all__ = [
     # Core execution
     "execute_single_request",
@@ -159,6 +170,12 @@ __all__ = [
     # Constants
     "DEFAULT_MEMORY_INCREASE_THRESHOLD_PCT",
     "DEFAULT_PERIODIC_SAMPLE_INTERVAL",
+    # Profiler
+    "EndpointProfiler",
+    "profile_endpoint",
+    "analyze_profile_file",
+    "load_profile_data",
+    "analyze_endpoint_memory",
 ]
 
 __version__ = "1.0.0"

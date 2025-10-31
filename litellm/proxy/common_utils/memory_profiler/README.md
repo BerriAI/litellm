@@ -1,10 +1,17 @@
-# Memory Leak Tests - For Dummies
+# Memory Leak Tests Library
 
 ## What is This?
 
-Tests that check if LiteLLM is leaking memory (eating up more RAM over time). Memory leaks can crash your server.
+A comprehensive library for detecting and monitoring memory leaks in LiteLLM:
+
+- **Testing Framework**: Automated tests that check if LiteLLM is leaking memory
+- **Live Profiler**: Production server endpoint monitoring and profiling
+
+Memory leaks can crash your server, this library helps you catch them early.
 
 ## Quick Start
+
+### Testing (Automated)
 
 ```bash
 # Run all tests
@@ -15,10 +22,31 @@ pytest tests/memory_leak_tests/tests/test_sdk_completion.py
 pytest tests/memory_leak_tests/tests/test_router_completion.py
 ```
 
+### Profiling (Production Server)
+
+```python
+from tests.memory_leak_tests.profiler import EndpointProfiler, profile_endpoint
+
+# Initialize at server startup
+profiler = EndpointProfiler.get_instance(enabled=True, sampling_rate=1.0)
+await profiler.start_auto_flush()
+
+# Decorate your endpoints
+@profile_endpoint()
+async def chat_completions(request: Request):
+    return {"response": "data"}
+
+# Analyze collected profiles
+python -m tests.memory_leak_tests.profiler endpoint_profiles/chat_completions.json
+```
+
+See `profiler/README.md` for complete profiler documentation.
+
 ## What Gets Tested
 
 - **SDK tests**: `litellm.completion()` and `litellm.acompletion()`
 - **Router tests**: `Router.completion()` and `Router.acompletion()`
+- **Live profiling**: Production server endpoint monitoring via `profiler/` module
 - Both sync/async and streaming/non-streaming modes
 
 ## How It Works
@@ -92,6 +120,15 @@ The codebase is organized into modular components:
 - `snapshot/` - Memory snapshot capture and storage
   - `capture.py` - Smart memory snapshot capturing
   - `storage.py` - Snapshot persistence
+
+### Live Server Profiling
+
+- `profiler/` - Production endpoint memory monitoring
+  - `profiler.py` - EndpointProfiler and decorators for live monitoring
+  - `capture.py` - Request-level memory capture
+  - `storage.py` - Profile buffering and persistence
+  - `analyze_profiles.py` - Profile analysis and leak detection
+  - `README.md` - Complete profiler documentation
 
 ### Test Suites
 

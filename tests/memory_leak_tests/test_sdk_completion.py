@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 
-from .. import (
+from litellm.proxy.common_utils.memory_profiler import (
     run_memory_measurement_with_tracemalloc,
     analyze_and_detect_leaks,
     verify_module_id_consistency,
@@ -21,7 +21,7 @@ from .. import (
     get_memory_test_config,
     print_test_header,
 )
-from ..constants import FAKE_LLM_ENDPOINT
+from litellm.proxy.common_utils.memory_profiler.constants import FAKE_LLM_ENDPOINT
 
 
 @pytest.mark.asyncio
