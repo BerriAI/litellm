@@ -26,10 +26,11 @@ def test_all_numeric_constants_can_be_overridden():
     constants_attributes = inspect.getmembers(constants)
 
     # Filter for uppercase constants (by convention) that are integers or floats
+    # Exclude booleans since bool is a subclass of int in Python
     numeric_constants = [
         (name, value)
         for name, value in constants_attributes
-        if name.isupper() and isinstance(value, (int, float))
+        if name.isupper() and isinstance(value, (int, float)) and not isinstance(value, bool)
     ]
 
     # Ensure we found some constants to test

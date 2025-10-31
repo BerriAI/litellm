@@ -3,11 +3,18 @@ import TabItem from '@theme/TabItem';
 
 # IBM Guardrails
 
-LiteLLM works with IBM's FMS Guardrails for content safety. You can use it to detect jailbreaks, PII, hate speech, and more.
+LiteLLM works with [IBM's FMS Guardrails](https://github.com/foundation-model-stack/fms-guardrails-orchestrator) for content safety. You can use it to detect jailbreaks, PII, hate speech, and more. 
 
 ## What it does
 
-IBM Guardrails analyzes text and tells you if it contains things you want to avoid. It gives each detection a score. Higher scores mean it's more confident.
+IBM's FMS Guardrails is a framework for invoking detectors on LLM inputs and outputs. To configure these detectors, you can use e.g. [TrustyAI detectors](https://github.com/trustyai-explainability/guardrails-detectors), an open-source project maintained by the Red Hat's [TrustyAI team](https://github.com/trustyai-explainability) that allows the user to configure detectors that are: 
+
+- regex patterns
+- file type validators
+- custom Python functions
+- Hugging Face [AutoModelForSequenceClassification](https://huggingface.co/docs/transformers/en/model_doc/auto#transformers.AutoModelForSequenceClassification), i.e. sequence classification models
+
+Each detector outputs an API response based on the following [openapi schema](https://foundation-model-stack.github.io/fms-guardrails-orchestrator/docs/api/openapi_detector_api.yaml). 
 
 You can run these checks:
 - Before sending to the LLM (on user input)
@@ -73,7 +80,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 - `guardrail` - str - Set to `ibm_guardrails`
 - `auth_token` - str - Your IBM Guardrails auth token. Can use `os.environ/IBM_GUARDRAILS_AUTH_TOKEN`
-- `base_url` - str - URL of your IBM Guardrails server
+- `base_url` - str - URL of your IBM Detector or Guardrails server 
 - `detector_id` - str - Which detector to use (e.g., "jailbreak-detector", "pii-detector")
 
 ### Optional params  
@@ -97,7 +104,7 @@ IBM Guardrails has two APIs you can use:
 
 ### Detector Server (recommended)
 
-The simpler one. Sends all messages at once.
+[This Detectors API](https://foundation-model-stack.github.io/fms-guardrails-orchestrator/?urls.primaryName=Detector+API#/Text) uses `api/v1/text/contents` endpoint to run a single detector; it can accept multiple text inputs within a request. 
 
 ```yaml
 guardrails:
@@ -113,7 +120,7 @@ guardrails:
 
 ### Orchestrator
 
-If you're using the IBM FMS Guardrails Orchestrator, you can use this.
+If you're using the IBM FMS Guardrails Orchestrator, you can use [FMS Orchestrator API](https://foundation-model-stack.github.io/fms-guardrails-orchestrator/?urls.primaryName=Orchestrator+API), specifically by leveraging the `api/v2/text/detection/content` to potentially run multiple detectors in a single request; however, this endpoint can only accept one text input per request.
 
 ```yaml
 guardrails:

@@ -9,9 +9,9 @@
 
 import ast
 import asyncio
-import contextvars
 import base64
 import binascii
+import contextvars
 import copy
 import datetime
 import hashlib
@@ -36,6 +36,7 @@ import traceback
 from dataclasses import dataclass, field
 from functools import lru_cache, wraps
 from importlib import resources
+from importlib.metadata import entry_points
 from inspect import iscoroutine
 from io import StringIO
 from os.path import abspath, dirname, join
@@ -385,10 +386,30 @@ def print_verbose(
 
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
+def load_custom_provider_entrypoints():
+    # Handle both Python 3.9 (returns dict) and Python 3.10+ (returns object with select method)
+    eps = entry_points()
+    if hasattr(eps, "select"):
+        # Python 3.10+
+        found_entry_points = tuple(eps.select(group="litellm"))  # type: ignore
+    else:
+        # Python 3.9 and earlier - entry_points() returns a dict
+        found_entry_points = eps.get("litellm", ())  # type: ignore
+    
+    for entry_point in found_entry_points:
+        # types are ignored because of circular dependency issues importing CustomLLM and CustomLLMItem
+        HandlerClass = entry_point.load()
+        handler = HandlerClass()
+        provider = {"provider": entry_point.name, "custom_handler": handler}
+        litellm.custom_provider_map.append(provider)  # type: ignore
+
+
 def custom_llm_setup():
     """
     Add custom_llm provider to provider list
     """
+    load_custom_provider_entrypoints()
+
     for custom_llm in litellm.custom_provider_map:
         if custom_llm["provider"] not in litellm.provider_list:
             litellm.provider_list.append(custom_llm["provider"])
@@ -7648,6 +7669,12 @@ class ProviderConfigManager:
             )
 
             return LiteLLMProxyImageGenerationConfig()
+        elif LlmProviders.FAL_AI == provider:
+            from litellm.llms.fal_ai.image_generation import (
+                get_fal_ai_image_generation_config,
+            )
+
+            return get_fal_ai_image_generation_config(model)
         return None
 
     @staticmethod

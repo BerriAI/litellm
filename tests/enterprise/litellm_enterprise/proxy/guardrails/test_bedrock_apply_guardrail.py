@@ -144,7 +144,7 @@ async def test_bedrock_apply_guardrail_api_failure():
 @pytest.mark.asyncio
 async def test_bedrock_apply_guardrail_endpoint_integration():
     """Test the full endpoint integration with Bedrock guardrail"""
-    from enterprise.litellm_enterprise.proxy.guardrails.endpoints import apply_guardrail
+    from litellm.proxy.guardrails.guardrail_endpoints import apply_guardrail
 
     # Create a real BedrockGuardrail instance
     guardrail = BedrockGuardrail(
@@ -154,7 +154,7 @@ async def test_bedrock_apply_guardrail_endpoint_integration():
     )
     
     # Mock the guardrail registry
-    with patch("enterprise.litellm_enterprise.proxy.guardrails.endpoints.GUARDRAIL_REGISTRY") as mock_registry:
+    with patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY") as mock_registry:
         # Mock the make_bedrock_api_request method
         with patch.object(guardrail, 'make_bedrock_api_request', new_callable=AsyncMock) as mock_api_request:
             # Mock a successful response from Bedrock

@@ -985,7 +985,7 @@ class ProxyLogging:
                     )
                 else:
                     _callback = callback  # type: ignore
-                if _callback is not None and isinstance(_callback, CustomGuardrail):
+                if _callback is not None and isinstance(_callback, CustomGuardrail) and data is not None:
                     result = await self._process_guardrail_callback(
                         callback=_callback,
                         data=data,

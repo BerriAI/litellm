@@ -317,7 +317,8 @@ const NotificationManager = {
         title === "Authentication Error" ||
         title === "Access Denied" ||
         title === "Not Found" ||
-        title === "Error"
+        title === "Error" ||
+        title === "Already Exists"
       ) {
         notification.error({ ...payload, duration: extra?.duration ?? 6 });
         return;
