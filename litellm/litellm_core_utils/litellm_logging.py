@@ -1310,6 +1310,7 @@ class Logging(LiteLLMLoggingBaseClass):
             response_cost = litellm.response_cost_calculator(
                 **response_cost_calculator_kwargs
             )
+
             verbose_logger.debug(f"response_cost: {response_cost}")
             return response_cost
         except Exception as e:  # error calculating cost
@@ -1623,7 +1624,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OCRResponse)  # OCR
             or isinstance(logging_result, dict)
             and logging_result.get("object") == "vector_store.search_results.page"
-            or isinstance(logging_result, VideoObject) 
+            or isinstance(logging_result, VideoObject)
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
             return True

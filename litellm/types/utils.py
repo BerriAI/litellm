@@ -280,7 +280,7 @@ class CallTypes(str, Enum):
     file_content = "file_content"
     create_fine_tuning_job = "create_fine_tuning_job"
     acreate_fine_tuning_job = "acreate_fine_tuning_job"
-    
+
     #########################################################
     # Video Generation Call Types
     #########################################################
@@ -360,6 +360,7 @@ CallTypesLiteral = Literal[
     "aocr",
     "avector_store_search",
     "vector_store_search",
+    "call_mcp_tool",
 ]
 
 
@@ -1177,8 +1178,6 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         kwargs["choices"] = new_choices
 
         super().__init__(**kwargs)
-
-
 
 
 class ModelResponseBase(OpenAIObject):
@@ -2576,6 +2575,7 @@ class SearchProviders(str, Enum):
     Enum for search provider types.
     Separate from LlmProviders for semantic clarity.
     """
+
     PERPLEXITY = "perplexity"
     TAVILY = "tavily"
     PARALLEL_AI = "parallel_ai"
@@ -2822,13 +2822,13 @@ CostResponseTypes = Union[
 class PriorityReservationDict(TypedDict, total=False):
     """
     Dictionary format for priority reservation values.
-    
+
     Used in litellm.priority_reservation to specify how much capacity to reserve
     for each priority level. Supports three formats:
     1. Percentage-based: {"type": "percent", "value": 0.9} -> 90% of capacity
     2. RPM-based: {"type": "rpm", "value": 900} -> 900 requests per minute
     3. TPM-based: {"type": "tpm", "value": 900000} -> 900,000 tokens per minute
-    
+
     Attributes:
         type: The type of value - "percent", "rpm", or "tpm". Defaults to "percent".
         value: The numeric value. For percent (0.0-1.0), for rpm/tpm (absolute value).
