@@ -3,9 +3,7 @@
 #           Use Zscaler AI Guard for your LLM calls
 #
 # +-------------------------------------------------------------+
-import requests
 import os
-from requests.adapters import HTTPAdapter, Retry
 from typing import Any, Literal, Optional, Union
 from fastapi import HTTPException
 
