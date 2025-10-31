@@ -96,6 +96,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
+    def log_management_event(
+        self,
+        event_name: str,
+        event_payload: dict,
+        user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+    ) -> None:
+        """Hook executed after a management endpoint succeeds."""
+        pass
+
     #### ASYNC ####
 
     async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
@@ -108,6 +117,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        pass
+
+    async def async_log_management_event(
+        self,
+        event_name: str,
+        event_payload: dict,
+        user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+    ) -> None:
+        """Async variant of the management event hook."""
         pass
 
     #### PROMPT MANAGEMENT HOOKS ####

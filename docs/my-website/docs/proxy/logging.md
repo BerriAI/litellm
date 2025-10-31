@@ -1709,6 +1709,10 @@ proxy_handler_instance = MyCustomHandler()
 # need to set litellm.callbacks = [proxy_handler_instance] # on the proxy
 ```
 
+:::tip
+**Track Management Events:** You can also add `log_management_event` or `async_log_management_event` hooks to track virtual key creation, team updates, user management, and more. [See Management Event Hook documentation](../observability/custom_callback.md#management-event-hooks-proxy-only).
+:::
+
 #### Step 2 - Pass your custom callback class in `config.yaml`
 
 We pass the custom callback class defined in **Step1** to the config.yaml. 
