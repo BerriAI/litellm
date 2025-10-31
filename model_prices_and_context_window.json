@@ -7073,7 +7073,8 @@
         "output_cost_per_token": 6e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "deepinfra/Qwen/Qwen3-14B": {
         "max_tokens": 40960,
@@ -18620,7 +18621,8 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 6.3e-07,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "openrouter/qwen/qwen3-coder": {
         "input_cost_per_token": 1e-06,
