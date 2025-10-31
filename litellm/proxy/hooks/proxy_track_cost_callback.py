@@ -261,4 +261,8 @@ def _should_track_cost_callback(
         or end_user_id is not None
     ):
         return True
-    return False
+    else:
+        raise Exception(
+            "User API key and team id and user id missing from custom callback."
+        )
+
