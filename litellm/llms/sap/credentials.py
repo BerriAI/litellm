@@ -181,7 +181,7 @@ def _resolve_value(
     return cred.default
 
 
-def fetch_credentials(profile: Optional[str] = None, **kwargs) -> Dict[str, str]:
+def fetch_credentials(service_key: Optional[str] = None, profile: Optional[str] = None, **kwargs) -> Dict[str, str]:
     """
     Resolution order per key:
       kwargs
@@ -195,7 +195,7 @@ def fetch_credentials(profile: Optional[str] = None, **kwargs) -> Dict[str, str]
     env = os.environ  # snapshot for testability
 
     # Prefer AICORE_SERVICE_KEY if present; otherwise fall back to the VCAP service.
-    service_like = sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR) or _get_vcap_service(
+    service_like = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR) or _get_vcap_service(
         VCAP_AICORE_SERVICE_NAME
     )
 
@@ -213,6 +213,7 @@ def fetch_credentials(profile: Optional[str] = None, **kwargs) -> Dict[str, str]
 
 
 def get_token_creator(
+    service_key: Optional[str] = None,
     profile: Optional[str] = None,
     *,
     timeout: float = 30.0,
@@ -239,7 +240,7 @@ def get_token_creator(
     """
 
     # Resolve credentials using your helper
-    credentials: Dict[str, str] = fetch_credentials(profile=profile, **overrides)
+    credentials: Dict[str, str] = fetch_credentials(service_key=service_key, profile=profile, **overrides)
 
     auth_url = credentials.get("auth_url")
     client_id = credentials.get("client_id")
