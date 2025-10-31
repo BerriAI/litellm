@@ -44,6 +44,7 @@ from .common_utils import (
     is_non_content_values_set,
 )
 from .image_handling import convert_url_to_base64
+from pydantic import BaseModel
 
 
 def default_pt(messages):
@@ -1143,6 +1144,8 @@ def infer_protocol_value(
 def _gemini_tool_call_invoke_helper(
     function_call_params: ChatCompletionToolCallFunctionChunk,
 ) -> Optional[VertexFunctionCall]:
+    if isinstance(function_call_params, BaseModel):
+        function_call_params = function_call_params.model_dump()
     name = function_call_params.get("name", "") or ""
     arguments = function_call_params.get("arguments", "")
     if (
@@ -1287,7 +1290,10 @@ def convert_to_gemini_tool_call_result(
                 and prev_tool_call_id
                 and msg_tool_call_id == prev_tool_call_id
             ):
-                name = tool.get("function", {}).get("name", "")
+                function_idf = tool.get("function")
+                if isinstance(function_idf, BaseModel):
+                    function_idf = function_idf.model_dump()
+                name = getattr(function_idf, "get", lambda *_: "")("name", "")
 
     if not name:
         raise Exception(
