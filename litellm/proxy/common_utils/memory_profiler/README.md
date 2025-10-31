@@ -124,7 +124,10 @@ The codebase is organized into modular components:
 ### Live Server Profiling
 
 - `endpoint_profiler/` - Production endpoint memory monitoring (modular design)
-  - `profiler.py` - EndpointProfiler and decorators for live monitoring
+  - **Profiler modules (modular)**:
+    - `profiler_core.py` - EndpointProfiler singleton class
+    - `decorator.py` - profile_endpoint decorator
+    - `profiler.py` - Re-exports for backward compatibility
   - `capture.py` - Request-level memory capture
   - `storage.py` - Profile buffering and persistence
   - **Analysis modules (modular)**:

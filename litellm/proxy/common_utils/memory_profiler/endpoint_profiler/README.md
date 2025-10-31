@@ -18,16 +18,17 @@ The Memory Leak Profiler monitors memory usage of proxy endpoints to detect leak
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    @profile_endpoint()                      │
-│                      (Decorator)                            │
+│            @profile_endpoint() (decorator.py)               │
+│              Async/Sync Request Wrappers                    │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│               EndpointProfiler (Singleton)                  │
+│         EndpointProfiler Singleton (profiler_core.py)       │
 │  • Manages profiling state (enabled/disabled)               │
 │  • Coordinates capture & storage                            │
 │  • Auto-flush background task                               │
+│  • Request counter & smart capture tracking                 │
 └────────────────────────┬────────────────────────────────────┘
                          │
             ┌────────────┴────────────┐
@@ -59,11 +60,26 @@ The Memory Leak Profiler monitors memory usage of proxy endpoints to detect leak
 
 ## Key Components
 
-### 1. **profiler.py** - Core Orchestrator
+### 1. **Profiler Components** - Modular Core
 
-- `EndpointProfiler`: Singleton managing profiling lifecycle
-- `@profile_endpoint()`: Decorator for automatic profiling
-- Auto-flush background task
+The profiler is split into focused modules:
+
+- **profiler_core.py** (~320 lines): `EndpointProfiler` singleton class
+
+  - State management (enabled/disabled, sampling rate)
+  - Request counter and smart capture coordination
+  - Buffer management and auto-flush orchestration
+  - Management API
+
+- **decorator.py** (~180 lines): `@profile_endpoint()` decorator
+
+  - Async/sync endpoint wrappers
+  - Request timing and error handling
+  - Profile recording coordination
+
+- **profiler.py** (~20 lines): Re-exports for backward compatibility
+  - Imports from profiler_core and decorator
+  - Maintains existing API
 
 ### 2. **capture.py** - Smart Capture Logic
 
