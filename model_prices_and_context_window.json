@@ -23571,24 +23571,6 @@
         "supports_parallel_function_calling": false,
         "supports_vision": false
     },
-    "voxtral-mini-2507": {
-        "input_cost_per_second": 3.3333e-05,
-        "litellm_provider": "mistral",
-        "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
-        "supported_endpoints": [
-            "/v1/audio/transcriptions"
-        ]
-    },
-    "voxtral-mini-latest": {
-        "input_cost_per_second": 3.3333e-05,
-        "litellm_provider": "mistral",
-        "mode": "audio_transcription",
-        "output_cost_per_second": 0.0,
-        "supported_endpoints": [
-            "/v1/audio/transcriptions"
-        ]
-    },
 
     "whisper-1": {
         "input_cost_per_second": 0.0001,
