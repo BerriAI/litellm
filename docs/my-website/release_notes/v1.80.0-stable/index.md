@@ -45,6 +45,7 @@ pip install litellm==1.80.0
 
 ## Key Highlights
 
+- **Container API Support** - End-to-end OpenAI Container API support with proxy integration, logging, and cost tracking
 - **FAL AI Image Generation** - Native support for FAL AI image generation models with cost tracking
 - **UI Enhancements** - Key type selection, SSO validation, embeddings testing, guardrail playground testing, and improved model management
 - **Batch API Rate Limiting** - Input-based rate limits support for Batch API requests
@@ -141,6 +142,12 @@ pip install litellm==1.80.0
 ## LLM API Endpoints
 
 #### Features
+
+- **[Container API](../../docs/container_api)**
+    - Add end-to-end OpenAI Container API support to LiteLLM SDK - [PR #16136](https://github.com/BerriAI/litellm/pull/16136)
+    - Add proxy support for container APIs - [PR #16049](https://github.com/BerriAI/litellm/pull/16049)
+    - Add logging support for Container API - [PR #16049](https://github.com/BerriAI/litellm/pull/16049)
+    - Add cost tracking support for containers with documentation - [PR #16117](https://github.com/BerriAI/litellm/pull/16117)
 
 - **[Responses API](../../docs/response_api)**
     - Respect `LiteLLM-Disable-Message-Redaction` header for Responses API - [PR #15966](https://github.com/BerriAI/litellm/pull/15966)
