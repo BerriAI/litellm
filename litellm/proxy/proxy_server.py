@@ -317,6 +317,7 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.middleware.proxy_timing_middleware import ProxyTimingMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -984,6 +985,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# IMPORTANT: ProxyTimingMiddleware MUST come before PrometheusAuthMiddleware
+# so that timing starts before auth runs
+app.add_middleware(ProxyTimingMiddleware)
 app.add_middleware(PrometheusAuthMiddleware)
 
 
@@ -4722,6 +4726,11 @@ async def chat_completion(  # noqa: PLR0915
     ```
 
     """
+    # Fallback to datetime.now() if middleware is not present (e.g., in tests)
+    start_time = getattr(request.state, "proxy_start_time", None)
+    if start_time is None:
+        start_time = datetime.now()
+            
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = await _read_request_body(request=request)

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union, cast, ove
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache, RedisCache
-from litellm.constants import DB_SPEND_UPDATE_JOB_NAME
+from litellm.constants import DB_SPEND_UPDATE_JOB_NAME, MAX_QUEUE_SIZE_BEFORE_REQUEUE
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -538,12 +538,37 @@ class DBSpendUpdateWriter:
         db_spend_update_transactions = (
             await self.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
         )
-        await self._commit_spend_updates_to_db(
-            prisma_client=prisma_client,
-            n_retry_times=n_retry_times,
-            proxy_logging_obj=proxy_logging_obj,
-            db_spend_update_transactions=db_spend_update_transactions,
-        )
+        
+        try:
+            await self._commit_spend_updates_to_db(
+                prisma_client=prisma_client,
+                n_retry_times=n_retry_times,
+                proxy_logging_obj=proxy_logging_obj,
+                db_spend_update_transactions=db_spend_update_transactions,
+            )
+        except Exception as e:
+            # Re-queue on failure to prevent data loss and reduce GC pressure from orphaned objects
+            current_queue_size = self.spend_update_queue.update_queue.qsize()
+            if current_queue_size < MAX_QUEUE_SIZE_BEFORE_REQUEUE:
+                total_requeued = 0
+                for entity_type, transactions in [
+                    ("user", db_spend_update_transactions.get("user_list_transactions")),
+                    ("key", db_spend_update_transactions.get("key_list_transactions")),
+                    ("team", db_spend_update_transactions.get("team_list_transactions")),
+                    ("team_member", db_spend_update_transactions.get("team_member_list_transactions")),
+                    ("end_user", db_spend_update_transactions.get("end_user_list_transactions")),
+                    ("organization", db_spend_update_transactions.get("org_list_transactions")),
+                    ("tag", db_spend_update_transactions.get("tag_list_transactions")),
+                ]:
+                    if transactions:
+                        for entity_id, spend in transactions.items():
+                            await self.spend_update_queue.add_update(
+                                SpendUpdateQueueItem(entity_type=cast(Litellm_EntityType, entity_type), entity_id=entity_id, response_cost=spend)
+                            )
+                            total_requeued += 1
+                verbose_proxy_logger.warning(f"[SPEND_REQUEUE] DB write failed, re-queued {total_requeued} spend transactions. Queue: {self.spend_update_queue.update_queue.qsize()}/{MAX_QUEUE_SIZE_BEFORE_REQUEUE}")
+            else:
+                verbose_proxy_logger.error(f"[SPEND_DROP] Queue full ({current_queue_size}/{MAX_QUEUE_SIZE_BEFORE_REQUEUE}), dropping failed transactions to prevent OOM. Error: {str(e)[:100]}")
 
         ################## Daily Spend Update Transactions ##################
         # Aggregate all in memory daily spend transactions and commit to db
@@ -552,12 +577,21 @@ class DBSpendUpdateWriter:
             await self.daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
         )
 
-        await DBSpendUpdateWriter.update_daily_user_spend(
-            n_retry_times=n_retry_times,
-            prisma_client=prisma_client,
-            proxy_logging_obj=proxy_logging_obj,
-            daily_spend_transactions=daily_spend_update_transactions,
-        )
+        try:
+            await DBSpendUpdateWriter.update_daily_user_spend(
+                n_retry_times=n_retry_times,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                daily_spend_transactions=daily_spend_update_transactions,
+            )
+        except Exception:
+            # Re-queue on failure to prevent data loss
+            current_queue_size = self.daily_spend_update_queue.update_queue.qsize()
+            if daily_spend_update_transactions and current_queue_size < MAX_QUEUE_SIZE_BEFORE_REQUEUE:
+                await self.daily_spend_update_queue.update_queue.put(cast(Dict[str, BaseDailySpendTransaction], daily_spend_update_transactions))
+                verbose_proxy_logger.warning(f"[DAILY_USER_REQUEUE] Re-queued {len(daily_spend_update_transactions)} daily user transactions")
+            elif daily_spend_update_transactions:
+                verbose_proxy_logger.error(f"[DAILY_USER_DROP] Queue full ({current_queue_size}/{MAX_QUEUE_SIZE_BEFORE_REQUEUE}), dropping {len(daily_spend_update_transactions)} transactions to prevent OOM")
 
         ################## Daily Team Spend Update Transactions ##################
         # Aggregate all in memory daily team spend transactions and commit to db
@@ -566,12 +600,21 @@ class DBSpendUpdateWriter:
             await self.daily_team_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
         )
 
-        await DBSpendUpdateWriter.update_daily_team_spend(
-            n_retry_times=n_retry_times,
-            prisma_client=prisma_client,
-            proxy_logging_obj=proxy_logging_obj,
-            daily_spend_transactions=daily_team_spend_update_transactions,
-        )
+        try:
+            await DBSpendUpdateWriter.update_daily_team_spend(
+                n_retry_times=n_retry_times,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                daily_spend_transactions=daily_team_spend_update_transactions,
+            )
+        except Exception:
+            # Re-queue on failure to prevent data loss
+            current_queue_size = self.daily_team_spend_update_queue.update_queue.qsize()
+            if daily_team_spend_update_transactions and current_queue_size < MAX_QUEUE_SIZE_BEFORE_REQUEUE:
+                await self.daily_team_spend_update_queue.update_queue.put(cast(Dict[str, BaseDailySpendTransaction], daily_team_spend_update_transactions))
+                verbose_proxy_logger.warning(f"[DAILY_TEAM_REQUEUE] Re-queued {len(daily_team_spend_update_transactions)} daily team transactions")
+            elif daily_team_spend_update_transactions:
+                verbose_proxy_logger.error(f"[DAILY_TEAM_DROP] Queue full ({current_queue_size}/{MAX_QUEUE_SIZE_BEFORE_REQUEUE}), dropping {len(daily_team_spend_update_transactions)} transactions to prevent OOM")
 
         ################## Daily Tag Spend Update Transactions ##################
         # Aggregate all in memory daily tag spend transactions and commit to db
@@ -580,12 +623,21 @@ class DBSpendUpdateWriter:
             await self.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
         )
 
-        await DBSpendUpdateWriter.update_daily_tag_spend(
-            n_retry_times=n_retry_times,
-            prisma_client=prisma_client,
-            proxy_logging_obj=proxy_logging_obj,
-            daily_spend_transactions=daily_tag_spend_update_transactions,
-        )
+        try:
+            await DBSpendUpdateWriter.update_daily_tag_spend(
+                n_retry_times=n_retry_times,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                daily_spend_transactions=daily_tag_spend_update_transactions,
+            )
+        except Exception:
+            # Re-queue on failure to prevent data loss
+            current_queue_size = self.daily_tag_spend_update_queue.update_queue.qsize()
+            if daily_tag_spend_update_transactions and current_queue_size < MAX_QUEUE_SIZE_BEFORE_REQUEUE:
+                await self.daily_tag_spend_update_queue.update_queue.put(cast(Dict[str, BaseDailySpendTransaction], daily_tag_spend_update_transactions))
+                verbose_proxy_logger.warning(f"[DAILY_TAG_REQUEUE] Re-queued {len(daily_tag_spend_update_transactions)} daily tag transactions")
+            elif daily_tag_spend_update_transactions:
+                verbose_proxy_logger.error(f"[DAILY_TAG_DROP] Queue full ({current_queue_size}/{MAX_QUEUE_SIZE_BEFORE_REQUEUE}), dropping {len(daily_tag_spend_update_transactions)} transactions to prevent OOM")
 
     async def _commit_spend_updates_to_db(  # noqa: PLR0915
         self,

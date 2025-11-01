@@ -10,7 +10,7 @@ Has 4 methods:
 
 import ast
 import asyncio
-import json
+import orjson
 from functools import partial
 from typing import Optional
 from datetime import datetime, timezone, timedelta
@@ -65,7 +65,7 @@ class S3Cache(BaseCache):
             print_verbose(f"LiteLLM SET Cache - S3. Key={key}. Value={value}")
             ttl = kwargs.get("ttl", None)
             # Convert value to JSON before storing in S3
-            serialized_value = json.dumps(value)
+            serialized_value = orjson.dumps(value)
             key = self._to_s3_key(key)
 
             if ttl is not None:
@@ -133,15 +133,14 @@ class S3Cache(BaseCache):
                         return None
 
                 # cached_response is in `b{} convert it to ModelResponse
-                cached_response = (
-                    cached_response["Body"].read().decode("utf-8")
-                )  # Convert bytes to string
+                cached_response_bytes = cached_response["Body"].read()  # Get bytes
                 try:
-                    cached_response = json.loads(
-                        cached_response
-                    )  # Convert string to dictionary
+                    cached_response = orjson.loads(
+                        cached_response_bytes
+                    )  # Convert bytes to dictionary directly
                 except Exception:
-                    cached_response = ast.literal_eval(cached_response)
+                    # Fallback to ast.literal_eval if orjson fails
+                    cached_response = ast.literal_eval(cached_response_bytes.decode("utf-8"))
             if not isinstance(cached_response, dict):
                 cached_response = dict(cached_response)
             verbose_logger.debug(
