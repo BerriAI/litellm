@@ -1382,7 +1382,7 @@ async def test_claude_tool_use_with_anthropic_acreate():
         messages=[
             {"role": "user", "content": "Hello, can you tell me the weather in Boston?"}
         ],
-        model="anthropic/claude-3-5-sonnet-20240620",
+        model="anthropic/claude-sonnet-4-5-20250929",
         stream=True,
         max_tokens=100,
         tools=[
