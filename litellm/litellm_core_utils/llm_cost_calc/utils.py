@@ -606,11 +606,13 @@ def generic_cost_per_token(
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
-    Handles context caching as well.
+    Handles tiered pricing, context caching, and service tiers.
 
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
+        - custom_llm_provider: str, the provider for the model
+        - service_tier: Optional[str], service tier like "flex" or "priority"
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -619,6 +621,23 @@ def generic_cost_per_token(
     ## GET MODEL INFO
     model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
+    # Check for tiered pricing first
+    tiered_pricing = model_info.get("tiered_pricing")
+    if isinstance(tiered_pricing, list) and tiered_pricing:
+        breakdown = _extract_token_breakdown(usage)
+        
+        prompt_cost = _calculate_prompt_cost_with_tiers(
+            breakdown=breakdown,
+            tiered_pricing=tiered_pricing
+        )
+        completion_cost = _calculate_completion_cost_with_tiers(
+            breakdown=breakdown,
+            tiered_pricing=tiered_pricing
+        )
+        
+        return prompt_cost, completion_cost
+
+    # Fallback to flat/threshold pricing logic
     ## CALCULATE INPUT COST
     ### Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
     prompt_cost = 0.0
