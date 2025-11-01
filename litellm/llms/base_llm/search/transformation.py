@@ -7,7 +7,7 @@ import httpx
 from pydantic import PrivateAttr
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -15,7 +15,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class SearchResult(LiteLLMPydanticObjectBase):
+class SearchResult(BaseLiteLLMOpenAIResponseObject):
     """Single search result."""
     title: str
     url: str
@@ -26,7 +26,7 @@ class SearchResult(LiteLLMPydanticObjectBase):
     model_config = {"extra": "allow"}
 
 
-class SearchResponse(LiteLLMPydanticObjectBase):
+class SearchResponse(BaseLiteLLMOpenAIResponseObject):
     """
     Standard Search response format.
     Standardized to Perplexity Search format - other providers should transform to this format.

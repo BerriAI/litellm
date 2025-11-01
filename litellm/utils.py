@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.cached_imports import (
     get_litellm_logging_class,
     get_set_callbacks,
 )
+from litellm.litellm_core_utils.construct_message_to_log import construct_message_to_log
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     map_finish_reason,
@@ -725,85 +726,10 @@ def function_setup(  # noqa: PLR0915
         # INIT LOGGER - for user-specified integrations
         model = args[0] if len(args) > 0 else kwargs.get("model", None)
         call_type = original_function
-        if (
-            call_type == CallTypes.completion.value
-            or call_type == CallTypes.acompletion.value
-            or call_type == CallTypes.anthropic_messages.value
-        ):
-            messages = None
-            if len(args) > 1:
-                messages = args[1]
-            elif kwargs.get("messages", None):
-                messages = kwargs["messages"]
-            ### PRE-CALL RULES ###
-            if (
-                Rules.has_pre_call_rules()
-                and isinstance(messages, list)
-                and len(messages) > 0
-                and isinstance(messages[0], dict)
-                and "content" in messages[0]
-            ):
+        messages = construct_message_to_log(
+            call_type=call_type, args=args, kwargs=kwargs, rules_obj=rules_obj
+        )
 
-                buffer = StringIO()
-                for m in messages:
-                    content = m.get("content", "")
-                    if content is not None and isinstance(content, str):
-                        buffer.write(content)
-
-                rules_obj.pre_call_rules(
-                    input=buffer.getvalue(),
-                    model=model,
-                )
-        elif (
-            call_type == CallTypes.embedding.value
-            or call_type == CallTypes.aembedding.value
-        ):
-            messages = args[1] if len(args) > 1 else kwargs.get("input", None)
-        elif (
-            call_type == CallTypes.image_generation.value
-            or call_type == CallTypes.aimage_generation.value
-        ):
-            messages = args[0] if len(args) > 0 else kwargs["prompt"]
-        elif (
-            call_type == CallTypes.moderation.value
-            or call_type == CallTypes.amoderation.value
-        ):
-            messages = args[1] if len(args) > 1 else kwargs["input"]
-        elif (
-            call_type == CallTypes.atext_completion.value
-            or call_type == CallTypes.text_completion.value
-        ):
-            messages = args[0] if len(args) > 0 else kwargs["prompt"]
-        elif (
-            call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value
-        ):
-            messages = kwargs.get("query")
-        elif (
-            call_type == CallTypes.atranscription.value
-            or call_type == CallTypes.transcription.value
-        ):
-            _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
-            file_checksum = (
-                litellm.litellm_core_utils.audio_utils.utils.get_audio_file_name(
-                    file_obj=_file_obj
-                )
-            )
-            if "metadata" in kwargs:
-                kwargs["metadata"]["file_checksum"] = file_checksum
-            else:
-                kwargs["metadata"] = {"file_checksum": file_checksum}
-            messages = file_checksum
-        elif (
-            call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
-        ):
-            messages = kwargs.get("input", "speech")
-        elif (
-            call_type == CallTypes.aresponses.value
-            or call_type == CallTypes.responses.value
-        ):
-            messages = args[0] if len(args) > 0 else kwargs["input"]
-        else:
-            messages = "default-message-value"
         stream = False
         if _is_streaming_request(
             kwargs=kwargs,
@@ -865,11 +791,18 @@ async def _client_async_logging_helper(
         ################################################
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine=logging_obj.async_success_handler(
+        if litellm.instant_log_for_testing:
+            # For testing: log synchronously without create_task/worker
+            await logging_obj.async_success_handler(
                 result=result, start_time=start_time, end_time=end_time
             )
-        )
+        else:
+            # Production: use worker for async logging
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=logging_obj.async_success_handler(
+                    result=result, start_time=start_time, end_time=end_time
+                )
+            )
 
         ################################################
         # Sync Logging Worker
@@ -1533,15 +1466,26 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            asyncio.create_task(
-                _client_async_logging_helper(
+            if litellm.instant_log_for_testing:
+                # For testing: log synchronously without create_task
+                await _client_async_logging_helper(
                     logging_obj=logging_obj,
                     result=result,
                     start_time=start_time,
                     end_time=end_time,
                     is_completion_with_fallbacks=is_completion_with_fallbacks,
                 )
-            )
+            else:
+                # Production: use create_task for pure async logging
+                asyncio.create_task(
+                    _client_async_logging_helper(
+                        logging_obj=logging_obj,
+                        result=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        is_completion_with_fallbacks=is_completion_with_fallbacks,
+                    )
+                )
             logging_obj.handle_sync_success_callbacks_for_async_calls(
                 result=result,
                 start_time=start_time,
