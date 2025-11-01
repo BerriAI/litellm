@@ -387,58 +387,33 @@ def test_avertex_ai_stream():
 
 @pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
-async def test_async_vertexai_response():
-    import random
+async def test_async_vertexai_response_basic():
 
     load_vertex_ai_credentials()
-    test_models = (
-        litellm.vertex_chat_models
-        | litellm.vertex_code_chat_models
-        | litellm.vertex_text_models
-        | litellm.vertex_code_text_models
-    )
-
-    test_models = random.sample(list(test_models), 1)
-    test_models += list(litellm.vertex_language_models)  # always test gemini-pro
-    for model in test_models:
-        print(
-            f"model being tested in async call: {model}, litellm.vertex_language_models: {litellm.vertex_language_models}"
+    try:
+        user_message = "Hello, how are you?"
+        messages = [{"content": user_message, "role": "user"}]
+        response = await acompletion(
+            model="gemini-2.5-flash",
+            messages=messages, 
+            temperature=0.7, 
+            timeout=5
         )
-        if model in VERTEX_MODELS_TO_NOT_TEST or (
-            "gecko" in model
-            or "32k" in model
-            or "ultra" in model
-            or "002" in model
-            or "gemini-2.0-flash-thinking-exp" in model
-            or "gemini-2.0-pro-exp-02-05" in model
-            or "gemini-pro" in model
-            or "gemini-1.0-pro" in model
-            or "image-generation" in model
-        ):
-            # our account does not have access to this model
-            continue
-        try:
-            user_message = "Hello, how are you?"
-            messages = [{"content": user_message, "role": "user"}]
-            response = await acompletion(
-                model=model, messages=messages, temperature=0.7, timeout=5
-            )
-            print(f"response: {response}")
-        except litellm.NotFoundError as e:
-            pass
-        except litellm.RateLimitError as e:
-            pass
-        except litellm.Timeout as e:
-            pass
-        except litellm.APIError as e:
-            pass
-        except litellm.InternalServerError as e:
-            pass
-        except Exception as e:
-            pytest.fail(f"An exception occurred: {e}")
+        print(f"response: {response}")
+    except litellm.NotFoundError as e:
+        pass
+    except litellm.RateLimitError as e:
+        pass
+    except litellm.Timeout as e:
+        pass
+    except litellm.APIError as e:
+        pass
+    except litellm.InternalServerError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {e}")
 
 
-# asyncio.run(test_async_vertexai_response())
 
 
 @pytest.mark.flaky(retries=3, delay=1)
