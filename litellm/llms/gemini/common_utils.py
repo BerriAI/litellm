@@ -175,12 +175,13 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         count_tokens_params = {
             "model": model_to_use,
             "contents": contents,
+            "messages": messages,  # Pass messages to handler for transformation
         }
         count_tokens_params_request.update(count_tokens_params)
         result = await GoogleAIStudioTokenCounter().acount_tokens(
             **count_tokens_params_request,
         )
-        
+
         if result is not None:
             return TokenCountResponse(
                 total_tokens=result.get("totalTokens", 0),
@@ -189,5 +190,5 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
                 tokenizer_type=result.get("tokenizer_used", ""),
                 original_response=result,
             )
-        
+
         return None

@@ -704,6 +704,58 @@ async def test_vertex_ai_gemini_token_counting_with_contents(model_name):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model_name", ["gemini-2.5-pro", "vertex-ai-gemini-2.5-pro"])
+async def test_vertex_ai_gemini_token_counting_with_messages(model_name):
+    """
+    Test token counting for Vertex AI Gemini model using messages format (Anthropic/OpenAI format) with call_endpoint=True.
+    This tests the transformation from messages format to Gemini contents format.
+    """
+    load_vertex_ai_credentials()
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "gemini/gemini-2.5-pro",
+                },
+            },
+            {
+                "model_name": "vertex-ai-gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                },
+            },
+        ]
+    )
+
+    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+
+    # Test with messages format (Anthropic/OpenAI format) and call_endpoint=True
+    response = await token_counter(
+        request=TokenCountRequest(
+            model=model_name,
+            messages=[
+                {"role": "user", "content": "Hello world, how are you doing today? i am ij"}
+            ],
+        ),
+        call_endpoint=True,
+    )
+
+    print(f"{model_name} token counting response with messages:", response)
+
+    # Validate we have original response
+    assert response.original_response is not None
+    assert response.original_response.get("totalTokens") is not None
+    assert response.original_response.get("promptTokensDetails") is not None
+
+    # Validate token count is reasonable
+    assert response.total_tokens > 0
+
+    prompt_tokens_details = response.original_response.get("promptTokensDetails")
+    assert prompt_tokens_details is not None
+
+
+@pytest.mark.asyncio
 async def test_bedrock_count_tokens_endpoint():
     """
     Test that Bedrock CountTokens endpoint correctly extracts model from request body.
