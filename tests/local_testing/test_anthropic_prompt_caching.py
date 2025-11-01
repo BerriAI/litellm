@@ -57,7 +57,7 @@ async def test_litellm_anthropic_prompt_caching_tools():
             "type": "message",
             "role": "assistant",
             "content": [{"type": "text", "text": "Hello!"}],
-            "model": "claude-3-5-sonnet-20240620",
+            "model": "claude-3-7-sonnet-20250219",
             "stop_reason": "end_turn",
             "stop_sequence": None,
             "usage": {"input_tokens": 12, "output_tokens": 6},
@@ -74,7 +74,7 @@ async def test_litellm_anthropic_prompt_caching_tools():
         # Act: Call the litellm.acompletion function
         response = await litellm.acompletion(
             api_key="mock_api_key",
-            model="anthropic/claude-sonnet-4-5-20250929",
+            model="anthropic/claude-3-7-sonnet-20250219",
             messages=[
                 {"role": "user", "content": "What's the weather like in Boston today?"}
             ],
@@ -154,7 +154,7 @@ async def test_litellm_anthropic_prompt_caching_tools():
                 }
             ],
             "max_tokens": 4096,
-            "model": "claude-3-5-sonnet-20240620",
+            "model": "claude-3-7-sonnet-20250219",
         }
 
         mock_post.assert_called_once_with(
@@ -605,7 +605,7 @@ async def test_litellm_anthropic_prompt_caching_system():
             "type": "message",
             "role": "assistant",
             "content": [{"type": "text", "text": "Hello!"}],
-            "model": "claude-3-5-sonnet-20240620",
+            "model": "claude-3-7-sonnet-20250219",
             "stop_reason": "end_turn",
             "stop_sequence": None,
             "usage": {"input_tokens": 12, "output_tokens": 6},
@@ -622,7 +622,7 @@ async def test_litellm_anthropic_prompt_caching_system():
         # Act: Call the litellm.acompletion function
         response = await litellm.acompletion(
             api_key="mock_api_key",
-            model="anthropic/claude-sonnet-4-5-20250929",
+            model="anthropic/claude-3-7-sonnet-20250219",
             messages=[
                 {
                     "role": "system",
@@ -685,7 +685,7 @@ async def test_litellm_anthropic_prompt_caching_system():
                 }
             ],
             "max_tokens": 4096,
-            "model": "claude-3-5-sonnet-20240620",
+            "model": "claude-3-7-sonnet-20250219",
         }
 
         mock_post.assert_called_once_with(
