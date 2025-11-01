@@ -42,7 +42,7 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
             },
             "response": {
                 "id": "chatcmpl-935b8dad-fdc2-466e-a8ca-e26e5a8a21bb",
-                "model": "claude-3-5-sonnet-20241022",
+                "model": "claude-sonnet-4-5-20250929",
                 "object": "chat.completion",
                 "choices": [
                     {
@@ -84,7 +84,7 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
             },
             "response": {
                 "id": "chatcmpl-370760c9-39fa-4db7-b034-d1f8d933c935",
-                "model": "claude-3-5-sonnet-20241022",
+                "model": "claude-sonnet-4-5-20250929",
                 "object": "chat.completion",
                 "choices": [
                     {
