@@ -120,3 +120,20 @@ for result in response.json().get("results", []):
     print(f"{data['title']}: {data['link']}")
 ```
 
+### Use with Chat Completion
+
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -d '{
+    "model": "claude-3-5-sonnet",
+    "messages": [{"role": "user", "content": "What is litellm?"}],
+    "tools": [
+        {
+            "type": "file_search",
+            "vector_store_ids": ["my-datastore"]
+        }
+    ]
+  }'
+```
