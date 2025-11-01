@@ -5150,6 +5150,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "tool_use_system_prompt_tokens": 346
     },
     "claude-opus-4-1": {
