@@ -1477,7 +1477,7 @@ def test_is_prompt_caching_enabled_error_handling():
             messages=[{"role": "user", "content": "test"}],
             tools=None,
             custom_llm_provider="anthropic",
-            model="anthropic/claude-3-5-sonnet-20240620",
+            model="anthropic/claude-sonnet-4-5-20250929",
         )
 
         assert result is False  # Should return False when an error occurs

@@ -220,11 +220,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     
     def _supports_penalty_parameters(self, model: str) -> bool:
         unsupported_models = ["gemini-2.5-pro-preview-06-05"]
-
-        for pattern in unsupported_models:
-            if model in pattern:
-                return False
-
+        if model in unsupported_models:
+            return False
         return True
 
     def get_supported_openai_params(self, model: str) -> List[str]:

@@ -630,11 +630,13 @@ async def get_guardrail_info(guardrail_id: str):
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
+    from litellm.types.guardrails import GUARDRAIL_DEFINITION_LOCATION
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
+        guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.DB
         result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
@@ -642,6 +644,7 @@ async def get_guardrail_info(guardrail_id: str):
             result = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(
                 guardrail_id=guardrail_id
             )
+            guardrail_definition_location = GUARDRAIL_DEFINITION_LOCATION.CONFIG
 
         if result is None:
             raise HTTPException(
@@ -669,6 +672,7 @@ async def get_guardrail_info(guardrail_id: str):
             guardrail_info=dict(result.get("guardrail_info") or {}),
             created_at=result.get("created_at"),
             updated_at=result.get("updated_at"),
+            guardrail_definition_location=guardrail_definition_location,
         )
     except HTTPException as e:
         raise e

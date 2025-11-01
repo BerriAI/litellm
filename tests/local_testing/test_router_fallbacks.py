@@ -1300,9 +1300,9 @@ async def test_anthropic_streaming_fallbacks(sync_mode):
     router = Router(
         model_list=[
             {
-                "model_name": "anthropic/claude-3-5-sonnet-20240620",
+                "model_name": "anthropic/claude-sonnet-4-5-20250929",
                 "litellm_params": {
-                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                 },
             },
             {
@@ -1313,7 +1313,7 @@ async def test_anthropic_streaming_fallbacks(sync_mode):
                 },
             },
         ],
-        fallbacks=[{"anthropic/claude-3-5-sonnet-20240620": ["gpt-3.5-turbo"]}],
+        fallbacks=[{"anthropic/claude-sonnet-4-5-20250929": ["gpt-3.5-turbo"]}],
         num_retries=0,
     )
 
@@ -1321,7 +1321,7 @@ async def test_anthropic_streaming_fallbacks(sync_mode):
         chunks = []
         if sync_mode:
             response = router.completion(
-                model="anthropic/claude-3-5-sonnet-20240620",
+                model="anthropic/claude-sonnet-4-5-20250929",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 stream=True,
                 client=client,
@@ -1331,7 +1331,7 @@ async def test_anthropic_streaming_fallbacks(sync_mode):
                 chunks.append(chunk)
         else:
             response = await router.acompletion(
-                model="anthropic/claude-3-5-sonnet-20240620",
+                model="anthropic/claude-sonnet-4-5-20250929",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 stream=True,
                 client=client,

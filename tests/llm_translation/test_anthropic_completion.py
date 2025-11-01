@@ -333,9 +333,9 @@ def test_process_anthropic_headers_with_no_matching_headers():
     "tool_type, tool_config, message_content",
     [
         (
-            "computer_20241022",
+            "computer_20250124",
             {
-                "type": "computer_20241022",
+                "type": "computer_20250124",
                 "function": {
                     "name": "computer",
                     "parameters": {
@@ -365,7 +365,7 @@ def test_anthropic_tool_use(tool_type, tool_config, message_content):
     litellm._turn_on_debug()
 
     tools = [tool_config]
-    model = "claude-3-5-sonnet-20241022"
+    model = "claude-sonnet-4-5-20250929"
     messages = [{"role": "user", "content": message_content}]
 
     try:
@@ -879,7 +879,7 @@ async def test_anthropic_structured_output():
     from litellm import acompletion
 
     args = {
-        "model": "claude-3-5-sonnet-20240620",
+        "model": "claude-sonnet-4-5-20250929",
         "seed": 3015206306868917280,
         "stop": None,
         "messages": [
@@ -908,7 +908,7 @@ def test_anthropic_citations_api():
 
     try:
         resp = completion(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-5-20250929",
             messages=[
                 {
                     "role": "user",
@@ -953,7 +953,7 @@ def test_anthropic_citations_api_streaming():
     from litellm import completion
 
     resp = completion(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-sonnet-4-5-20250929",
         messages=[
             {
                 "role": "user",
@@ -1282,7 +1282,7 @@ def test_anthropic_text_editor():
                 "content": "There'''s a syntax error in my primes.py file. Can you help me fix it?",
             }
         ],
-        "tools": [{"type": "text_editor_20250124", "name": "str_replace_editor"}],
+        "tools": [{"type": "text_editor_20250728", "name": "str_replace_editor"}],
     }
 
     try:
@@ -1382,7 +1382,7 @@ async def test_claude_tool_use_with_anthropic_acreate():
         messages=[
             {"role": "user", "content": "Hello, can you tell me the weather in Boston?"}
         ],
-        model="anthropic/claude-3-5-sonnet-20240620",
+        model="anthropic/claude-sonnet-4-5-20250929",
         stream=True,
         max_tokens=100,
         tools=[

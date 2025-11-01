@@ -175,7 +175,7 @@ async def test_stream_token_counting_anthropic_with_include_usage():
     input_text = "Respond in just 1 word. Say ping"
 
     response = await litellm.acompletion(
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": input_text}],
         max_tokens=4096,
         stream=True,

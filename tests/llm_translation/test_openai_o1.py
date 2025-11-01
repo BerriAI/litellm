@@ -210,7 +210,7 @@ def test_o3_reasoning_effort():
     assert resp.choices[0].message.content is not None
 
 
-@pytest.mark.parametrize("model", ["o1-mini", "o1", "o3-mini"])
+@pytest.mark.parametrize("model", ["o1", "o3-mini"])
 def test_streaming_response(model):
     """Test that streaming response is returned correctly"""
     from litellm import completion

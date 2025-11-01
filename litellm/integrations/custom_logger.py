@@ -592,7 +592,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
           • Recursively redact inline base64 blobs in *any* string field, at any depth.
         """
         raw_messages: Any = payload.get("messages", [])
-        messages: list[Any] = raw_messages if isinstance(raw_messages, list) else []
+        messages: List[Any] = raw_messages if isinstance(raw_messages, list) else []
         verbose_logger.debug(f"[CustomLogger] Stripping base64 from {len(messages)} messages")
 
         if messages:
@@ -644,14 +644,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         ctype = content.get("type")
         return not (isinstance(ctype, str) and ctype != "text")
 
-    def _process_messages(self, messages: list[Any], max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER) -> List[dict[str, Any]]:
-        filtered_messages: List[dict[str, Any]] = []
+    def _process_messages(self, messages: List[Any], max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER) -> List[Dict[str, Any]]:
+        filtered_messages: List[Dict[str, Any]] = []
         for msg in messages:
             if not isinstance(msg, dict):
                 continue
             contents: Any = msg.get("content")
             if isinstance(contents, list):
-                cleaned: list[Any] = []
+                cleaned: List[Any] = []
                 for c in contents:
                     if self._should_keep_content(content=c):
                         cleaned.append(self._redact_base64(value=c, max_depth=max_depth))
