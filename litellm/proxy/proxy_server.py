@@ -4155,7 +4155,7 @@ class ProxyStartupEvent:
             min(30, proxy_budget_rescheduler_max_time - proxy_budget_rescheduler_min_time))
 
         # Ensure minimum interval of 30 seconds for batch writing to prevent memory issues
-        batch_writing_interval = max(30, proxy_batch_write_at) + random.randint(0, 5)
+        batch_writing_interval = proxy_batch_write_at + random.randint(0, 5)
 
         ### RESET BUDGET ###
         if general_settings.get("disable_reset_budget", False) is False:
