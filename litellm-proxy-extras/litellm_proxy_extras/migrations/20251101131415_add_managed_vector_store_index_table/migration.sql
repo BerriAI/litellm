@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_IndexTable" (
+CREATE TABLE "LiteLLM_ManagedVectorStoreIndexTable" (
     "id" TEXT NOT NULL,
     "index_name" TEXT NOT NULL,
     "litellm_params" JSONB NOT NULL,
@@ -9,9 +9,9 @@ CREATE TABLE "LiteLLM_IndexTable" (
     "updated_at" TIMESTAMP(3) NOT NULL,
     "updated_by" TEXT,
 
-    CONSTRAINT "LiteLLM_IndexTable_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "LiteLLM_ManagedVectorStoreIndexTable_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_IndexTable_index_name_key" ON "LiteLLM_IndexTable"("index_name");
+CREATE UNIQUE INDEX "LiteLLM_ManagedVectorStoreIndexTable_index_name_key" ON "LiteLLM_ManagedVectorStoreIndexTable"("index_name");
 
