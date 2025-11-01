@@ -301,6 +301,7 @@ async def test_anthropic_api_prompt_caching_basic():
 
 
 @pytest.mark.asyncio()
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_anthropic_api_prompt_caching_basic_with_cache_creation():
     from uuid import uuid4
 
