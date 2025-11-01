@@ -1,21 +1,44 @@
-import React from "react";
+"use client";
+
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { TextInput } from "@tremor/react";
+import { Select } from "antd";
+import React, { useEffect, useState } from "react";
+import { fetchAvailableModels, ModelGroup } from "../chat_ui/llm_calls/fetch_models";
+import NumericalInput from "../shared/numerical_input";
 
 interface CacheFieldRendererProps {
   field: any;
   currentValue: any;
 }
 
-const CacheFieldRenderer: React.FC<CacheFieldRendererProps> = ({
-  field,
-  currentValue,
-}) => {
+const CacheFieldRenderer: React.FC<CacheFieldRendererProps> = ({ field, currentValue }) => {
+  const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
+  const { accessToken } = useAuthorized();
+
+  useEffect(() => {
+    if (!accessToken) return;
+
+    const loadModels = async () => {
+      try {
+        const uniqueModels = await fetchAvailableModels(accessToken);
+        console.log("Fetched models for selector:", uniqueModels);
+
+        if (uniqueModels.length > 0) {
+          setModelInfo(uniqueModels);
+        }
+      } catch (error) {
+        console.error("Error fetching model info:", error);
+      }
+    };
+
+    loadModels();
+  }, [accessToken]);
+
   if (field.field_type === "Boolean") {
     return (
       <div className="space-y-2">
-        <label className="text-sm font-medium text-gray-700">
-          {field.ui_field_name}
-        </label>
+        <label className="text-sm font-medium text-gray-700">{field.ui_field_name}</label>
         <div className="flex items-center">
           <input
             type="checkbox"
@@ -29,12 +52,25 @@ const CacheFieldRenderer: React.FC<CacheFieldRendererProps> = ({
     );
   }
 
+  if (field.field_type === "Integer" || field.field_type === "Float") {
+    return (
+      <div className="space-y-2">
+        <label className="text-sm font-medium text-gray-700">{field.ui_field_name}</label>
+        <NumericalInput
+          name={field.field_name}
+          type="number"
+          defaultValue={currentValue}
+          placeholder={field.field_description}
+        />
+        <p className="text-xs text-gray-500">{field.field_description}</p>
+      </div>
+    );
+  }
+
   if (field.field_type === "List") {
     return (
       <div className="space-y-2">
-        <label className="text-sm font-medium text-gray-700">
-          {field.ui_field_name}
-        </label>
+        <label className="text-sm font-medium text-gray-700">{field.ui_field_name}</label>
         <textarea
           name={field.field_name}
           defaultValue={typeof currentValue === "object" ? JSON.stringify(currentValue, null, 2) : currentValue}
@@ -47,31 +83,54 @@ const CacheFieldRenderer: React.FC<CacheFieldRendererProps> = ({
     );
   }
 
+  if (field.field_type === "Models_Select") {
+    const [selectedModel, setSelectedModel] = useState<string>(currentValue || "");
+
+    const embeddingModels = modelInfo
+      .filter((option: ModelGroup) => option.mode === "embedding")
+      .map((option: ModelGroup) => ({
+        value: option.model_group,
+        label: option.model_group,
+      }));
+
+    return (
+      <div className="space-y-2">
+        <label className="text-sm font-medium text-gray-700">{field.ui_field_name}</label>
+        <Select
+          value={selectedModel}
+          onChange={setSelectedModel}
+          showSearch={true}
+          placeholder="Search and select a model..."
+          options={embeddingModels}
+          style={{ width: "100%" }}
+          className="rounded-md"
+          filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
+        />
+        {/* Hidden input to capture the value for form submission */}
+        <input type="hidden" name={field.field_name} value={selectedModel} />
+        {field.field_description && <p className="text-xs text-gray-500">{field.field_description}</p>}
+      </div>
+    );
+  }
+
   // Determine input type
-  let inputType = "text";
-  if (field.field_type === "Integer" || field.field_type === "Float") {
-    inputType = "number";
-  } else if (field.field_name === "password" || field.field_name.includes("password")) {
+  let inputType: "text" | "password" | "email" | "url" | undefined = "text";
+  if (field.field_name === "password" || field.field_name.includes("password")) {
     inputType = "password";
   }
 
   return (
     <div className="space-y-2">
-      <label className="text-sm font-medium text-gray-700">
-        {field.ui_field_name}
-      </label>
+      <label className="text-sm font-medium text-gray-700">{field.ui_field_name}</label>
       <TextInput
         name={field.field_name}
         type={inputType}
         defaultValue={currentValue}
         placeholder={field.field_description}
       />
-      {field.field_description && (
-        <p className="text-xs text-gray-500">{field.field_description}</p>
-      )}
+      {field.field_description && <p className="text-xs text-gray-500">{field.field_description}</p>}
     </div>
   );
 };
 
 export default CacheFieldRenderer;
-

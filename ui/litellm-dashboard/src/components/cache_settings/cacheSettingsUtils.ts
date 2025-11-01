@@ -7,37 +7,36 @@ export const shouldShowField = (field: any, redisType: string): boolean => {
   if (field.redis_type === null || field.redis_type === undefined) {
     return true;
   }
-  
+
   return field.redis_type === redisType;
 };
 
 export const getFieldByName = (fields: any[], fieldName: string) => {
-  return fields.find(f => f.field_name === fieldName);
+  return fields.find((f) => f.field_name === fieldName);
 };
 
 export const groupFieldsByCategory = (fields: any[], redisType: string) => {
   // Basic fields that are always shown
   const basicFieldNames = ["host", "port", "password", "username"];
-  const basicFields = basicFieldNames
-    .map(name => getFieldByName(fields, name))
-    .filter(Boolean);
+  const basicFields = basicFieldNames.map((name) => getFieldByName(fields, name)).filter(Boolean);
 
   // Advanced field groups
   const sslFields = ["ssl", "ssl_cert_reqs", "ssl_check_hostname"]
-    .map(name => getFieldByName(fields, name))
+    .map((name) => getFieldByName(fields, name))
     .filter(Boolean);
-  
+
   const cacheManagementFields = ["namespace", "ttl", "max_connections"]
-    .map(name => getFieldByName(fields, name))
+    .map((name) => getFieldByName(fields, name))
     .filter(Boolean);
-  
+
   const gcpFields = ["gcp_service_account", "gcp_ssl_ca_certs"]
-    .map(name => getFieldByName(fields, name))
+    .map((name) => getFieldByName(fields, name))
     .filter(Boolean);
 
   // Redis type-specific fields
-  const clusterFields = fields.filter(f => f.redis_type === "cluster");
-  const sentinelFields = fields.filter(f => f.redis_type === "sentinel");
+  const clusterFields = fields.filter((f) => f.redis_type === "cluster");
+  const sentinelFields = fields.filter((f) => f.redis_type === "sentinel");
+  const semanticFields = fields.filter((f) => f.redis_type === "semantic");
 
   return {
     basicFields,
@@ -46,6 +45,7 @@ export const groupFieldsByCategory = (fields: any[], redisType: string) => {
     gcpFields,
     clusterFields,
     sentinelFields,
+    semanticFields,
   };
 };
 
@@ -108,4 +108,3 @@ export const gatherFormValues = (fields: any[], redisType: string): { [key: stri
 
   return values;
 };
-

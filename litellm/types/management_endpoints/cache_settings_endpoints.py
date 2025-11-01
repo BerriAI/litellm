@@ -150,6 +150,25 @@ CACHE_SETTINGS_FIELDS: List[CacheSettingsField] = [
         ui_field_name="Sentinel Password",
         redis_type="sentinel",
     ),
+    # Semantic-specific fields
+    CacheSettingsField(
+        field_name="similarity_threshold",
+        field_type="Float",
+        field_value=None,
+        field_description="Similarity threshold for semantic cache",
+        field_default=0.8,
+        ui_field_name="Similarity Threshold",
+        redis_type="semantic",
+    ),
+    CacheSettingsField(
+        field_name="redis_semantic_cache_embedding_model",
+        field_type="Models_Select",
+        field_value=None,
+        field_description="Embedding model for semantic cache",
+        field_default=None,
+        ui_field_name="Embedding Model",
+        redis_type="semantic",
+    ),
     # GCP IAM authentication fields
     CacheSettingsField(
         field_name="gcp_service_account",
