@@ -17,7 +17,7 @@ os.environ["OPENAI_API_KEY"] = "your-api-key"
 ### Basic Usage
 
 ```python
-from litellm import video_generation, video_retrieval
+from litellm import video_generation, video_content
 import os
 
 os.environ["OPENAI_API_KEY"] = "your-api-key"
@@ -34,7 +34,7 @@ print(f"Video ID: {response.id}")
 print(f"Status: {response.status}")
 
 # Download video content when ready
-video_bytes = video_retrieval(
+video_bytes = video_content(
     video_id=response.id,
     model="sora-2"
 )
@@ -63,7 +63,7 @@ with open("generated_video.mp4", "wb") as f:
 
 ```python
 # Download video content
-video_bytes = video_retrieval(
+video_bytes = video_content(
     video_id="video_1234567890",
     model="sora-2"
 )
@@ -95,7 +95,7 @@ def generate_and_download_video(prompt):
     time.sleep(30)
     
     # Step 3: Download video
-    video_bytes = litellm.video_retrieval(
+    video_bytes = litellm.video_content(
         video_id=video_id,
         model="sora-2"
     )
@@ -118,7 +118,7 @@ video_file = generate_and_download_video(
 # Video editing with reference image
 response = litellm.video_generation(
     prompt="Make the cat jump higher",
-    input_reference="path/to/image.jpg",  # Reference image
+    input_reference=open("path/to/image.jpg", "rb"),  # Reference image
     model="sora-2",
     seconds="8"
 )

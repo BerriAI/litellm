@@ -118,6 +118,7 @@ from litellm.types.utils import (
 from litellm.types.videos.main import VideoObject
 from litellm.types.containers.main import ContainerObject
 from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
+from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
@@ -1620,6 +1621,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OpenAIFileObject)
             or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
             or isinstance(logging_result, OpenAIModerationResponse)
+            or isinstance(logging_result, OCRResponse)  # OCR
             or isinstance(logging_result, dict)
             and logging_result.get("object") == "vector_store.search_results.page"
             or isinstance(logging_result, VideoObject) 

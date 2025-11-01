@@ -11,7 +11,7 @@ import litellm
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm import ModelResponse
-from litellm.llms.oci.chat.transformation import OCIChatConfig, version
+from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIRequestWrapper, version
 
 TEST_MODEL_NAME = "xai.grok-4"
 TEST_MODEL = f"oci/{TEST_MODEL_NAME}"
@@ -309,3 +309,190 @@ class TestOCIChatConfig:
         assert usage.prompt_tokens == 10 # type: ignore
         assert usage.completion_tokens == 20 # type: ignore
         assert usage.total_tokens == 30 # type: ignore
+
+
+class TestOCISignerSupport:
+    """Tests for OCI SDK Signer integration."""
+
+    def test_validate_environment_with_oci_signer(self):
+        """Test validation when using oci_signer instead of manual credentials."""
+        config = OCIChatConfig()
+        headers = {}
+
+        # Mock signer object
+        class MockSigner:
+            def do_request_sign(self, request, enforce_content_headers=True):
+                request.headers["authorization"] = "Signature version=\"1\""
+
+        optional_params = {
+            "oci_signer": MockSigner(),
+            "oci_region": "us-ashburn-1"
+        }
+
+        result = config.validate_environment(
+            headers=headers,
+            model=TEST_MODEL,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+        )
+
+        assert result["content-type"] == "application/json"
+        assert result["user-agent"] == f"litellm/{version}"
+
+    def test_validate_environment_with_oci_signer_no_compartment_id_in_validate(self):
+        """Test that oci_compartment_id is not required in validate_environment when using signer."""
+        config = OCIChatConfig()
+        headers = {}
+
+        class MockSigner:
+            def do_request_sign(self, request, enforce_content_headers=True):
+                request.headers["authorization"] = "Signature version=\"1\""
+
+        optional_params = {
+            "oci_signer": MockSigner(),
+            "oci_region": "us-phoenix-1"
+        }
+
+        # Should not raise an exception even without oci_compartment_id
+        result = config.validate_environment(
+            headers=headers,
+            model=TEST_MODEL,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+        )
+
+        assert result["content-type"] == "application/json"
+
+    def test_sign_request_with_oci_signer(self):
+        """Test request signing with oci_signer."""
+        config = OCIChatConfig()
+
+        class MockSigner:
+            def do_request_sign(self, request, enforce_content_headers=True):
+                request.headers["authorization"] = "Signature version=\"1\""
+                request.headers["date"] = "Mon, 01 Jan 2024 00:00:00 GMT"
+
+        optional_params = {
+            "oci_signer": MockSigner(),
+            "method": "POST"
+        }
+
+        headers, body = config.sign_request(
+            headers={},
+            optional_params=optional_params,
+            request_data={"test": "data"},
+            api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/20231130/actions/chat"
+        )
+
+        assert "authorization" in headers
+        assert "Signature" in headers["authorization"]
+        assert body is not None  # oci_signer path returns body
+        assert json.loads(body.decode("utf-8")) == {"test": "data"}
+
+    def test_sign_request_with_oci_signer_updates_headers(self):
+        """Test that signer properly updates request headers."""
+        config = OCIChatConfig()
+
+        class MockSigner:
+            def do_request_sign(self, request, enforce_content_headers=True):
+                # Verify the request has the expected attributes
+                assert hasattr(request, "method")
+                assert hasattr(request, "url")
+                assert hasattr(request, "headers")
+                assert hasattr(request, "body")
+                assert hasattr(request, "path_url")
+
+                # Add signature headers
+                request.headers["authorization"] = "Signature keyId=\"test\""
+                request.headers["date"] = "Mon, 01 Jan 2024 00:00:00 GMT"
+                request.headers["x-content-sha256"] = "test-hash"
+
+        optional_params = {
+            "oci_signer": MockSigner(),
+        }
+
+        headers, body = config.sign_request(
+            headers={"custom-header": "custom-value"},
+            optional_params=optional_params,
+            request_data={"message": "Hello"},
+            api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/20231130/actions/chat"
+        )
+
+        # Check that all signer-added headers are present
+        assert headers["authorization"] == "Signature keyId=\"test\""
+        assert headers["date"] == "Mon, 01 Jan 2024 00:00:00 GMT"
+        assert headers["x-content-sha256"] == "test-hash"
+        # Original headers should be preserved
+        assert headers["custom-header"] == "custom-value"
+
+    def test_sign_request_with_failing_oci_signer(self):
+        """Test error handling when oci_signer fails."""
+        config = OCIChatConfig()
+
+        class FailingSigner:
+            def do_request_sign(self, request, enforce_content_headers=True):
+                raise RuntimeError("Signing failed due to invalid credentials")
+
+        optional_params = {
+            "oci_signer": FailingSigner(),
+        }
+
+        from litellm.llms.oci.common_utils import OCIError
+
+        with pytest.raises(OCIError) as excinfo:
+            config.sign_request(
+                headers={},
+                optional_params=optional_params,
+                request_data={"test": "data"},
+                api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/20231130/actions/chat"
+            )
+
+        assert "Failed to sign request with provided oci_signer" in str(excinfo.value)
+        assert excinfo.value.status_code == 500
+
+    def test_sign_request_with_invalid_http_method(self):
+        """Test that invalid HTTP methods are rejected."""
+        config = OCIChatConfig()
+
+        class MockSigner:
+            def do_request_sign(self, request, enforce_content_headers=True):
+                pass
+
+        optional_params = {
+            "oci_signer": MockSigner(),
+            "method": "INVALID"
+        }
+
+        with pytest.raises(ValueError) as excinfo:
+            config.sign_request(
+                headers={},
+                optional_params=optional_params,
+                request_data={"test": "data"},
+                api_base="https://inference.generativeai.us-ashburn-1.oci.oraclecloud.com/20231130/actions/chat"
+            )
+
+        assert "Unsupported HTTP method: INVALID" in str(excinfo.value)
+
+    def test_oci_request_wrapper_path_url(self):
+        """Test OCIRequestWrapper path_url property."""
+        wrapper = OCIRequestWrapper(
+            method="POST",
+            url="https://example.com/api/v1/chat?param1=value1&param2=value2",
+            headers={},
+            body=b"test"
+        )
+
+        assert wrapper.path_url == "/api/v1/chat?param1=value1&param2=value2"
+
+    def test_oci_request_wrapper_path_url_no_query(self):
+        """Test OCIRequestWrapper path_url property without query string."""
+        wrapper = OCIRequestWrapper(
+            method="POST",
+            url="https://example.com/api/v1/chat",
+            headers={},
+            body=b"test"
+        )
+
+        assert wrapper.path_url == "/api/v1/chat"

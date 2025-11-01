@@ -1776,11 +1776,16 @@ class BaseLLMHTTPHandler:
             provider_specific_header=provider_specific_header,
             custom_llm_provider=custom_llm_provider,
         )
+        forwarded_headers = kwargs.get("headers", None)
+        if forwarded_headers and extra_headers:
+            merged_headers = {**forwarded_headers, **extra_headers}
+        else:
+            merged_headers = forwarded_headers or extra_headers
         (
             headers,
             api_base,
         ) = anthropic_messages_provider_config.validate_anthropic_messages_environment(
-            headers=extra_headers or {},
+            headers=merged_headers or {},
             model=model,
             messages=messages,
             optional_params=anthropic_messages_optional_request_params,

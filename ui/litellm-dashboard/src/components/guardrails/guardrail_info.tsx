@@ -13,7 +13,8 @@ import {
   TabPanels,
   TextInput,
 } from "@tremor/react";
-import { Button, Form, Input, Select, Divider } from "antd";
+import { Button, Form, Input, Select, Divider, Tooltip } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import {
   getGuardrailInfo,
   updateGuardrailCall,
@@ -328,6 +329,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     }
   };
 
+  const isConfigGuardrail = guardrailData.guardrail_definition_location === "config";
+
   return (
     <div className="p-4">
       <div>
@@ -434,7 +437,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               <Card>
                 <div className="flex justify-between items-center mb-4">
                   <Title>Guardrail Settings</Title>
-                  {!isEditing && <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>}
+                  {isConfigGuardrail && (
+                    <Tooltip title="Guardrail is defined in the config file and cannot be edited.">
+                      <InfoCircleOutlined />
+                    </Tooltip>
+                  )}
+                  {!isEditing && !isConfigGuardrail && (
+                    <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
+                  )}
                 </div>
 
                 {isEditing ? (

@@ -581,3 +581,19 @@ model LiteLLM_SearchToolsTable {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 }
+
+// SSO configuration table
+model LiteLLM_SSOConfig {
+  id String @id @default("sso_config")
+  sso_settings Json
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+// Cache configuration table
+model LiteLLM_CacheConfig {
+  id String @id @default("cache_config")
+  cache_settings Json
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
