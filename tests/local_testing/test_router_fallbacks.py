@@ -1355,9 +1355,9 @@ def test_router_fallbacks_with_custom_model_costs():
 
     model_list = [
         {
-            "model_name": "claude-3-5-sonnet-20240620",
+            "model_name": "claude-sonnet-4-5-20250929",
             "litellm_params": {
-                "model": "claude-3-5-sonnet-20240620",
+                "model": "claude-sonnet-4-5-20250929",
                 "api_key": os.environ["ANTHROPIC_API_KEY"],
                 "input_cost_per_token": 30,
                 "output_cost_per_token": 60,
@@ -1366,7 +1366,7 @@ def test_router_fallbacks_with_custom_model_costs():
         {
             "model_name": "claude-3-5-sonnet-aihubmix",
             "litellm_params": {
-                "model": "openai/claude-3-5-sonnet-20240620",
+                "model": "openai/claude-sonnet-4-5-20250929",
                 "input_cost_per_token": 0.000003,  # 3$/M
                 "output_cost_per_token": 0.000015,  # 15$/M
                 "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
@@ -1377,7 +1377,7 @@ def test_router_fallbacks_with_custom_model_costs():
 
     router = Router(
         model_list=model_list,
-        fallbacks=[{"claude-3-5-sonnet-20240620": ["claude-3-5-sonnet-aihubmix"]}],
+        fallbacks=[{"claude-sonnet-4-5-20250929": ["claude-3-5-sonnet-aihubmix"]}],
     )
 
     router.completion(
@@ -1385,14 +1385,14 @@ def test_router_fallbacks_with_custom_model_costs():
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
 
-    model_info = litellm.get_model_info(model="claude-3-5-sonnet-20240620")
+    model_info = litellm.get_model_info(model="claude-sonnet-4-5-20250929")
 
     print(f"key: {model_info['key']}")
 
     assert model_info["litellm_provider"] == "anthropic"
 
     response = router.completion(
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
 
@@ -1400,7 +1400,7 @@ def test_router_fallbacks_with_custom_model_costs():
 
     assert response._hidden_params["response_cost"] > 10
 
-    model_info = litellm.get_model_info(model="claude-3-5-sonnet-20240620")
+    model_info = litellm.get_model_info(model="claude-sonnet-4-5-20250929")
 
     print(f"key: {model_info['key']}")
 
