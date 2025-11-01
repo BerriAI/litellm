@@ -151,5 +151,44 @@ async def test__transform_request_body_image_config():
 
     rb: RequestBody = transformation._transform_request_body(**transform_request_params)
 
-    assert "imageConfig" in rb
-    assert rb["imageConfig"] == {"aspectRatio": "16:9"}
+    assert "generationConfig" in rb
+    assert "imageConfig" in rb["generationConfig"]
+    assert rb["generationConfig"]["imageConfig"] == {"aspectRatio": "16:9"}
+
+
+@pytest.mark.asyncio
+async def test__transform_request_body_image_config_snake_case():
+    """
+    Test that Vertex AI Gemini supports the image_config parameter (snake_case) for gemini-2.5-flash-image model.
+    This should be transformed to imageConfig with aspectRatio.
+    """
+    model = "gemini-2.5-flash-image"
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Create a picture of a nano banana dish in a fancy restaurant with a Gemini theme"
+                }
+            ]
+        }
+    ]
+    optional_params = {
+        "image_config": {"aspect_ratio": "16:9"}
+    }
+    litellm_params = {}
+    transform_request_params = {
+        "messages": messages,
+        "model": model,
+        "optional_params": optional_params,
+        "custom_llm_provider": "gemini",
+        "litellm_params": litellm_params,
+        "cached_content": None,
+    }
+
+    rb: RequestBody = transformation._transform_request_body(**transform_request_params)
+
+    assert "generationConfig" in rb
+    assert "image_config" in rb["generationConfig"]
+    assert rb["generationConfig"]["image_config"] == {"aspect_ratio": "16:9"}
