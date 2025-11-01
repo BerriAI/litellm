@@ -225,6 +225,10 @@ def test_azure_assistant_features_integrated_cost_tracking():
     """
     Test integrated cost tracking for Azure assistant features.
     """
+    # Force use of local model cost map for CI/CD consistency
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    
     model = "azure/gpt-4o"
     
     # Test with multiple Azure assistant features
