@@ -430,7 +430,8 @@ def search(
         # Get VectorStoreSearchOptionalRequestParams with only valid parameters
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams = (
             VectorStoreRequestUtils.get_requested_vector_store_search_optional_param(
-                local_vars
+                local_vars,
+                vector_store_provider_config=vector_store_provider_config,
             )
         )
 
@@ -445,6 +446,7 @@ def search(
             litellm_params={
                 "litellm_call_id": litellm_call_id,
                 "vector_store_id": vector_store_id,
+                **litellm_params.model_dump(exclude_none=True),
             },
             custom_llm_provider=custom_llm_provider,
         )

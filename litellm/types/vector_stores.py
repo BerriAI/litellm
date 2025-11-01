@@ -240,3 +240,9 @@ class VectorStoreIndexEndpoints(TypedDict):
     write: List[
         Tuple[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], str]
     ]  # endpoints for writing a vector store index
+VECTOR_STORE_OPENAI_PARAMS = Literal[
+    "filters",
+    "max_num_results",
+    "ranking_options",
+    "rewrite_query",
+]

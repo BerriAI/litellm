@@ -15,6 +15,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
     BaseVectorStoreAuthCredentials,
     VectorStoreIndexEndpoints,
+    VECTOR_STORE_OPENAI_PARAMS,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
@@ -44,6 +45,134 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             "read": [("POST", "/knowledgebases/{knowledge_base_id}/retrieve")],
             "write": [],
         }
+
+    def get_supported_openai_params(
+        self, model: str
+    ) -> List[VECTOR_STORE_OPENAI_PARAMS]:
+        return ["filters", "max_num_results", "ranking_options"]
+
+    def _map_operator_to_aws(self, operator: str) -> str:
+        """
+        Map OpenAI-style operators to AWS Bedrock operator names.
+
+        OpenAI uses: eq, ne, gt, gte, lt, lte, in, nin
+        AWS uses: equals, notEquals, greaterThan, greaterThanOrEquals, lessThan, lessThanOrEquals, in, notIn, startsWith, listContains, stringContains
+        """
+        operator_mapping = {
+            "eq": "equals",
+            "ne": "notEquals",
+            "gt": "greaterThan",
+            "gte": "greaterThanOrEquals",
+            "lt": "lessThan",
+            "lte": "lessThanOrEquals",
+            "in": "in",
+            "nin": "notIn",
+            # AWS-specific operators (pass through)
+            "equals": "equals",
+            "notEquals": "notEquals",
+            "greaterThan": "greaterThan",
+            "greaterThanOrEquals": "greaterThanOrEquals",
+            "lessThan": "lessThan",
+            "lessThanOrEquals": "lessThanOrEquals",
+            "notIn": "notIn",
+            "startsWith": "startsWith",
+            "listContains": "listContains",
+            "stringContains": "stringContains",
+        }
+        return operator_mapping.get(operator, operator)
+
+    def _map_operator_filter(self, filter_dict: dict) -> dict:
+        """
+        Map a single OpenAI operator filter to AWS KB format.
+
+        OpenAI format: {"key": <key>, "value": <value>, "operator": <operator>}
+        AWS KB format: {"operator": {"key": <key>, "value": <value>}}
+        """
+        aws_operator = self._map_operator_to_aws(filter_dict["operator"])
+        return {
+            aws_operator: {
+                "key": filter_dict["key"],
+                "value": filter_dict["value"],
+            }
+        }
+
+    def _map_and_or_filters(self, value: dict) -> dict:
+        """
+        Map OpenAI and/or filters to AWS KB format.
+
+        OpenAI format: {"and" | "or": [{"key": <key>, "value": <value>, "operator": <operator>}]}
+        AWS KB format: {"andAll" | "orAll": [{"operator": {"key": <key>, "value": <value>}}]}
+
+        Note: AWS requires andAll/orAll to have at least 2 elements.
+        For single filters, unwrap and return just the operator.
+        """
+        aws_filters = {}
+
+        if "and" in value:
+            and_filters = value["and"]
+            # If only 1 filter, return just the operator (AWS requires andAll to have >=2 elements)
+            if len(and_filters) == 1:
+                return self._map_operator_filter(and_filters[0])
+
+            aws_filters["andAll"] = [
+                {
+                    self._map_operator_to_aws(and_filters[i]["operator"]): {
+                        "key": and_filters[i]["key"],
+                        "value": and_filters[i]["value"],
+                    }
+                }
+                for i in range(len(and_filters))
+            ]
+
+        if "or" in value:
+            or_filters = value["or"]
+            # If only 1 filter, return just the operator (AWS requires orAll to have >=2 elements)
+            if len(or_filters) == 1:
+                return self._map_operator_filter(or_filters[0])
+
+            aws_filters["orAll"] = [
+                {
+                    self._map_operator_to_aws(or_filters[i]["operator"]): {
+                        "key": or_filters[i]["key"],
+                        "value": or_filters[i]["value"],
+                    }
+                }
+                for i in range(len(or_filters))
+            ]
+
+        return aws_filters
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        drop_params: bool,
+    ) -> dict:
+        for param, value in non_default_params.items():
+            if param == "max_num_results":
+                optional_params["numberOfResults"] = value
+            elif param == "filters" and value is not None:
+
+                # map the openai filters to the aws kb filters format
+                # openai filters = {"key": <key>, "value": <value>, "operator": <operator>} OR {"and" | "or": [{"key": <key>, "value": <value>, "operator": <operator>}]}
+                # aws kb filters = {"operator": {"<key>": <value>}} OR {"andAll | orAll": [{"operator": {"<key>": <value>}}]}
+                # 1. check if filter is in openai format
+                # 2. if it is, map it to the aws kb filters format
+                # 3. if it is not, assume it is in aws kb filters format and add it to the optional_params
+                aws_filters: Optional[Dict] = None
+
+                if isinstance(value, dict):
+                    if "operator" in value.keys():
+                        # Single operator - map directly (no wrapping needed)
+                        aws_filters = self._map_operator_filter(value)
+                    elif "and" in value.keys() or "or" in value.keys():
+                        aws_filters = self._map_and_or_filters(value)
+                    else:
+                        # Assume it's already in AWS KB format
+                        aws_filters = value
+                optional_params["filters"] = aws_filters
+
+        return optional_params
 
     def validate_environment(
         self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
