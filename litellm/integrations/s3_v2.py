@@ -191,13 +191,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         self.s3_path = litellm.s3_callback_params.get("s3_path") or s3_path
         # done reading litellm.s3_callback_params
         self.s3_use_team_prefix = (
-            bool(litellm.s3_callback_params.get("s3_strip_base64_files", False))
+            bool(litellm.s3_callback_params.get("s3_use_team_prefix", False))
             or s3_use_team_prefix
         )
 
         self.s3_strip_base64_files = (
             bool(litellm.s3_callback_params.get("s3_strip_base64_files", False))
-            or s3_use_team_prefix
+            or s3_strip_base64_files
         )
 
         return
