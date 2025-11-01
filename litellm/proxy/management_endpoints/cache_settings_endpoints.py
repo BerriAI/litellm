@@ -26,6 +26,102 @@ from litellm.types.management_endpoints import (
 router = APIRouter()
 
 
+class CacheSettingsManager:
+    """
+    Manages cache settings initialization and updates.
+    Tracks last cache params to avoid unnecessary reinitialization.
+    """
+    
+    _last_cache_params: Optional[Dict[str, Any]] = None
+    
+    @staticmethod
+    def _cache_params_equal(params1: Dict[str, Any], params2: Dict[str, Any]) -> bool:
+        """
+        Compare two cache parameter dictionaries for equality.
+        Normalizes values and filters out UI-only fields.
+        """
+        # Normalize by removing None values and UI-only fields
+        def normalize(params: Dict[str, Any]) -> Dict[str, Any]:
+            normalized = {}
+            for k, v in params.items():
+                if k == 'redis_type':  # Skip UI-only field
+                    continue
+                if v is not None:
+                    # Convert to string for comparison to handle different types
+                    normalized[k] = str(v) if not isinstance(v, (list, dict)) else v
+            return normalized
+        
+        normalized1 = normalize(params1)
+        normalized2 = normalize(params2)
+        
+        return normalized1 == normalized2
+    
+    @staticmethod
+    async def init_cache_settings_in_db(prisma_client, proxy_config):
+        """
+        Initialize cache settings from database into the router on startup.
+        Only reinitializes if cache params have changed.
+        """
+        import json
+        
+        try:
+            cache_config = await prisma_client.db.litellm_cacheconfig.find_unique(
+                where={"id": "cache_config"}
+            )
+            if cache_config is not None and cache_config.cache_settings:
+                # Parse cache settings JSON
+                cache_settings_json = cache_config.cache_settings
+                if isinstance(cache_settings_json, str):
+                    cache_settings_dict = json.loads(cache_settings_json)
+                else:
+                    cache_settings_dict = cache_settings_json
+                
+                # Decrypt cache settings
+                decrypted_settings = proxy_config._decrypt_db_variables(
+                    variables_dict=cache_settings_dict
+                )
+                
+                # Remove redis_type if present (UI-only field, not a Cache parameter)
+                # We derive it for UI in get_cache_settings endpoint
+                cache_params = {k: v for k, v in decrypted_settings.items() if k != "redis_type"}
+                
+                # Check if cache params have changed
+                if CacheSettingsManager._last_cache_params is not None and CacheSettingsManager._cache_params_equal(
+                    CacheSettingsManager._last_cache_params, cache_params
+                ):
+                    verbose_proxy_logger.debug(
+                        "Cache settings unchanged, skipping reinitialization"
+                    )
+                    return
+                
+                # Initialize cache only if params changed or cache not initialized
+                proxy_config._init_cache(cache_params=cache_params)
+                
+                # Store the params we just initialized
+                CacheSettingsManager._last_cache_params = cache_params.copy()
+                
+                # Switch on LLM response caching
+                proxy_config.switch_on_llm_response_caching()
+                
+                verbose_proxy_logger.info(
+                    "Cache settings initialized from database"
+                )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.management_endpoints.cache_settings_endpoints.py::CacheSettingsManager::init_cache_settings_in_db - {}".format(
+                    str(e)
+                )
+            )
+    
+    @staticmethod
+    def update_cache_params(cache_params: Dict[str, Any]):
+        """
+        Update the last cache params after initialization.
+        Called after cache settings are updated via the API.
+        """
+        CacheSettingsManager._last_cache_params = cache_params.copy()
+
+
 class CacheSettingsResponse(BaseModel):
     fields: List[CacheSettingsField] = Field(
         description="List of all configurable cache settings with metadata"
@@ -242,8 +338,17 @@ async def update_cache_settings(
             variables_dict=encrypted_settings
         )
         
+        # Remove redis_type if present (UI-only field, not a Cache parameter)
+        cache_params = {k: v for k, v in decrypted_settings.items() if k != "redis_type"}
+        
         # Initialize cache (frontend sends type="redis", not redis_type)
-        proxy_config._init_cache(cache_params=decrypted_settings)
+        proxy_config._init_cache(cache_params=cache_params)
+        
+        # Update the last cache params to avoid reinitializing unnecessarily
+        CacheSettingsManager.update_cache_params(cache_params)
+        
+        # Switch on LLM response caching
+        proxy_config.switch_on_llm_response_caching()
         
         return {
             "message": "Cache settings updated successfully",

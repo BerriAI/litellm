@@ -3370,7 +3370,12 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="sso_settings"):
             await self._init_sso_settings_in_db(prisma_client=prisma_client)
         if self._should_load_db_object(object_type="cache_settings"):
-            await self._init_cache_settings_in_db(prisma_client=prisma_client)
+            from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+                CacheSettingsManager,
+            )
+            await CacheSettingsManager.init_cache_settings_in_db(
+                prisma_client=prisma_client, proxy_config=self
+            )
 
     async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
         """
@@ -3388,49 +3393,6 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - {}".format(
-                    str(e)
-                )
-            )   
-
-    async def _init_cache_settings_in_db(self, prisma_client: PrismaClient):
-        """
-        Initialize cache settings from database into the router on startup.
-        """
-        import json
-        
-        try:
-            cache_config = await prisma_client.db.litellm_cacheconfig.find_unique(
-                where={"id": "cache_config"}
-            )
-            if cache_config is not None and cache_config.cache_settings:
-                # Parse cache settings JSON
-                cache_settings_json = cache_config.cache_settings
-                if isinstance(cache_settings_json, str):
-                    cache_settings_dict = json.loads(cache_settings_json)
-                else:
-                    cache_settings_dict = cache_settings_json
-                
-                # Decrypt cache settings
-                decrypted_settings = self._decrypt_db_variables(
-                    variables_dict=cache_settings_dict
-                )
-                
-                # Remove redis_type if present (UI-only field, not a Cache parameter)
-                # We derive it for UI in get_cache_settings endpoint
-                cache_params = {k: v for k, v in decrypted_settings.items() if k != "redis_type"}
-                
-                # Initialize cache
-                self._init_cache(cache_params=cache_params)
-                
-                # Switch on LLM response caching
-                self.switch_on_llm_response_caching()
-                
-                verbose_proxy_logger.info(
-                    "Cache settings initialized from database"
-                )
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.py::ProxyConfig:_init_cache_settings_in_db - {}".format(
                     str(e)
                 )
             )   
