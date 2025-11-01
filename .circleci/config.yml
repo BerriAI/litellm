@@ -1710,6 +1710,7 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
+            pip install apscheduler
       - run:
           name: Build Docker image
           command: |
@@ -2610,6 +2611,7 @@ jobs:
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "mypy==1.18.2"
+            pip install apscheduler
       - run:
           name: Build Docker image
           command: |

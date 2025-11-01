@@ -17,6 +17,7 @@ export enum EndpointType {
   RESPONSES = "responses",
   IMAGE_EDITS = "image_edits",
   ANTHROPIC_MESSAGES = "anthropic_messages",
+  EMBEDDINGS = "embeddings",
   // add additional endpoint types if required
 }
 

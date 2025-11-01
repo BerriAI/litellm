@@ -13,10 +13,60 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 
 router = APIRouter(
     tags=["mcp"],
 )
+
+
+def get_request_base_url(request: Request) -> str:
+    """
+    Get the base URL for the request, considering X-Forwarded-* headers.
+
+    When behind a proxy (like nginx), the proxy may set:
+    - X-Forwarded-Proto: The original protocol (http/https)
+    - X-Forwarded-Host: The original host (may include port)
+    - X-Forwarded-Port: The original port (if not in Host header)
+
+    Args:
+        request: FastAPI Request object
+
+    Returns:
+        The reconstructed base URL (e.g., "https://proxy.example.com")
+    """
+    base_url = str(request.base_url).rstrip("/")
+    parsed = urlparse(base_url)
+
+    # Get forwarded headers
+    x_forwarded_proto = request.headers.get("X-Forwarded-Proto")
+    x_forwarded_host = request.headers.get("X-Forwarded-Host")
+    x_forwarded_port = request.headers.get("X-Forwarded-Port")
+
+    # Start with the original scheme
+    scheme = x_forwarded_proto if x_forwarded_proto else parsed.scheme
+
+    # Handle host and port
+    if x_forwarded_host:
+        # X-Forwarded-Host may already include port (e.g., "example.com:8080")
+        if ":" in x_forwarded_host and not x_forwarded_host.startswith("["):
+            # Host includes port
+            netloc = x_forwarded_host
+        elif x_forwarded_port:
+            # Port is separate
+            netloc = f"{x_forwarded_host}:{x_forwarded_port}"
+        else:
+            # Just host, no explicit port
+            netloc = x_forwarded_host
+    else:
+        # No X-Forwarded-Host, use original netloc
+        netloc = parsed.netloc
+        if x_forwarded_port and ":" not in netloc:
+            # Add forwarded port if not already in netloc
+            netloc = f"{netloc}:{x_forwarded_port}"
+
+    # Reconstruct the URL
+    return urlunparse((scheme, netloc, parsed.path, "", "", ""))
 
 
 def encode_state_with_base_url(
@@ -90,24 +140,25 @@ async def authorize(
         global_mcp_server_manager,
     )
 
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(client_id)
+    if mcp_server_name:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+    else:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(client_id)
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     if mcp_server.auth_type != "oauth2":
         raise HTTPException(status_code=400, detail="MCP server is not OAuth2")
-    if mcp_server.client_id is None:
-        raise HTTPException(status_code=400, detail="MCP server client id is not set")
     if mcp_server.authorization_url is None:
         raise HTTPException(
             status_code=400, detail="MCP server authorization url is not set"
         )
-    if mcp_server.scopes is None:
-        raise HTTPException(status_code=400, detail="MCP server scopes is not set")
 
     # Parse it to remove any existing query
     parsed = urlparse(redirect_uri)
     base_url = urlunparse(parsed._replace(query=""))
-    request_base_url = str(request.base_url).rstrip("/")
+
+    # Get the correct base URL considering X-Forwarded-* headers
+    request_base_url = get_request_base_url(request)
 
     # Encode the base_url, original state, PKCE params, and client redirect_uri in encrypted state
     encoded_state = encode_state_with_base_url(
@@ -117,15 +168,17 @@ async def authorize(
         code_challenge_method=code_challenge_method,
         client_redirect_uri=redirect_uri,
     )
-
     # Build params for upstream OAuth provider
     params = {
-        "client_id": mcp_server.client_id,
+        "client_id": client_id if client_id else mcp_server.client_id,
         "redirect_uri": f"{request_base_url}/callback",
-        "scope": scope or " ".join(mcp_server.scopes),
         "state": encoded_state,
         "response_type": response_type or "code",
     }
+    if scope:
+        params["scope"] = scope
+    elif mcp_server.scopes:
+        params["scope"] = " ".join(mcp_server.scopes)
 
     # Forward PKCE parameters if present
     if code_challenge:
@@ -136,6 +189,7 @@ async def authorize(
     return RedirectResponse(f"{mcp_server.authorization_url}?{urlencode(params)}")
 
 
+@router.post("/{mcp_server_name}/token")
 @router.post("/token")
 async def token_endpoint(
     request: Request,
@@ -143,8 +197,9 @@ async def token_endpoint(
     code: str = Form(None),
     redirect_uri: str = Form(None),
     client_id: str = Form(...),
-    client_secret: str = Form(...),
+    client_secret: Optional[str] = Form(None),
     code_verifier: str = Form(None),
+    mcp_server_name: Optional[str] = None,
 ):
     """
     Accept the authorization code from client and exchange it for OAuth token.
@@ -159,7 +214,11 @@ async def token_endpoint(
         global_mcp_server_manager,
     )
 
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(client_id)
+    if mcp_server_name:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+    else:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(client_id)
+
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
 
@@ -169,13 +228,14 @@ async def token_endpoint(
     if mcp_server.token_url is None:
         raise HTTPException(status_code=400, detail="MCP server token url is not set")
 
-    proxy_base_url = str(request.base_url).rstrip("/")
+    # Get the correct base URL considering X-Forwarded-* headers
+    proxy_base_url = get_request_base_url(request)
 
     # Build token request data
     token_data = {
         "grant_type": "authorization_code",
-        "client_id": mcp_server.client_id,
-        "client_secret": mcp_server.client_secret,
+        "client_id": client_id if client_id else mcp_server.client_id,
+        "client_secret": client_secret if client_secret else mcp_server.client_secret,
         "code": code,
         "redirect_uri": f"{proxy_base_url}/callback",
     }
@@ -243,7 +303,8 @@ async def callback(code: str, state: str):
 async def oauth_protected_resource_mcp(
     request: Request, mcp_server_name: Optional[str] = None
 ):
-    request_base_url = str(request.base_url).rstrip("/")
+    # Get the correct base URL considering X-Forwarded-* headers
+    request_base_url = get_request_base_url(request)
     return {
         "authorization_servers": [
             (
@@ -265,11 +326,24 @@ async def oauth_protected_resource_mcp(
 async def oauth_authorization_server_mcp(
     request: Request, mcp_server_name: Optional[str] = None
 ):
-    request_base_url = str(request.base_url).rstrip("/")
+    # Get the correct base URL considering X-Forwarded-* headers
+    request_base_url = get_request_base_url(request)
+
+    authorization_endpoint = (
+        f"{request_base_url}/{mcp_server_name}/authorize"
+        if mcp_server_name
+        else f"{request_base_url}/authorize"
+    )
+    token_endpoint = (
+        f"{request_base_url}/{mcp_server_name}/token"
+        if mcp_server_name
+        else f"{request_base_url}/token"
+    )
+
     return {
         "issuer": request_base_url,  # point to your proxy
-        "authorization_endpoint": f"{request_base_url}/authorize",
-        "token_endpoint": f"{request_base_url}/token",
+        "authorization_endpoint": authorization_endpoint,
+        "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
         "code_challenge_methods_supported": ["S256"],
@@ -296,11 +370,65 @@ async def oauth_authorization_server_root(
 @router.post("/{mcp_server_name}/register")
 @router.post("/register")
 async def register_client(request: Request, mcp_server_name: Optional[str] = None):
-    request_base_url = str(request.base_url).rstrip("/")
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
 
-    # return fixed GitHub client credentials
-    return {
+    # Get the correct base URL considering X-Forwarded-* headers
+    request_base_url = get_request_base_url(request)
+
+    request_data = await _read_request_body(request=request)
+    data: dict = {**request_data}
+
+    dummy_return = {
         "client_id": mcp_server_name or "dummy_client",
         "client_secret": "dummy",
-        "redirect_uris": [f"{request_base_url}/mcp/callback"],
+        "redirect_uris": [f"{request_base_url}/callback"],
     }
+    if not mcp_server_name:
+        return dummy_return
+
+    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+    if mcp_server is None:
+        return dummy_return
+
+    if mcp_server.client_id and mcp_server.client_secret:
+        return {
+            "client_id": mcp_server.client_id,
+            "client_secret": mcp_server.client_secret,
+            "redirect_uris": [f"{request_base_url}/callback"],
+        }
+
+    if mcp_server.authorization_url is None:
+        raise HTTPException(
+            status_code=400, detail="MCP server authorization url is not set"
+        )
+
+    if mcp_server.registration_url is None:
+        return dummy_return
+
+    register_data = {
+        "client_name": data.get("client_name", ""),
+        "redirect_uris": [f"{request_base_url}/callback"],
+        "grant_types": data.get("grant_types", []),
+        "response_types": data.get("response_types", []),
+        "token_endpoint_auth_method": data.get("token_endpoint_auth_method", ""),
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    async_client = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.Oauth2Register
+    )
+    response = await async_client.post(
+        mcp_server.registration_url,
+        headers=headers,
+        json=register_data,
+    )
+    response.raise_for_status()
+
+    token_response = response.json()
+
+    return JSONResponse(token_response)

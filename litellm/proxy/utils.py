@@ -986,7 +986,11 @@ class ProxyLogging:
                     )
                 else:
                     _callback = callback  # type: ignore
-                if _callback is not None and isinstance(_callback, CustomGuardrail):
+                if (
+                    _callback is not None
+                    and isinstance(_callback, CustomGuardrail)
+                    and data is not None
+                ):
                     result = await self._process_guardrail_callback(
                         callback=_callback,
                         data=data,
@@ -3690,6 +3694,16 @@ def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
         is_in_list = True
 
     return is_in_list
+
+
+def is_known_vector_store_index(index_name: str) -> bool:
+    """
+    Returns True if the vector store index is in the llm_router vector store indexes
+    """
+
+    if litellm.vector_store_index_registry is None:
+        return False
+    return index_name in litellm.vector_store_index_registry.get_vector_store_indexes()
 
 
 def join_paths(base_path: str, route: str) -> str:

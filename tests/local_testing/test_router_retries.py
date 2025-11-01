@@ -780,7 +780,7 @@ async def test_router_timeout_model_specific_and_global():
             {
                 "model_name": "anthropic-claude",
                 "litellm_params": {
-                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                     "timeout": 1,
                 },
             }

@@ -12,7 +12,8 @@ Create a vector store which can be used to store and search document chunks for 
 | Cost Tracking | ✅ | Tracked per vector store operation |
 | Logging | ✅ | Works across all integrations |
 | End-user Tracking | ✅ | |
-| Support LLM Providers | **OpenAI** | Full vector stores API support across providers |
+| Support LLM Providers (OpenAI `/vector_stores` API) | **OpenAI** | Full vector stores API support across providers |
+| Support LLM Providers (Passthrough API) | [**Azure AI**](/docs/providers/azure_ai/azure_ai_vector_stores_passthrough) | Full vector stores API support across providers |
 
 ## Usage
 

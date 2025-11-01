@@ -4442,6 +4442,132 @@ export const getGeneralSettingsCall = async (accessToken: string) => {
   }
 };
 
+export const getRouterSettingsCall = async (accessToken: string) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/router/settings`
+      : `/router/settings`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get router settings:", error);
+    throw error;
+  }
+};
+
+export const getCacheSettingsCall = async (accessToken: string) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/cache/settings`
+      : `/cache/settings`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get cache settings:", error);
+    throw error;
+  }
+};
+
+export const testCacheConnectionCall = async (
+  accessToken: string,
+  cacheSettings: Record<string, any>
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/cache/settings/test`
+      : `/cache/settings/test`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        cache_settings: cacheSettings,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to test cache connection:", error);
+    throw error;
+  }
+};
+
+export const updateCacheSettingsCall = async (
+  accessToken: string,
+  cacheSettings: Record<string, any>
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/settings` : `/cache/settings`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        cache_settings: cacheSettings,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to update cache settings:", error);
+    throw error;
+  }
+};
+
 export const getPassThroughEndpointsCall = async (accessToken: string, teamId?: string | null) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/config/pass_through_endpoint` : `/config/pass_through_endpoint`;
@@ -6426,6 +6552,68 @@ export const updateGuardrailCall = async (
     return data;
   } catch (error) {
     console.error("Failed to update guardrail:", error);
+    throw error;
+  }
+};
+
+export const applyGuardrail = async (
+  accessToken: string,
+  guardrailName: string,
+  text: string,
+  language?: string | null,
+  entities?: string[] | null,
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/apply_guardrail` : `/guardrails/apply_guardrail`;
+
+    const requestBody: Record<string, any> = {
+      guardrail_name: guardrailName,
+      text: text,
+    };
+
+    if (language) {
+      requestBody.language = language;
+    }
+
+    if (entities && entities.length > 0) {
+      requestBody.entities = entities;
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      let errorMessage = "Failed to apply guardrail";
+      
+      try {
+        const errorJson = JSON.parse(errorData);
+        if (errorJson.error?.message) {
+          errorMessage = errorJson.error.message;
+        } else if (errorJson.detail) {
+          errorMessage = errorJson.detail;
+        } else if (errorJson.message) {
+          errorMessage = errorJson.message;
+        }
+      } catch (e) {
+        errorMessage = errorData || errorMessage;
+      }
+      
+      handleError(errorData);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Apply guardrail response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to apply guardrail:", error);
     throw error;
   }
 };

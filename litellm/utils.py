@@ -11,6 +11,7 @@ import ast
 import asyncio
 import base64
 import binascii
+import contextvars
 import copy
 import datetime
 import hashlib
@@ -1299,7 +1300,11 @@ def client(original_function):  # noqa: PLR0915
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
+            # Copy the current context to propagate it to the background thread
+            # This is essential for OpenTelemetry span context propagation
+            ctx = contextvars.copy_context()
             executor.submit(
+                ctx.run,
                 logging_obj.success_handler,
                 result,
                 start_time,
@@ -5004,7 +5009,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "output_cost_per_token_above_200k_tokens", None
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
-                output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
+                output_cost_per_video_per_second=_model_info.get(
+                    "output_cost_per_video_per_second", None
+                ),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get(
@@ -7579,6 +7586,12 @@ class ProviderConfigManager:
             )
 
             return AzureAIVectorStoreConfig()
+        elif litellm.LlmProviders.MILVUS == provider:
+            from litellm.llms.milvus.vector_stores.transformation import (
+                MilvusVectorStoreConfig,
+            )
+
+            return MilvusVectorStoreConfig()
         return None
 
     @staticmethod
@@ -7640,11 +7653,17 @@ class ProviderConfigManager:
             )
 
             return LiteLLMProxyImageGenerationConfig()
+        elif LlmProviders.FAL_AI == provider:
+            from litellm.llms.fal_ai.image_generation import (
+                get_fal_ai_image_generation_config,
+            )
+
+            return get_fal_ai_image_generation_config(model)
         return None
 
     @staticmethod
     def get_provider_video_config(
-        model: str,
+        model: Optional[str],
         provider: LlmProviders,
     ) -> Optional[BaseVideoConfig]:
         if LlmProviders.OPENAI == provider:
@@ -7656,7 +7675,6 @@ class ProviderConfigManager:
 
             return AzureVideoConfig()
         return None
-
 
     @staticmethod
     def get_provider_realtime_config(

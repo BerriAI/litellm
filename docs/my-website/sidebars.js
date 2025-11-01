@@ -32,6 +32,7 @@ const sidebars = {
       items: [
         "proxy/guardrails/quick_start",
         ...[
+          "adding_provider/adding_guardrail_support",
           "proxy/guardrails/aim_security",
           "proxy/guardrails/aporia_api",
           "proxy/guardrails/azure_content_guardrail",
@@ -340,6 +341,7 @@ const sidebars = {
             "image_variations",
           ]
         },
+        "videos",
         {
           type: "category",
           label: "/mcp - Model Context Protocol",
@@ -430,6 +432,7 @@ const sidebars = {
             "providers/openai",
             "providers/openai/responses_api",
             "providers/openai/text_to_speech",
+            "providers/openai/videos",
           ]
         },
         "providers/text_completion_openai",
@@ -442,6 +445,7 @@ const sidebars = {
             "providers/azure/azure_responses",
             "providers/azure/azure_embedding",
             "providers/azure/azure_speech",
+            "providers/azure/videos",
           ]
         },
         {
@@ -453,6 +457,7 @@ const sidebars = {
             "providers/azure_ai_speech",
             "providers/azure_ai_img",
             "providers/azure_ai_vector_stores",
+            "providers/azure_ai/azure_ai_vector_stores_passthrough",
           ]
         },
         {
@@ -491,6 +496,7 @@ const sidebars = {
             "providers/bedrock_vector_store",
           ]
         },
+        "providers/milvus_vector_stores",
         "providers/litellm_proxy",
         "providers/meta_llama",
         "providers/mistral",
@@ -533,6 +539,7 @@ const sidebars = {
         "providers/groq",
         "providers/deepseek",
         "providers/elevenlabs",
+        "providers/fal_ai",
         "providers/fireworks_ai",
         "providers/clarifai",
         "providers/compactifai",
@@ -712,7 +719,7 @@ const sidebars = {
           items: [
             "adding_provider/directory_structure",
             "adding_provider/new_rerank_provider",
-            "adding_provider/adding_guardrail_support"],
+          ]
         },
         "extras/contributing",
         "contributing",

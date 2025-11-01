@@ -138,6 +138,125 @@ print(response.choices[0].message.content)
 </Tabs>
 
 
+## Filter Results
+
+Filter by metadata attributes.
+
+**Operators** (OpenAI-style, auto-translated):
+- `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`
+
+**AWS operators** (use directly):
+- `equals`, `notEquals`, `greaterThan`, `greaterThanOrEquals`, `lessThan`, `lessThanOrEquals`, `in`, `notIn`, `startsWith`, `listContains`, `stringContains`
+
+<Tabs>
+<TabItem value="single-filter" label="Single Filter">
+
+```python
+response = await litellm.acompletion(
+    model="anthropic/claude-3-5-sonnet",
+    messages=[{"role": "user", "content": "What are the latest updates?"}],
+    tools=[{
+        "type": "file_search",
+        "vector_store_ids": ["YOUR_KNOWLEDGE_BASE_ID"],
+        "filters": {
+            "key": "category",
+            "value": "updates",
+            "operator": "eq"
+        }
+    }]
+)
+```
+
+</TabItem>
+
+<TabItem value="and-filters" label="AND">
+
+```python
+response = await litellm.acompletion(
+    model="anthropic/claude-3-5-sonnet",
+    messages=[{"role": "user", "content": "What are the policies?"}],
+    tools=[{
+        "type": "file_search",
+        "vector_store_ids": ["YOUR_KNOWLEDGE_BASE_ID"],
+        "filters": {
+            "and": [
+                {"key": "category", "value": "policy", "operator": "eq"},
+                {"key": "year", "value": 2024, "operator": "gte"}
+            ]
+        }
+    }]
+)
+```
+
+</TabItem>
+
+<TabItem value="or-filters" label="OR">
+
+```python
+response = await litellm.acompletion(
+    model="anthropic/claude-3-5-sonnet",
+    messages=[{"role": "user", "content": "Show me technical docs"}],
+    tools=[{
+        "type": "file_search",
+        "vector_store_ids": ["YOUR_KNOWLEDGE_BASE_ID"],
+        "filters": {
+            "or": [
+                {"key": "category", "value": "api", "operator": "eq"},
+                {"key": "category", "value": "sdk", "operator": "eq"}
+            ]
+        }
+    }]
+)
+```
+
+</TabItem>
+
+<TabItem value="advanced-filters" label="AWS Operators">
+
+```python
+response = await litellm.acompletion(
+    model="anthropic/claude-3-5-sonnet",
+    messages=[{"role": "user", "content": "Find docs"}],
+    tools=[{
+        "type": "file_search",
+        "vector_store_ids": ["YOUR_KNOWLEDGE_BASE_ID"],
+        "filters": {
+            "and": [
+                {"key": "title", "value": "Guide", "operator": "stringContains"},
+                {"key": "tags", "value": "important", "operator": "listContains"}
+            ]
+        }
+    }]
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy-filters" label="Proxy">
+
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -d '{
+    "model": "claude-3-5-sonnet",
+    "messages": [{"role": "user", "content": "What are our policies?"}],
+    "tools": [{
+        "type": "file_search",
+        "vector_store_ids": ["YOUR_KNOWLEDGE_BASE_ID"],
+        "filters": {
+            "and": [
+                {"key": "department", "value": "engineering", "operator": "eq"},
+                {"key": "type", "value": "policy", "operator": "eq"}
+            ]
+        }
+    }]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
 ## Accessing Search Results
 
 See how to access vector store search results in your response:
