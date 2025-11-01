@@ -6,6 +6,8 @@ import Image from '@theme/IdealImage';
 
 You can find the Dockerfile to build litellm proxy [here](https://github.com/BerriAI/litellm/blob/main/Dockerfile)
 
+> Note: Production requires at least 4 CPU cores and 8 GB RAM.
+
 ## Quick Start
 
 To start using Litellm, run the following commands in a shell:
