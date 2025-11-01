@@ -333,9 +333,9 @@ def test_process_anthropic_headers_with_no_matching_headers():
     "tool_type, tool_config, message_content",
     [
         (
-            "computer_20241022",
+            "computer_20250124",
             {
-                "type": "computer_20241022",
+                "type": "computer_20250124",
                 "function": {
                     "name": "computer",
                     "parameters": {
