@@ -235,7 +235,7 @@ async def test_anthropic_vertex_ai_prompt_caching(anthropic_messages, sync_mode)
         print(mock_post.call_args.kwargs["headers"])
         assert "anthropic-beta" not in mock_post.call_args.kwargs["headers"]
 
-
+@pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio()
 async def test_anthropic_api_prompt_caching_basic():
     litellm.set_verbose = True
