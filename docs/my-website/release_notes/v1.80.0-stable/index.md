@@ -58,8 +58,8 @@ pip install litellm==1.80.0
 
 - **Dependencies**
     - Build(deps): bump starlette from 0.47.2 to 0.49.1 - [PR #16027](https://github.com/BerriAI/litellm/pull/16027)
-    - Build(deps): bump hono from 4.9.7 to 4.10.3 in /litellm-js/spend-logs - [PR #15915](https://github.com/BerriAI/litellm/pull/15915)
     - Build(deps): bump fastapi from 0.116.1 to 0.120.1 - [PR #16054](https://github.com/BerriAI/litellm/pull/16054)
+    - Build(deps): bump hono from 4.9.7 to 4.10.3 in /litellm-js/spend-logs - [PR #15915](https://github.com/BerriAI/litellm/pull/15915)
 
 
 ## New Models / Updated Models
