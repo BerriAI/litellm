@@ -600,3 +600,11 @@ model LiteLLM_ManagedVectorStoreIndexTable {
   updated_at DateTime @updatedAt
   updated_by String?
 }
+
+// Cache configuration table
+model LiteLLM_CacheConfig {
+  id String @id @default("cache_config")
+  cache_settings Json
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}

@@ -81,10 +81,10 @@ class TestExtractUsageForOCRCall:
         
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
         
-        assert usage["prompt_tokens"] == 0
-        assert usage["completion_tokens"] == 0
-        assert usage["total_tokens"] == 0
-        assert usage["pages_processed"] == 3
+        assert usage.get("prompt_tokens") == 0
+        assert usage.get("completion_tokens") == 0
+        assert usage.get("total_tokens") == 0
+        assert usage.get("pages_processed") == 3
 
     def test_extract_usage_missing_usage_info(self):
         """Test handling missing usage_info"""
@@ -102,10 +102,10 @@ class TestExtractUsageForOCRCall:
         
         usage = _extract_usage_for_ocr_call(response_obj_dict, response_obj_dict)
         
-        assert usage["prompt_tokens"] == 0
-        assert usage["completion_tokens"] == 0
-        assert usage["total_tokens"] == 0
-        assert usage["pages_processed"] == 0
+        assert usage.get("prompt_tokens") == 0
+        assert usage.get("completion_tokens") == 0
+        assert usage.get("total_tokens") == 0
+        assert usage.get("pages_processed") == 0
 
 
 class TestGetLoggingPayloadOCR:
@@ -145,15 +145,15 @@ class TestGetLoggingPayloadOCR:
             end_time=mock_datetime
         )
         
-        assert payload.call_type == "ocr"
-        assert payload.prompt_tokens == 0
-        assert payload.completion_tokens == 0
-        assert payload.total_tokens == 0
-        assert payload.spend == 0.05
+        assert payload["call_type"] == "ocr"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        assert payload["spend"] == 0.05
         
         # Verify pages_processed is in additional_usage_values
         import json
-        metadata = json.loads(payload.metadata)
+        metadata = json.loads(payload["metadata"])
         assert "additional_usage_values" in metadata
         assert metadata["additional_usage_values"]["pages_processed"] == 7
 
@@ -176,14 +176,14 @@ class TestGetLoggingPayloadOCR:
             end_time=mock_datetime
         )
         
-        assert payload.call_type == "aocr"
-        assert payload.prompt_tokens == 0
-        assert payload.completion_tokens == 0
-        assert payload.total_tokens == 0
+        assert payload["call_type"] == "aocr"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
         
         # Verify pages_processed is in additional_usage_values
         import json
-        metadata = json.loads(payload.metadata)
+        metadata = json.loads(payload["metadata"])
         assert "additional_usage_values" in metadata
         assert metadata["additional_usage_values"]["pages_processed"] == 12
 
@@ -202,10 +202,10 @@ class TestGetLoggingPayloadOCR:
             end_time=mock_datetime
         )
         
-        assert payload.call_type == "ocr"
-        assert payload.prompt_tokens == 0
-        assert payload.completion_tokens == 0
-        assert payload.total_tokens == 0
+        assert payload["call_type"] == "ocr"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
 
     def test_ocr_call_with_zero_pages(self, mock_datetime, base_kwargs):
         """Test OCR call with zero pages processed"""
@@ -225,14 +225,14 @@ class TestGetLoggingPayloadOCR:
             end_time=mock_datetime
         )
         
-        assert payload.call_type == "ocr"
-        assert payload.prompt_tokens == 0
-        assert payload.completion_tokens == 0
-        assert payload.total_tokens == 0
+        assert payload["call_type"] == "ocr"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
         
         # Verify pages_processed is 0
         import json
-        metadata = json.loads(payload.metadata)
+        metadata = json.loads(payload["metadata"])
         assert metadata["additional_usage_values"]["pages_processed"] == 0
 
     def test_non_ocr_call_uses_token_based_usage(self, mock_datetime):
@@ -262,10 +262,10 @@ class TestGetLoggingPayloadOCR:
             end_time=mock_datetime
         )
         
-        assert payload.call_type == "completion"
-        assert payload.prompt_tokens == 50
-        assert payload.completion_tokens == 100
-        assert payload.total_tokens == 150
+        assert payload["call_type"] == "completion"
+        assert payload["prompt_tokens"] == 50
+        assert payload["completion_tokens"] == 100
+        assert payload["total_tokens"] == 150
 
     def test_ocr_with_metadata(self, mock_datetime, base_kwargs):
         """Test OCR call with additional metadata"""
@@ -293,13 +293,13 @@ class TestGetLoggingPayloadOCR:
             end_time=mock_datetime
         )
         
-        assert payload.call_type == "ocr"
-        assert payload.user == ""  # Metadata structure might differ
-        assert payload.prompt_tokens == 0
-        assert payload.completion_tokens == 0
+        assert payload["call_type"] == "ocr"
+        assert payload["user"] == "test-user"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
         
         # Verify pages_processed and doc_size_bytes are both in additional_usage_values
         import json
-        metadata = json.loads(payload.metadata)
+        metadata = json.loads(payload["metadata"])
         assert metadata["additional_usage_values"]["pages_processed"] == 5
         assert metadata["additional_usage_values"]["doc_size_bytes"] == 1024

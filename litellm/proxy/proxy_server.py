@@ -253,6 +253,9 @@ from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
 )
+from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+    router as cache_settings_router,
+)
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
@@ -765,7 +768,13 @@ def get_openapi_schema():
     if app.openapi_schema:
         return app.openapi_schema
 
-    openapi_schema = get_openapi(
+    # Use compatibility wrapper for FastAPI 0.120+ schema generation
+    from litellm.proxy.common_utils.openapi_schema_compat import (
+        get_openapi_schema_with_compat,
+    )
+
+    openapi_schema = get_openapi_schema_with_compat(
+        get_openapi_func=get_openapi,
         title=app.title,
         version=app.version,
         description=app.description,
@@ -784,18 +793,25 @@ def get_openapi_schema():
 
         # Extract parameters from the route
         parameters = []
-        if hasattr(route, "dependant"):
-            for param in route.dependant.query_params:
-                parameters.append(
-                    {
-                        "name": param.name,
-                        "in": "query",
-                        "required": param.required,
-                        "schema": {
-                            "type": "string"
-                        },  # You can make this more specific if needed
-                    }
-                )
+        try:
+            if hasattr(route, "dependant") and route.dependant is not None:
+                # Handle both FastAPI <0.120 and >=0.120
+                query_params = getattr(route.dependant, "query_params", [])
+                if query_params:
+                    for param in query_params:
+                        parameters.append(
+                            {
+                                "name": param.name,
+                                "in": "query",
+                                "required": param.required,
+                                "schema": {
+                                    "type": "string"
+                                },  # You can make this more specific if needed
+                            }
+                        )
+        except (AttributeError, TypeError):
+            # If we can't access query_params, continue without them
+            pass
 
         openapi_schema["paths"][base_path] = {
             "get": {
@@ -1801,6 +1817,21 @@ class ProxyConfig:
         ):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
+
+    def switch_on_llm_response_caching(self):
+        """
+        Enable caching on the router by setting cache_responses=True.
+        This ensures caching works without needing caching=True in request body.
+        Router passes caching=self.cache_responses to litellm.completion()
+        """
+        global llm_router
+        import litellm
+        
+        if llm_router is not None and litellm.cache is not None and llm_router.cache_responses is not True:
+            llm_router.cache_responses = True
+            verbose_proxy_logger.debug(
+                "Set router.cache_responses=True after initializing cache"
+            )
 
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
@@ -2952,6 +2983,16 @@ class ProxyConfig:
                     "Error setting env variable: %s - %s", k, str(e)
                 )
         return decrypted_env_vars
+    
+    def _decrypt_db_variables(self, variables_dict: dict) -> dict:
+        """
+        Decrypts a dictionary of variables and returns them.
+        """
+        decrypted_variables = {}
+        for k, v in variables_dict.items():
+            decrypted_value = decrypt_value_helper(value=v, key=k, return_original_value=True)
+            decrypted_variables[k] = decrypted_value
+        return decrypted_variables
 
     async def _add_router_settings_from_db_config(
         self,
@@ -3343,6 +3384,13 @@ class ProxyConfig:
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
         if self._should_load_db_object(object_type="sso_settings"):
             await self._init_sso_settings_in_db(prisma_client=prisma_client)
+        if self._should_load_db_object(object_type="cache_settings"):
+            from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+                CacheSettingsManager,
+            )
+            await CacheSettingsManager.init_cache_settings_in_db(
+                prisma_client=prisma_client, proxy_config=self
+            )
 
     async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
         """
@@ -3595,7 +3643,7 @@ class ProxyConfig:
         Initialize search tools from database into the router on startup.
         """
         global llm_router
-
+        
         from litellm.proxy.search_endpoints.search_tool_registry import (
             SearchToolRegistry,
         )
@@ -4115,7 +4163,7 @@ class ProxyStartupEvent:
         # Key fixes:
         # 1. Remove/minimize jitter to avoid normalize() memory explosion
         # 2. Use larger misfire_grace_time to prevent backlog calculations
-        # 3. Set replace_existing=True to avoid duplicate jobs
+        # 3. Set replace_existing=True to avoid duplicate jobs (must be passed per-job, not as default)
         from apscheduler.executors.asyncio import AsyncIOExecutor
         from apscheduler.jobstores.memory import MemoryJobStore
 
@@ -4124,7 +4172,8 @@ class ProxyStartupEvent:
                 "coalesce": APSCHEDULER_COALESCE,
                 "misfire_grace_time": APSCHEDULER_MISFIRE_GRACE_TIME,
                 "max_instances": APSCHEDULER_MAX_INSTANCES,
-                "replace_existing": APSCHEDULER_REPLACE_EXISTING,
+                # Note: replace_existing is NOT a valid job_default in APScheduler
+                # It must be passed individually when calling add_job()
             },
             # Limit job store size to prevent memory growth
             jobstores={"default": MemoryJobStore()},  # explicitly use memory job store
@@ -4147,7 +4196,7 @@ class ProxyStartupEvent:
         )
 
         # Ensure minimum interval of 30 seconds for batch writing to prevent memory issues
-        batch_writing_interval = max(30, proxy_batch_write_at) + random.randint(0, 5)
+        batch_writing_interval = proxy_batch_write_at + random.randint(0, 5)
 
         ### RESET BUDGET ###
         if general_settings.get("disable_reset_budget", False) is False:
@@ -10089,6 +10138,7 @@ app.include_router(model_management_router)
 app.include_router(tag_management_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
+app.include_router(cache_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)

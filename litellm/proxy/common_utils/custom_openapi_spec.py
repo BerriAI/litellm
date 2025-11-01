@@ -49,6 +49,11 @@ class CustomOpenAPISpec:
             except AttributeError:
                 # If both methods fail, return None
                 return None
+        except Exception as e:
+            # FastAPI 0.120+ may fail schema generation for certain types (e.g., openai.Timeout)
+            # Log the error and return None to skip schema generation for this model
+            verbose_proxy_logger.debug(f"Failed to generate schema for {model_class}: {e}")
+            return None
     
     @staticmethod
     def add_schema_to_components(openapi_schema: Dict[str, Any], schema_name: str, schema_def: Dict[str, Any]) -> None:
