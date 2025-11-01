@@ -348,12 +348,6 @@ pip install litellm==1.80.0
 
 ---
 
-## Python Entry-point Support
-
-- **CustomLLM Support** - Python entry-point for CustomLLM subclasses - [PR #15881](https://github.com/BerriAI/litellm/pull/15881)
-
----
-
 ## Full Changelog
 
 **[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.79.0-stable...v1.80.0-stable)**
