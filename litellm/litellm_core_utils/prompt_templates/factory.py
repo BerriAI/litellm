@@ -870,19 +870,42 @@ def convert_to_anthropic_image_obj(
     openai_image_url: str, format: Optional[str]
 ) -> GenericImageParsingChunk:
     """
-    Input:
-    "image_url": "data:image/jpeg;base64,{base64_image}",
+    Convert OpenAI image URL to Anthropic image object.
+    
+    Supports both URL and base64 formats:
+    - HTTP URLs: Returns URL type (native Anthropic support)
+    - Base64 data: Returns base64 type
+    
+    Input examples:
+    "image_url": "https://example.com/image.jpg"  -> URL type
+    "image_url": "data:image/jpeg;base64,{base64_image}"  -> base64 type
 
-    Return:
-    "source": {
-      "type": "base64",
-      "media_type": "image/jpeg",
-      "data": {base64_image},
-    }
+    Return examples:
+    URL type: {"type": "url", "data": "https://..."}
+    Base64 type: {"type": "base64", "media_type": "image/jpeg", "data": "{base64_image}"}
     """
     try:
+        # Handle HTTP URLs - use native Anthropic URL support
         if openai_image_url.startswith("http"):
-            openai_image_url = convert_url_to_base64(url=openai_image_url)
+            # Determine media type from URL extension or use format parameter
+            if format:
+                media_type = format
+            else:
+                # Try to infer media type from URL extension
+                import mimetypes
+                guessed_type, _ = mimetypes.guess_type(openai_image_url)
+                if guessed_type and guessed_type.startswith("image/"):
+                    media_type = guessed_type
+                else:
+                    # Default to JPEG if we can't determine the type
+                    media_type = "image/jpeg"
+            
+            return GenericImageParsingChunk(
+                type="url",
+                data=openai_image_url,
+            )
+        
+        # Handle base64 data URLs
         # Extract the media type and base64 data
         media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
 
@@ -900,7 +923,10 @@ def convert_to_anthropic_image_obj(
         if "Error: Unable to fetch image from URL" in str(e):
             raise e
         raise Exception(
-            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."""
+            """Image url not in expected format. Supported inputs:
+- HTTP URL: "https://example.com/image.jpg"  
+- Base64 data: "data:image/jpeg;base64,{base64_image}"
+Supported formats: ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."""
         )
 
 
@@ -1371,16 +1397,30 @@ def convert_to_anthropic_tool_result(
                     image_chunk = convert_to_anthropic_image_obj(
                         content["image_url"]["url"], format=format
                     )
-                anthropic_content_list.append(
-                    AnthropicMessagesImageParam(
-                        type="image",
-                        source=AnthropicContentParamSource(
-                            type="base64",
-                            media_type=image_chunk["media_type"],
-                            data=image_chunk["data"],
-                        ),
+                # Handle URL vs base64 image types correctly
+                if image_chunk["type"] == "url":
+                    # For URL images, use Anthropic's native URL format (no media_type field)
+                    anthropic_content_list.append(
+                        AnthropicMessagesImageParam(
+                            type="image",
+                            source=AnthropicContentParamSourceUrl(
+                                type="url",
+                                url=image_chunk["data"],
+                            ),
+                        )
                     )
-                )
+                else:
+                    # For base64 images, use the existing base64 format
+                    anthropic_content_list.append(
+                        AnthropicMessagesImageParam(
+                            type="image",
+                            source=AnthropicContentParamSource(
+                                type="base64",
+                                media_type=image_chunk["media_type"],
+                                data=image_chunk["data"],
+                            ),
+                        )
+                    )
 
         anthropic_content = anthropic_content_list
     anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
@@ -1526,7 +1566,7 @@ def add_cache_control_to_content(
 def _anthropic_content_element_factory(
     image_chunk: GenericImageParsingChunk,
 ) -> Union[AnthropicMessagesImageParam, AnthropicMessagesDocumentParam]:
-    if image_chunk["media_type"] == "application/pdf":
+    if image_chunk.get("media_type") == "application/pdf":
         _anthropic_content_element: Union[
             AnthropicMessagesDocumentParam, AnthropicMessagesImageParam
         ] = AnthropicMessagesDocumentParam(
@@ -1538,14 +1578,26 @@ def _anthropic_content_element_factory(
             ),
         )
     else:
-        _anthropic_content_element = AnthropicMessagesImageParam(
-            type="image",
-            source=AnthropicContentParamSource(
-                type="base64",
-                media_type=image_chunk["media_type"],
-                data=image_chunk["data"],
-            ),
-        )
+        # Handle URL vs base64 image types correctly
+        if image_chunk["type"] == "url":
+            # For URL images, use Anthropic's native URL format (no media_type field)
+            _anthropic_content_element = AnthropicMessagesImageParam(
+                type="image",
+                source=AnthropicContentParamSourceUrl(
+                    type="url",
+                    url=image_chunk["data"],
+                ),
+            )
+        else:
+            # For base64 images, use the existing base64 format
+            _anthropic_content_element = AnthropicMessagesImageParam(
+                type="image",
+                source=AnthropicContentParamSource(
+                    type="base64",
+                    media_type=image_chunk["media_type"],
+                    data=image_chunk["data"],
+                ),
+            )
 
     return _anthropic_content_element
 
