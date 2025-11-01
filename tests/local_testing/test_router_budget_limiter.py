@@ -153,7 +153,7 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
 
     response = await router.acompletion(
         messages=[{"role": "user", "content": "Hello, how are you?"}],
-        model="anthropic/claude-3-5-sonnet-20240620",
+        model="anthropic/claude-sonnet-4-5-20250929",
     )
     print(response)
 
@@ -163,7 +163,7 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
         with pytest.raises(Exception) as exc_info:
             response = await router.acompletion(
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
-                model="anthropic/claude-3-5-sonnet-20240620",
+                model="anthropic/claude-sonnet-4-5-20250929",
             )
             print(response)
             print("response.hidden_params", response._hidden_params)

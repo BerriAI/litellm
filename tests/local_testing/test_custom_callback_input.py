@@ -1418,7 +1418,7 @@ async def test_standard_logging_payload_stream_usage(sync_mode):
         with patch.object(customHandler, patch_event, new=return_val) as mock_client:
             if sync_mode:
                 resp = litellm.completion(
-                    model="anthropic/claude-3-5-sonnet-20240620",
+                    model="anthropic/claude-sonnet-4-5-20250929",
                     messages=[{"role": "user", "content": "Hey, how's it going?"}],
                     stream=stream,
                 )
@@ -1429,7 +1429,7 @@ async def test_standard_logging_payload_stream_usage(sync_mode):
                 time.sleep(2)
             else:
                 resp = await litellm.acompletion(
-                    model="anthropic/claude-3-5-sonnet-20240620",
+                    model="anthropic/claude-sonnet-4-5-20250929",
                     messages=[{"role": "user", "content": "Hey, how's it going?"}],
                     stream=stream,
                 )
