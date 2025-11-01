@@ -240,7 +240,7 @@ async def test_anthropic_vertex_ai_prompt_caching(anthropic_messages, sync_mode)
 async def test_anthropic_api_prompt_caching_basic():
     litellm.set_verbose = True
     response = await litellm.acompletion(
-        model="anthropic/claude-3-5-sonnet-20241022",
+        model="anthropic/claude-3-7-sonnet-20250219",
         messages=[
             # System Message
             {
@@ -309,7 +309,7 @@ async def test_anthropic_api_prompt_caching_basic_with_cache_creation():
 
     litellm.set_verbose = True
     response = await litellm.acompletion(
-        model="anthropic/claude-3-5-sonnet-20241022",
+        model="anthropic/claude-3-7-sonnet-20250219",
         messages=[
             # System Message
             {
@@ -462,7 +462,7 @@ async def test_anthropic_api_prompt_caching_with_content_str():
 async def test_anthropic_api_prompt_caching_no_headers():
     litellm.set_verbose = True
     response = await litellm.acompletion(
-        model="anthropic/claude-3-5-sonnet-20241022",
+        model="anthropic/claude-3-7-sonnet-20250219",
         messages=[
             # System Message
             {
@@ -522,7 +522,7 @@ async def test_anthropic_api_prompt_caching_no_headers():
 @pytest.mark.asyncio()
 async def test_anthropic_api_prompt_caching_streaming():
     response = await litellm.acompletion(
-        model="anthropic/claude-3-5-sonnet-20241022",
+        model="anthropic/claude-3-7-sonnet-20250219",
         messages=[
             # System Message
             {
