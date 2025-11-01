@@ -79,13 +79,13 @@ pip install litellm==1.80.0
     - Removed Claude Haiku 3-5 deprecation date (previously 2025-03-01) - [PR #15976](https://github.com/BerriAI/litellm/pull/15976)
     - Added Claude Opus 4-1, Claude Opus 4-0 20250513, Claude Sonnet 4 20250514 deprecation dates - [PR #15976](https://github.com/BerriAI/litellm/pull/15976)
     - Added web search support for Claude Opus 4-1 - [PR #15976](https://github.com/BerriAI/litellm/pull/15976)
-    - Fix gemini request mutation for tool use - [PR #16002](https://github.com/BerriAI/litellm/pull/16002)
 
 - **[Bedrock](../../docs/providers/bedrock)**
     - Fix empty assistant message handling in AWS Bedrock Converse API to prevent 400 Bad Request errors - [PR #15850](https://github.com/BerriAI/litellm/pull/15850)
     - Allow using ARNs when generating images via Bedrock - [PR #15789](https://github.com/BerriAI/litellm/pull/15789)
     - Add per model group header forwarding for Bedrock Invoke API - [PR #16042](https://github.com/BerriAI/litellm/pull/16042)
     - Preserve Bedrock inference profile IDs in health checks - [PR #15947](https://github.com/BerriAI/litellm/pull/15947)
+    - Added fallback logic for detecting file content-type when S3 returns generic type - When using Bedrock with S3-hosted files, if the S3 object's Content-Type is not correctly set (e.g., binary/octet-stream instead of image/png), Bedrock can now handle it correctly - [PR #15635](https://github.com/BerriAI/litellm/pull/15635)
 
 - **[Azure](../../docs/providers/azure)**
     - Add deprecation dates for Azure OpenAI models (gpt-4o-2024-08-06, gpt-4o-2024-11-20, gpt-4.1 series, o3-2025-04-16, text-embedding-3-small) - [PR #15976](https://github.com/BerriAI/litellm/pull/15976)
@@ -105,10 +105,8 @@ pip install litellm==1.80.0
 - **[Mistral](../../docs/providers/mistral)**
     - Add codestral-embed-2505 embedding model - [PR #16071](https://github.com/BerriAI/litellm/pull/16071)
 
-- **[FAL AI](../../docs/image_generation)**
-    - Add FAL AI Image Generation support with cost tracking - [PR #16067](https://github.com/BerriAI/litellm/pull/16067)
-
-- **[Gemini](../../docs/providers/gemini)**
+- **[Gemini (Google AI Studio + Vertex AI)](../../docs/providers/gemini)**
+    - Fix gemini request mutation for tool use - [PR #16002](https://github.com/BerriAI/litellm/pull/16002)
     - Add gemini-embedding-001 pricing entry for Google GenAI API - [PR #16078](https://github.com/BerriAI/litellm/pull/16078)
     - Changes to fix frequency_penalty and presence_penalty issue for gemini-2.5-pro model - [PR #16041](https://github.com/BerriAI/litellm/pull/16041)
 
@@ -124,9 +122,6 @@ pip install litellm==1.80.0
 - **[Cohere](../../docs/providers/cohere)**
     - Add OpenAI-compatible annotations support for Cohere v2 citations - [PR #16038](https://github.com/BerriAI/litellm/pull/16038)
 
-- **[OCI](../../docs/providers/oci)**
-    - Add OCI Signer Authentication - [PR #16064](https://github.com/BerriAI/litellm/pull/16064)
-
 - **[Deepgram](../../docs/providers/deepgram)**
     - Handle Deepgram detected language when available - [PR #16093](https://github.com/BerriAI/litellm/pull/16093)
 
@@ -135,10 +130,10 @@ pip install litellm==1.80.0
 - **[Xai](../../docs/providers/xai)**
     - Add Xai websearch cost tracking - [PR #16001](https://github.com/BerriAI/litellm/pull/16001)
 
-- **[S3](../../docs/providers/s3)**
-    - Added fallback logic for detecting file content-type when S3 returns generic type - [PR #15635](https://github.com/BerriAI/litellm/pull/15635)
-
 #### New Provider Support
+
+- **[FAL AI](../../docs/image_generation)**
+    - Add FAL AI Image Generation support - [PR #16067](https://github.com/BerriAI/litellm/pull/16067)
 
 - **[OCI (Oracle Cloud Infrastructure)](../../docs/providers/oci)**
     - Add OCI Signer Authentication support - [PR #16064](https://github.com/BerriAI/litellm/pull/16064)
@@ -174,10 +169,6 @@ pip install litellm==1.80.0
 - **[Passthrough Endpoints](../../docs/pass_through/vertex_ai)**
     - Support multi-part form data on passthrough - [PR #16035](https://github.com/BerriAI/litellm/pull/16035)
 
-#### Bugs
-
-- **General**
-    - Remove unnecessary model variable assignment - [PR #16008](https://github.com/BerriAI/litellm/pull/16008)
 
 ---
 
@@ -208,15 +199,11 @@ pip install litellm==1.80.0
 - **Routing**
     - Allow setting all routing strategies, tag filtering on UI - [PR #16139](https://github.com/BerriAI/litellm/pull/16139)
 
-- **Admin**
+- **Admi Settings**
     - Add license metadata to health/readiness endpoint - [PR #15997](https://github.com/BerriAI/litellm/pull/15997)
-    - Building UI infrastructure improvements - [PR #16158](https://github.com/BerriAI/litellm/pull/16158)
     - Litellm Backend SSO Changes - [PR #16029](https://github.com/BerriAI/litellm/pull/16029)
 
-#### Bugs
 
-- **General**
-    - Circle CI UI E2E Test Fix - [PR #16100](https://github.com/BerriAI/litellm/pull/16100)
 
 ---
 
