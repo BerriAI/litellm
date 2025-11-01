@@ -253,6 +253,7 @@ heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 ovhcloud_key: Optional[str] = None
 lemonade_key: Optional[str] = None
+sap_service_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -1199,6 +1200,7 @@ from .llms.topaz.common_utils import TopazModelInfo
 from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
+from .llms.sap.chat.transformation import GenAIHubOrchestrationConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from .llms.voyage.embedding.transformation_contextual import (
     VoyageContextualEmbeddingConfig,
@@ -1293,6 +1295,7 @@ from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+from .llms.sap.embed.transformation import GenAIHubEmbeddingConfig
 from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.wandb.chat.transformation import WandbConfig
