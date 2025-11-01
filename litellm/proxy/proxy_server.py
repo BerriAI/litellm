@@ -253,6 +253,9 @@ from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
 )
+from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+    router as cache_settings_router,
+)
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
@@ -262,12 +265,6 @@ from litellm.proxy.management_endpoints.cost_tracking_settings import (
 )
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
-)
-from litellm.proxy.management_endpoints.router_settings_endpoints import (
-    router as router_settings_router,
-)
-from litellm.proxy.management_endpoints.cache_settings_endpoints import (
-    router as cache_settings_router,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
@@ -297,6 +294,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.router_settings_endpoints import (
+    router as router_settings_router,
+)
 from litellm.proxy.management_endpoints.scim.scim_v2 import scim_router
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
@@ -319,7 +319,6 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
-from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
@@ -380,6 +379,7 @@ from litellm.proxy.vector_store_endpoints.endpoints import router as vector_stor
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
 )
+from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.router import (
     AssistantsTypedDict,
     Deployment,
@@ -3594,7 +3594,9 @@ class ProxyConfig:
         """
         global llm_router
         
-        from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+        from litellm.proxy.search_endpoints.search_tool_registry import (
+            SearchToolRegistry,
+        )
         from litellm.router_utils.search_api_router import SearchAPIRouter
         
         try:
@@ -4111,8 +4113,8 @@ class ProxyStartupEvent:
         # 1. Remove/minimize jitter to avoid normalize() memory explosion
         # 2. Use larger misfire_grace_time to prevent backlog calculations
         # 3. Set replace_existing=True to avoid duplicate jobs
-        from apscheduler.jobstores.memory import MemoryJobStore
         from apscheduler.executors.asyncio import AsyncIOExecutor
+        from apscheduler.jobstores.memory import MemoryJobStore
 
         scheduler = AsyncIOScheduler(
             job_defaults={
@@ -8894,6 +8896,7 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                 )
             elif k == "cache_settings":
                 import json
+
                 # Encrypt cache settings before saving
                 encrypted_cache_settings = proxy_config._encrypt_env_variables(
                     environment_variables=v
