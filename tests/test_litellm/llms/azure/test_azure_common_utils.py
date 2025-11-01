@@ -19,7 +19,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, EmbeddingResponse
 
 
 # Mock the necessary dependencies
@@ -935,6 +935,82 @@ async def test_azure_client_cache_separates_sync_and_async():
         assert (
             mock_init_azure.call_count == 2
         ), "initialize_azure_sdk_client should be called twice"
+
+
+@pytest.mark.asyncio
+async def test_aembedding_path_forwards_azure_parameters(monkeypatch):
+    from unittest.mock import Mock
+    from litellm.llms.azure.azure import AzureChatCompletion
+
+    captured_params = {}
+
+    async def fake_aembedding(
+        self,
+        *,
+        data,
+        input,
+        model,
+        logging_obj,
+        api_key,
+        model_response,
+        timeout,
+        client,
+        litellm_params,
+        api_base,
+        api_version=None,
+        max_retries=None,
+        azure_ad_token=None,
+        azure_ad_token_provider=None,
+    ):
+        captured_params.update(
+            {
+                "api_version": api_version,
+                "max_retries": max_retries,
+                "azure_ad_token": azure_ad_token,
+                "azure_ad_token_provider": azure_ad_token_provider,
+                "litellm_params": litellm_params,
+            }
+        )
+        return "ok"
+
+    monkeypatch.setattr(AzureChatCompletion, "aembedding", fake_aembedding)
+    monkeypatch.setattr(
+        AzureChatCompletion, "create_client_session", lambda self: "client"
+    )
+
+    azure_completion = AzureChatCompletion()
+    logging_obj = Mock()
+    api_version = "2023-05-15"
+    max_retries = 4
+    azure_ad_token = "oidc/mock-token"
+
+    def token_provider():
+        return "token"
+
+    coroutine = azure_completion.embedding(
+        model="azure/text-embedding-3-large",
+        input=["hello"],
+        api_base="https://example.azure.com/",
+        api_version=api_version,
+        timeout=30,
+        logging_obj=logging_obj,
+        model_response=EmbeddingResponse(),
+        optional_params={},
+        api_key="test-key",
+        azure_ad_token=azure_ad_token,
+        azure_ad_token_provider=token_provider,
+        max_retries=max_retries,
+        litellm_params={"foo": "bar"},
+        aembedding=True,
+    )
+
+    result = await coroutine
+    assert result == "ok"
+    assert captured_params["api_version"] == api_version
+    assert captured_params["max_retries"] == max_retries
+    assert captured_params["azure_ad_token"] == azure_ad_token
+    assert captured_params["azure_ad_token_provider"] is token_provider
+    assert captured_params["litellm_params"] == {"foo": "bar"}
 
 
 def test_scope_always_string_in_initialize_azure_sdk_client(setup_mocks, monkeypatch):
