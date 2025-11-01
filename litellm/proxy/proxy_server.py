@@ -8894,32 +8894,6 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                         "update": {"param_value": v},
                     },
                 )
-            elif k == "cache_settings":
-                import json
-
-                # Encrypt cache settings before saving
-                encrypted_cache_settings = proxy_config._encrypt_env_variables(
-                    environment_variables=v
-                )
-                await prisma_client.db.litellm_cacheconfig.upsert(
-                    where={"id": "cache_config"},
-                    data={
-                        "create": {
-                            "id": "cache_config",
-                            "cache_settings": json.dumps(encrypted_cache_settings),
-                        },
-                        "update": {
-                            "cache_settings": json.dumps(encrypted_cache_settings),
-                        },
-                    },
-                )
-                # Reinitialize cache with new settings
-                decrypted_settings = proxy_config._decrypt_and_set_db_env_variables(
-                    environment_variables=encrypted_cache_settings,
-                    return_original_value=True
-                )
-                # Initialize cache (frontend sends type="redis", not redis_type)
-                proxy_config._init_cache(cache_params=decrypted_settings)
 
         ### OLD LOGIC [TODO] MOVE TO DB ###
 
