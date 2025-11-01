@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from annotated_types import Ge
 from pydantic import BaseModel
@@ -222,3 +222,21 @@ class LiteLLM_ManagedVectorStoreIndex(BaseModel):
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
+
+
+class VectorStoreIndexType(str, Enum):
+    """Type of vector store index"""
+
+    READ = "read"
+    WRITE = "write"
+
+
+class VectorStoreIndexEndpoints(TypedDict):
+    """Endpoints for vector store index"""
+
+    read: List[
+        Tuple[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], str]
+    ]  # endpoints for reading a vector store index
+    write: List[
+        Tuple[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], str]
+    ]  # endpoints for writing a vector store index

@@ -9,6 +9,7 @@ from litellm.types.vector_stores import (
     BaseVectorStoreAuthCredentials,
     VectorStoreCreateOptionalRequestParams,
     VectorStoreCreateResponse,
+    VectorStoreIndexEndpoints,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
@@ -52,6 +53,12 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
             },
+        }
+
+    def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
+        return {
+            "read": [("POST", ":retrieveContexts")],
+            "write": [("POST", "/ragCorpora")],
         }
 
     def validate_environment(

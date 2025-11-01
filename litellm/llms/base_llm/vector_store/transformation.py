@@ -8,6 +8,7 @@ from litellm.types.vector_stores import (
     BaseVectorStoreAuthCredentials,
     VectorStoreCreateOptionalRequestParams,
     VectorStoreCreateResponse,
+    VectorStoreIndexEndpoints,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
 )
@@ -29,6 +30,10 @@ class BaseVectorStoreConfig:
     def get_auth_credentials(
         self, litellm_params: dict
     ) -> BaseVectorStoreAuthCredentials:
+        pass
+
+    @abstractmethod
+    def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
         pass
 
     @abstractmethod

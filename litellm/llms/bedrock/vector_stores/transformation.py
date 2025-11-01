@@ -14,6 +14,7 @@ from litellm.types.integrations.rag.bedrock_knowledgebase import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
     BaseVectorStoreAuthCredentials,
+    VectorStoreIndexEndpoints,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
@@ -37,6 +38,12 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         self, litellm_params: dict
     ) -> BaseVectorStoreAuthCredentials:
         return {}
+
+    def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
+        return {
+            "read": [("POST", "/knowledgebases/{knowledge_base_id}/retrieve")],
+            "write": [],
+        }
 
     def validate_environment(
         self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]

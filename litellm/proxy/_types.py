@@ -41,6 +41,7 @@ from litellm.types.utils import (
     StandardPassThroughResponseObject,
     TextCompletionResponse,
 )
+from litellm.types.vector_stores import VectorStoreIndexType
 
 from .types_utils.utils import get_instance_fn, validate_custom_validate_return_type
 

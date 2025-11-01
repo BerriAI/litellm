@@ -10,6 +10,7 @@ from litellm.types.vector_stores import (
     BaseVectorStoreAuthCredentials,
     VectorStoreCreateOptionalRequestParams,
     VectorStoreCreateResponse,
+    VectorStoreIndexEndpoints,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
@@ -34,6 +35,12 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
 
     def __init__(self):
         super().__init__()
+
+    def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
+        return {
+            "read": [("GET", "/indexes/{index_name}/docs/search")],
+            "write": [("PUT", "/indexes/{index_name}/docs")],
+        }
 
     def get_auth_credentials(
         self, litellm_params: dict

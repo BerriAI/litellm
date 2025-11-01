@@ -11,6 +11,7 @@ from litellm.types.vector_stores import (
     VectorStoreCreateOptionalRequestParams,
     VectorStoreCreateRequest,
     VectorStoreCreateResponse,
+    VectorStoreIndexEndpoints,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchRequest,
     VectorStoreSearchResponse,
@@ -39,6 +40,12 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
             "headers": {
                 "Authorization": f"Bearer {api_key}",
             },
+        }
+
+    def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
+        return {
+            "read": [("GET", "/vector_stores/{index_name}/search")],
+            "write": [("POST", "/vector_stores")],
         }
 
     def validate_environment(
