@@ -4112,7 +4112,7 @@ class ProxyStartupEvent:
         # Key fixes:
         # 1. Remove/minimize jitter to avoid normalize() memory explosion
         # 2. Use larger misfire_grace_time to prevent backlog calculations
-        # 3. Set replace_existing=True to avoid duplicate jobs
+        # 3. Set replace_existing=True to avoid duplicate jobs (must be passed per-job, not as default)
         from apscheduler.executors.asyncio import AsyncIOExecutor
         from apscheduler.jobstores.memory import MemoryJobStore
 
@@ -4121,7 +4121,8 @@ class ProxyStartupEvent:
                 "coalesce": APSCHEDULER_COALESCE,
                 "misfire_grace_time": APSCHEDULER_MISFIRE_GRACE_TIME,
                 "max_instances": APSCHEDULER_MAX_INSTANCES,
-                "replace_existing": APSCHEDULER_REPLACE_EXISTING,
+                # Note: replace_existing is NOT a valid job_default in APScheduler
+                # It must be passed individually when calling add_job()
             },
             # Limit job store size to prevent memory growth
             jobstores={
