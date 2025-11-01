@@ -13,6 +13,8 @@ from litellm.types.integrations.rag.bedrock_knowledgebase import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    BaseVectorStoreAuthCredentials,
+    VectorStoreIndexEndpoints,
     VECTOR_STORE_OPENAI_PARAMS,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
@@ -32,6 +34,17 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     def __init__(self) -> None:
         BaseVectorStoreConfig.__init__(self)
         BaseAWSLLM.__init__(self)
+
+    def get_auth_credentials(
+        self, litellm_params: dict
+    ) -> BaseVectorStoreAuthCredentials:
+        return {}
+
+    def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
+        return {
+            "read": [("POST", "/knowledgebases/{knowledge_base_id}/retrieve")],
+            "write": [],
+        }
 
     def get_supported_openai_params(
         self, model: str
