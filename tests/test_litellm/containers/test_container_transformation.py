@@ -324,6 +324,10 @@ class TestOpenAIContainerTransformation:
 
     def test_container_create_response_includes_cost(self):
         """Test that container create response includes code interpreter cost calculation."""
+        # Force use of local model cost map for CI/CD consistency
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        
         from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import StandardBuiltInToolCostTracking
         
         # Mock HTTP response
