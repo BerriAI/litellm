@@ -1811,6 +1811,21 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
+    def switch_on_llm_response_caching(self):
+        """
+        Enable caching on the router by setting cache_responses=True.
+        This ensures caching works without needing caching=True in request body.
+        Router passes caching=self.cache_responses to litellm.completion()
+        """
+        global llm_router
+        import litellm
+        
+        if llm_router is not None and litellm.cache is not None and llm_router.cache_responses is not True:
+            llm_router.cache_responses = True
+            verbose_proxy_logger.debug(
+                "Set router.cache_responses=True after initializing cache"
+            )
+
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
         Load config file
@@ -3406,6 +3421,9 @@ class ProxyConfig:
                 
                 # Initialize cache
                 self._init_cache(cache_params=cache_params)
+                
+                # Switch on LLM response caching
+                self.switch_on_llm_response_caching()
                 
                 verbose_proxy_logger.info(
                     "Cache settings initialized from database"
