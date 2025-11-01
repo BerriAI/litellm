@@ -4471,6 +4471,103 @@ export const getRouterSettingsCall = async (accessToken: string) => {
   }
 };
 
+export const getCacheSettingsCall = async (accessToken: string) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/cache/settings`
+      : `/cache/settings`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get cache settings:", error);
+    throw error;
+  }
+};
+
+export const testCacheConnectionCall = async (
+  accessToken: string,
+  cacheSettings: Record<string, any>
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/cache/settings/test`
+      : `/cache/settings/test`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        cache_settings: cacheSettings,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to test cache connection:", error);
+    throw error;
+  }
+};
+
+export const updateCacheSettingsCall = async (
+  accessToken: string,
+  cacheSettings: Record<string, any>
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/settings` : `/cache/settings`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        cache_settings: cacheSettings,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to update cache settings:", error);
+    throw error;
+  }
+};
+
 export const getPassThroughEndpointsCall = async (accessToken: string, teamId?: string | null) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/config/pass_through_endpoint` : `/config/pass_through_endpoint`;

@@ -253,6 +253,9 @@ from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
 )
+from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+    router as cache_settings_router,
+)
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
@@ -262,9 +265,6 @@ from litellm.proxy.management_endpoints.cost_tracking_settings import (
 )
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
-)
-from litellm.proxy.management_endpoints.router_settings_endpoints import (
-    router as router_settings_router,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
@@ -294,6 +294,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.router_settings_endpoints import (
+    router as router_settings_router,
+)
 from litellm.proxy.management_endpoints.scim.scim_v2 import scim_router
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
@@ -316,7 +319,6 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
-from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
@@ -377,6 +379,7 @@ from litellm.proxy.vector_store_endpoints.endpoints import router as vector_stor
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
 )
+from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.router import (
     AssistantsTypedDict,
     Deployment,
@@ -1808,6 +1811,21 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
+    def switch_on_llm_response_caching(self):
+        """
+        Enable caching on the router by setting cache_responses=True.
+        This ensures caching works without needing caching=True in request body.
+        Router passes caching=self.cache_responses to litellm.completion()
+        """
+        global llm_router
+        import litellm
+        
+        if llm_router is not None and litellm.cache is not None and llm_router.cache_responses is not True:
+            llm_router.cache_responses = True
+            verbose_proxy_logger.debug(
+                "Set router.cache_responses=True after initializing cache"
+            )
+
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
         Load config file
@@ -2954,6 +2972,16 @@ class ProxyConfig:
                     "Error setting env variable: %s - %s", k, str(e)
                 )
         return decrypted_env_vars
+    
+    def _decrypt_db_variables(self, variables_dict: dict) -> dict:
+        """
+        Decrypts a dictionary of variables and returns them.
+        """
+        decrypted_variables = {}
+        for k, v in variables_dict.items():
+            decrypted_value = decrypt_value_helper(value=v, key=k, return_original_value=True)
+            decrypted_variables[k] = decrypted_value
+        return decrypted_variables
 
     async def _add_router_settings_from_db_config(
         self,
@@ -3341,6 +3369,13 @@ class ProxyConfig:
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
         if self._should_load_db_object(object_type="sso_settings"):
             await self._init_sso_settings_in_db(prisma_client=prisma_client)
+        if self._should_load_db_object(object_type="cache_settings"):
+            from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+                CacheSettingsManager,
+            )
+            await CacheSettingsManager.init_cache_settings_in_db(
+                prisma_client=prisma_client, proxy_config=self
+            )
 
     async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
         """
@@ -3559,7 +3594,9 @@ class ProxyConfig:
         """
         global llm_router
         
-        from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+        from litellm.proxy.search_endpoints.search_tool_registry import (
+            SearchToolRegistry,
+        )
         from litellm.router_utils.search_api_router import SearchAPIRouter
         
         try:
@@ -4076,8 +4113,8 @@ class ProxyStartupEvent:
         # 1. Remove/minimize jitter to avoid normalize() memory explosion
         # 2. Use larger misfire_grace_time to prevent backlog calculations
         # 3. Set replace_existing=True to avoid duplicate jobs
-        from apscheduler.jobstores.memory import MemoryJobStore
         from apscheduler.executors.asyncio import AsyncIOExecutor
+        from apscheduler.jobstores.memory import MemoryJobStore
 
         scheduler = AsyncIOScheduler(
             job_defaults={
@@ -10044,6 +10081,7 @@ app.include_router(model_management_router)
 app.include_router(tag_management_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
+app.include_router(cache_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
