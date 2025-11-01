@@ -777,6 +777,11 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
+class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
+    index_name: str
+    index_permissions: List[Literal["read", "write"]]
+
+
 class KeyRequestBase(GenerateRequestBase):
     key: Optional[str] = None
     budget_id: Optional[str] = None
@@ -784,6 +789,7 @@ class KeyRequestBase(GenerateRequestBase):
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
     allowed_passthrough_routes: Optional[list] = None
+    allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     rpm_limit_type: Optional[
         Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
@@ -3177,11 +3183,10 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "model_tpm_limit",
     "rpm_limit_type",
     "tpm_limit_type",
-    "guardrails",
-    "tags",
     "enforced_params",
     "temp_budget_increase",
     "temp_budget_expiry",
+    "allowed_vector_store_indexes",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [

@@ -551,6 +551,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                 field_name=field,
                 value=getattr(data, field),
             )
+            delattr(data, field)
 
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
         if getattr(data, field, None) is not None:
