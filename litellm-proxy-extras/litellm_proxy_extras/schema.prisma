@@ -589,3 +589,11 @@ model LiteLLM_SSOConfig {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 }
+
+// Cache configuration table
+model LiteLLM_CacheConfig {
+  id String @id @default("cache_config")
+  cache_settings Json
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}

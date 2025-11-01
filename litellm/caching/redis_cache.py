@@ -1022,6 +1022,46 @@ class RedisCache(BaseCache):
 
     async def disconnect(self):
         await self.async_redis_conn_pool.disconnect(inuse_connections=True)
+    
+    async def test_connection(self) -> dict:
+        """
+        Test the Redis connection by creating a new client and pinging it.
+        
+        This creates a fresh connection without using cached clients or connection pools
+        to ensure the credentials are actually valid.
+        
+        Returns:
+            dict: {"status": "success" | "failed", "message": str, "error": Optional[str]}
+        """
+        try:
+            import redis.asyncio as redis_async
+
+            # Create a fresh Redis client with current settings
+            redis_client = redis_async.Redis(**self.redis_kwargs)
+            
+            # Test the connection
+            ping_result = await redis_client.ping()
+            
+            # Close the connection
+            await redis_client.aclose()
+            
+            if ping_result:
+                return {
+                    "status": "success",
+                    "message": "Redis connection test successful"
+                }
+            else:
+                return {
+                    "status": "failed",
+                    "message": "Redis ping returned False"
+                }
+        except Exception as e:
+            verbose_logger.error(f"Redis connection test failed: {str(e)}")
+            return {
+                "status": "failed",
+                "message": f"Redis connection failed: {str(e)}",
+                "error": str(e)
+            }
 
     async def async_delete_cache(self, key: str):
         # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `delete`
