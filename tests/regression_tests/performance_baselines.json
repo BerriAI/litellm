@@ -1,0 +1,19 @@
+{
+  "_comment": "Baseline values for LiteLLM regression tests set slightly high to ignore minor fluctuations and focus on real regressions.",
+  "sdk_completion": {
+    "median_ms": 16.0,
+    "p95_ms": 25.0
+  },
+  "router_completion": {
+    "median_ms": 16.0,
+    "p95_ms": 25.0
+  },
+  "sdk_embedding": {
+    "median_ms": 20.14472899827524,
+    "p95_ms": 26.283304501703242
+  },
+  "router_embedding": {
+    "median_ms": 20.391874997585546,
+    "p95_ms": 27.92618329913239
+  }
+}
