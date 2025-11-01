@@ -337,20 +337,6 @@ pip install litellm==1.80.0
 
 ---
 
-## PR Count Summary
-
-### 11/01/2025
-* New Models / Updated Models: 29
-* LLM API Endpoints: 10
-* Management Endpoints / UI: 14
-* Logging / Guardrail / Prompt Management Integrations: 17
-* Spend Tracking, Budgets and Rate Limiting: 3
-* MCP Gateway: 2
-* Performance / Loadbalancing / Reliability improvements: 9
-* Documentation Updates: 5
-
----
-
 ## Python Entry-point Support
 
 - **CustomLLM Support** - Python entry-point for CustomLLM subclasses - [PR #15881](https://github.com/BerriAI/litellm/pull/15881)
