@@ -54,6 +54,14 @@ pip install litellm==1.80.0
 
 ---
 
+## Dependency Upgrades
+
+- **Dependencies**
+    - Build(deps): bump starlette from 0.47.2 to 0.49.1 - [PR #16027](https://github.com/BerriAI/litellm/pull/16027)
+    - Build(deps): bump hono from 4.9.7 to 4.10.3 in /litellm-js/spend-logs - [PR #15915](https://github.com/BerriAI/litellm/pull/15915)
+    - Build(deps): bump fastapi from 0.116.1 to 0.120.1 - [PR #16054](https://github.com/BerriAI/litellm/pull/16054)
+
+
 ## New Models / Updated Models
 
 #### New Model Support
@@ -295,10 +303,6 @@ pip install litellm==1.80.0
     - Remove minimum validation for cache control injection index - [PR #16149](https://github.com/BerriAI/litellm/pull/16149)
     - Fix prompt_caching.md: wrong prompt_tokens definition - [PR #16044](https://github.com/BerriAI/litellm/pull/16044)
 
-- **Dependencies**
-    - Build(deps): bump starlette from 0.47.2 to 0.49.1 - [PR #16027](https://github.com/BerriAI/litellm/pull/16027)
-    - Build(deps): bump hono from 4.9.7 to 4.10.3 in /litellm-js/spend-logs - [PR #15915](https://github.com/BerriAI/litellm/pull/15915)
-    - Requirements update - [PR #16054](https://github.com/BerriAI/litellm/pull/16054)
 
 ---
 
