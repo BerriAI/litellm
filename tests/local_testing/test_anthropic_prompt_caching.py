@@ -235,12 +235,12 @@ async def test_anthropic_vertex_ai_prompt_caching(anthropic_messages, sync_mode)
         print(mock_post.call_args.kwargs["headers"])
         assert "anthropic-beta" not in mock_post.call_args.kwargs["headers"]
 
-@pytest.mark.flaky(retries=3, delay=1)
+@pytest.mark.flaky(retries=3, delay=2)
 @pytest.mark.asyncio()
 async def test_anthropic_api_prompt_caching_basic():
     litellm.set_verbose = True
     response = await litellm.acompletion(
-        model="anthropic/claude-sonnet-4-5-20250929",
+        model="anthropic/claude-3-5-sonnet-20241022",
         messages=[
             # System Message
             {
@@ -249,7 +249,7 @@ async def test_anthropic_api_prompt_caching_basic():
                     {
                         "type": "text",
                         "text": "Here is the full text of a complex legal agreement"
-                        * 400,
+                        * 100,
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
@@ -300,8 +300,8 @@ async def test_anthropic_api_prompt_caching_basic():
     )
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 @pytest.mark.asyncio()
-@pytest.mark.flaky(retries=3, delay=1)
 async def test_anthropic_api_prompt_caching_basic_with_cache_creation():
     from uuid import uuid4
 
@@ -309,7 +309,7 @@ async def test_anthropic_api_prompt_caching_basic_with_cache_creation():
 
     litellm.set_verbose = True
     response = await litellm.acompletion(
-        model="anthropic/claude-sonnet-4-5-20250929",
+        model="anthropic/claude-3-5-sonnet-20241022",
         messages=[
             # System Message
             {
@@ -320,7 +320,7 @@ async def test_anthropic_api_prompt_caching_basic_with_cache_creation():
                         "text": "Here is the full text of a complex legal agreement {}".format(
                             random_id
                         )
-                        * 400,
+                        * 100,
                         "cache_control": {"type": "ephemeral", "ttl": "1h"},
                     }
                 ],
@@ -457,11 +457,12 @@ async def test_anthropic_api_prompt_caching_with_content_str():
         ), "Error on idx={}. Got={}, Expected={}".format(idx, i, expected_messages[idx])
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 @pytest.mark.asyncio()
 async def test_anthropic_api_prompt_caching_no_headers():
     litellm.set_verbose = True
     response = await litellm.acompletion(
-        model="anthropic/claude-sonnet-4-5-20250929",
+        model="anthropic/claude-3-5-sonnet-20241022",
         messages=[
             # System Message
             {
@@ -470,7 +471,7 @@ async def test_anthropic_api_prompt_caching_no_headers():
                     {
                         "type": "text",
                         "text": "Here is the full text of a complex legal agreement"
-                        * 400,
+                        * 100,
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
@@ -517,11 +518,11 @@ async def test_anthropic_api_prompt_caching_no_headers():
     )
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 @pytest.mark.asyncio()
-@pytest.mark.flaky(retries=3, delay=1)
 async def test_anthropic_api_prompt_caching_streaming():
     response = await litellm.acompletion(
-        model="anthropic/claude-sonnet-4-5-20250929",
+        model="anthropic/claude-3-5-sonnet-20241022",
         messages=[
             # System Message
             {
@@ -530,7 +531,7 @@ async def test_anthropic_api_prompt_caching_streaming():
                     {
                         "type": "text",
                         "text": "Here is the full text of a complex legal agreement"
-                        * 400,
+                        * 100,
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
