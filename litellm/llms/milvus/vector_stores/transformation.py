@@ -7,8 +7,10 @@ from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreCon
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    BaseVectorStoreAuthCredentials,
     VectorStoreCreateOptionalRequestParams,
     VectorStoreCreateResponse,
+    VectorStoreIndexEndpoints,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
@@ -62,6 +64,33 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         headers.update({"Authorization": f"Bearer {api_key}"})
 
         return headers
+
+    def get_auth_credentials(
+        self, litellm_params: dict
+    ) -> BaseVectorStoreAuthCredentials:
+        api_key = litellm_params.get("api_key")
+        if not api_key:
+            raise ValueError(
+                "MILVUS_API_KEY is not set. Either set it in the litellm_params or set the MILVUS_API_KEY environment variable."
+            )
+        return {
+            "headers": {
+                "Authorization": f"Bearer {api_key}",
+            },
+        }
+
+    def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
+        return {
+            "read": [
+                ("POST", "/v2/vectordb/entities/search"),
+                ("POST", "/v2/vectordb/entities/get"),
+                ("POST", "/v2/vectordb/entities/query"),
+            ],
+            "write": [
+                ("POST", "/v2/vectordb/entities/upsert"),
+                ("POST", "/v2/vectordb/entities/insert"),
+            ],
+        }
 
     def map_openai_params(
         self, non_default_params: dict, optional_params: dict, drop_params: bool
