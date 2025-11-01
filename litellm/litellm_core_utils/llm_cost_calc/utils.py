@@ -1,7 +1,8 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-from typing import Any, Literal, Optional, Tuple, TypedDict, cast
+from typing import Any, Literal, Optional, Tuple, TypedDict, cast, List
+from dataclasses import dataclass
 
 import litellm
 from litellm._logging import verbose_logger
@@ -12,9 +13,114 @@ from litellm.types.utils import (
     ModelInfo,
     PassthroughCallTypes,
     ServiceTier,
-    Usage,
+    Usage,  
 )
 from litellm.utils import get_model_info
+
+
+@dataclass
+class TokenBreakdown:
+    """Token breakdown for cost calculation."""
+    text_tokens: int
+    cached_tokens: int
+    completion_tokens: int
+    reasoning_tokens: int
+
+
+def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
+    """Extract token counts from usage, handling cached and reasoning tokens."""
+    cached_tokens = 0
+    if usage.prompt_tokens_details and hasattr(usage.prompt_tokens_details, "cached_tokens"):
+        cached_tokens = usage.prompt_tokens_details.cached_tokens or 0
+    
+    # an alternate way cache tokens are passed for some providers is via _cache_read_input_tokens
+    if hasattr(usage, "_cache_read_input_tokens"):
+        cached_tokens = usage._cache_read_input_tokens or cached_tokens
+    
+    text_tokens = usage.prompt_tokens - cached_tokens
+    
+    reasoning_tokens = 0
+    if (hasattr(usage, "completion_tokens_details") and 
+        usage.completion_tokens_details and
+        hasattr(usage.completion_tokens_details, "reasoning_tokens")):
+        reasoning_tokens = usage.completion_tokens_details.reasoning_tokens or 0
+    
+    completion_tokens = (usage.completion_tokens or 0) - reasoning_tokens
+    
+    return TokenBreakdown(text_tokens, cached_tokens, completion_tokens, reasoning_tokens)
+
+
+def _calculate_tiered_cost(
+    tokens: int, 
+    tiered_pricing: List[dict], 
+    cost_key: str,
+    fallback_cost_key: Optional[str] = None
+) -> float:
+    """Calculate cost using tiered pricing structure."""
+    if not tiered_pricing or tokens <= 0:
+        return 0.0
+    
+    total_cost = 0.0
+    tokens_processed = 0
+    
+    # Sort tiers by the start of their range to ensure correct processing
+    sorted_tiers = sorted(tiered_pricing, key=lambda x: x.get("range", [0, 0])[0])
+
+    for tier in sorted_tiers:
+        if tokens_processed >= tokens:
+            break
+            
+        tier_range = tier.get("range", [])
+        if len(tier_range) != 2:
+            continue
+            
+        range_start, range_end = tier_range
+        
+        # Skip this tier if the tokens are below its start range
+        if tokens <= range_start:
+            continue # to handle out of order tiers
+            
+        tier_start = max(range_start, tokens_processed)
+        tier_end = min(range_end, tokens)
+        
+        if tier_end > tier_start:
+            tokens_in_tier = tier_end - tier_start
+            cost_per_token = tier.get(cost_key) or tier.get(fallback_cost_key, 0)
+            total_cost += tokens_in_tier * cost_per_token
+            tokens_processed = tier_end
+    
+    return total_cost
+
+
+def _calculate_prompt_cost_with_tiers(breakdown: TokenBreakdown, tiered_pricing: List[dict]) -> float:
+    """Calculate total prompt cost using tiered pricing."""
+    text_cost = _calculate_tiered_cost(
+        tokens=breakdown.text_tokens, 
+        tiered_pricing=tiered_pricing, 
+        cost_key="input_cost_per_token"
+    )
+    cache_cost = _calculate_tiered_cost(
+        tokens=breakdown.cached_tokens, 
+        tiered_pricing=tiered_pricing, 
+        cost_key="cache_read_input_token_cost"
+    )
+    return text_cost + cache_cost
+
+
+def _calculate_completion_cost_with_tiers(breakdown: TokenBreakdown, tiered_pricing: List[dict]) -> float:
+    """Calculate total completion cost using tiered pricing."""
+    completion_cost = _calculate_tiered_cost(
+        tokens=breakdown.completion_tokens, 
+        tiered_pricing=tiered_pricing, 
+        cost_key="output_cost_per_token"
+    )
+    reasoning_cost = _calculate_tiered_cost(
+        tokens=breakdown.reasoning_tokens, 
+        tiered_pricing=tiered_pricing, 
+        cost_key="output_cost_per_reasoning_token",
+        fallback_cost_key="output_cost_per_token"
+    )
+    return completion_cost + reasoning_cost
 
 
 def _is_above_128k(tokens: float) -> bool:
