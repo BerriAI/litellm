@@ -1,5 +1,5 @@
 ---
-title: "v1.80.0-stable - UI Enhancements & Provider Expansions"
+title: "[Preview] v1.80.0-stable - UI Enhancements & Provider Expansions"
 slug: "v1-80-0"
 date: 2025-11-01T10:00:00
 authors:
@@ -46,10 +46,8 @@ pip install litellm==1.80.0
 ## Key Highlights
 
 - **FAL AI Image Generation** - Native support for FAL AI image generation models with cost tracking
-- **Mistral Codestral Embed 2505** - New embedding model support from Mistral API
 - **UI Enhancements** - Key type selection, SSO validation, embeddings testing, guardrail playground testing, and improved model management
 - **Batch API Rate Limiting** - Input-based rate limits support for Batch API requests
-- **MCP OAuth Improvements** - X-Forwarded headers support and dynamic client registration
 - **Vector Store Expansion** - Milvus vector store support and Azure AI virtual indexes
 - **Memory Leak Fixes** - Resolved Pydantic 2.11+ deprecation warnings and httpx memory leaks
 
@@ -151,9 +149,6 @@ pip install litellm==1.80.0
     - Support text.format parameter in Responses API for providers without native ResponsesAPIConfig - [PR #16023](https://github.com/BerriAI/litellm/pull/16023)
     - Add LLM provider response headers to Responses API - [PR #16091](https://github.com/BerriAI/litellm/pull/16091)
 
-- **[Batch API](../../docs/batch_api)**
-    - Add support for Batch API Rate limiting - PR1 adds support for input based rate limits - [PR #16075](https://github.com/BerriAI/litellm/pull/16075)
-
 - **[Video Generation API](../../docs/video_generation)**
     - Add `custom_llm_provider` support for video endpoints (non-generation) - [PR #16121](https://github.com/BerriAI/litellm/pull/16121)
     - Fix documentation for videos - [PR #15937](https://github.com/BerriAI/litellm/pull/15937)
@@ -199,7 +194,7 @@ pip install litellm==1.80.0
 - **Routing**
     - Allow setting all routing strategies, tag filtering on UI - [PR #16139](https://github.com/BerriAI/litellm/pull/16139)
 
-- **Admi Settings**
+- **Admin Settings**
     - Add license metadata to health/readiness endpoint - [PR #15997](https://github.com/BerriAI/litellm/pull/15997)
     - Litellm Backend SSO Changes - [PR #16029](https://github.com/BerriAI/litellm/pull/16029)
 
@@ -230,7 +225,6 @@ pip install litellm==1.80.0
     - Add Base64 handling for SQS Logger - [PR #16028](https://github.com/BerriAI/litellm/pull/16028)
 
 - **General**
-    - Make debug log debug - [PR #16137](https://github.com/BerriAI/litellm/pull/16137)
     - Fix: User API key and team id and user id missing from custom callback is not misfiring - [PR #15982](https://github.com/BerriAI/litellm/pull/15982)
 
 #### Guardrails
@@ -251,6 +245,9 @@ pip install litellm==1.80.0
 - **[Grayswan](../../docs/proxy/guardrails)**
     - Improve Grayswan guardrail documentation - [PR #15875](https://github.com/BerriAI/litellm/pull/15875)
 
+- **[Pillar AI](../../docs/proxy/guardrails)**
+    - Graceful degradation for pillar service when using litellm - [PR #15857](https://github.com/BerriAI/litellm/pull/15857)
+
 - **General**
     - Ensure Key Guardrails are applied - [PR #16025](https://github.com/BerriAI/litellm/pull/16025)
 
@@ -267,6 +264,7 @@ pip install litellm==1.80.0
     - Fix spend tracking for OCR/aOCR requests (log `pages_processed` + recognize `OCRResponse`) - [PR #16070](https://github.com/BerriAI/litellm/pull/16070)
 
 - **Rate Limiting**
+    - Add support for Batch API Rate limiting - PR1 adds support for input based rate limits - [PR #16075](https://github.com/BerriAI/litellm/pull/16075)
     - Handle multiple rate limit types per descriptor and prevent IndexError - [PR #16039](https://github.com/BerriAI/litellm/pull/16039)
 
 ---
@@ -286,12 +284,6 @@ pip install litellm==1.80.0
     - Fix: resolve memory accumulation caused by Pydantic 2.11+ deprecation warnings - [PR #16110](https://github.com/BerriAI/litellm/pull/16110)
     - Fix(apscheduler): prevent memory leaks from jitter and frequent job intervals - [PR #15846](https://github.com/BerriAI/litellm/pull/15846)
 
-- **Performance**
-    - Perf speed up pytest - [PR #15951](https://github.com/BerriAI/litellm/pull/15951)
-
-- **Reliability**
-    - Graceful degradation for pillar service when using litellm - [PR #15857](https://github.com/BerriAI/litellm/pull/15857)
-
 - **Configuration**
     - Remove minimum validation for cache control injection index - [PR #16149](https://github.com/BerriAI/litellm/pull/16149)
     - Fix prompt_caching.md: wrong prompt_tokens definition - [PR #16044](https://github.com/BerriAI/litellm/pull/16044)
@@ -300,9 +292,6 @@ pip install litellm==1.80.0
     - Build(deps): bump starlette from 0.47.2 to 0.49.1 - [PR #16027](https://github.com/BerriAI/litellm/pull/16027)
     - Build(deps): bump hono from 4.9.7 to 4.10.3 in /litellm-js/spend-logs - [PR #15915](https://github.com/BerriAI/litellm/pull/15915)
     - Requirements update - [PR #16054](https://github.com/BerriAI/litellm/pull/16054)
-
-- **Infrastructure**
-    - Add: minimum resource requirement for production - [PR #16146](https://github.com/BerriAI/litellm/pull/16146)
 
 ---
 
@@ -318,6 +307,7 @@ pip install litellm==1.80.0
 
 - **General Documentation**
     - 1-79-0 docs - [PR #15936](https://github.com/BerriAI/litellm/pull/15936)
+    - Add minimum resource requirement for production - [PR #16146](https://github.com/BerriAI/litellm/pull/16146)
 
 ---
 
@@ -351,13 +341,13 @@ pip install litellm==1.80.0
 
 ### 11/01/2025
 * New Models / Updated Models: 29
-* LLM API Endpoints: 11
-* Management Endpoints / UI: 15
+* LLM API Endpoints: 10
+* Management Endpoints / UI: 14
 * Logging / Guardrail / Prompt Management Integrations: 17
-* Spend Tracking, Budgets and Rate Limiting: 2
+* Spend Tracking, Budgets and Rate Limiting: 3
 * MCP Gateway: 2
-* Performance / Loadbalancing / Reliability improvements: 10
-* Documentation Updates: 4
+* Performance / Loadbalancing / Reliability improvements: 9
+* Documentation Updates: 5
 
 ---
 
