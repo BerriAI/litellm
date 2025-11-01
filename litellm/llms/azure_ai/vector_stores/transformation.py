@@ -7,6 +7,7 @@ from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    BaseVectorStoreAuthCredentials,
     VectorStoreCreateOptionalRequestParams,
     VectorStoreCreateResponse,
     VectorStoreResultContent,
@@ -33,6 +34,19 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
 
     def __init__(self):
         super().__init__()
+
+    def get_auth_credentials(
+        self, litellm_params: dict
+    ) -> BaseVectorStoreAuthCredentials:
+        api_key = litellm_params.get("api_key")
+        if api_key is None:
+            raise ValueError("api_key is required")
+
+        return {
+            "headers": {
+                "Authorization": f"Bearer {api_key}",
+            }
+        }
 
     def validate_environment(
         self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]

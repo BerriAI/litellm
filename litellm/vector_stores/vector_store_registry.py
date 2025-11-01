@@ -17,6 +17,37 @@ else:
     PrismaClient = Any
 
 
+class VectorStoreIndexRegistry:
+    def __init__(self):
+        self.vector_store_indexes: List[str] = []
+
+    def get_vector_store_indexes(self) -> List[str]:
+        """
+        Returns the vector store indexes
+        """
+        return self.vector_store_indexes
+
+    def add_vector_store_index(self, vector_store_index: str):
+        """
+        Adds a vector store index to the registry
+        """
+        self.vector_store_indexes.append(vector_store_index)
+
+    def delete_vector_store_index(self, vector_store_index: str):
+        """
+        Deletes a vector store index from the registry
+        """
+        self.vector_store_indexes = [
+            index for index in self.vector_store_indexes if index != vector_store_index
+        ]
+
+    def is_vector_store_index(self, vector_store_index: str) -> bool:
+        """
+        Returns True if the vector store index is in the registry
+        """
+        return vector_store_index in self.vector_store_indexes
+
+
 class VectorStoreRegistry:
     def __init__(self, vector_stores: List[LiteLLM_ManagedVectorStore] = []):
         self.vector_stores: List[LiteLLM_ManagedVectorStore] = vector_stores
@@ -136,6 +167,17 @@ class VectorStoreRegistry:
         """
         for vector_store in self.vector_stores:
             if vector_store.get("vector_store_id") == vector_store_id:
+                return vector_store
+        return None
+
+    def get_litellm_managed_vector_store_from_registry_by_name(
+        self, vector_store_name: str
+    ) -> Optional[LiteLLM_ManagedVectorStore]:
+        """
+        Returns the vector store from the registry by name
+        """
+        for vector_store in self.vector_stores:
+            if vector_store.get("vector_store_name") == vector_store_name:
                 return vector_store
         return None
 

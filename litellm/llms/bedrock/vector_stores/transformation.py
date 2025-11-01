@@ -13,6 +13,7 @@ from litellm.types.integrations.rag.bedrock_knowledgebase import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    BaseVectorStoreAuthCredentials,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
@@ -32,6 +33,11 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         BaseVectorStoreConfig.__init__(self)
         BaseAWSLLM.__init__(self)
 
+    def get_auth_credentials(
+        self, litellm_params: dict
+    ) -> BaseVectorStoreAuthCredentials:
+        return {}
+
     def validate_environment(
         self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
@@ -39,13 +45,13 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         headers.setdefault("Content-Type", "application/json")
         return headers
 
-    def get_complete_url(
-        self, api_base: Optional[str], litellm_params: dict
-    ) -> str:
+    def get_complete_url(self, api_base: Optional[str], litellm_params: dict) -> str:
         aws_region_name = litellm_params.get("aws_region_name")
         endpoint_url, _ = self.get_runtime_endpoint(
             api_base=api_base,
-            aws_bedrock_runtime_endpoint=litellm_params.get("aws_bedrock_runtime_endpoint"),
+            aws_bedrock_runtime_endpoint=litellm_params.get(
+                "aws_bedrock_runtime_endpoint"
+            ),
             aws_region_name=self.get_aws_region_name_for_non_llm_api_calls(
                 aws_region_name=aws_region_name
             ),
@@ -86,7 +92,9 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             # Create a properly typed retrieval configuration
             typed_retrieval_config: BedrockKBRetrievalConfiguration = {}
             if "vectorSearchConfiguration" in retrieval_config:
-                typed_retrieval_config["vectorSearchConfiguration"] = retrieval_config["vectorSearchConfiguration"]
+                typed_retrieval_config["vectorSearchConfiguration"] = retrieval_config[
+                    "vectorSearchConfiguration"
+                ]
             request_body["retrievalConfiguration"] = typed_retrieval_config
 
         litellm_logging_obj.model_call_details["query"] = query
@@ -117,8 +125,12 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         source_uri = metadata.get("x-amz-bedrock-kb-source-uri", "") if metadata else ""
         if source_uri:
             return source_uri
-        
-        chunk_id = metadata.get("x-amz-bedrock-kb-chunk-id", "unknown") if metadata else "unknown"
+
+        chunk_id = (
+            metadata.get("x-amz-bedrock-kb-chunk-id", "unknown")
+            if metadata
+            else "unknown"
+        )
         return f"bedrock-kb-{chunk_id}"
 
     def _get_filename_from_metadata(self, metadata: Dict[str, Any]) -> str:
@@ -127,18 +139,26 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         Tries to extract filename from source URI, falls back to domain name or data source ID.
         """
         source_uri = metadata.get("x-amz-bedrock-kb-source-uri", "") if metadata else ""
-        
+
         if source_uri:
             try:
                 parsed_uri = urlparse(source_uri)
-                filename = parsed_uri.path.split('/')[-1] if parsed_uri.path and parsed_uri.path != '/' else parsed_uri.netloc
-                if not filename or filename == '/':
+                filename = (
+                    parsed_uri.path.split("/")[-1]
+                    if parsed_uri.path and parsed_uri.path != "/"
+                    else parsed_uri.netloc
+                )
+                if not filename or filename == "/":
                     filename = parsed_uri.netloc
                 return filename
             except Exception:
                 return source_uri
-        
-        data_source_id = metadata.get("x-amz-bedrock-kb-data-source-id", "unknown") if metadata else "unknown"
+
+        data_source_id = (
+            metadata.get("x-amz-bedrock-kb-data-source-id", "unknown")
+            if metadata
+            else "unknown"
+        )
         return f"bedrock-kb-document-{data_source_id}"
 
     def _get_attributes_from_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
@@ -161,13 +181,13 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 text = content.get("text") if content else None
                 if text is None:
                     continue
-                
+
                 # Extract metadata and use helper functions
                 metadata = item.get("metadata", {}) or {}
                 file_id = self._get_file_id_from_metadata(metadata)
                 filename = self._get_filename_from_metadata(metadata)
                 attributes = self._get_attributes_from_metadata(metadata)
-                
+
                 results.append(
                     VectorStoreSearchResult(
                         score=item.get("score"),

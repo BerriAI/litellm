@@ -340,6 +340,7 @@ class LiteLLMRoutes(enum.Enum):
         "/anthropic",
         "/langfuse",
         "/azure",
+        "/azure_ai",
         "/openai",
         "/assemblyai",
         "/eu.assemblyai",

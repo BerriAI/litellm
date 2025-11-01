@@ -1,10 +1,11 @@
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypedDict, Union
 
 import httpx
 
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    BaseVectorStoreAuthCredentials,
     VectorStoreCreateOptionalRequestParams,
     VectorStoreCreateResponse,
     VectorStoreSearchOptionalRequestParams,
@@ -24,6 +25,12 @@ else:
 
 
 class BaseVectorStoreConfig:
+    @abstractmethod
+    def get_auth_credentials(
+        self, litellm_params: dict
+    ) -> BaseVectorStoreAuthCredentials:
+        pass
+
     @abstractmethod
     def transform_search_vector_store_request(
         self,

@@ -204,3 +204,8 @@ class IndexCreateRequest(BaseModel):
     index_name: str
     litellm_params: IndexCreateLiteLLMParams
     index_info: Optional[Dict[str, Any]] = None
+
+
+class BaseVectorStoreAuthCredentials(TypedDict, total=False):
+    headers: dict
+    query_params: dict
