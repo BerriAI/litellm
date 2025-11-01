@@ -253,6 +253,9 @@ from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
 )
+from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+    router as cache_settings_router,
+)
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
@@ -262,12 +265,6 @@ from litellm.proxy.management_endpoints.cost_tracking_settings import (
 )
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
-)
-from litellm.proxy.management_endpoints.router_settings_endpoints import (
-    router as router_settings_router,
-)
-from litellm.proxy.management_endpoints.cache_settings_endpoints import (
-    router as cache_settings_router,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
@@ -297,6 +294,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.router_settings_endpoints import (
+    router as router_settings_router,
+)
 from litellm.proxy.management_endpoints.scim.scim_v2 import scim_router
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
@@ -319,7 +319,6 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
-from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
@@ -380,6 +379,7 @@ from litellm.proxy.vector_store_endpoints.endpoints import router as vector_stor
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
 )
+from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.router import (
     AssistantsTypedDict,
     Deployment,
@@ -1810,6 +1810,21 @@ class ProxyConfig:
         ):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
+
+    def switch_on_llm_response_caching(self):
+        """
+        Enable caching on the router by setting cache_responses=True.
+        This ensures caching works without needing caching=True in request body.
+        Router passes caching=self.cache_responses to litellm.completion()
+        """
+        global llm_router
+        import litellm
+        
+        if llm_router is not None and litellm.cache is not None and llm_router.cache_responses is not True:
+            llm_router.cache_responses = True
+            verbose_proxy_logger.debug(
+                "Set router.cache_responses=True after initializing cache"
+            )
 
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
@@ -3355,7 +3370,12 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="sso_settings"):
             await self._init_sso_settings_in_db(prisma_client=prisma_client)
         if self._should_load_db_object(object_type="cache_settings"):
-            await self._init_cache_settings_in_db(prisma_client=prisma_client)
+            from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+                CacheSettingsManager,
+            )
+            await CacheSettingsManager.init_cache_settings_in_db(
+                prisma_client=prisma_client, proxy_config=self
+            )
 
     async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
         """
@@ -3373,46 +3393,6 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - {}".format(
-                    str(e)
-                )
-            )   
-
-    async def _init_cache_settings_in_db(self, prisma_client: PrismaClient):
-        """
-        Initialize cache settings from database into the router on startup.
-        """
-        import json
-        
-        try:
-            cache_config = await prisma_client.db.litellm_cacheconfig.find_unique(
-                where={"id": "cache_config"}
-            )
-            if cache_config is not None and cache_config.cache_settings:
-                # Parse cache settings JSON
-                cache_settings_json = cache_config.cache_settings
-                if isinstance(cache_settings_json, str):
-                    cache_settings_dict = json.loads(cache_settings_json)
-                else:
-                    cache_settings_dict = cache_settings_json
-                
-                # Decrypt cache settings
-                decrypted_settings = self._decrypt_db_variables(
-                    variables_dict=cache_settings_dict
-                )
-                
-                # Remove redis_type if present (UI-only field, not a Cache parameter)
-                # We derive it for UI in get_cache_settings endpoint
-                cache_params = {k: v for k, v in decrypted_settings.items() if k != "redis_type"}
-                
-                # Initialize cache
-                self._init_cache(cache_params=cache_params)
-                
-                verbose_proxy_logger.info(
-                    "Cache settings initialized from database"
-                )
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.py::ProxyConfig:_init_cache_settings_in_db - {}".format(
                     str(e)
                 )
             )   
@@ -3614,7 +3594,9 @@ class ProxyConfig:
         """
         global llm_router
         
-        from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+        from litellm.proxy.search_endpoints.search_tool_registry import (
+            SearchToolRegistry,
+        )
         from litellm.router_utils.search_api_router import SearchAPIRouter
         
         try:
@@ -4131,8 +4113,8 @@ class ProxyStartupEvent:
         # 1. Remove/minimize jitter to avoid normalize() memory explosion
         # 2. Use larger misfire_grace_time to prevent backlog calculations
         # 3. Set replace_existing=True to avoid duplicate jobs
-        from apscheduler.jobstores.memory import MemoryJobStore
         from apscheduler.executors.asyncio import AsyncIOExecutor
+        from apscheduler.jobstores.memory import MemoryJobStore
 
         scheduler = AsyncIOScheduler(
             job_defaults={
@@ -8912,31 +8894,6 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                         "update": {"param_value": v},
                     },
                 )
-            elif k == "cache_settings":
-                import json
-                # Encrypt cache settings before saving
-                encrypted_cache_settings = proxy_config._encrypt_env_variables(
-                    environment_variables=v
-                )
-                await prisma_client.db.litellm_cacheconfig.upsert(
-                    where={"id": "cache_config"},
-                    data={
-                        "create": {
-                            "id": "cache_config",
-                            "cache_settings": json.dumps(encrypted_cache_settings),
-                        },
-                        "update": {
-                            "cache_settings": json.dumps(encrypted_cache_settings),
-                        },
-                    },
-                )
-                # Reinitialize cache with new settings
-                decrypted_settings = proxy_config._decrypt_and_set_db_env_variables(
-                    environment_variables=encrypted_cache_settings,
-                    return_original_value=True
-                )
-                # Initialize cache (frontend sends type="redis", not redis_type)
-                proxy_config._init_cache(cache_params=decrypted_settings)
 
         ### OLD LOGIC [TODO] MOVE TO DB ###
 
