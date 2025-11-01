@@ -3,7 +3,7 @@ anyio==4.8.0 # openai + http req.
 httpx==0.28.1
 openai==1.99.5  # openai req.
 fastapi==0.116.1 # server dep
-starlette==0.47.2 # starlette fastapi dep
+starlette==0.49.1 # starlette fastapi dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
 uvicorn==0.29.0 # server dep
