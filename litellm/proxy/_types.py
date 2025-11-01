@@ -3483,6 +3483,7 @@ class DailyUserSpendTransaction(BaseDailySpendTransaction):
 
 
 class DailyTagSpendTransaction(BaseDailySpendTransaction):
+    request_id: Optional[str]
     tag: str
 
 
