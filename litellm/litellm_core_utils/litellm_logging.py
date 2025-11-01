@@ -116,6 +116,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
+from litellm.types.containers.main import ContainerObject
 from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
@@ -1624,6 +1625,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, dict)
             and logging_result.get("object") == "vector_store.search_results.page"
             or isinstance(logging_result, VideoObject) 
+            or isinstance(logging_result, ContainerObject)
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
             return True

@@ -24072,6 +24072,16 @@
             "1280x720"
         ]
     },
+    "openai/container": {
+        "code_interpreter_cost_per_session": 0.03,
+        "litellm_provider": "openai",
+        "mode": "container"
+    },
+    "azure/container": {
+        "code_interpreter_cost_per_session": 0.03,
+        "litellm_provider": "azure",
+        "mode": "container"
+    },
     "azure/sora-2": {
         "litellm_provider": "azure",
         "mode": "video_generation",
