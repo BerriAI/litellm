@@ -183,7 +183,6 @@ class TestAzureVideoConfig:
         logging_obj = MagicMock()
         
         result = self.config.transform_video_remix_response(
-            model=self.model,
             raw_response=mock_response,
             logging_obj=logging_obj
         )
@@ -208,7 +207,6 @@ class TestAzureVideoConfig:
         logging_obj = MagicMock()
         
         result = self.config.transform_video_delete_response(
-            model=self.model,
             raw_response=mock_response,
             logging_obj=logging_obj
         )
@@ -226,7 +224,6 @@ class TestAzureVideoConfig:
         logging_obj = MagicMock()
         
         result = self.config.transform_video_content_response(
-            model=self.model,
             raw_response=mock_response,
             logging_obj=logging_obj
         )
@@ -374,7 +371,6 @@ class TestAzureVideoConfig:
         logging_obj = MagicMock()
         
         result = self.config.transform_video_remix_response(
-            model=self.model,
             raw_response=mock_response,
             logging_obj=logging_obj
         )

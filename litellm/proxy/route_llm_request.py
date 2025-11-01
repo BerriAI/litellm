@@ -152,6 +152,15 @@ async def route_request(
             models = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
     elif llm_router is not None:
+        if route_type in [
+            "avideo_list",
+            "avideo_status",
+            "avideo_content",
+            "avideo_remix",
+        ] and (data.get("model") is None or data.get("model") == ""):
+            # These video endpoints don't need a model, use custom_llm_provider
+            return getattr(litellm, f"{route_type}")(**data)
+        
         team_model_name = (
             llm_router.map_team_model(data["model"], team_id)
             if team_id is not None
