@@ -115,7 +115,7 @@ def is_allowed_to_call_vector_store_endpoint(
     if not has_permission:
         raise HTTPException(
             status_code=403,
-            detail=f"User does not have permission to call vector store endpoint {index_name} for provider {provider}",
+            detail=f"User does not have permission to call vector store endpoint {index_name}. Ask your administrator to add the necessary permissions to your API key/Team.",
         )
 
     return has_permission
