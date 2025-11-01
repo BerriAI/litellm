@@ -457,6 +457,7 @@ const sidebars = {
             "providers/azure_ai_speech",
             "providers/azure_ai_img",
             "providers/azure_ai_vector_stores",
+            "providers/azure_ai/azure_ai_vector_stores_passthrough",
           ]
         },
         {

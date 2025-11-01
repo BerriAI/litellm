@@ -5,9 +5,11 @@ import httpx
 
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    BaseVectorStoreAuthCredentials,
     VECTOR_STORE_OPENAI_PARAMS,
     VectorStoreCreateOptionalRequestParams,
     VectorStoreCreateResponse,
+    VectorStoreIndexEndpoints,
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
 )
@@ -38,6 +40,16 @@ class BaseVectorStoreConfig:
         drop_params: bool,
     ) -> dict:
         return optional_params
+
+    @abstractmethod
+    def get_auth_credentials(
+        self, litellm_params: dict
+    ) -> BaseVectorStoreAuthCredentials:
+        pass
+
+    @abstractmethod
+    def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
+        pass
 
     @abstractmethod
     def transform_search_vector_store_request(

@@ -590,6 +590,17 @@ model LiteLLM_SSOConfig {
   updated_at DateTime @updatedAt
 }
 
+model LiteLLM_IndexTable {
+  id String @id @default(uuid())
+  index_name String @unique
+  litellm_params Json
+  index_info Json?
+  created_at DateTime @default(now())
+  created_by String?
+  updated_at DateTime @updatedAt
+  updated_by String?
+}
+
 // Cache configuration table
 model LiteLLM_CacheConfig {
   id String @id @default("cache_config")
