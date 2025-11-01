@@ -198,7 +198,7 @@ async def test_stream_token_counting_anthropic_with_include_usage():
 
     # print making the same request with anthropic client
     anthropic_response = anthropic_client.messages.create(
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-5-20250929",
         max_tokens=4096,
         messages=[{"role": "user", "content": input_text}],
         stream=True,
