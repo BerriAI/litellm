@@ -124,6 +124,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_config=None,
         s3_path: Optional[str] = None,
         s3_use_team_prefix: bool = False,
+        s3_strip_base64_files: bool = False,
     ):
         """
         Initialize the s3 params for this logging callback
@@ -190,7 +191,12 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         self.s3_path = litellm.s3_callback_params.get("s3_path") or s3_path
         # done reading litellm.s3_callback_params
         self.s3_use_team_prefix = (
-            bool(litellm.s3_callback_params.get("s3_use_team_prefix", False))
+            bool(litellm.s3_callback_params.get("s3_strip_base64_files", False))
+            or s3_use_team_prefix
+        )
+
+        self.s3_strip_base64_files = (
+            bool(litellm.s3_callback_params.get("s3_strip_base64_files", False))
             or s3_use_team_prefix
         )
 
@@ -363,6 +369,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         """
         if standard_logging_payload is None:
             return None
+
+        if self.s3_strip_base64_files:
+            import asyncio
+            standard_logging_payload = asyncio.run(self._strip_base64_from_messages(standard_logging_payload))
 
         team_alias = standard_logging_payload["metadata"].get("user_api_key_team_alias")
 
