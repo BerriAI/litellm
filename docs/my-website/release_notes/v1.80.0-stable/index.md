@@ -47,10 +47,10 @@ pip install litellm==1.80.0
 
 - **Container API Support** - End-to-end OpenAI Container API support with proxy integration, logging, and cost tracking
 - **FAL AI Image Generation** - Native support for FAL AI image generation models with cost tracking
-- **UI Enhancements** - Key type selection, SSO validation, embeddings testing, guardrail playground testing, and improved model management
+- **UI Enhancements** - Guardrail Playground, Cache Settings, Tag Routing, SSO Settings
 - **Batch API Rate Limiting** - Input-based rate limits support for Batch API requests
 - **Vector Store Expansion** - Milvus vector store support and Azure AI virtual indexes
-- **Memory Leak Fixes** - Resolved Pydantic 2.11+ deprecation warnings and httpx memory leaks
+- **Memory Leak Fixes** - Resolved issues accounting for 90% of memory leaks on Python SDK & AI Gateway
 
 ---
 
