@@ -13,15 +13,13 @@ from litellm.caching.caching import DualCache
 from litellm.cost_calculator import _infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms import (
-    endpoint_guardrail_translation_mappings,
-    load_guardrail_translation_mappings,
-)
+from litellm.llms import load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes, ModelResponseStream
 
 GUARDRAIL_NAME = "unified_llm_guardrails"
+endpoint_guardrail_translation_mappings = None
 
 
 class UnifiedLLMGuardrails(CustomLogger):

@@ -37,6 +37,7 @@ export interface KeyResponse {
   budget_duration: string;
   budget_reset_at: string;
   allowed_cache_controls: string[];
+  allowed_routes: string[];
   permissions: Record<string, unknown>;
   model_spend: Record<string, number>;
   model_max_budget: Record<string, number>;

@@ -165,7 +165,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
     def transform_video_content_request(
         self,
         video_id: str,
-        model: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -188,7 +187,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
         self,
         video_id: str,
         prompt: str,
-        model: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -214,7 +212,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
     
     def transform_video_content_response(
         self,
-        model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> bytes:
@@ -227,7 +224,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
     def transform_video_remix_response(
         self,
-        model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> VideoObject:
@@ -255,7 +251,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
     def transform_video_list_request(
         self,
-        model: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -290,7 +285,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
     def transform_video_list_response(
         self,
-        model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> Dict[str,str]:
@@ -299,7 +293,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
     def transform_video_delete_request(
         self,
         video_id: str,
-        model: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -320,7 +313,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
     def transform_video_delete_response(
         self,
-        model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> VideoObject:
@@ -337,7 +329,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
     def transform_video_status_retrieve_request(
         self,
         video_id: str,
-        model: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -355,7 +346,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
     def transform_video_status_retrieve_response(
         self,
-        model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> VideoObject:

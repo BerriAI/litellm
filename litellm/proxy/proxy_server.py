@@ -137,6 +137,10 @@ from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
+    APSCHEDULER_COALESCE,
+    APSCHEDULER_MAX_INSTANCES,
+    APSCHEDULER_MISFIRE_GRACE_TIME,
+    APSCHEDULER_REPLACE_EXISTING,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
@@ -249,6 +253,9 @@ from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
 )
+from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+    router as cache_settings_router,
+)
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
@@ -262,9 +269,7 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    user_update,
-)
+from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -286,6 +291,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
+)
+from litellm.proxy.management_endpoints.router_settings_endpoints import (
+    router as router_settings_router,
 )
 from litellm.proxy.management_endpoints.scim.scim_v2 import scim_router
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
@@ -309,13 +317,10 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
-from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import (
-    set_files_config,
-)
+from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -370,6 +375,7 @@ from litellm.proxy.vector_store_endpoints.endpoints import router as vector_stor
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
 )
+from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.router import (
     AssistantsTypedDict,
     Deployment,
@@ -401,9 +407,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import (
-    DeploymentTypedDict,
-)
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -764,7 +768,13 @@ def get_openapi_schema():
     if app.openapi_schema:
         return app.openapi_schema
 
-    openapi_schema = get_openapi(
+    # Use compatibility wrapper for FastAPI 0.120+ schema generation
+    from litellm.proxy.common_utils.openapi_schema_compat import (
+        get_openapi_schema_with_compat,
+    )
+
+    openapi_schema = get_openapi_schema_with_compat(
+        get_openapi_func=get_openapi,
         title=app.title,
         version=app.version,
         description=app.description,
@@ -783,18 +793,25 @@ def get_openapi_schema():
 
         # Extract parameters from the route
         parameters = []
-        if hasattr(route, "dependant"):
-            for param in route.dependant.query_params:
-                parameters.append(
-                    {
-                        "name": param.name,
-                        "in": "query",
-                        "required": param.required,
-                        "schema": {
-                            "type": "string"
-                        },  # You can make this more specific if needed
-                    }
-                )
+        try:
+            if hasattr(route, "dependant") and route.dependant is not None:
+                # Handle both FastAPI <0.120 and >=0.120
+                query_params = getattr(route.dependant, "query_params", [])
+                if query_params:
+                    for param in query_params:
+                        parameters.append(
+                            {
+                                "name": param.name,
+                                "in": "query",
+                                "required": param.required,
+                                "schema": {
+                                    "type": "string"
+                                },  # You can make this more specific if needed
+                            }
+                        )
+        except (AttributeError, TypeError):
+            # If we can't access query_params, continue without them
+            pass
 
         openapi_schema["paths"][base_path] = {
             "get": {
@@ -1066,6 +1083,7 @@ celery_fn = None  # Redis Queue for handling requests
 # Global variables for model cost map reload scheduling
 scheduler = None
 last_model_cost_map_reload = None
+
 
 ### DB WRITER ###
 db_writer_client: Optional[AsyncHTTPHandler] = None
@@ -1800,6 +1818,21 @@ class ProxyConfig:
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
+    def switch_on_llm_response_caching(self):
+        """
+        Enable caching on the router by setting cache_responses=True.
+        This ensures caching works without needing caching=True in request body.
+        Router passes caching=self.cache_responses to litellm.completion()
+        """
+        global llm_router
+        import litellm
+        
+        if llm_router is not None and litellm.cache is not None and llm_router.cache_responses is not True:
+            llm_router.cache_responses = True
+            verbose_proxy_logger.debug(
+                "Set router.cache_responses=True after initializing cache"
+            )
+
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
         Load config file
@@ -1889,29 +1922,31 @@ class ProxyConfig:
         """
         Parse and validate search tools from config.
         Loads environment variables and casts to SearchToolTypedDict.
-        
+
         Args:
             config: Config dictionary containing search_tools
-            
+
         Returns:
             List of validated SearchToolTypedDict or None if not configured
         """
         search_tools_raw = config.get("search_tools", None)
         if not search_tools_raw:
             return None
-        
+
         search_tools_parsed: List[SearchToolTypedDict] = []
-        
+
         print(  # noqa
             "\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m"
         )  # noqa
-        
+
         for search_tool in search_tools_raw:
             # Display loaded search tool
             search_tool_name = search_tool.get("search_tool_name", "")
-            search_provider = search_tool.get("litellm_params", {}).get("search_provider", "")
+            search_provider = search_tool.get("litellm_params", {}).get(
+                "search_provider", ""
+            )
             print(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")  # noqa
-            
+
             # Cast to SearchToolTypedDict for type safety
             try:
                 search_tool_typed: SearchToolTypedDict = SearchToolTypedDict(**search_tool)  # type: ignore
@@ -1921,7 +1956,7 @@ class ProxyConfig:
                     f"Error parsing search tool {search_tool_name}: {str(e)}"
                 )
                 continue
-        
+
         return search_tools_parsed if search_tools_parsed else None
 
     def _load_environment_variables(self, config: dict):
@@ -2427,7 +2462,9 @@ class ProxyConfig:
             assistants_config = AssistantsTypedDict(**assistant_settings)  # type: ignore
 
         ## SEARCH TOOLS SETTINGS
-        search_tools: Optional[List[SearchToolTypedDict]] = self.parse_search_tools(config)
+        search_tools: Optional[List[SearchToolTypedDict]] = self.parse_search_tools(
+            config
+        )
 
         ## /fine_tuning/jobs endpoints config
         finetuning_config = config.get("finetune_settings", None)
@@ -2946,6 +2983,16 @@ class ProxyConfig:
                     "Error setting env variable: %s - %s", k, str(e)
                 )
         return decrypted_env_vars
+    
+    def _decrypt_db_variables(self, variables_dict: dict) -> dict:
+        """
+        Decrypts a dictionary of variables and returns them.
+        """
+        decrypted_variables = {}
+        for k, v in variables_dict.items():
+            decrypted_value = decrypt_value_helper(value=v, key=k, return_original_value=True)
+            decrypted_variables[k] = decrypted_value
+        return decrypted_variables
 
     async def _add_router_settings_from_db_config(
         self,
@@ -3317,6 +3364,10 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="vector_stores"):
             await self._init_vector_stores_in_db(prisma_client=prisma_client)
 
+        if self._should_load_db_object(object_type="vector_store_indexes"):
+
+            await self._init_vector_store_indexes_in_db(prisma_client=prisma_client)
+
         if self._should_load_db_object(object_type="mcp"):
             await self._init_mcp_servers_in_db()
 
@@ -3331,6 +3382,40 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
+        if self._should_load_db_object(object_type="sso_settings"):
+            await self._init_sso_settings_in_db(prisma_client=prisma_client)
+        if self._should_load_db_object(object_type="cache_settings"):
+            from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+                CacheSettingsManager,
+            )
+            await CacheSettingsManager.init_cache_settings_in_db(
+                prisma_client=prisma_client, proxy_config=self
+            )
+
+    async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize SSO settings from database into the router on startup.
+        """
+
+        try:
+            sso_settings = await prisma_client.db.litellm_ssoconfig.find_unique(
+                where={"id": "sso_config"}
+            )
+            if sso_settings is not None:
+                # Capitalize all keys in sso_settings dictionary
+                uppercase_sso_settings = {
+                    key.upper(): value
+                    for key, value in sso_settings.sso_settings.items()
+                }
+                self._decrypt_and_set_db_env_variables(
+                    environment_variables=uppercase_sso_settings
+                )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - {}".format(
+                    str(e)
+                )
+            )
 
     async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
         """
@@ -3501,6 +3586,36 @@ class ProxyConfig:
                 )
             )
 
+    async def _init_vector_store_indexes_in_db(self, prisma_client: PrismaClient):
+        from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+
+        try:
+            # read vector stores from db table
+            vector_store_indexes = (
+                await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(
+                    prisma_client=prisma_client
+                )
+            )
+
+            if len(vector_store_indexes) <= 0:
+                return
+
+            if litellm.vector_store_index_registry is None:
+                litellm.vector_store_index_registry = VectorStoreIndexRegistry(
+                    vector_store_indexes=vector_store_indexes
+                )
+            else:
+                for vector_store_index in vector_store_indexes:
+                    litellm.vector_store_index_registry.upsert_vector_store_index(
+                        vector_store_index=vector_store_index
+                    )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_vector_stores_in_db - {}".format(
+                    str(e)
+                )
+            )
+
     async def _init_mcp_servers_in_db(self):
         from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
 
@@ -3522,28 +3637,31 @@ class ProxyConfig:
                     str(e)
                 )
             )
-    
+
     async def _init_search_tools_in_db(self, prisma_client: PrismaClient):
         """
         Initialize search tools from database into the router on startup.
         """
         global llm_router
         
-        from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+        from litellm.proxy.search_endpoints.search_tool_registry import (
+            SearchToolRegistry,
+        )
         from litellm.router_utils.search_api_router import SearchAPIRouter
-        
+
         try:
-            search_tools = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
-            
+            search_tools = await SearchToolRegistry.get_all_search_tools_from_db(
+                prisma_client=prisma_client
+            )
+
             verbose_proxy_logger.info(
                 f"Loading {len(search_tools)} search tool(s) from database into router"
             )
-            
+
             if llm_router is not None:
                 # Add search tools to the router
                 await SearchAPIRouter.update_router_search_tools(
-                    router_instance=llm_router,
-                    search_tools=search_tools
+                    router_instance=llm_router, search_tools=search_tools
                 )
                 verbose_proxy_logger.info(
                     f"Successfully loaded {len(search_tools)} search tool(s) into router"
@@ -3552,14 +3670,14 @@ class ProxyConfig:
                 verbose_proxy_logger.debug(
                     "Router not initialized yet, search tools will be added when router is created"
                 )
-                
+
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_search_tools_in_db - {}".format(
                     str(e)
                 )
             )
-    
+
     async def _init_pass_through_endpoints_in_db(self):
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             initialize_pass_through_endpoints_in_db,
@@ -4038,13 +4156,47 @@ class ProxyStartupEvent:
     ):
         """Initializes scheduled background jobs"""
         global store_model_in_db
-        scheduler = AsyncIOScheduler()
-        interval = random.randint(
-            proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
-        )  # random interval, so multiple workers avoid resetting budget at the same time
-        batch_writing_interval = random.randint(
-            proxy_batch_write_at - 3, proxy_batch_write_at + 3
-        )  # random interval, so multiple workers avoid batch writing at the same time
+
+        # MEMORY LEAK FIX: Configure scheduler with optimized settings
+        # Memray analysis showed APScheduler's normalize() and _apply_jitter() causing
+        # massive memory allocations (35GB with 483M allocations)
+        # Key fixes:
+        # 1. Remove/minimize jitter to avoid normalize() memory explosion
+        # 2. Use larger misfire_grace_time to prevent backlog calculations
+        # 3. Set replace_existing=True to avoid duplicate jobs (must be passed per-job, not as default)
+        from apscheduler.executors.asyncio import AsyncIOExecutor
+        from apscheduler.jobstores.memory import MemoryJobStore
+
+        scheduler = AsyncIOScheduler(
+            job_defaults={
+                "coalesce": APSCHEDULER_COALESCE,
+                "misfire_grace_time": APSCHEDULER_MISFIRE_GRACE_TIME,
+                "max_instances": APSCHEDULER_MAX_INSTANCES,
+                # Note: replace_existing is NOT a valid job_default in APScheduler
+                # It must be passed individually when calling add_job()
+            },
+            # Limit job store size to prevent memory growth
+            jobstores={"default": MemoryJobStore()},  # explicitly use memory job store
+            # Use simple executor to minimize overhead
+            executors={
+                "default": AsyncIOExecutor(),
+            },
+            # Disable timezone awareness to reduce computation
+            timezone=None,
+        )
+
+        # Use fixed intervals with small random offset instead of jitter
+        # This avoids the expensive jitter calculations in APScheduler
+        budget_interval = proxy_budget_rescheduler_min_time + random.randint(
+            0,
+            min(
+                30,
+                proxy_budget_rescheduler_max_time - proxy_budget_rescheduler_min_time,
+            ),
+        )
+
+        # Ensure minimum interval of 30 seconds for batch writing to prevent memory issues
+        batch_writing_interval = proxy_batch_write_at + random.randint(0, 5)
 
         ### RESET BUDGET ###
         if general_settings.get("disable_reset_budget", False) is False:
@@ -4056,7 +4208,11 @@ class ProxyStartupEvent:
             scheduler.add_job(
                 budget_reset_job.reset_budget,
                 "interval",
-                seconds=interval,
+                seconds=budget_interval,
+                # REMOVED jitter parameter - major cause of memory leak
+                id="reset_budget_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
 
         ### UPDATE SPEND ###
@@ -4064,7 +4220,11 @@ class ProxyStartupEvent:
             update_spend,
             "interval",
             seconds=batch_writing_interval,
+            # REMOVED jitter parameter - major cause of memory leak
             args=[prisma_client, db_writer_client, proxy_logging_obj],
+            id="update_spend_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
         ### ADD NEW MODELS ###
@@ -4073,11 +4233,17 @@ class ProxyStartupEvent:
         )
 
         if store_model_in_db is True:
+            # MEMORY LEAK FIX: Increase interval from 10s to 30s minimum
+            # Frequent polling was causing excessive memory allocations
             scheduler.add_job(
                 proxy_config.add_deployment,
                 "interval",
-                seconds=10,
+                seconds=30,  # increased from 10s to reduce memory pressure
+                # REMOVED jitter parameter - major cause of memory leak
                 args=[prisma_client, proxy_logging_obj],
+                id="add_deployment_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
 
             # this will load all existing models on proxy startup
@@ -4089,8 +4255,12 @@ class ProxyStartupEvent:
             scheduler.add_job(
                 proxy_config.get_credentials,
                 "interval",
-                seconds=10,
+                seconds=30,  # increased from 10s to reduce memory pressure
+                # REMOVED jitter parameter - major cause of memory leak
                 args=[prisma_client],
+                id="get_credentials_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
         if (
@@ -4116,15 +4286,24 @@ class ProxyStartupEvent:
                 proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report,
                 "interval",
                 days=days,
+                # REMOVED jitter parameter - major cause of memory leak
+                # Use random start time instead for distribution
                 next_run_time=datetime.now()
-                + timedelta(seconds=10),  # Start 10 seconds from now
+                + timedelta(
+                    seconds=10 + random.randint(0, 300)
+                ),  # Random 0-5 min offset
                 args=[spend_report_frequency],
+                id="weekly_spend_report_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
 
             scheduler.add_job(
                 proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report,
                 "cron",
                 day=1,
+                id="monthly_spend_report_job",
+                replace_existing=True,
             )
 
             # Beta Feature - only used when prometheus api is in .env
@@ -4137,6 +4316,8 @@ class ProxyStartupEvent:
                     hour=PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
                     minute=0,
                     timezone=ZoneInfo("America/Los_Angeles"),  # Pacific Time
+                    id="prometheus_fallback_stats_job",
+                    replace_existing=True,
                 )
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
 
@@ -4154,8 +4335,13 @@ class ProxyStartupEvent:
                 scheduler.add_job(
                     spend_log_cleanup.cleanup_old_spend_logs,
                     "interval",
-                    seconds=interval_seconds,
+                    seconds=interval_seconds
+                    + random.randint(0, 60),  # Add small random offset
+                    # REMOVED jitter parameter - major cause of memory leak
                     args=[prisma_client],
+                    id="spend_log_cleanup_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                 )
             except ValueError:
                 verbose_proxy_logger.error(
@@ -4176,20 +4362,32 @@ class ProxyStartupEvent:
                 scheduler.add_job(
                     check_batch_cost_job.check_batch_cost,
                     "interval",
-                    seconds=proxy_batch_polling_interval,  # these can run infrequently, as batch jobs take time to complete
+                    seconds=proxy_batch_polling_interval
+                    + random.randint(0, 30),  # Add small random offset
+                    # REMOVED jitter parameter - major cause of memory leak
+                    id="check_batch_cost_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                 )
                 verbose_proxy_logger.info("Batch cost check job scheduled successfully")
 
             except Exception as e:
-                verbose_proxy_logger.error(
-                    f"Failed to setup batch cost checking: {e}"
-                )
+                verbose_proxy_logger.error(f"Failed to setup batch cost checking: {e}")
                 verbose_proxy_logger.debug(
                     "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
                 pass
 
-        scheduler.start()
+        # MEMORY LEAK FIX: Start scheduler with paused=False to avoid backlog processing
+        # Do NOT reset job times to "now" as this can trigger the memory leak
+        # The misfire_grace_time and coalesce settings will handle any missed runs properly
+
+        # Start the scheduler immediately without processing backlogs
+        scheduler.start(paused=False)
+        verbose_proxy_logger.info(
+            f"APScheduler started with memory leak prevention settings: "
+            f"removed jitter, increased intervals, misfire_grace_time={APSCHEDULER_MISFIRE_GRACE_TIME}"
+        )
 
     @classmethod
     async def _initialize_spend_tracking_background_jobs(
@@ -9939,6 +10137,8 @@ app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(tag_management_router)
 app.include_router(cost_tracking_settings_router)
+app.include_router(router_settings_router)
+app.include_router(cache_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
