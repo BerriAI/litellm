@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import {
   Card,
-  Title,
   Table,
   TableHead,
   TableRow,
@@ -19,7 +18,7 @@ import {
   updateConfigFieldSetting,
   deleteConfigFieldSetting,
 } from "./networking";
-import { Form, InputNumber } from "antd";
+import { InputNumber } from "antd";
 import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
 
 import RouterSettings from "./router_settings";
