@@ -441,10 +441,15 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             else:
                 form_data_dict[field_name] = field_value
 
+        # Remove content-type header - httpx will set it correctly with the new boundary
+        # when it creates the multipart body from files/data parameters
+        headers_copy = headers.copy()
+        headers_copy.pop("content-type", None)
+
         response = await async_client.request(
             method=request.method,
             url=url,
-            headers=headers,
+            headers=headers_copy,
             params=requested_query_params,
             files=files,
             data=form_data_dict,
@@ -925,6 +930,69 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
     return metadata
 
 
+async def _parse_request_data_by_content_type(
+    request: Request,
+) -> Tuple[Optional[Any], Optional[Any], Optional[Any], Optional[Any]]:
+    """
+    Parse request data based on content type.
+
+    Handles JSON, multipart/form-data, and URL-encoded form data.
+
+    Returns:
+        Tuple of (query_params_data, custom_body_data, file_data, stream)
+    """
+    content_type = request.headers.get("content-type", "")
+
+    query_params_data = None
+    custom_body_data = None
+    file_data = None
+    stream = None
+
+    if "application/json" in content_type:
+        # ✅ Handle JSON
+        body = await request.json()
+        query_params_data = body.get("query_params")
+        custom_body_data = body.get("custom_body")
+        stream = body.get("stream")
+    elif "multipart/form-data" in content_type:
+        # ✅ Handle multipart form-data
+        form = await request.form()
+        if "query_params" in form:
+            form_value = form["query_params"]
+            if isinstance(form_value, str):
+                try:
+                    query_params_data = json.loads(form_value)
+                except Exception:
+                    query_params_data = form_value
+            else:
+                query_params_data = form_value
+
+        if "custom_body" in form:
+            form_value = form["custom_body"]
+            if isinstance(form_value, str):
+                try:
+                    custom_body_data = json.loads(form_value)
+                except Exception:
+                    custom_body_data = form_value
+            else:
+                custom_body_data = form_value
+
+        if "file" in form:
+            file_data = form["file"]  # this is a Starlette UploadFile object
+
+    elif "application/x-www-form-urlencoded" in content_type:
+        # ✅ Handle URL-encoded form data
+        form = await request.form()
+        query_params_data = form.get("query_params")
+        custom_body_data = form.get("custom_body")
+
+    else:
+        # ✅ Fallback: maybe no body, just query params
+        query_params_data = dict(request.query_params) or None
+
+    return query_params_data, custom_body_data, file_data, stream
+
+
 def create_pass_through_route(
     endpoint,
     target: str,
@@ -968,11 +1036,6 @@ def create_pass_through_route(
             request: Request,
             fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-            query_params: Optional[dict] = None,
-            custom_body: Optional[dict] = None,
-            stream: Optional[
-                bool
-            ] = None,  # if pass-through endpoint is a streaming request
             subpath: str = "",  # captures sub-paths when include_subpath=True
         ):
             from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -980,6 +1043,14 @@ def create_pass_through_route(
             )
 
             path = request.url.path
+
+            # Parse request data based on content type
+            (
+                query_params_data,
+                custom_body_data,
+                file_data,
+                stream,
+            ) = await _parse_request_data_by_content_type(request)
 
             if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
                 route=path
@@ -1032,6 +1103,18 @@ def create_pass_through_route(
                 param_custom_headers if isinstance(param_custom_headers, dict) else {}
             )
 
+            # Ensure query_params and custom_body are dicts or None
+            final_query_params = (
+                query_params_data
+                if isinstance(query_params_data, dict) or query_params_data is None
+                else None
+            )
+            final_custom_body = (
+                custom_body_data
+                if isinstance(custom_body_data, dict) or custom_body_data is None
+                else None
+            )
+
             return await pass_through_request(  # type: ignore
                 request=request,
                 target=full_target,
@@ -1039,9 +1122,9 @@ def create_pass_through_route(
                 user_api_key_dict=user_api_key_dict,
                 forward_headers=cast(Optional[bool], param_forward_headers),
                 merge_query_params=cast(Optional[bool], param_merge_query_params),
-                query_params=query_params,
+                query_params=final_query_params,
                 stream=stream,
-                custom_body=custom_body,
+                custom_body=final_custom_body,
                 cost_per_request=cast(Optional[float], param_cost_per_request),
                 custom_llm_provider=custom_llm_provider,
             )
