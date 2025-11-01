@@ -161,11 +161,11 @@ def _extract_usage_for_ocr_call(
     usage_info = None
     
     # Try to extract usage_info from dict
-    if isinstance(response_obj_dict, dict):
-        usage_info = response_obj_dict.get("usage_info", {})
+    if isinstance(response_obj_dict, dict) and "usage_info" in response_obj_dict:
+        usage_info = response_obj_dict.get("usage_info")
     
-    # Try to extract usage_info from object attributes
-    elif hasattr(response_obj, "usage_info"):
+    # Try to extract usage_info from object attributes if not found in dict
+    if not usage_info and hasattr(response_obj, "usage_info"):
         usage_info = response_obj.usage_info
         if hasattr(usage_info, "model_dump"):
             usage_info = usage_info.model_dump()
@@ -173,13 +173,28 @@ def _extract_usage_for_ocr_call(
             usage_info = vars(usage_info)
     
     # For OCR, we track pages instead of tokens
-    if usage_info:
-        return {
-            "prompt_tokens": 0,  # OCR doesn't use traditional tokens
-            "completion_tokens": 0,
-            "total_tokens": 0,
-            "pages_processed": usage_info.get("pages_processed", 0) if isinstance(usage_info, dict) else 0
-        }
+    if usage_info is not None:
+        # Handle dict or object with attributes
+        if isinstance(usage_info, dict):
+            result = {
+                "prompt_tokens": 0,  # OCR doesn't use traditional tokens
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            }
+            # Add all fields from usage_info, including pages_processed
+            for key, value in usage_info.items():
+                result[key] = value
+            # Ensure pages_processed exists
+            if "pages_processed" not in result:
+                result["pages_processed"] = 0
+            return result
+        else:
+            return {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "pages_processed": 0
+            }
     else:
         return {}
 
