@@ -943,10 +943,12 @@ class CustomStreamWrapper:
                 if self.custom_llm_provider == "bedrock" and "trace" in model_response:
                     return model_response
 
-                # Default - return StopIteration
-                if hasattr(model_response, "usage"):
+                # Don't raise StopIteration here - some providers (like OpenRouter)
+                # send usage/cost data in chunks after the finish_reason chunk
+                if hasattr(model_response, "usage") and model_response.usage is not None:
                     self.chunks.append(model_response)
-                raise StopIteration
+                    return model_response
+                return
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
                 if model_response.choices[0].delta.content is None:
@@ -1044,7 +1046,11 @@ class CustomStreamWrapper:
             ):
                 if self.received_finish_reason is not None:
                     if "provider_specific_fields" not in chunk:
-                        raise StopIteration
+                        if self.custom_llm_provider != "openrouter":
+                            raise StopIteration
+                        else:
+                            # OpenRouter: continue processing - usage will come in later chunks
+                            pass
                 anthropic_response_obj: GChunk = cast(GChunk, chunk)
                 completion_obj["content"] = anthropic_response_obj["text"]
                 if anthropic_response_obj["is_finished"]:
@@ -1487,12 +1493,16 @@ class CustomStreamWrapper:
 
                 self.tool_call = True
 
+            if hasattr(chunk, "usage") and chunk.usage is not None:
+                model_response.usage = chunk.usage
+
             ## RETURN ARG
-            return self.return_processed_chunk_logic(
+            result = self.return_processed_chunk_logic(
                 completion_obj=completion_obj,
                 model_response=model_response,  # type: ignore
                 response_obj=response_obj,
             )
+            return result
 
         except StopIteration:
             raise StopIteration
@@ -1639,6 +1649,10 @@ class CustomStreamWrapper:
                     if hasattr(
                         response, "usage"
                     ):  # remove usage from chunk, only send on final chunk
+                        usage_to_preserve = response.usage
+                        if usage_to_preserve:
+                            response._hidden_params["usage"] = usage_to_preserve
+
                         # Convert the object to a dictionary
                         obj_dict = response.dict()
 
@@ -2001,12 +2015,20 @@ def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    latest_usage_chunk = None
+
     for chunk in chunks:
         if "usage" in chunk:
-            if "prompt_tokens" in chunk["usage"]:
-                prompt_tokens = chunk["usage"].get("prompt_tokens", 0) or 0
-            if "completion_tokens" in chunk["usage"]:
-                completion_tokens = chunk["usage"].get("completion_tokens", 0) or 0
+            usage = chunk["usage"]
+            if usage:
+                latest_usage_chunk = usage
+                if "prompt_tokens" in usage:
+                    prompt_tokens = usage.get("prompt_tokens", 0) or 0
+                if "completion_tokens" in usage:
+                    completion_tokens = usage.get("completion_tokens", 0) or 0
+
+    if latest_usage_chunk and hasattr(latest_usage_chunk, "cost") and latest_usage_chunk.cost is not None:
+        return latest_usage_chunk
 
     returned_usage_chunk = Usage(
         prompt_tokens=prompt_tokens,
