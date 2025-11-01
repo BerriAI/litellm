@@ -4206,7 +4206,6 @@ class BaseLLMHTTPHandler:
     def video_content_handler(
         self,
         video_id: str,
-        model: str,
         video_content_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -4223,7 +4222,6 @@ class BaseLLMHTTPHandler:
         if _is_async:
             return self.async_video_content_handler(
                 video_id=video_id,
-                model=model,
                 video_content_provider_config=video_content_provider_config,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -4243,7 +4241,7 @@ class BaseLLMHTTPHandler:
 
         headers = video_content_provider_config.validate_environment(
             headers=extra_headers or {},
-            model=model,
+            model="",
             api_key=api_key,
         )
 
@@ -4251,7 +4249,7 @@ class BaseLLMHTTPHandler:
             headers.update(extra_headers)
 
         api_base = video_content_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
@@ -4259,7 +4257,6 @@ class BaseLLMHTTPHandler:
         # Transform the request using the provider config
         url, params = video_content_provider_config.transform_video_content_request(
             video_id=video_id,
-            model=model,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
@@ -4275,7 +4272,6 @@ class BaseLLMHTTPHandler:
 
             # Transform the response using the provider config
             return video_content_provider_config.transform_video_content_response(
-                model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
             )
@@ -4289,7 +4285,6 @@ class BaseLLMHTTPHandler:
     async def async_video_content_handler(
         self,
         video_id: str,
-        model: str,
         video_content_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -4312,7 +4307,7 @@ class BaseLLMHTTPHandler:
 
         headers = video_content_provider_config.validate_environment(
             headers=extra_headers or {},
-            model=model,
+            model="",
             api_key=api_key,
         )
 
@@ -4320,7 +4315,7 @@ class BaseLLMHTTPHandler:
             headers.update(extra_headers)
 
         api_base = video_content_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
@@ -4328,7 +4323,6 @@ class BaseLLMHTTPHandler:
         # Transform the request using the provider config
         url, params = video_content_provider_config.transform_video_content_request(
             video_id=video_id,
-            model=model,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
@@ -4344,7 +4338,6 @@ class BaseLLMHTTPHandler:
 
             # Transform the response using the provider config
             return video_content_provider_config.transform_video_content_response(
-                model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
             )
@@ -4359,7 +4352,6 @@ class BaseLLMHTTPHandler:
         self,
         video_id: str,
         prompt: str,
-        model: str,
         video_remix_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -4380,7 +4372,6 @@ class BaseLLMHTTPHandler:
             return self.async_video_remix_handler(
                 video_id=video_id,
                 prompt=prompt,
-                model=model,
                 video_remix_provider_config=video_remix_provider_config,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -4403,14 +4394,14 @@ class BaseLLMHTTPHandler:
         headers = video_remix_provider_config.validate_environment(
             api_key=api_key,
             headers=extra_headers or {},
-            model=model,
+            model="",
         )
 
         if extra_headers:
             headers.update(extra_headers)
 
         api_base = video_remix_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
@@ -4419,7 +4410,6 @@ class BaseLLMHTTPHandler:
         url, data = video_remix_provider_config.transform_video_remix_request(
             video_id=video_id,
             prompt=prompt,
-            model=model,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
@@ -4447,7 +4437,6 @@ class BaseLLMHTTPHandler:
             )
 
             return video_remix_provider_config.transform_video_remix_response(
-                model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
             )
@@ -4462,7 +4451,6 @@ class BaseLLMHTTPHandler:
         self,
         video_id: str,
         prompt: str,
-        model: str,
         video_remix_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -4487,14 +4475,14 @@ class BaseLLMHTTPHandler:
         headers = video_remix_provider_config.validate_environment(
             api_key=api_key,
             headers=extra_headers or {},
-            model=model,
+            model="",
         )
 
         if extra_headers:
             headers.update(extra_headers)
 
         api_base = video_remix_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
@@ -4503,7 +4491,6 @@ class BaseLLMHTTPHandler:
         url, data = video_remix_provider_config.transform_video_remix_request(
             video_id=video_id,
             prompt=prompt,
-            model=model,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
@@ -4531,7 +4518,6 @@ class BaseLLMHTTPHandler:
             )
 
             return video_remix_provider_config.transform_video_remix_response(
-                model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
             )
@@ -4547,7 +4533,6 @@ class BaseLLMHTTPHandler:
         after: Optional[str],
         limit: Optional[int],
         order: Optional[str],
-        model: str,
         video_list_provider_config,
         custom_llm_provider: str,
         litellm_params,
@@ -4567,7 +4552,6 @@ class BaseLLMHTTPHandler:
                 after=after,
                 limit=limit,
                 order=order,
-                model=model,
                 video_list_provider_config=video_list_provider_config,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -4587,7 +4571,6 @@ class BaseLLMHTTPHandler:
                     after=after,
                     limit=limit,
                     order=order,
-                    model=model,
                     video_list_provider_config=video_list_provider_config,
                     custom_llm_provider=custom_llm_provider,
                     litellm_params=litellm_params,
@@ -4604,7 +4587,6 @@ class BaseLLMHTTPHandler:
         after: Optional[str],
         limit: Optional[int],
         order: Optional[str],
-        model: str,
         video_list_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -4629,21 +4611,20 @@ class BaseLLMHTTPHandler:
         headers = video_list_provider_config.validate_environment(
             api_key=api_key,
             headers=extra_headers or {},
-            model=model,
+            model="",
         )
 
         if extra_headers:
             headers.update(extra_headers)
 
         api_base = video_list_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
         url, params = video_list_provider_config.transform_video_list_request(
-            model=model,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
@@ -4672,7 +4653,6 @@ class BaseLLMHTTPHandler:
             )
 
             return video_list_provider_config.transform_video_list_response(
-                model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
             )
@@ -4686,7 +4666,6 @@ class BaseLLMHTTPHandler:
     async def async_video_delete_handler(
         self,
         video_id: str,
-        model: str,
         video_delete_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -4710,14 +4689,14 @@ class BaseLLMHTTPHandler:
         headers = video_delete_provider_config.validate_environment(
             api_key=api_key,
             headers=extra_headers or {},
-            model=model,
+            model="",
         )
 
         if extra_headers:
             headers.update(extra_headers)
 
         api_base = video_delete_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
@@ -4725,7 +4704,6 @@ class BaseLLMHTTPHandler:
         # Transform the request using the provider config
         url, data = video_delete_provider_config.transform_video_delete_request(
             video_id=video_id,
-            model=model,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
@@ -4750,7 +4728,6 @@ class BaseLLMHTTPHandler:
             )
 
             return video_delete_provider_config.transform_video_delete_response(
-                model=model,
                 raw_response=response,
                 logging_obj=logging_obj,
             )
@@ -4764,7 +4741,6 @@ class BaseLLMHTTPHandler:
     def video_status_handler(
         self,
         video_id: str,
-        model: str,
         video_status_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -4784,7 +4760,6 @@ class BaseLLMHTTPHandler:
             # Return the async coroutine if called with _is_async=True
             return self.async_video_status_handler(
                 video_id=video_id,
-                model=model,
                 video_status_provider_config=video_status_provider_config,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -4807,27 +4782,24 @@ class BaseLLMHTTPHandler:
         headers = video_status_provider_config.validate_environment(
             api_key=api_key,
             headers=extra_headers or {},
-            model=model,
+            model="",
         )
 
         if extra_headers:
             headers.update(extra_headers)
 
         api_base = video_status_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
-        url, data = (
-            video_status_provider_config.transform_video_status_retrieve_request(
-                video_id=video_id,
-                model=model,
-                api_base=api_base,
-                litellm_params=litellm_params,
-                headers=headers,
-            )
+        url, data = video_status_provider_config.transform_video_status_retrieve_request(
+            video_id=video_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
         )
 
         ## LOGGING
@@ -4846,13 +4818,9 @@ class BaseLLMHTTPHandler:
                 url=url,
                 headers=headers,
             )
-
-            return (
-                video_status_provider_config.transform_video_status_retrieve_response(
-                    model=model,
-                    raw_response=response,
-                    logging_obj=logging_obj,
-                )
+            return video_status_provider_config.transform_video_status_retrieve_response(
+                raw_response=response,
+                logging_obj=logging_obj,
             )
 
         except Exception as e:
@@ -4864,7 +4832,6 @@ class BaseLLMHTTPHandler:
     async def async_video_status_handler(
         self,
         video_id: str,
-        model: str,
         video_status_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -4889,27 +4856,24 @@ class BaseLLMHTTPHandler:
         headers = video_status_provider_config.validate_environment(
             api_key=api_key,
             headers=extra_headers or {},
-            model=model,
+            model="",
         )
 
         if extra_headers:
             headers.update(extra_headers)
 
         api_base = video_status_provider_config.get_complete_url(
-            model=model,
+            model="",
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
-        url, data = (
-            video_status_provider_config.transform_video_status_retrieve_request(
-                video_id=video_id,
-                model=model,
-                api_base=api_base,
-                litellm_params=litellm_params,
-                headers=headers,
-            )
+        url, data = video_status_provider_config.transform_video_status_retrieve_request(
+            video_id=video_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
         )
 
         ## LOGGING
@@ -4928,13 +4892,9 @@ class BaseLLMHTTPHandler:
                 url=url,
                 headers=headers,
             )
-
-            return (
-                video_status_provider_config.transform_video_status_retrieve_response(
-                    model=model,
-                    raw_response=response,
-                    logging_obj=logging_obj,
-                )
+            return video_status_provider_config.transform_video_status_retrieve_response(
+                raw_response=response,
+                logging_obj=logging_obj,
             )
 
         except Exception as e:

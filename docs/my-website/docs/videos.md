@@ -42,7 +42,7 @@ print(f"Initial Status: {response.status}")
 while True:
     status_response = video_status(
         video_id=response.id,
-        model="openai/sora-2"
+        custom_llm_provider="openai"
     )
     
     print(f"Current Status: {status_response.status}")
@@ -58,7 +58,7 @@ while True:
 # Download video content when ready
 video_bytes = video_content(
     video_id=response.id,
-    model="openai/sora-2"
+    custom_llm_provider="openai"
 )
 
 # Save to file
@@ -89,7 +89,7 @@ async def test_async_video():
     while True:
         status_response = await avideo_status(
             video_id=response.id,
-            model="openai/sora-2"
+            custom_llm_provider="openai"
         )
         
         print(f"Current Status: {status_response.status}")
@@ -105,7 +105,7 @@ async def test_async_video():
     # Download video content when ready
     video_bytes = await avideo_content(
         video_id=response.id,
-        model="openai/sora-2"
+        custom_llm_provider="openai"
     )
     
     # Save to file
@@ -123,7 +123,7 @@ from litellm import video_status
 # Check the status of a video generation
 status_response = video_status(
     video_id="video_1234567890",
-    model="openai/sora-2"
+    custom_llm_provider="openai"
 )
 
 print(f"Video Status: {status_response.status}")
@@ -253,27 +253,57 @@ curl --location 'http://localhost:4000/v1/videos' \
 Test video status request
 
 ```bash
+# Using custom-llm-provider header
 curl --location 'http://localhost:4000/v1/videos/video_id' \
 --header 'Accept: application/json' \
---header 'x-litellm-api-key: sk-1234'
+--header 'x-litellm-api-key: sk-1234' \
+--header 'custom-llm-provider: azure'
 
+# Or using query parameter
+curl --location 'http://localhost:4000/v1/videos/video_id?custom_llm_provider=azure' \
+--header 'Accept: application/json' \
+--header 'x-litellm-api-key: sk-1234'
 ```
 
 Test video retrieval request
 
 ```bash
+# Using custom-llm-provider header
 curl --location 'http://localhost:4000/v1/videos/video_id/content' \
 --header 'Accept: application/json' \
---header 'x-litellm-api-key: sk-1234'
+--header 'x-litellm-api-key: sk-1234' \
+--header 'custom-llm-provider: openai' \
+--output video.mp4
 
+# Or using query parameter
+curl --location 'http://localhost:4000/v1/videos/video_id/content?custom_llm_provider=openai' \
+--header 'Accept: application/json' \
+--header 'x-litellm-api-key: sk-1234' \
+--output video.mp4
 ```
 
 Test video remix request
 
 ```bash
-curl --location --request POST 'http://localhost:4000/v1/videos/string/remix' \
+# Using custom_llm_provider in request body
+curl --location --request POST 'http://localhost:4000/v1/videos/video_id/remix' \
 --header 'Accept: application/json' \
---header 'x-litellm-api-key: sk-1234'
+--header 'Content-Type: application/json' \
+--header 'x-litellm-api-key: sk-1234' \
+--data '{
+    "prompt": "New remix instructions",
+    "custom_llm_provider": "azure"
+}'
+
+# Or using custom-llm-provider header
+curl --location --request POST 'http://localhost:4000/v1/videos/video_id/remix' \
+--header 'Accept: application/json' \
+--header 'Content-Type: application/json' \
+--header 'x-litellm-api-key: sk-1234' \
+--header 'custom-llm-provider: azure' \
+--data '{
+    "prompt": "New remix instructions"
+}'
 ```
 
 Test Azure video generation request

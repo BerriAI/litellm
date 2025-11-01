@@ -7663,7 +7663,7 @@ class ProviderConfigManager:
 
     @staticmethod
     def get_provider_video_config(
-        model: str,
+        model: Optional[str],
         provider: LlmProviders,
     ) -> Optional[BaseVideoConfig]:
         if LlmProviders.OPENAI == provider:

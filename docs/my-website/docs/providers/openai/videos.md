@@ -65,7 +65,7 @@ with open("generated_video.mp4", "wb") as f:
 # Download video content
 video_bytes = video_content(
     video_id="video_1234567890",
-    model="sora-2"
+    custom_llm_provider="openai"  # Or use model="sora-2"
 )
 
 # Save to file
@@ -97,7 +97,7 @@ def generate_and_download_video(prompt):
     # Step 3: Download video
     video_bytes = litellm.video_content(
         video_id=video_id,
-        model="sora-2"
+        custom_llm_provider="openai"  
     )
     
     # Step 4: Save to file
