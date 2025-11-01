@@ -3558,7 +3558,7 @@ class ProxyConfig:
                 )
             else:
                 for vector_store_index in vector_store_indexes:
-                    litellm.vector_store_index_registry.add_vector_store_index(
+                    litellm.vector_store_index_registry.upsert_vector_store_index(
                         vector_store_index=vector_store_index
                     )
         except Exception as e:

@@ -44,7 +44,7 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
 
         return {
             "headers": {
-                "Authorization": f"Bearer {api_key}",
+                "api-key": api_key,
             }
         }
 

@@ -43,12 +43,20 @@ class VectorStoreIndexRegistry:
                 return vector_store_index
         return None
 
-    def add_vector_store_index(
+    def upsert_vector_store_index(
         self, vector_store_index: LiteLLM_ManagedVectorStoreIndex
     ):
         """
-        Adds a vector store index to the registry
+        Adds a vector store index to the registry.
+
+        If it already exists, it will be updated.
         """
+        for i, _vector_store_index in enumerate[LiteLLM_ManagedVectorStoreIndex](
+            self.vector_store_indexes
+        ):
+            if _vector_store_index.index_name == vector_store_index.index_name:
+                self.vector_store_indexes[i] = vector_store_index
+                return
         self.vector_store_indexes.append(vector_store_index)
 
     def delete_vector_store_index(self, vector_store_index: str):
