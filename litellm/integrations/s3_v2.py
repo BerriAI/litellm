@@ -49,7 +49,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_batch_size: Optional[int] = DEFAULT_S3_BATCH_SIZE,
         s3_config=None,
         s3_use_team_prefix: bool = False,
-        s3_strip_base64_files: bool = False
+        s3_strip_base64_files: bool = False,
         **kwargs,
     ):
         try:
