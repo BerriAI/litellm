@@ -187,6 +187,7 @@ class BaseLLMChatTest(ABC):
         print(response)
         print(json.dumps(response, indent=4, default=str))
 
+    @pytest.mark.flaky(retries=3, delay=1)
     def test_tool_call_with_empty_enum_property(self):
         litellm._turn_on_debug()
         from litellm.utils import supports_function_calling

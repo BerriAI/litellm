@@ -458,6 +458,7 @@ const sidebars = {
             "providers/azure_ai_speech",
             "providers/azure_ai_img",
             "providers/azure_ai_vector_stores",
+            "providers/azure_ai/azure_ai_vector_stores_passthrough",
           ]
         },
         {
@@ -496,6 +497,7 @@ const sidebars = {
             "providers/bedrock_vector_store",
           ]
         },
+        "providers/milvus_vector_stores",
         "providers/litellm_proxy",
         "providers/meta_llama",
         "providers/mistral",
