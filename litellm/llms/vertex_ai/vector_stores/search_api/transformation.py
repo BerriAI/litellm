@@ -83,10 +83,12 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         """
         vertex_location = self.get_vertex_ai_location(litellm_params)
         vertex_project = self.get_vertex_ai_project(litellm_params)
-        engine_id = litellm_params.get("vertex_app_id")
         collection_id = (
             litellm_params.get("vertex_collection_id") or "default_collection"
         )
+        datastore_id = litellm_params.get("vector_store_id")
+        if not datastore_id:
+            raise ValueError("vector_store_id is required")
         if api_base:
             return api_base.rstrip("/")
 
@@ -94,7 +96,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         return (
             f"https://discoveryengine.googleapis.com/v1/"
             f"projects/{vertex_project}/locations/{vertex_location}/"
-            f"collections/{collection_id}/engines/{engine_id}/servingConfigs/default_config"
+            f"collections/{collection_id}/dataStores/{datastore_id}/servingConfigs/default_config"
         )
 
     def transform_search_vector_store_request(

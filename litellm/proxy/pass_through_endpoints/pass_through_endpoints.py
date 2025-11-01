@@ -995,6 +995,7 @@ def create_pass_through_route(
     include_subpath: Optional[bool] = False,
     cost_per_request: Optional[float] = None,
     custom_llm_provider: Optional[str] = None,
+    is_streaming_request: Optional[bool] = False,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -1115,7 +1116,7 @@ def create_pass_through_route(
                 forward_headers=cast(Optional[bool], param_forward_headers),
                 merge_query_params=cast(Optional[bool], param_merge_query_params),
                 query_params=final_query_params,
-                stream=stream,
+                stream=is_streaming_request or stream,
                 custom_body=final_custom_body,
                 cost_per_request=cast(Optional[float], param_cost_per_request),
                 custom_llm_provider=custom_llm_provider,

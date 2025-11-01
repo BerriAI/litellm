@@ -1504,6 +1504,7 @@ async def _base_vertex_proxy_route(
         endpoint=endpoint,
         target=target,
         custom_headers=headers,
+        is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
 
     try:
@@ -1511,7 +1512,6 @@ async def _base_vertex_proxy_route(
             request,
             fastapi_response,
             user_api_key_dict,
-            stream=is_streaming_request,  # type: ignore
         )
     except ProxyException as e:
         if headers_passed_through:
