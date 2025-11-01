@@ -1266,18 +1266,11 @@ def test_anthropic_websearch(optional_params: dict):
         response = litellm.completion(**params)
     except litellm.InternalServerError as e:
         print(e)
-        pytest.skip(f"API error: {e}")
 
     assert response is not None
+
     print(f"response: {response}\n")
-    
-    # Check if web search was used
-    if hasattr(response.usage, "server_tool_use") and response.usage.server_tool_use is not None:
-        assert response.usage.server_tool_use.web_search_requests >= 1
-    else:
-        # Web search may not always be triggered depending on the query
-        # Just verify the response was successful
-        assert response.choices[0].message.content is not None
+    assert response.usage.server_tool_use.web_search_requests == 1
 
 
 def test_anthropic_text_editor():
