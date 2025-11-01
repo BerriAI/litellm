@@ -1318,6 +1318,7 @@ class NewTeamRequest(TeamBase):
         None  # allow user to set TPM limit for all team members
     )
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
+    allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1366,6 +1367,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     allowed_passthrough_routes: Optional[list] = None
     model_rpm_limit: Optional[Dict[str, int]] = None
     model_tpm_limit: Optional[Dict[str, int]] = None
+    allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
