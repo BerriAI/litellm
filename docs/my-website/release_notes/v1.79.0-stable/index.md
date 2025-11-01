@@ -1,5 +1,5 @@
 ---
-title: "[Pre-Release] v1.79.0-stable - Search APIs"
+title: "v1.79.0-stable - Search APIs"
 slug: "v1-79-0"
 date: 2025-10-26T10:00:00
 authors:
