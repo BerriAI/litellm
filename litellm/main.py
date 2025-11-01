@@ -154,6 +154,7 @@ from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
+from .llms.bedrock.agentcore import AgentCoreConfig
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
@@ -3163,6 +3164,25 @@ def completion(  # type: ignore # noqa: PLR0915
 
             ## RESPONSE OBJECT
             response = model_response
+        elif custom_llm_provider == "bedrock" and "agentcore" in model:
+            # AgentCore Runtime - serverless agent deployment
+            from litellm.llms.bedrock.agentcore import handler as agentcore_chat_completion
+
+            response = agentcore_chat_completion.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                api_base=api_base,
+                logging_obj=logging,
+                acompletion=acompletion,
+            )
         elif custom_llm_provider == "bedrock":
             # boto3 reads keys from .env
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
