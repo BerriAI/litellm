@@ -568,7 +568,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_vector_store_not_in_regi
     client = AsyncHTTPHandler()
 
     if litellm.vector_store_registry is not None:
-        print("Registry iniitalized:", litellm.vector_store_registry.vector_stores)
+        print("Registry initialized:", litellm.vector_store_registry.vector_stores)
     else:
         print("Registry is None")
 

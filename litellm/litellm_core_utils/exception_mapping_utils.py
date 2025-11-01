@@ -780,7 +780,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 elif "token_quota_reached" in error_str:
                     exception_mapping_worked = True
                     raise RateLimitError(
-                        message=f"{custom_llm_provider.capitalize()}Exception: Rate Limit Errror - {error_str}",
+                        message=f"{custom_llm_provider.capitalize()}Exception: Rate Limit Error - {error_str}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=getattr(original_exception, "response", None),

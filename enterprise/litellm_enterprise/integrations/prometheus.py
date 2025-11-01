@@ -1194,7 +1194,7 @@ class PrometheusLogger(CustomLogger):
             self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:
             verbose_logger.exception(
-                "prometheus Layer Error(): Exception occured - {}".format(str(e))
+                "prometheus Layer Error(): Exception occurred - {}".format(str(e))
             )
             pass
         pass
@@ -1262,7 +1262,7 @@ class PrometheusLogger(CustomLogger):
 
         except Exception as e:
             verbose_logger.exception(
-                "prometheus Layer Error(): Exception occured - {}".format(str(e))
+                "prometheus Layer Error(): Exception occurred - {}".format(str(e))
             )
             pass
 
@@ -1303,7 +1303,7 @@ class PrometheusLogger(CustomLogger):
 
         except Exception as e:
             verbose_logger.exception(
-                "prometheus Layer Error(): Exception occured - {}".format(str(e))
+                "prometheus Layer Error(): Exception occurred - {}".format(str(e))
             )
             pass
 
@@ -1390,7 +1390,7 @@ class PrometheusLogger(CustomLogger):
             pass
         except Exception as e:
             verbose_logger.debug(
-                "Prometheus Error: set_llm_deployment_failure_metrics. Exception occured - {}".format(
+                "Prometheus Error: set_llm_deployment_failure_metrics. Exception occurred - {}".format(
                     str(e)
                 )
             )
@@ -1537,7 +1537,7 @@ class PrometheusLogger(CustomLogger):
 
         except Exception as e:
             verbose_logger.exception(
-                "Prometheus Error: set_llm_deployment_success_metrics. Exception occured - {}".format(
+                "Prometheus Error: set_llm_deployment_success_metrics. Exception occurred - {}".format(
                     str(e)
                 )
             )

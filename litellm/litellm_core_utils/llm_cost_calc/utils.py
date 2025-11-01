@@ -85,7 +85,7 @@ def _generic_cost_per_character(
         prompt_cost = prompt_characters * custom_prompt_cost
     except Exception as e:
         verbose_logger.exception(
-            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {}\nDefaulting to None".format(
+            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occurred - {}\nDefaulting to None".format(
                 str(e)
             )
         )
@@ -105,7 +105,7 @@ def _generic_cost_per_character(
         completion_cost = completion_characters * custom_completion_cost
     except Exception as e:
         verbose_logger.exception(
-            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {}\nDefaulting to None".format(
+            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occurred - {}\nDefaulting to None".format(
                 str(e)
             )
         )
@@ -276,7 +276,7 @@ def _get_cost_per_unit(
             return float(cost_per_unit)
         except ValueError:
             verbose_logger.exception(
-                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::calculate_cost_per_component(): Exception occured - {cost_per_unit}\nDefaulting to 0.0"
+                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::calculate_cost_per_component(): Exception occurred - {cost_per_unit}\nDefaulting to 0.0"
             )
     
     # If the service tier key doesn't exist or is None, try to fall back to the standard key
@@ -297,7 +297,7 @@ def _get_cost_per_unit(
                         return float(fallback_cost)
                     except ValueError:
                         verbose_logger.exception(
-                            f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_cost_per_unit(): Exception occured - {fallback_cost}\nDefaulting to 0.0"
+                            f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_cost_per_unit(): Exception occurred - {fallback_cost}\nDefaulting to 0.0"
                         )
                 break  # Only try the first matching suffix
     
