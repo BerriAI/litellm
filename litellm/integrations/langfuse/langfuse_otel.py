@@ -158,6 +158,7 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         # Set observation output (response with tool_calls if present)
         if response_obj and hasattr(response_obj, "get"):
+            # Handle chat completions API (choices field)
             choices = response_obj.get("choices", [])
             if choices:
                 # Extract the first choice's message
@@ -211,6 +212,44 @@ class LangfuseOtelLogger(OpenTelemetry):
                             LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
                             safe_dumps(output_data),
                         )
+
+            # Handle responses API (output field)
+            output = response_obj.get("output", [])
+            if output:
+                output_data = []
+                for item in output:
+                    if hasattr(item, "type"):
+                        item_type = item.type
+                    
+                        if item_type == "reasoning" and hasattr(item, "summary"):
+                            for summary in item.summary:
+                                if hasattr(summary, "text"):
+                                    output_data.append({
+                                        "role": "reasoning_summary",
+                                        "content": summary.text
+                                    })
+                        elif item_type == "message":
+                            output_data.append({
+                                "role": getattr(item, "role", "assistant"),
+                                "content": getattr(getattr(item, "content", [{}])[0], "text", "")
+                            })
+                        elif item_type == "function_call":
+                            arguments_str = getattr(item, "arguments", "{}")
+                            arguments_obj = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
+                            langfuse_tool_call = {
+                                "id": getattr(item, "id", ""),
+                                "name": getattr(item, "name", ""),
+                                "call_id": getattr(item, "call_id", ""),
+                                "type": "function_call",
+                                "arguments": arguments_obj,
+                            }
+                            output_data.append(langfuse_tool_call)
+                if output_data:
+                    safe_set_attribute(
+                        span,
+                        LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
+                        safe_dumps(output_data),
+                    )
 
     @staticmethod
     def _get_langfuse_otel_host() -> Optional[str]:
