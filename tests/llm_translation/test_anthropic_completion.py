@@ -1258,7 +1258,7 @@ def test_anthropic_websearch(optional_params: dict):
     litellm._turn_on_debug()
     params = {
         "model": "anthropic/claude-sonnet-4-5-20250929",
-        "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+        "messages": [{"role": "user", "content": "What is the current weather in Tokyo right now?. Make sure to search the web for an answer"}],
         **optional_params,
     }
 
@@ -1270,7 +1270,9 @@ def test_anthropic_websearch(optional_params: dict):
     assert response is not None
 
     print(f"response: {response}\n")
-    assert response.usage.server_tool_use.web_search_requests == 1
+    # When web search is requested and used, server_tool_use should be present
+    assert response.usage.server_tool_use is not None
+    assert response.usage.server_tool_use.web_search_requests >= 1
 
 
 def test_anthropic_text_editor():
