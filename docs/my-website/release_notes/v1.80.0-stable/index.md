@@ -1,6 +1,6 @@
 ---
-title: "[Preview] v1.80.0-stable - UI Enhancements & Provider Expansions"
-slug: "v1-80-0"
+title: "[Preview] v1.79.1-stable - FAL AI Support"
+slug: "v1-79-1"
 date: 2025-11-01T10:00:00
 authors:
   - name: Krrish Dholakia
