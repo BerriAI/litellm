@@ -879,7 +879,7 @@ async def test_anthropic_structured_output():
     from litellm import acompletion
 
     args = {
-        "model": "claude-3-5-sonnet-20240620",
+        "model": "claude-sonnet-4-5-20250929",
         "seed": 3015206306868917280,
         "stop": None,
         "messages": [
