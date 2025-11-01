@@ -78,7 +78,7 @@ def _calculate_tiered_cost(
         
         # Skip this tier if the tokens are below its start range
         if tokens <= range_start:
-            continue # to handle out of order tiers
+            continue
             
         tier_start = max(range_start, tokens_processed)
         tier_end = min(range_end, tokens)

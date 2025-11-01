@@ -651,3 +651,115 @@ def test_bedrock_anthropic_prompt_caching():
     assert completion_cost >= 0
     assert round(prompt_cost, 3) == 0.111
     assert round(completion_cost, 5) == 0.00820
+
+
+def test_generic_cost_calculator_backward_compatibility():
+    """
+    Tests that the generic cost calculator still works for a standard flat-rate model.
+    """
+    usage = Usage(prompt_tokens=100, completion_tokens=50)
+    prompt_cost, completion_cost = generic_cost_per_token(model="gpt-3.5-turbo", usage=usage, custom_llm_provider="openai")
+    
+    model_info = litellm.get_model_info("gpt-3.5-turbo")
+    expected_prompt_cost = 100 * model_info["input_cost_per_token"]
+    expected_completion_cost = 50 * model_info["output_cost_per_token"]
+
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+    assert completion_cost == pytest.approx(expected_completion_cost)
+
+def test_tiered_pricing_within_first_tier():
+    """
+    Tests tiered pricing when token count is entirely within the first tier.
+    """
+    model_name = "custom-tiered-model-1"
+    model_cost_dict = {
+        model_name: {
+            "litellm_provider": "custom",
+            "mode": "chat",
+            "tiered_pricing": [
+                {"range": [0, 1000], "input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+                {"range": [1000, 5000], "input_cost_per_token": 0.0005, "output_cost_per_token": 0.001},
+            ]
+        }
+    }
+    
+    try:
+        litellm.register_model(model_cost_dict)
+        usage = Usage(prompt_tokens=500, completion_tokens=200)
+        prompt_cost, completion_cost = generic_cost_per_token(model=model_name, usage=usage, custom_llm_provider="custom")
+
+        expected_prompt_cost = 500 * 0.001
+        expected_completion_cost = 200 * 0.002
+        
+        assert prompt_cost == pytest.approx(expected_prompt_cost)
+        assert completion_cost == pytest.approx(expected_completion_cost)
+    finally:
+        # Cleanup to ensure test isolation
+        if model_name in litellm.model_cost:
+            del litellm.model_cost[model_name]
+
+def test_tiered_pricing_spanning_multiple_tiers():
+    """
+    Tests tiered pricing when token count spans multiple tiers. This is the key test.
+    """
+    model_name = "custom-tiered-model-2"
+    model_cost_dict = {
+        model_name: {
+            "litellm_provider": "custom",
+            "mode": "chat",
+            "tiered_pricing": [
+                {"range": [0, 1000], "input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+                {"range": [1000, 5000], "input_cost_per_token": 0.0005, "output_cost_per_token": 0.001},
+            ]
+        }
+    }
+
+    try:
+        litellm.register_model(model_cost_dict)
+        usage = Usage(prompt_tokens=3000, completion_tokens=1500)
+        prompt_cost, completion_cost = generic_cost_per_token(model=model_name, usage=usage, custom_llm_provider="custom")
+
+        # Expected prompt cost: (1000 tokens * 0.001) + (2000 tokens * 0.0005)
+        expected_prompt_cost = (1000 * 0.001) + (2000 * 0.0005)
+        
+        # Expected completion cost: (1000 tokens * 0.002) + (500 tokens * 0.001)
+        expected_completion_cost = (1000 * 0.002) + (500 * 0.001)
+
+        assert prompt_cost == pytest.approx(expected_prompt_cost)
+        assert completion_cost == pytest.approx(expected_completion_cost)
+    finally:
+        # Cleanup to ensure test isolation
+        if model_name in litellm.model_cost:
+            del litellm.model_cost[model_name]
+
+def test_tiered_pricing_at_tier_boundary():
+    """
+    Tests tiered pricing exactly at the boundary of a tier.
+    """
+    model_name = "custom-tiered-model-3"
+    model_cost_dict = {
+        model_name: {
+            "litellm_provider": "custom",
+            "mode": "chat",
+            "tiered_pricing": [
+                {"range": [0, 1000], "input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+                {"range": [1000, 5000], "input_cost_per_token": 0.0005, "output_cost_per_token": 0.001},
+            ]
+        }
+    }
+
+    try:
+        litellm.register_model(model_cost_dict)
+        usage = Usage(prompt_tokens=1000, completion_tokens=1000)
+        prompt_cost, completion_cost = generic_cost_per_token(model=model_name, usage=usage, custom_llm_provider="custom")
+
+        expected_prompt_cost = 1000 * 0.001
+        expected_completion_cost = 1000 * 0.002
+
+        assert prompt_cost == pytest.approx(expected_prompt_cost)
+        assert completion_cost == pytest.approx(expected_completion_cost)
+    finally:
+        # Cleanup to ensure test isolation
+        if model_name in litellm.model_cost:
+            del litellm.model_cost[model_name]
+            
