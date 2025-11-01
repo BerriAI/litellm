@@ -1282,7 +1282,7 @@ def test_anthropic_text_editor():
                 "content": "There'''s a syntax error in my primes.py file. Can you help me fix it?",
             }
         ],
-        "tools": [{"type": "text_editor_20250124", "name": "str_replace_editor"}],
+        "tools": [{"type": "text_editor_20250728", "name": "str_replace_editor"}],
     }
 
     try:
