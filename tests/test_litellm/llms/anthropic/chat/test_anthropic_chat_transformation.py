@@ -138,7 +138,7 @@ def test_extract_response_content_with_citations():
         "id": "msg_01XrAv7gc5tQNDuoADra7vB4",
         "type": "message",
         "role": "assistant",
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-4-5-20250929",
         "content": [
             {"type": "text", "text": "According to the documents, "},
             {
@@ -326,7 +326,7 @@ def test_transform_response_with_prefix_prompt():
         "id": "msg_01XrAv7gc5tQNDuoADra7vB4",
         "type": "message",
         "role": "assistant",
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-4-5-20250929",
         "content": [{"type": "text", "text": " The grass is green."}],
         "stop_reason": "end_turn",
         "stop_sequence": None,
