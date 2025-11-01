@@ -34,7 +34,10 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_websocket_passthrough_route,
     websocket_passthrough_request,
 )
-from litellm.proxy.utils import is_known_model, is_known_vector_store_index
+from litellm.proxy.utils import is_known_model
+from litellm.proxy.vector_store_endpoints.utils import (
+    is_allowed_to_call_vector_store_endpoint,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import ProviderConfigManager
 
@@ -1105,6 +1108,12 @@ async def azure_proxy_route(
                 if litellm.vector_store_registry is None:
                     raise Exception("Vector store registry not found")
 
+                is_allowed_to_call_vector_store_endpoint(
+                    index_name=part,
+                    provider=litellm.LlmProviders.AZURE_AI,
+                    request=request,
+                    user_api_key_dict=user_api_key_dict,
+                )
                 # get the vector store name from index registry
                 index_object = (
                     (

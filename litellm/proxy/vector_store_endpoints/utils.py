@@ -1,6 +1,7 @@
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, Literal, Optional
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import LlmProviders
@@ -65,7 +66,7 @@ def is_allowed_to_call_vector_store_endpoint(
     index_name: str,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
-) -> Optional[bool]:
+) -> Optional[Literal[True]]:
     """
     Check if the user is allowed to call the vector store endpoint.
 
@@ -73,7 +74,6 @@ def is_allowed_to_call_vector_store_endpoint(
     1. Creating a vector store index
     2. Reading a vector store index (Search / List / Get)
     """
-
     # check what allowed permissions are for the key
     key_metadata = user_api_key_dict.metadata
     team_metadata = user_api_key_dict.team_metadata
@@ -82,7 +82,7 @@ def is_allowed_to_call_vector_store_endpoint(
         provider=provider
     )
     if provider_config is None:
-        return False
+        return None
 
     provider_vector_store_endpoints = (
         provider_config.get_vector_store_endpoints_by_type()
@@ -102,7 +102,7 @@ def is_allowed_to_call_vector_store_endpoint(
                 break
 
     if permission_type is None:
-        return False
+        return None
 
     # Check if key has specific permission for allowed_vector_store_indexes
     has_permission = check_vector_store_permission(
@@ -111,5 +111,11 @@ def is_allowed_to_call_vector_store_endpoint(
         key_metadata=key_metadata,
         team_metadata=team_metadata,
     )
+
+    if not has_permission:
+        raise HTTPException(
+            status_code=403,
+            detail=f"User does not have permission to call vector store endpoint {index_name} for provider {provider}",
+        )
 
     return has_permission
