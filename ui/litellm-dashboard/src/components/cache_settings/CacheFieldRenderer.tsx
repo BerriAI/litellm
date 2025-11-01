@@ -1,5 +1,5 @@
 import React from "react";
-import { TextInput } from "@tremor/react";
+import { TextInput, NumberInput } from "@tremor/react";
 
 interface CacheFieldRendererProps {
   field: any;
@@ -47,13 +47,31 @@ const CacheFieldRenderer: React.FC<CacheFieldRendererProps> = ({
     );
   }
 
-  // Determine input type
-  let inputType = "text";
+  // Render number input for numeric fields
   if (field.field_type === "Integer" || field.field_type === "Float") {
-    inputType = "number";
-  } else if (field.field_name === "password" || field.field_name.includes("password")) {
-    inputType = "password";
+    return (
+      <div className="space-y-2">
+        <label className="text-sm font-medium text-gray-700">
+          {field.ui_field_name}
+        </label>
+        <NumberInput
+          name={field.field_name}
+          defaultValue={currentValue}
+          placeholder={field.field_description}
+          step={field.field_type === "Float" ? 0.01 : 1}
+        />
+        {field.field_description && (
+          <p className="text-xs text-gray-500">{field.field_description}</p>
+        )}
+      </div>
+    );
   }
+
+  // Determine input type for text-based fields
+  const inputType: "text" | "password" | "email" | "url" | undefined = 
+    (field.field_name === "password" || field.field_name.includes("password")) 
+      ? "password" 
+      : "text";
 
   return (
     <div className="space-y-2">
