@@ -45,6 +45,7 @@ def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
         SpanAttributes,
         ToolCallAttributes,
     )
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
     try:
         optional_params = kwargs.get("optional_params", {})
@@ -235,6 +236,7 @@ def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
 
         # Captures response tokens, message, and content.
         if hasattr(response_obj, "get"):
+            # Handle chat completions API (choices field)
             for idx, choice in enumerate(response_obj.get("choices", [])):
                 response_message = choice.get("message", {})
                 safe_set_attribute(
@@ -256,6 +258,51 @@ def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
                     response_message.get("content", ""),
                 )
 
+            # Handle responses API (output field)
+            output_items = response_obj.get("output", [])
+            if output_items:
+                for i, item in enumerate(output_items):
+                    prefix = f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{i}"
+
+                    if hasattr(item, "type"):
+                        item_type = item.type
+
+                        # Extract reasoning summary
+                        if item_type == "reasoning" and hasattr(item, "summary"):
+                            for summary in item.summary:
+                                if hasattr(summary, "text"):
+                                    safe_set_attribute(
+                                        span,
+                                        f"{prefix}.{MessageAttributes.MESSAGE_REASONING_SUMMARY}",
+                                        summary.text,
+                                    )
+
+                        # Extract message content
+                        elif item_type == "message" and hasattr(item, "content"):
+                            message_content = ""
+
+                            content_list = item.content
+                            if content_list and len(content_list) > 0:
+                                first_content = content_list[0]
+                                message_content = getattr(first_content, "text", "")
+                            message_role = getattr(item, "role", "assistant")
+
+                            safe_set_attribute(
+                                span,
+                                SpanAttributes.OUTPUT_VALUE,
+                                message_content,
+                            )
+                            safe_set_attribute(
+                                span,
+                                f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
+                                message_content,
+                            )
+                            safe_set_attribute(
+                                span,
+                                f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
+                                message_role,
+                            )
+
             # Token usage info.
             usage = response_obj and response_obj.get("usage")
             if usage:
@@ -266,18 +313,33 @@ def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
                 )
 
                 # The number of tokens used in the LLM response (completion).
-                safe_set_attribute(
-                    span,
-                    SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
-                    usage.get("completion_tokens"),
-                )
+                # Responses API uses "output_tokens", chat completions uses "completion_tokens"
+                completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
+                if completion_tokens:
+                    safe_set_attribute(
+                        span,
+                        SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
+                        completion_tokens,
+                    )
 
                 # The number of tokens used in the LLM prompt.
-                safe_set_attribute(
-                    span,
-                    SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
-                    usage.get("prompt_tokens"),
-                )
+                # Responses API uses "input_tokens", chat completions uses "prompt_tokens"
+                prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
+                if prompt_tokens:
+                    safe_set_attribute(
+                        span,
+                        SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
+                        prompt_tokens,
+                    )
+
+                # The number of reasoning tokens in the output, if available.
+                reasoning_tokens = usage.get("output_tokens_details", {}).get("reasoning_tokens")
+                if reasoning_tokens:
+                    safe_set_attribute(
+                        span,
+                        SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
+                        reasoning_tokens,
+                    )
 
     except Exception as e:
         verbose_logger.error(
