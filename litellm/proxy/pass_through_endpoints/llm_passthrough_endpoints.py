@@ -70,15 +70,6 @@ def is_passthrough_request_using_router_model(
         return False
 
 
-def is_passthrough_request_using_vector_store_index(
-    potential_vector_store_index: str,
-) -> bool:
-    """
-    Returns True if the request is using a vector store index
-    """
-    return is_known_vector_store_index(index_name=potential_vector_store_index)
-
-
 def is_passthrough_request_streaming(request_body: dict) -> bool:
     """
     Returns True if the request is streaming
@@ -1034,8 +1025,14 @@ async def azure_proxy_route(
                 request_body={"model": part}, llm_router=llm_router
             )
             # check if vector store index
-            is_vector_store_index = is_passthrough_request_using_vector_store_index(
-                potential_vector_store_index=part
+            is_vector_store_index = (
+                (
+                    litellm.vector_store_index_registry.is_vector_store_index(
+                        vector_store_index_name=part
+                    )
+                )
+                if litellm.vector_store_index_registry is not None
+                else False
             )
 
             if is_router_model:
@@ -1107,15 +1104,33 @@ async def azure_proxy_route(
                 # get the index from registry
                 if litellm.vector_store_registry is None:
                     raise Exception("Vector store registry not found")
+
+                # get the vector store name from index registry
+                index_object = (
+                    (
+                        litellm.vector_store_index_registry.get_vector_store_index_by_name(
+                            vector_store_index_name=part
+                        )
+                    )
+                    if litellm.vector_store_index_registry is not None
+                    else None
+                )
+                if index_object is None:
+                    raise Exception(f"Vector store index not found for {part}")
+
+                vector_store_name = index_object.litellm_params.vector_store_name
+
                 vector_store = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry_by_name(
-                    vector_store_name=part
+                    vector_store_name=vector_store_name
                 )
                 if vector_store is None:
-                    raise Exception(f"Vector store not found for {part}")
+                    raise Exception(f"Vector store not found for {vector_store_name}")
                 litellm_params = vector_store.get("litellm_params") or {}
-                extra_headers = provider_config.get_auth_credentials(
+                auth_credentials = provider_config.get_auth_credentials(
                     litellm_params=litellm_params
                 )
+
+                extra_headers = auth_credentials.get("headers") or {}
 
                 base_target_url = litellm_params.get("api_base")
                 if base_target_url is None:

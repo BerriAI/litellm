@@ -3695,11 +3695,12 @@ def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
     return is_in_list
 
 
-def is_known_vector_store_index(index_name: Optional[str]) -> bool:
+def is_known_vector_store_index(index_name: str) -> bool:
     """
     Returns True if the vector store index is in the llm_router vector store indexes
     """
-    if index_name is None or litellm.vector_store_index_registry is None:
+
+    if litellm.vector_store_index_registry is None:
         return False
     return index_name in litellm.vector_store_index_registry.get_vector_store_indexes()
 

@@ -212,8 +212,10 @@ async def index_create(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
     ## 1. check if index already exists
-    existing_index = await prisma_client.db.litellm_indextable.find_unique(
-        where={"index_name": index_create_request.index_name}
+    existing_index = (
+        await prisma_client.db.litellm_managedvectorstoreindextable.find_unique(
+            where={"index_name": index_create_request.index_name}
+        )
     )
 
     ## 2. set created_by and updated_by
@@ -228,7 +230,7 @@ async def index_create(
     index_data = index_create_request.model_dump(exclude_none=True)
     index_data["created_by"] = user_api_key_dict.user_id
     index_data["updated_by"] = user_api_key_dict.user_id
-    new_index = await prisma_client.db.litellm_indextable.create(
+    new_index = await prisma_client.db.litellm_managedvectorstoreindextable.create(
         data=jsonify_object(index_data)
     )
 

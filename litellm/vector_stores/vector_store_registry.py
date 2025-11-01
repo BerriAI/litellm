@@ -7,6 +7,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
+    LiteLLM_ManagedVectorStoreIndex,
     LiteLLM_ManagedVectorStoreListResponse,
     LiteLLM_VectorStoreConfig,
 )
@@ -18,16 +19,33 @@ else:
 
 
 class VectorStoreIndexRegistry:
-    def __init__(self):
-        self.vector_store_indexes: List[str] = []
+    def __init__(
+        self, vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = []
+    ):
+        self.vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = (
+            vector_store_indexes
+        )
 
-    def get_vector_store_indexes(self) -> List[str]:
+    def get_vector_store_indexes(self) -> List[LiteLLM_ManagedVectorStoreIndex]:
         """
         Returns the vector store indexes
         """
         return self.vector_store_indexes
 
-    def add_vector_store_index(self, vector_store_index: str):
+    def get_vector_store_index_by_name(
+        self, vector_store_index_name: str
+    ) -> Optional[LiteLLM_ManagedVectorStoreIndex]:
+        """
+        Returns the vector store index by name
+        """
+        for vector_store_index in self.vector_store_indexes:
+            if vector_store_index.index_name == vector_store_index_name:
+                return vector_store_index
+        return None
+
+    def add_vector_store_index(
+        self, vector_store_index: LiteLLM_ManagedVectorStoreIndex
+    ):
         """
         Adds a vector store index to the registry
         """
@@ -41,11 +59,40 @@ class VectorStoreIndexRegistry:
             index for index in self.vector_store_indexes if index != vector_store_index
         ]
 
-    def is_vector_store_index(self, vector_store_index: str) -> bool:
+    def is_vector_store_index(self, vector_store_index_name: str) -> bool:
         """
         Returns True if the vector store index is in the registry
         """
-        return vector_store_index in self.vector_store_indexes
+        for vector_store_index in self.vector_store_indexes:
+            if vector_store_index.index_name == vector_store_index_name:
+                return True
+        return False
+
+    #########################################################
+    ########### DB management helpers for vector stores ###########
+    #########################################################
+
+    @staticmethod
+    async def _get_vector_store_indexes_from_db(
+        prisma_client: Optional[PrismaClient],
+    ) -> List[LiteLLM_ManagedVectorStoreIndex]:
+        """
+        Get vector stores from the database
+        """
+        vector_stores_from_db: List[LiteLLM_ManagedVectorStoreIndex] = []
+        if prisma_client is not None:
+            _vector_stores_from_db = (
+                await prisma_client.db.litellm_managedvectorstoreindextable.find_many(
+                    order={"created_at": "desc"},
+                )
+            )
+            for vector_store in _vector_stores_from_db:
+                _dict_vector_store = dict(vector_store)
+                _litellm_managed_vector_store = LiteLLM_ManagedVectorStoreIndex(
+                    **_dict_vector_store
+                )
+                vector_stores_from_db.append(_litellm_managed_vector_store)
+        return vector_stores_from_db
 
 
 class VectorStoreRegistry:

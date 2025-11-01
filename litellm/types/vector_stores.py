@@ -209,3 +209,16 @@ class IndexCreateRequest(BaseModel):
 class BaseVectorStoreAuthCredentials(TypedDict, total=False):
     headers: dict
     query_params: dict
+
+
+class LiteLLM_ManagedVectorStoreIndex(BaseModel):
+    """LiteLLM managed vector store index object - this is is the object stored in the database"""
+
+    id: str
+    index_name: str
+    litellm_params: IndexCreateLiteLLMParams
+    index_info: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None

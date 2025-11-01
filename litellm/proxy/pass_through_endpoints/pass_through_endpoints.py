@@ -766,14 +766,6 @@ async def pass_through_request(  # noqa: PLR0915
                 status_code=response.status_code,
             )
 
-        verbose_proxy_logger.debug("request method: {}".format(request.method))
-        verbose_proxy_logger.debug("request url: {}".format(url))
-        verbose_proxy_logger.debug("request headers: {}".format(headers))
-        verbose_proxy_logger.debug(
-            "requested_query_params={}".format(requested_query_params)
-        )
-        verbose_proxy_logger.debug("request body: {}".format(_parsed_body))
-
         response = (
             await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
                 request=request,
