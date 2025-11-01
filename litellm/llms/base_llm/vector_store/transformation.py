@@ -5,6 +5,7 @@ import httpx
 
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    VECTOR_STORE_OPENAI_PARAMS,
     VectorStoreCreateOptionalRequestParams,
     VectorStoreCreateResponse,
     VectorStoreSearchOptionalRequestParams,
@@ -24,6 +25,20 @@ else:
 
 
 class BaseVectorStoreConfig:
+
+    def get_supported_openai_params(
+        self, model: str
+    ) -> List[VECTOR_STORE_OPENAI_PARAMS]:
+        return []
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        drop_params: bool,
+    ) -> dict:
+        return optional_params
+
     @abstractmethod
     def transform_search_vector_store_request(
         self,
@@ -34,6 +49,7 @@ class BaseVectorStoreConfig:
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> Tuple[str, Dict]:
+
         pass
 
     @abstractmethod

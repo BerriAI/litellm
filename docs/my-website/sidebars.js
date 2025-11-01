@@ -495,6 +495,7 @@ const sidebars = {
             "providers/bedrock_vector_store",
           ]
         },
+        "providers/milvus_vector_stores",
         "providers/litellm_proxy",
         "providers/meta_llama",
         "providers/mistral",
