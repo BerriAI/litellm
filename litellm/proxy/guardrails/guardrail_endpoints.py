@@ -644,7 +644,7 @@ async def get_guardrail_info(guardrail_id: str):
             result = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(
                 guardrail_id=guardrail_id
             )
-            guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.CONFIG
+            guardrail_definition_location = GUARDRAIL_DEFINITION_LOCATION.CONFIG
 
         if result is None:
             raise HTTPException(
