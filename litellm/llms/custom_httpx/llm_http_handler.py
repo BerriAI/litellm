@@ -31,6 +31,7 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.google_genai.transformation import (
@@ -48,7 +49,6 @@ from litellm.llms.base_llm.search.transformation import BaseSearchConfig, Search
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
-from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -60,6 +60,11 @@ from litellm.responses.streaming_iterator import (
     MockResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
+)
+from litellm.types.containers.main import (
+    ContainerListResponse,
+    ContainerObject,
+    DeleteContainerResult,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -74,7 +79,6 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.rerank import RerankResponse
 from litellm.types.responses.main import DeleteResponseResult
-from litellm.types.containers.main import ContainerObject, ContainerListResponse, DeleteContainerResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     EmbeddingResponse,

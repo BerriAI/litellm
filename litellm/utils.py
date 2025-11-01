@@ -258,6 +258,7 @@ from litellm.llms.base_llm.base_utils import (
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
+from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -273,7 +274,6 @@ from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
-from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -7682,7 +7682,9 @@ class ProviderConfigManager:
         provider: LlmProviders,
     ) -> Optional[BaseContainerConfig]:
         if LlmProviders.OPENAI == provider:
-            from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
+            from litellm.llms.openai.containers.transformation import (
+                OpenAIContainerConfig,
+            )
 
             return OpenAIContainerConfig()
         return None
