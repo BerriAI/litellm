@@ -285,7 +285,7 @@ class CustomGuardrail(CustomLogger):
                 data, self.event_hook
             )
             if result is not None:
-                return result
+                return result        
         return True
 
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:
@@ -403,6 +403,7 @@ class CustomGuardrail(CustomLogger):
         text: str,
         language: Optional[str] = None,
         entities: Optional[List[PiiEntityType]] = None,
+        request_data: Optional[dict] = None,
     ) -> str:
         """
         Apply your guardrail logic to the given text
@@ -411,6 +412,7 @@ class CustomGuardrail(CustomLogger):
             text: The text to apply the guardrail to
             language: The language of the text
             entities: The entities to mask, optional
+            request_data: The request data dictionary to store guardrail metadata
 
         Any of the custom guardrails can override this method to provide custom guardrail logic
 
