@@ -697,12 +697,15 @@ async def get_guardrail_ui_settings():
     # Convert the PII_ENTITY_CATEGORIES_MAP to the format expected by the UI
     category_maps = []
     for category, entities in PII_ENTITY_CATEGORIES_MAP.items():
-        category_maps.append({"category": category, "entities": entities})
+        category_maps.append({
+            "category": category.value,
+            "entities": [entity.value for entity in entities]
+        })
 
     return GuardrailUIAddGuardrailSettings(
-        supported_entities=list(PiiEntityType),
-        supported_actions=list(PiiAction),
-        supported_modes=list(GuardrailEventHooks),
+        supported_entities=[entity.value for entity in PiiEntityType],
+        supported_actions=[action.value for action in PiiAction],
+        supported_modes=[mode.value for mode in GuardrailEventHooks],
         pii_entity_categories=category_maps,
     )
 
