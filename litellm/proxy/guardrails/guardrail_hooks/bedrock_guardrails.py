@@ -525,14 +525,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         
         #The blocked content should be prioritized over the configuration parameters.
 
-        # if user opted into masking, return False. since we'll use the masked output from the guardrail
-        if self.mask_request_content or self.mask_response_content:
-            return False
-
-        # if no intervention, return False
-        if response.get("action") != "GUARDRAIL_INTERVENED":
-            return False
-
         # Check assessments to determine if any actions were BLOCKED (vs ANONYMIZED)
         assessments = response.get("assessments", [])
         if not assessments:
