@@ -4613,6 +4613,24 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
                 litellm_params={},
             )
+        elif custom_llm_provider == "isaacus":
+            api_key = (
+                api_key or litellm.isaacus_key or get_secret_str("ISAACUS_API_KEY")
+            )
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={},
+            )
         elif custom_llm_provider == "watsonx":
             credentials = IBMWatsonXMixin.get_watsonx_credentials(
                 optional_params=optional_params, api_key=api_key, api_base=api_base

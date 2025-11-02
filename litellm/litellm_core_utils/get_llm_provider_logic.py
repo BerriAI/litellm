@@ -373,6 +373,12 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "lemonade"
         elif model.startswith("heroku/"):
             custom_llm_provider = "heroku"
+        # isaacus models
+        elif (
+            model.startswith("isaacus/")
+            or model in litellm.isaacus_embedding_models
+        ):
+            custom_llm_provider = "isaacus"
         # cometapi models
         elif model.startswith("cometapi/"):
             custom_llm_provider = "cometapi"
