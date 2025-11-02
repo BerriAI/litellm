@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -7,7 +8,6 @@ import pytest
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.types.integrations.langfuse_otel import LangfuseOtelConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
-from datetime import datetime
 
 
 class TestLangfuseOtelIntegration:
@@ -75,6 +75,10 @@ class TestLangfuseOtelIntegration:
     
     def test_set_langfuse_otel_attributes(self):
         """Test that set_langfuse_otel_attributes calls the Arize utils function."""
+        from litellm.integrations.langfuse.langfuse_otel_attributes import (
+            LangfuseLLMObsOTELAttributes,
+        )
+        
         mock_span = MagicMock()
         mock_kwargs = {"test": "kwargs"}
         mock_response = {"test": "response"}
@@ -82,7 +86,7 @@ class TestLangfuseOtelIntegration:
         with patch('litellm.integrations.arize._utils.set_attributes') as mock_set_attributes:
             LangfuseOtelLogger.set_langfuse_otel_attributes(mock_span, mock_kwargs, mock_response)
             
-            mock_set_attributes.assert_called_once_with(mock_span, mock_kwargs, mock_response)
+            mock_set_attributes.assert_called_once_with(mock_span, mock_kwargs, mock_response, LangfuseLLMObsOTELAttributes)
 
     def test_set_langfuse_environment_attribute(self):
         """Test that Langfuse environment is set correctly when environment variable is present."""
@@ -285,13 +289,17 @@ class TestLangfuseOtelResponsesAPI:
         
         mock_span = MagicMock()
         
+        from litellm.integrations.langfuse.langfuse_otel_attributes import (
+            LangfuseLLMObsOTELAttributes,
+        )
+        
         with patch('litellm.integrations.arize._utils.set_attributes') as mock_set_attributes:
             with patch('litellm.integrations.arize._utils.safe_set_attribute') as mock_safe_set_attribute:
                 logger = LangfuseOtelLogger()
                 logger.set_langfuse_otel_attributes(mock_span, kwargs, mock_response)
                 
                 # Verify that set_attributes was called for general attributes
-                mock_set_attributes.assert_called_once_with(mock_span, kwargs, mock_response)
+                mock_set_attributes.assert_called_once_with(mock_span, kwargs, mock_response, LangfuseLLMObsOTELAttributes)
                 
                 # Verify that Langfuse-specific attributes were set
                 mock_safe_set_attribute.assert_any_call(
