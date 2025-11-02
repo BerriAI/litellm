@@ -68,7 +68,9 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
+from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.containers.main import ContainerObject
 from litellm.types.llms.openai import (
     AllMessageValues,
     Batch,
@@ -76,6 +78,7 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     OpenAIFileObject,
     OpenAIModerationResponse,
+    ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
 )
@@ -116,9 +119,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.types.containers.main import ContainerObject
 from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
-from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
@@ -1311,6 +1312,7 @@ class Logging(LiteLLMLoggingBaseClass):
             response_cost = litellm.response_cost_calculator(
                 **response_cost_calculator_kwargs
             )
+
             verbose_logger.debug(f"response_cost: {response_cost}")
             return response_cost
         except Exception as e:  # error calculating cost
@@ -2997,6 +2999,17 @@ class Logging(LiteLLMLoggingBaseClass):
         elif isinstance(result, TextCompletionResponse):
             return result
         elif isinstance(result, ResponseCompletedEvent):
+            ## return unified Usage object
+            if isinstance(result.response.usage, ResponseAPIUsage):
+                setattr(
+                    result.response,
+                    "usage",
+                    (
+                        ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                            result.response.usage
+                        )
+                    ),
+                )
             return result.response
         else:
             return None
