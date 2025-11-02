@@ -120,11 +120,6 @@ def _calculate_tiered_cost(
     return total_cost
 
 
-def _calculate_flat_cost(tokens: int, cost_per_token: float) -> float:
-    """Calculate cost using flat pricing."""
-    return tokens * cost_per_token
-
-
 def _calculate_prompt_cost(
     breakdown: TokenBreakdown,
     model_info: ModelInfo,
