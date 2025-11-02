@@ -2006,7 +2006,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
-                        message=f"litellm.ContentPolicyViolationError: AzureException - {message}",
+                        message=f"litellm.ContentPolicyViolationError: AzureException - {error_str}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
