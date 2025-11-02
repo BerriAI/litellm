@@ -54,7 +54,10 @@ from litellm.caching.caching import (
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import (
+    _get_parent_otel_span_from_kwargs,
+    get_metadata_variable_name_from_kwargs,
+)
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -889,6 +892,54 @@ class Router:
 
         self.asearch = self.factory_function(asearch, call_type="asearch")
         self.search = self.factory_function(search, call_type="search")
+
+        # Video routes
+        #########################################################
+        from litellm.videos import (
+            avideo_generation,
+            video_generation,
+            avideo_list,
+            video_list,
+            avideo_status,
+            video_status,
+            avideo_content,
+            video_content,
+            avideo_remix,
+            video_remix,
+        )
+
+        self.avideo_generation = self.factory_function(avideo_generation, call_type="avideo_generation")
+        self.video_generation = self.factory_function(video_generation, call_type="video_generation")
+        self.avideo_list = self.factory_function(avideo_list, call_type="avideo_list")
+        self.video_list = self.factory_function(video_list, call_type="video_list")
+        self.avideo_status = self.factory_function(avideo_status, call_type="avideo_status")
+        self.video_status = self.factory_function(video_status, call_type="video_status")
+        self.avideo_content = self.factory_function(avideo_content, call_type="avideo_content")
+        self.video_content = self.factory_function(video_content, call_type="video_content")
+        self.avideo_remix = self.factory_function(avideo_remix, call_type="avideo_remix")
+        self.video_remix = self.factory_function(video_remix, call_type="video_remix")
+
+        # Container routes
+        #########################################################
+        from litellm.containers import (
+            acreate_container,
+            create_container,
+            alist_containers,
+            list_containers,
+            aretrieve_container,
+            retrieve_container,
+            adelete_container,
+            delete_container,
+        )
+
+        self.acreate_container = self.factory_function(acreate_container, call_type="acreate_container")
+        self.create_container = self.factory_function(create_container, call_type="create_container")
+        self.alist_containers = self.factory_function(alist_containers, call_type="alist_containers")
+        self.list_containers = self.factory_function(list_containers, call_type="list_containers")
+        self.aretrieve_container = self.factory_function(aretrieve_container, call_type="aretrieve_container")
+        self.retrieve_container = self.factory_function(retrieve_container, call_type="retrieve_container")
+        self.adelete_container = self.factory_function(adelete_container, call_type="adelete_container")
+        self.delete_container = self.factory_function(delete_container, call_type="delete_container")
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
@@ -3624,7 +3675,25 @@ class Router:
             "ocr",
             "asearch",
             "search",
-            "aadapter_generate_content"
+            "aadapter_generate_content",
+            "avideo_generation",
+            "video_generation",
+            "avideo_list",
+            "video_list",
+            "avideo_status",
+            "video_status",
+            "avideo_content",
+            "video_content",
+            "avideo_remix",
+            "video_remix",
+            "acreate_container",
+            "create_container",
+            "alist_containers",
+            "list_containers",
+            "aretrieve_container",
+            "retrieve_container",
+            "adelete_container",
+            "delete_container"
         ] = "assistants",
     ):
         """
@@ -3643,6 +3712,15 @@ class Router:
             "vector_store_create",
             "ocr",
             "search",
+            "video_generation",
+            "video_list",
+            "video_status",
+            "video_content",
+            "video_remix",
+            "create_container",
+            "list_containers",
+            "retrieve_container",
+            "delete_container",
         ):
 
             def sync_wrapper(
@@ -3692,6 +3770,15 @@ class Router:
                 "agenerate_content_stream",
                 "aocr",
                 "ocr",
+                "avideo_generation",
+                "avideo_list",
+                "avideo_status",
+                "avideo_content",
+                "avideo_remix",
+                "acreate_container",
+                "alist_containers",
+                "aretrieve_container",
+                "adelete_container",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -4710,7 +4797,7 @@ class Router:
         - OpenAI then started using this field for their metadata
         - LiteLLM is now moving to using `litellm_metadata` for our metadata
         """
-        return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+        return get_metadata_variable_name_from_kwargs(kwargs)
 
     def log_retry(self, kwargs: dict, e: Exception) -> dict:
         """

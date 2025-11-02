@@ -342,6 +342,7 @@ def image_generation(  # noqa: PLR0915
             litellm.LlmProviders.RECRAFT,
             litellm.LlmProviders.AIML,
             litellm.LlmProviders.GEMINI,
+            litellm.LlmProviders.FAL_AI,
         ):
             if image_generation_config is None:
                 raise ValueError(

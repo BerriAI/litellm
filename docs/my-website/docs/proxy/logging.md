@@ -1415,18 +1415,26 @@ AWS_REGION_NAME = ""
 
 ```yaml
 model_list:
- - model_name: gpt-4o
+  - model_name: gpt-4o
     litellm_params:
       model: gpt-4o
+
 litellm_settings:
   callbacks: ["aws_sqs"]
+
   aws_sqs_callback_params:
-    sqs_queue_url: https://sqs.us-west-2.amazonaws.com/123456789012/my-queue   # AWS SQS Queue URL
-    sqs_region_name: us-west-2              # AWS Region Name for SQS
-    sqs_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # use os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for SQS
-    sqs_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for SQS
-    sqs_batch_size: 10  # [OPTIONAL] Number of messages to batch before sending (default: 10)
-    sqs_flush_interval: 30  # [OPTIONAL] Time in seconds to wait before flushing batch (default: 30)
+    # --- 🧱 Required Parameters ---
+    sqs_queue_url: https://sqs.us-west-2.amazonaws.com/123456789012/my-queue
+    # The AWS SQS Queue URL to which LiteLLM will send log events.
+
+    sqs_region_name: us-west-2
+    # AWS Region for your SQS queue (e.g., us-east-1, eu-central-1, etc.)
+    
+    # --- Logging Controls ---
+    sqs_strip_base64_files: true
+    # If true, LiteLLM will remove or redact base64-encoded binary data (e.g., PDFs, images, audio)
+    # from logged messages to avoid large payloads. SQS has a 1 MB payload size limit.
+
 ```
 
 **Step 3**: Start the proxy, make a test request

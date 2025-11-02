@@ -4,18 +4,17 @@ import TabItem from '@theme/TabItem';
 
 # /audio/speech
 
-## Overview 
+## Overview
 
-| Feature | Supported | Notes | 
-|-------|-------|-------|
-| Cost Tracking | ✅ |  |
-| Logging | ✅ | works across all integrations |
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Cost Tracking | ✅ | Works with all supported models |
+| Logging | ✅ | Works across all integrations |
 | End-user Tracking | ✅ | |
-| Fallbacks | ✅ | between supported models |
-| Loadbalancing | ✅ | between supported models |
-| Guardrails | ❌ Please make an [issue if you need this feature](https://github.com/BerriAI/litellm/issues/new) | |
-| Support llm providers | | `openai`, `azure`, `azure_ai`, `vertex_ai`, `gemini`, etc. |
-
+| Fallbacks | ✅ | Works between supported models |
+| Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to input text (non-streaming only) |
+| Supported Providers | OpenAI, Azure OpenAI, Vertex AI | |
 
 ## **LiteLLM Python SDK Usage**
 ### Quick Start 

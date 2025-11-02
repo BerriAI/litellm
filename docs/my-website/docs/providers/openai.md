@@ -841,3 +841,9 @@ response = completion(
     messages=[{"role": "user", "content": "Solve this complex reasoning problem..."}]
 )
 ```
+
+## Video Generation
+
+LiteLLM supports OpenAI's video generation models including Sora.
+
+For detailed documentation on video generation, see [OpenAI Video Generation →](./openai/video_generation.md)

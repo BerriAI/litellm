@@ -175,11 +175,6 @@ OPENAI_FILE_SEARCH_COST_PER_1K_CALLS = float(
 AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY = float(
     os.getenv("AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY", 0.1)  # $0.1 USD per 1 GB/Day
 )
-AZURE_CODE_INTERPRETER_COST_PER_SESSION = float(
-    os.getenv(
-        "AZURE_CODE_INTERPRETER_COST_PER_SESSION", 0.03
-    )  # $0.03 USD per 1 Session
-)
 AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS = float(
     os.getenv(
         "AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS", 3.0
@@ -273,6 +268,7 @@ ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "high": 10,
 }
 DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
+DEFAULT_VIDEO_ENDPOINT_MODEL = "sora-2"
 
 ### DATAFORSEO CONSTANTS ###
 DEFAULT_DATAFORSEO_LOCATION_CODE = int(
@@ -823,6 +819,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "ai21",
     "nova",
     "deepseek_r1",
+    "qwen3",
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
@@ -1048,7 +1045,15 @@ PROXY_BATCH_POLLING_INTERVAL = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 360
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 )
-PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds
+PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds, increased from 10
+
+# APScheduler Configuration - MEMORY LEAK FIX
+# These settings prevent memory leaks in APScheduler's normalize() and _apply_jitter() functions
+APSCHEDULER_COALESCE = os.getenv("APSCHEDULER_COALESCE", "True").lower() in ["true", "1"]  # collapse many missed runs into one
+APSCHEDULER_MISFIRE_GRACE_TIME = int(os.getenv("APSCHEDULER_MISFIRE_GRACE_TIME", 3600))  # ignore runs older than 1 hour (was 120)
+APSCHEDULER_MAX_INSTANCES = int(os.getenv("APSCHEDULER_MAX_INSTANCES", 1))  # prevent concurrent job instances
+APSCHEDULER_REPLACE_EXISTING = os.getenv("APSCHEDULER_REPLACE_EXISTING", "True").lower() in ["true", "1"]  # always replace existing jobs
+
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
 )  # 5 minutes

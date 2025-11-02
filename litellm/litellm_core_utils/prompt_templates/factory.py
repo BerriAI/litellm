@@ -38,7 +38,11 @@ from litellm.types.llms.vertex_ai import FunctionResponse as VertexFunctionRespo
 from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
-from .common_utils import convert_content_list_to_str, is_non_content_values_set
+from .common_utils import (
+    convert_content_list_to_str,
+    infer_content_type_from_url_and_content,
+    is_non_content_values_set,
+)
 from .image_handling import convert_url_to_base64
 
 
@@ -2536,13 +2540,17 @@ class BedrockImageProcessor:
     """Handles both sync and async image processing for Bedrock conversations."""
 
     @staticmethod
-    def _post_call_image_processing(response: httpx.Response) -> Tuple[str, str]:
+    def _post_call_image_processing(response: httpx.Response, image_url: str = "") -> Tuple[str, str]:
         # Check the response's content type to ensure it is an image
         content_type = response.headers.get("content-type")
-        if not content_type:
-            raise ValueError(
-                f"URL does not contain content-type (content-type: {content_type})"
-            )
+        
+        # Use helper function to infer content type with fallback logic
+        content_type = infer_content_type_from_url_and_content(
+            url=image_url,
+            content=response.content,
+            current_content_type=content_type,
+        )
+        
         content_type = _parse_content_type(content_type)
 
         # Convert the image content to base64 bytes
@@ -2561,7 +2569,7 @@ class BedrockImageProcessor:
             response = await client.get(image_url, follow_redirects=True)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
-            return BedrockImageProcessor._post_call_image_processing(response)
+            return BedrockImageProcessor._post_call_image_processing(response, image_url)
 
         except Exception as e:
             raise e
@@ -2574,7 +2582,7 @@ class BedrockImageProcessor:
             response = client.get(image_url, follow_redirects=True)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
-            return BedrockImageProcessor._post_call_image_processing(response)
+            return BedrockImageProcessor._post_call_image_processing(response, image_url)
 
         except Exception as e:
             raise e
@@ -3803,7 +3811,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 assistant_parts=assistants_parts,
                             )
                         elif element["type"] == "text":
-                            assistants_part = BedrockContentBlock(text=element["text"])
+                            # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
+                            text_content = element["text"] if element["text"].strip() else "."
+                            assistants_part = BedrockContentBlock(text=text_content)
                             assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
@@ -3827,7 +3837,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
             elif _assistant_content is not None and isinstance(_assistant_content, str):
-                assistant_content.append(BedrockContentBlock(text=_assistant_content))
+                # AWS Bedrock doesn't allow empty or whitespace-only text content, so use placeholder for empty strings
+                text_content = _assistant_content if _assistant_content.strip() else "."
+                assistant_content.append(BedrockContentBlock(text=text_content))
                 # Add cache point block for assistant string content
                 _cache_point_block = (
                     litellm.AmazonConverseConfig()._get_cache_point_block(

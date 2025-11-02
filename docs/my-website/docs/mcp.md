@@ -219,6 +219,25 @@ mcp_servers:
     extra_headers: ["custom_key", "x-custom-header"]  # These headers will be forwarded from client
 ```
 
+### Static Headers
+
+Sometimes your MCP server needs specific headers on every request. Maybe it's an API key, maybe it's a custom header the server expects. Instead of configuring auth, you can just set them directly.
+
+```yaml title="config.yaml" showLineNumbers
+mcp_servers:
+  my_mcp_server:
+    url: "https://my-mcp-server.com/mcp"
+    static_headers:
+      X-API-Key: "abc123"
+      X-Custom-Header: "some-value"
+```
+
+These headers get sent with every request to the server. That's it.
+
+**When to use this:**
+- Your server needs custom headers that don't fit the standard auth patterns
+- You want full control over exactly what headers are sent
+- You're debugging and need to quickly add headers without changing auth configuration
 
 ### MCP Aliases
 
@@ -1203,6 +1222,10 @@ mcp_servers:
     client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
     scopes: ["public_repo", "user:email"]
 ```
+
+**Note**  
+In the future, users will only need to specify the `url` of the MCP server.
+LiteLLM will automatically resolve the corresponding `authorization_url`, `token_url`, and `registration_url` based on the MCP server metadata (e.g., `.well-known/oauth-authorization-server` or `oauth-protected-resource`).
 
 [**See Claude Code Tutorial**](./tutorials/claude_responses_api#connecting-mcp-servers)
 

@@ -1,5 +1,6 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
+import re
 import traceback
 from typing import (
     TYPE_CHECKING,
@@ -15,7 +16,9 @@ from typing import (
 
 from pydantic import BaseModel
 
+from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.utils import (
@@ -51,6 +54,12 @@ else:
     MCPDuringCallRequestObject = Any
     MCPDuringCallResponseObject = Any
     PreRoutingHookResponse = Any
+
+
+_BASE64_INLINE_PATTERN = re.compile(
+    r"data:(?:application|image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
+    re.MULTILINE,
+)
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -567,3 +576,91 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         Get the proxy server request from cold storage using the object key directly.
         """
         pass
+
+
+    async def _strip_base64_from_messages(
+        self, payload: "StandardLoggingPayload", max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+    ) -> "StandardLoggingPayload":
+        """
+        Removes or redacts base64-encoded file data (e.g., PDFs, images, audio)
+        from messages and responses before sending to SQS.
+
+        Behavior:
+          • Drop entries with a 'file' key.
+          • Drop entries with type == 'file' or any non-text type.
+          • Keep untyped or text content.
+          • Recursively redact inline base64 blobs in *any* string field, at any depth.
+        """
+        raw_messages: Any = payload.get("messages", [])
+        messages: List[Any] = raw_messages if isinstance(raw_messages, list) else []
+        verbose_logger.debug(f"[CustomLogger] Stripping base64 from {len(messages)} messages")
+
+        if messages:
+            payload["messages"] = self._process_messages(messages=messages, max_depth=max_depth)
+
+        total_items = 0
+        for m in payload.get("messages", []) or []:
+            if isinstance(m, dict):
+                content = m.get("content", [])
+                if isinstance(content, list):
+                    total_items += len(content)
+
+        verbose_logger.debug(
+            f"[CustomLogger] Completed base64 strip; retained {total_items} content items"
+        )
+        return payload
+    
+
+    def _redact_base64(self, value: Any, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER) -> Any:
+        """Recursively redact inline base64 from any nested structure with a max recursion depth limit."""
+        if depth > max_depth:
+            verbose_logger.warning(
+                f"[CustomLogger] Max recursion depth {max_depth} reached while redacting base64"
+            )
+            return "[MAX_DEPTH_REACHED]"
+
+        if isinstance(value, str):
+            if _BASE64_INLINE_PATTERN.search(value):
+                verbose_logger.debug(
+                    f"[CustomLogger] Redacted inline base64 string: {value[:40]}..."
+                )
+                return _BASE64_INLINE_PATTERN.sub("[BASE64_REDACTED]", value)
+            return value
+
+        if isinstance(value, list):
+            return [self._redact_base64(value=v, depth=depth + 1, max_depth=max_depth) for v in value]
+
+        if isinstance(value, dict):
+            return {k: self._redact_base64(value=v, depth=depth + 1, max_depth=max_depth) for k, v in value.items()}
+
+        return value
+
+    def _should_keep_content(self, content: Any) -> bool:
+        """Return True if this content item should be retained."""
+        if not isinstance(content, dict):
+            return True
+        if "file" in content:
+            return False
+        ctype = content.get("type")
+        return not (isinstance(ctype, str) and ctype != "text")
+
+    def _process_messages(self, messages: List[Any], max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER) -> List[Dict[str, Any]]:
+        filtered_messages: List[Dict[str, Any]] = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            contents: Any = msg.get("content")
+            if isinstance(contents, list):
+                cleaned: List[Any] = []
+                for c in contents:
+                    if self._should_keep_content(content=c):
+                        cleaned.append(self._redact_base64(value=c, max_depth=max_depth))
+                msg["content"] = cleaned
+            else:
+                msg["content"] = self._redact_base64(value=contents, max_depth=max_depth)
+
+            for key, val in list(msg.items()):
+                if key != "content":
+                    msg[key] = self._redact_base64(value=val, max_depth=max_depth)
+            filtered_messages.append(msg)
+        return filtered_messages

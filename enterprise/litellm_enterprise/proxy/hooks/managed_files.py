@@ -152,7 +152,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "status": file_object.status,
                 },
                 "update": {},  # don't do anything if it already exists
-            }
+            },
         )
 
     async def get_unified_file_id(
@@ -224,9 +224,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 where={"unified_object_id": unified_object_id}
             )
         )
+
         if managed_object:
             return managed_object.created_by == user_id
-        return False
+        return True  # don't raise error if managed object is not found
 
     async def get_user_created_file_ids(
         self, user_api_key_dict: UserAPIKeyAuth, model_object_ids: List[str]

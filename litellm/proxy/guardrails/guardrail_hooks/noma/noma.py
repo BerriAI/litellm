@@ -9,7 +9,7 @@ import asyncio
 import copy
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, Final, Literal, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, Final, List, Literal, Optional, Type, Union
 from urllib.parse import urljoin
 
 from fastapi import HTTPException
@@ -23,7 +23,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, PiiEntityType
 from litellm.types.utils import EmbeddingResponse, GuardrailStatus, ImageResponse
 
 # Constants
@@ -850,6 +850,98 @@ class NomaGuardrail(CustomGuardrail):
                 verbose_proxy_logger.info(msg)
             else:
                 verbose_proxy_logger.debug(msg)
+    
+    async def apply_guardrail(
+        self,
+        text: str,
+        language: Optional[str] = None,
+        entities: Optional[List[PiiEntityType]] = None,
+        request_data: Optional[dict] = None,
+    ) -> str:
+        """
+        Apply Noma guardrail to the given text for testing purposes.
+
+        This method allows users to test Noma guardrails without making actual LLM calls.
+        It creates a mock request to test the guardrail functionality.
+
+        Args:
+            text: The text to analyze
+            language: Optional language parameter (not used by Noma)
+            entities: Optional entities parameter (not used by Noma)
+            request_data: Optional request data dictionary for logging metadata
+
+        Returns:
+            The original text if allowed, or anonymized text if available
+
+        Raises:
+            Exception: If the content is blocked by Noma guardrail
+        """
+        try:
+            verbose_proxy_logger.debug("Noma Guardrail: Applying guardrail")
+            
+            # Create a mock user auth object for testing
+            from litellm.proxy._types import UserAPIKeyAuth
+            mock_user_auth = UserAPIKeyAuth()
+            
+            # Create payload for Noma API
+            payload = {"request": {"text": text}}
+            
+            # Use provided request_data or create a mock one for testing
+            if request_data is None:
+                request_data = {"messages": [{"role": "user", "content": text}]}
+            
+            # Call Noma API
+            response_json = await self._call_noma_api(
+                payload=payload,
+                llm_request_id=None,
+                request_data=request_data,
+                user_auth=mock_user_auth,
+                extra_data={},
+            )
+
+            # Check if content is blocked
+            verdict = response_json.get("verdict", True)
+            if not verdict:
+                # Check if we should anonymize instead of blocking
+                if self.anonymize_input and self._should_anonymize(response_json, USER_ROLE):
+                    anonymized_content = self._extract_anonymized_content(
+                        response_json, USER_ROLE
+                    )
+                    if anonymized_content:
+                        verbose_proxy_logger.debug(
+                            "Noma Guardrail: Content anonymized"
+                        )
+                        return anonymized_content
+                
+                # Content is blocked
+                original_response = response_json.get("originalResponse", {})
+                filtered_response = NomaBlockedMessage(original_response)._filter_triggered_classifications(original_response)
+                raise Exception(
+                    f"Content blocked by Noma guardrail: {filtered_response}"
+                )
+
+            # Check if anonymization is available even for allowed content
+            if self.anonymize_input:
+                anonymized_content = self._extract_anonymized_content(
+                    response_json, USER_ROLE
+                )
+                if anonymized_content:
+                    verbose_proxy_logger.debug(
+                        "Noma Guardrail: Content anonymized"
+                    )
+                    return anonymized_content
+
+            verbose_proxy_logger.debug(
+                "Noma Guardrail: Successfully applied guardrail"
+            )
+
+            return text
+
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Noma Guardrail: Failed to apply guardrail: %s", str(e)
+            )
+            raise Exception(f"Noma guardrail failed: {str(e)}")
     
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:

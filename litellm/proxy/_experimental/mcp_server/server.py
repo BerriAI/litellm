@@ -884,6 +884,26 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
+            # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
+            for server_name in mcp_servers or []:
+                server = global_mcp_server_manager.get_mcp_server_by_name(server_name)
+                if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
+                    from starlette.requests import Request
+
+                    request = Request(scope)
+                    base_url = str(request.base_url).rstrip("/")
+
+                    authorization_uri = (
+                        f"Bearer authorization_uri="
+                        f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
+                    )
+
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={"www-authenticate": authorization_uri},
+                    )
+
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,

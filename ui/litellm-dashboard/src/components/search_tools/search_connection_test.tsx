@@ -252,7 +252,7 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
                 <li style={{ marginBottom: "6px" }}>Verify your API key is correct and active</li>
                 <li style={{ marginBottom: "6px" }}>Check if the search provider service is operational</li>
                 <li style={{ marginBottom: "6px" }}>Ensure you have sufficient credits/quota with the provider</li>
-                <li style={{ marginBottom: "6px" }}>Review the provider's documentation for any additional requirements</li>
+                <li style={{ marginBottom: "6px" }}>Review the provider&apos;s documentation for any additional requirements</li>
               </ul>
             </div>
           </div>
