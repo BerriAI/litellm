@@ -167,14 +167,16 @@ class LiteLLMAnthropicMessagesAdapter:
                             )
                             new_user_content_list.append(text_obj)
                         elif content.get("type") == "image":
-                            image_url = ChatCompletionImageUrlObject(
-                                url=f"data:{content.get('type', '')};base64,{content.get('source', '')}"
-                            )
-                            image_obj = ChatCompletionImageObject(
-                                type="image_url", image_url=image_url
-                            )
+                            # Convert Anthropic image format to OpenAI format
+                            source = content.get("source", {})
+                            openai_image_url = self._translate_anthropic_image_to_openai(source)
 
-                            new_user_content_list.append(image_obj)
+                            if openai_image_url:
+                                image_url_obj = ChatCompletionImageUrlObject(url=openai_image_url)
+                                image_obj = ChatCompletionImageObject(
+                                    type="image_url", image_url=image_url_obj
+                                )
+                                new_user_content_list.append(image_obj)
                         elif content.get("type") == "tool_result":
                             if "content" not in content:
                                 tool_result = ChatCompletionToolMessage(
@@ -210,13 +212,16 @@ class LiteLLMAnthropicMessagesAdapter:
                                             )
                                             tool_message_list.append(tool_result)
                                         elif c.get("type") == "image":
-                                            image_str = f"data:{c.get('type', '')};base64,{c.get('source', '')}"
+                                            # Convert Anthropic image format to OpenAI format for tool results
+                                            source = c.get("source", {})
+                                            openai_image_url = self._translate_anthropic_image_to_openai(source) or ""
+
                                             tool_result = ChatCompletionToolMessage(
                                                 role="tool",
                                                 tool_call_id=content.get(
                                                     "tool_use_id", ""
                                                 ),
-                                                content=image_str,
+                                                content=openai_image_url,
                                             )
                                             tool_message_list.append(tool_result)
 
@@ -405,6 +410,33 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_kwargs[k] = v  # type: ignore
 
         return new_kwargs
+
+    def _translate_anthropic_image_to_openai(self, image_source: dict) -> Optional[str]:
+        """
+        Translate Anthropic image source format to OpenAI-compatible image URL.
+
+        Anthropic supports two image source formats:
+        1. Base64: {"type": "base64", "media_type": "image/jpeg", "data": "..."}
+        2. URL: {"type": "url", "url": "https://..."}
+
+        Returns the properly formatted image URL string, or None if invalid format.
+        """
+        if not isinstance(image_source, dict):
+            return None
+
+        source_type = image_source.get("type")
+
+        if source_type == "base64":
+            # Base64 image format
+            media_type = image_source.get("media_type", "image/jpeg")
+            image_data = image_source.get("data", "")
+            if image_data:
+                return f"data:{media_type};base64,{image_data}"
+        elif source_type == "url":
+            # URL-referenced image format
+            return image_source.get("url", "")
+
+        return None
 
     def _translate_openai_content_to_anthropic(
         self, choices: List[Choices]
