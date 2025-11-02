@@ -848,7 +848,7 @@ curl --location 'http://localhost:4000/user/new' \
 -H 'Authorization: Bearer <your-master-key>' \
 -H 'Content-Type: application/json' \
 -d '{"models": ["beta-models"], # 👈 Model Access Group
-			"max_budget": 0}'
+			"max_budget": 10}'
 ```
 
 
@@ -861,19 +861,6 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data '{"models": ["azure-models"], "user_id": "krrish@berri.ai"}'
-```
-
-
-## API Specification 
-
-### `GenericBudgetInfo`
-
-A Pydantic model that defines budget information with a time period and limit.
-
-```python
-class GenericBudgetInfo(BaseModel):
-    budget_limit: float  # The maximum budget amount in USD
-    time_period: str    # Duration string like "1d", "30d", etc.
 ```
 
 #### Fields:
@@ -996,12 +983,3 @@ When a budget is exceeded:
 - **Soft Budget** (if configured): Request succeeds but warning is logged
 - **Error Response**: Returns `401` with message showing current spend vs. max budget
 - **Example**: `"Budget has been exceeded: User ishaan3 has exceeded their budget. Current spend: 0.0008869999999999999; Max Budget: 0.0001"`
-
-### Tips for Budget Management
-
-1. **Start Conservative**: Set budgets lower than expected, then increase based on actual usage
-2. **Monitor Regularly**: Use the UI dashboard to track spend across all levels
-3. **Use Team Budgets**: For organizational costs, prefer team budgets over individual keys
-4. **Set Durations**: Always set `budget_duration` for monthly/periodic resets (otherwise budgets accumulate forever)
-5. **Test Before Production**: Create test keys with very low budgets to verify budget enforcement
-6. **Combine with Rate Limits**: Use both budgets (spending) and rate limits (requests/tokens) for complete control
