@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { render, renderHook } from "@testing-library/react";
 import { describe, it, vi, expect } from "vitest";
 import { Form } from "antd";
 import AddModelTab from "./add_model_tab";
@@ -24,8 +24,9 @@ vi.mock("../networking", async () => {
 
 describe("Add Model Tab", () => {
   it("should render", () => {
-    // Create a form instance
-    const [form] = Form.useForm();
+    // Create a form instance using renderHook
+    const { result } = renderHook(() => Form.useForm());
+    const [form] = result.current;
 
     // Mock functions
     const handleOk = vi.fn();
@@ -75,7 +76,7 @@ describe("Add Model Tab", () => {
     const userRole = "Admin";
     const premiumUser = true;
 
-    const { getByText } = render(
+    const { getByRole } = render(
       <AddModelTab
         form={form}
         handleOk={handleOk}
@@ -94,6 +95,7 @@ describe("Add Model Tab", () => {
         premiumUser={premiumUser}
       />,
     );
-    expect(getByText("Add Model")).toBeInTheDocument();
+    // Check for the heading specifically
+    expect(getByRole("heading", { name: "Add Model" })).toBeInTheDocument();
   });
 });
