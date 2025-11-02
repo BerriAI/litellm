@@ -1,6 +1,6 @@
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from .base import GuardrailConfigModel
@@ -86,23 +86,31 @@ class JavelinGuardResponse(TypedDict):
     ]
 
 
-class JavelinGuardrailConfigModel(GuardrailConfigModel):
-    """Configuration parameters for the Javelin guardrail"""
+class JavelinGuardrailConfigModelOptionalParams(BaseModel):
+    """Optional parameters for the Javelin guardrail"""
 
     guard_name: Optional[str] = Field(
-        default=None, description="Name of the Javelin guard to use"
+        default="javelin_guard",
+        description="(Optional) Name of the Javelin guard to use",
     )
     api_version: Optional[str] = Field(
-        default="v1", description="API version for Javelin service"
-    )
-    metadata: Optional[Dict] = Field(
-        default=None, description="Additional metadata to send with requests"
+        default="v1", description="(Optional) API version for Javelin service"
     )
     application: Optional[str] = Field(
-        default=None, description="Application name for Javelin service"
+        default=None, description="(Optional) Application name for Javelin service"
     )
-    config: Optional[Dict] = Field(
-        default=None, description="Configuration parameters for Javelin service"
+
+
+class JavelinGuardrailConfigModel(
+    GuardrailConfigModel[JavelinGuardrailConfigModelOptionalParams]
+):
+    """Configuration parameters for the Javelin guardrail"""
+
+    api_key: Optional[str] = Field(
+        default=None, description="The API key for the Javelin guardrail."
+    )
+    api_base: Optional[str] = Field(
+        default=None, description="The API base for the Javelin guardrail."
     )
 
     @staticmethod
