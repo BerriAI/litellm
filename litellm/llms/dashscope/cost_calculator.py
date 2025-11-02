@@ -109,6 +109,14 @@ def _calculate_tiered_cost(
             total_cost += tokens_in_tier * cost_per_token
             tokens_processed = tier_end
 
+    # After loop, check if any tokens remain (i.e., tokens > highest tier's end range)
+    # and charge them at the last tier's rate.
+    if tokens_processed < tokens and sorted_tiers:
+        last_tier = sorted_tiers[-1]
+        remaining_tokens = tokens - tokens_processed
+        cost_per_token = last_tier.get(cost_key) or last_tier.get(fallback_cost_key, 0)
+        total_cost += remaining_tokens * cost_per_token
+
     return total_cost
 
 
@@ -133,15 +141,20 @@ def _calculate_prompt_cost(
             tokens=breakdown.cached_tokens,
             tiered_pricing=tiered_pricing,
             cost_key="cache_read_input_token_cost",
+            fallback_cost_key="input_cost_per_token",
         )
         return text_cost + cache_cost
 
-    input_cost = model_info.get("input_cost_per_token", 0.0)
-    cache_cost = model_info.get("cache_read_input_token_cost", input_cost) or input_cost
+    input_cost = float(model_info.get("input_cost_per_token") or 0.0)
 
-    return _calculate_flat_cost(
-        tokens=breakdown.text_tokens, cost_per_token=input_cost
-    ) + _calculate_flat_cost(tokens=breakdown.cached_tokens, cost_per_token=cache_cost)
+    # For cache_cost, first try the specific key, then fall back to input_cost.
+    cache_cost_val = model_info.get("cache_read_input_token_cost")
+    if cache_cost_val is None:
+        cache_cost = input_cost
+    else:
+        cache_cost = float(cache_cost_val)
+
+    return (breakdown.text_tokens * input_cost) + (breakdown.cached_tokens * cache_cost)
 
 
 def _calculate_completion_cost(
@@ -164,15 +177,17 @@ def _calculate_completion_cost(
         )
         return completion_cost + reasoning_cost
 
-    output_cost = model_info.get("output_cost_per_token", 0.0)
-    reasoning_cost = (
-        model_info.get("output_cost_per_reasoning_token", output_cost) or output_cost
-    )
+    output_cost = float(model_info.get("output_cost_per_token") or 0.0)
 
-    return _calculate_flat_cost(
-        tokens=breakdown.completion_tokens, cost_per_token=output_cost
-    ) + _calculate_flat_cost(
-        tokens=breakdown.reasoning_tokens, cost_per_token=reasoning_cost
+    # For reasoning_cost, first try the specific key, then fall back to output_cost.
+    reasoning_cost_val = model_info.get("output_cost_per_reasoning_token")
+    if reasoning_cost_val is None:
+        reasoning_cost = output_cost
+    else:
+        reasoning_cost = float(reasoning_cost_val)
+
+    return (breakdown.completion_tokens * output_cost) + (
+        breakdown.reasoning_tokens * reasoning_cost
     )
 
 
