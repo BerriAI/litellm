@@ -792,7 +792,7 @@ class VertexAITokenCounter(BaseTokenCounter):
 
             count_tokens_params = {
                 "model": model_to_use,
-                "contents": contents
+                "contents": contents,
             }
             count_tokens_params_request.update(count_tokens_params)
             result = await VertexAITokenCounter().acount_tokens(
