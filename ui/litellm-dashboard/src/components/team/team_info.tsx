@@ -25,7 +25,7 @@ import {
   teamUpdateCall,
   getGuardrailsList,
 } from "@/components/networking";
-import { Button, Form, Input, Select, message, Tooltip } from "antd";
+import { Button, Form, Input, Select, message, Modal, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import MemberModal from "./edit_membership";
@@ -138,6 +138,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   console.log("userModels in team info", userModels);
 
@@ -268,13 +270,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     }
   };
 
-  const handleMemberDelete = async (member: Member) => {
-    try {
-      if (accessToken == null) {
-        return;
-      }
+  const handleMemberDelete = (member: Member) => {
+    setMemberToDelete(member);
+  };
 
-      await teamMemberDeleteCall(accessToken, teamId, member);
+  const handleDeleteConfirm = async () => {
+    if (!memberToDelete || !accessToken) return;
+
+    setIsDeleting(true);
+    try {
+      await teamMemberDeleteCall(accessToken, teamId, memberToDelete);
 
       NotificationsManager.success("Team member removed successfully");
 
@@ -287,7 +292,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     } catch (error) {
       NotificationsManager.fromBackend("Failed to remove team member");
       console.error("Error removing team member:", error);
+    } finally {
+      setIsDeleting(false);
+      setMemberToDelete(null);
     }
+  };
+
+  const handleDeleteCancel = () => {
+    setMemberToDelete(null);
   };
 
   const handleTeamUpdate = async (values: any) => {
@@ -885,6 +897,30 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         onSubmit={handleMemberCreate}
         accessToken={accessToken}
       />
+
+      {/* Delete Member Confirmation Modal */}
+      {memberToDelete && (
+        <Modal
+          title="Delete Team Member"
+          open={memberToDelete !== null}
+          onOk={handleDeleteConfirm}
+          onCancel={handleDeleteCancel}
+          confirmLoading={isDeleting}
+          okText={isDeleting ? "Deleting..." : "Delete"}
+          okButtonProps={{ danger: true }}
+        >
+          <p>Are you sure you want to remove this member from the team?</p>
+          <p className="mt-2">
+            <strong>User ID:</strong> {memberToDelete.user_id}
+          </p>
+          {memberToDelete.user_email && (
+            <p>
+              <strong>Email:</strong> {memberToDelete.user_email}
+            </p>
+          )}
+          <p className="mt-2 text-red-600">This action cannot be undone.</p>
+        </Modal>
+      )}
     </div>
   );
 };
