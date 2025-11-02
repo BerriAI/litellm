@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import httpx
 
@@ -77,12 +77,11 @@ class GoogleAIStudioTokenCounter:
 
     async def acount_tokens(
         self,
-        contents: Optional[Any] = None,
-        model: str = "",
+        contents: Any,
+        model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
-        messages: Optional[List[Dict[str, Any]]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -95,8 +94,6 @@ class GoogleAIStudioTokenCounter:
             api_key: Optional Google API key (will fall back to environment)
             api_base: Optional API base URL (defaults to Google Gen AI Studio)
             timeout: Optional timeout for the request
-            messages: Optional messages in Anthropic/OpenAI format (will be transformed to contents)
-                    Example: [{"role": "user", "content": "Hello world"}]
             **kwargs: Additional parameters
 
         Returns:
@@ -114,26 +111,11 @@ class GoogleAIStudioTokenCounter:
             }
 
         Raises:
-            ValueError: If API key is missing or if neither contents nor messages provided
+            ValueError: If API key is missing
             litellm.APIError: If the API call fails
             litellm.APIConnectionError: If the connection fails
             Exception: For any other unexpected errors
         """
-
-        # Transform messages to contents if needed
-        if contents is None and messages is not None:
-            from litellm.llms.gemini.chat.transformation import (
-                GoogleAIStudioGeminiConfig,
-            )
-
-            config = GoogleAIStudioGeminiConfig()
-            contents = config._transform_messages(messages=messages)
-
-        # Validate that we have contents
-        if contents is None:
-            raise ValueError(
-                "Either 'contents' or 'messages' must be provided for token counting"
-            )
 
         # Prepare headers
         headers, url = await self.validate_environment(
@@ -162,8 +144,6 @@ class GoogleAIStudioTokenCounter:
 
             # Parse response
             result = response.json()
-            # Add tokenizer_used field for consistency with other providers
-            result["tokenizer_used"] = "gemini_api"
             return result
 
         except httpx.HTTPStatusError as e:
