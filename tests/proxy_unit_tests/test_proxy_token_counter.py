@@ -735,7 +735,10 @@ async def test_vertex_ai_gemini_token_counting_with_messages(model_name):
         request=TokenCountRequest(
             model=model_name,
             messages=[
-                {"role": "user", "content": "Hello world, how are you doing today? i am ij"}
+                {
+                    "role": "user",
+                    "content": "Hello world, how are you doing today? i am ij",
+                }
             ],
         ),
         call_endpoint=True,
@@ -839,7 +842,10 @@ async def test_vertex_ai_anthropic_token_counting():
             request=TokenCountRequest(
                 model="vertex_ai/claude-3-5-sonnet-20241022",
                 messages=[
-                    {"role": "user", "content": "Hello Claude on Vertex AI! How are you?"}
+                    {
+                        "role": "user",
+                        "content": "Hello Claude on Vertex AI! How are you?",
+                    }
                 ],
             ),
             call_endpoint=True,
@@ -855,7 +861,10 @@ async def test_vertex_ai_anthropic_token_counting():
         assert call_args is not None
         assert call_args.kwargs["model"] == "claude-3-5-sonnet-20241022"
         assert "messages" in call_args.kwargs["request_data"]
-        assert call_args.kwargs["request_data"]["messages"][0]["content"] == "Hello Claude on Vertex AI! How are you?"
+        assert (
+            call_args.kwargs["request_data"]["messages"][0]["content"]
+            == "Hello Claude on Vertex AI! How are you?"
+        )
 
         # Validate response structure
         assert response.model_used == "claude-3-5-sonnet-20241022"
