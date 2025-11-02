@@ -178,7 +178,7 @@ curl -X POST 'http://0.0.0.0:4000/v1/vector_stores/my-collection-name/search' \
 | Guardrails | ❌ Not Yet Supported | Guardrails are not currently supported for vector stores |
 | Cost Tracking | ✅ Supported | Cost is $0 for Milvus searches |
 | Unified API | ✅ Supported | Call via OpenAI compatible `/v1/vector_stores/search` endpoint |
-| Passthrough | ❌ Not yet supported |  |
+| Passthrough | ✅ Supported | Use native Milvus API format |
 
 ## Response Format
 
@@ -206,6 +206,313 @@ The response follows the standard LiteLLM vector store format:
     }
   ]
 }
+```
+
+## Passthrough API (Native Milvus Format)
+
+Use this to allow developers to **create** and **search** vector stores using the native Milvus API format, without giving them the Milvus credentials.
+
+This is for the proxy only.
+
+### Admin Flow
+
+#### 1. Add the vector store to LiteLLM
+
+```yaml
+model_list:  
+  - model_name: embedding-model
+    litellm_params:
+      model: azure/text-embedding-3-large
+      api_base: https://your-endpoint.cognitiveservices.azure.com/
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2025-09-01"
+
+vector_store_registry:
+  - vector_store_name: "milvus-store"
+    litellm_params:
+      vector_store_id: "can-be-anything" # vector store id can be anything for the purpose of passthrough api
+      custom_llm_provider: "milvus"
+      api_key: os.environ/MILVUS_API_KEY
+      api_base: https://your-milvus-instance.milvus.io
+
+general_settings:
+    database_url: "postgresql://user:password@host:port/database"
+    master_key: "sk-1234"
+```
+
+Add your vector store credentials to LiteLLM.
+
+#### 2. Start the proxy
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+#### 3. Create a virtual index
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/indexes' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{ 
+    "index_name": "dall-e-6",
+    "litellm_params": {
+        "vector_store_index": "real-collection-name",
+        "vector_store_name": "milvus-store"
+    }
+}'
+```
+
+This is a virtual index, which the developer can use to create and search vector stores.
+
+#### 4. Create a key with the vector store permissions
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "allowed_vector_store_indexes": [{"index_name": "dall-e-6", "index_permissions": ["write", "read"]}],
+    "models": ["embedding-model"]
+}'
+```
+
+Give the key access to the virtual index and the embedding model.
+
+**Expected response**
+
+```json
+{
+    "key": "sk-my-virtual-key"
+}
+```
+
+### Developer Flow
+
+#### 1. Create a collection with schema
+
+Note: Use the `/milvus` endpoint for the passthrough api that uses the `milvus` provider in your config.
+
+```python
+from milvus_rest_client import MilvusRESTClient, DataType
+import random
+import time
+
+# Configuration
+uri = "http://0.0.0.0:4000/milvus"  # IMPORTANT: Use the '/milvus' endpoint for passthrough
+token = "sk-my-virtual-key"
+collection_name = "dall-e-6"  # Virtual index name
+
+# Initialize client
+milvus_client = MilvusRESTClient(uri=uri, token=token)
+print(f"Connected to DB: {uri} successfully")
+
+# Check if the collection exists and drop if it does
+check_collection = milvus_client.has_collection(collection_name)
+if check_collection:
+    milvus_client.drop_collection(collection_name)
+    print(f"Dropped the existing collection {collection_name} successfully")
+
+# Define schema
+dim = 64  # Vector dimension
+
+print("Start to create the collection schema")
+schema = milvus_client.create_schema()
+schema.add_field(
+    "book_id", DataType.INT64, is_primary=True, description="customized primary id"
+)
+schema.add_field("word_count", DataType.INT64, description="word count")
+schema.add_field(
+    "book_intro", DataType.FLOAT_VECTOR, dim=dim, description="book introduction"
+)
+
+# Prepare index parameters
+print("Start to prepare index parameters with default AUTOINDEX")
+index_params = milvus_client.prepare_index_params()
+index_params.add_index("book_intro", metric_type="L2")
+
+# Create collection
+print(f"Start to create example collection: {collection_name}")
+milvus_client.create_collection(
+    collection_name, schema=schema, index_params=index_params
+)
+collection_property = milvus_client.describe_collection(collection_name)
+print("Collection details: %s" % collection_property)
+```
+
+#### 2. Insert data into the collection
+
+```python
+# Insert data with customized ids
+nb = 1000
+insert_rounds = 2
+start = 0  # first primary key id
+total_rt = 0  # total response time for insert
+
+print(
+    f"Start to insert {nb*insert_rounds} entities into example collection: {collection_name}"
+)
+for i in range(insert_rounds):
+    vector = [random.random() for _ in range(dim)]
+    rows = [
+        {"book_id": i, "word_count": random.randint(1, 100), "book_intro": vector}
+        for i in range(start, start + nb)
+    ]
+    t0 = time.time()
+    milvus_client.insert(collection_name, rows)
+    ins_rt = time.time() - t0
+    start += nb
+    total_rt += ins_rt
+print(f"Insert completed in {round(total_rt, 4)} seconds")
+
+# Flush the collection
+print("Start to flush")
+start_flush = time.time()
+milvus_client.flush(collection_name)
+end_flush = time.time()
+print(f"Flush completed in {round(end_flush - start_flush, 4)} seconds")
+```
+
+#### 3. Search the collection
+
+```python
+# Search configuration
+nq = 3  # Number of query vectors
+search_params = {"metric_type": "L2", "params": {"level": 2}}
+limit = 2  # Number of results to return
+
+# Perform searches
+for i in range(5):
+    search_vectors = [[random.random() for _ in range(dim)] for _ in range(nq)]
+    t0 = time.time()
+    results = milvus_client.search(
+        collection_name,
+        data=search_vectors,
+        limit=limit,
+        search_params=search_params,
+        anns_field="book_intro",
+    )
+    t1 = time.time()
+    print(f"Search {i} results: {results}")
+    print(f"Search {i} latency: {round(t1-t0, 4)} seconds")
+```
+
+#### Complete Example
+
+Here's a full working example:
+
+```python
+from milvus_rest_client import MilvusRESTClient, DataType
+import random
+import time
+
+# ----------------------------
+# 🔐 CONFIGURATION
+# ----------------------------
+uri = "http://0.0.0.0:4000/milvus"  # IMPORTANT: Use the '/milvus' endpoint
+token = "sk-my-virtual-key"
+collection_name = "dall-e-6"  # Your virtual index name
+
+# ----------------------------
+# 📋 STEP 1 — Initialize Client
+# ----------------------------
+milvus_client = MilvusRESTClient(uri=uri, token=token)
+print(f"✅ Connected to DB: {uri} successfully")
+
+# ----------------------------
+# 🗑️  STEP 2 — Drop Existing Collection (if needed)
+# ----------------------------
+check_collection = milvus_client.has_collection(collection_name)
+if check_collection:
+    milvus_client.drop_collection(collection_name)
+    print(f"🗑️  Dropped the existing collection {collection_name} successfully")
+
+# ----------------------------
+# 📐 STEP 3 — Create Collection Schema
+# ----------------------------
+dim = 64  # Vector dimension
+
+print("📐 Creating the collection schema")
+schema = milvus_client.create_schema()
+schema.add_field(
+    "book_id", DataType.INT64, is_primary=True, description="customized primary id"
+)
+schema.add_field("word_count", DataType.INT64, description="word count")
+schema.add_field(
+    "book_intro", DataType.FLOAT_VECTOR, dim=dim, description="book introduction"
+)
+
+# ----------------------------
+# 🔍 STEP 4 — Create Index
+# ----------------------------
+print("🔍 Preparing index parameters with default AUTOINDEX")
+index_params = milvus_client.prepare_index_params()
+index_params.add_index("book_intro", metric_type="L2")
+
+# ----------------------------
+# 🏗️  STEP 5 — Create Collection
+# ----------------------------
+print(f"🏗️  Creating collection: {collection_name}")
+milvus_client.create_collection(
+    collection_name, schema=schema, index_params=index_params
+)
+collection_property = milvus_client.describe_collection(collection_name)
+print(f"✅ Collection created: {collection_property}")
+
+# ----------------------------
+# 📤 STEP 6 — Insert Data
+# ----------------------------
+nb = 1000
+insert_rounds = 2
+start = 0
+total_rt = 0
+
+print(f"📤 Inserting {nb*insert_rounds} entities into collection")
+for i in range(insert_rounds):
+    vector = [random.random() for _ in range(dim)]
+    rows = [
+        {"book_id": i, "word_count": random.randint(1, 100), "book_intro": vector}
+        for i in range(start, start + nb)
+    ]
+    t0 = time.time()
+    milvus_client.insert(collection_name, rows)
+    ins_rt = time.time() - t0
+    start += nb
+    total_rt += ins_rt
+print(f"✅ Insert completed in {round(total_rt, 4)} seconds")
+
+# ----------------------------
+# 💾 STEP 7 — Flush Collection
+# ----------------------------
+print("💾 Flushing collection")
+start_flush = time.time()
+milvus_client.flush(collection_name)
+end_flush = time.time()
+print(f"✅ Flush completed in {round(end_flush - start_flush, 4)} seconds")
+
+# ----------------------------
+# 🔍 STEP 8 — Search
+# ----------------------------
+nq = 3
+search_params = {"metric_type": "L2", "params": {"level": 2}}
+limit = 2
+
+print(f"🔍 Performing {5} search operations")
+for i in range(5):
+    search_vectors = [[random.random() for _ in range(dim)] for _ in range(nq)]
+    t0 = time.time()
+    results = milvus_client.search(
+        collection_name,
+        data=search_vectors,
+        limit=limit,
+        search_params=search_params,
+        anns_field="book_intro",
+    )
+    t1 = time.time()
+    print(f"✅ Search {i} results: {results}")
+    print(f"   Search {i} latency: {round(t1-t0, 4)} seconds")
 ```
 
 ## How It Works
