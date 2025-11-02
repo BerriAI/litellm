@@ -788,9 +788,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 )
         else:
             # Use standard Vertex AI (Gemini) token counter
-            from litellm.llms.vertex_ai.count_tokens.handler import (
-                VertexAITokenCounter as VertexAIGeminiTokenCounter,
-            )
+            from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
 
             count_tokens_params = {
                 "model": model_to_use,
@@ -798,7 +796,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 "messages": messages,  # Pass messages to handler for transformation
             }
             count_tokens_params_request.update(count_tokens_params)
-            result = await VertexAIGeminiTokenCounter().acount_tokens(
+            result = await VertexAITokenCounter().acount_tokens(
                 **count_tokens_params_request,
             )
 
