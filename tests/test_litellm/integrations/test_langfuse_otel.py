@@ -474,6 +474,132 @@ class TestLangfuseOtelResponsesAPI:
             for expected_call in expected_calls:
                 mock_safe_set_attribute.assert_any_call(*expected_call)
 
+    def test_responses_api_with_output(self):
+        """Test Langfuse OTEL logger with Responses API output (reasoning + message)."""
+        from openai.types.responses import ResponseReasoningItem, ResponseOutputMessage, ResponseOutputText
+        from openai.types.responses.response_reasoning_item import Summary
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+
+        # Create Responses API response with reasoning and message
+        response_obj = ResponsesAPIResponse(
+            id="response-456",
+            created_at=1625247600,
+            output=[
+                ResponseReasoningItem(
+                    id="reasoning-001",
+                    type="reasoning",
+                    summary=[
+                        Summary(
+                            text="Let me analyze this problem step by step...",
+                            type="summary_text"
+                        )
+                    ]
+                ),
+                ResponseOutputMessage(
+                    id="msg-001",
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[
+                        ResponseOutputText(
+                            annotations=[],
+                            text="The weather in San Francisco is sunny, 20°C.",
+                            type="output_text",
+                        )
+                    ]
+                )
+            ]
+        )
+
+        kwargs = {
+            "call_type": "responses",
+            "messages": [{"role": "user", "content": "What's the weather in San Francisco?"}],
+            "model": "gpt-4o",
+            "optional_params": {},
+        }
+
+        mock_span = MagicMock()
+
+        with patch('litellm.integrations.arize._utils.safe_set_attribute') as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, kwargs, response_obj)
+
+            # Verify observation output was set
+            output_calls = [
+                call for call in mock_safe_set_attribute.call_args_list
+                if call.args[1] == LangfuseSpanAttributes.OBSERVATION_OUTPUT.value
+            ]
+
+            assert len(output_calls) > 0, "observation.output should be set"
+            output_json = output_calls[0].args[2]
+            output_data = json.loads(output_json)
+
+            # Verify output contains reasoning and message
+            assert isinstance(output_data, list)
+            assert len(output_data) == 2
+
+            # Verify reasoning summary
+            assert output_data[0]["role"] == "reasoning_summary"
+            assert output_data[0]["content"] == "Let me analyze this problem step by step..."
+
+            # Verify message
+            assert output_data[1]["role"] == "assistant"
+            assert output_data[1]["content"] == "The weather in San Francisco is sunny, 20°C."
+
+    def test_responses_api_with_function_calls(self):
+        """Test Langfuse OTEL logger with Responses API function_call output."""
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+        from openai.types.responses import ResponseFunctionToolCall
+
+        # Create Responses API response with function call
+        response_obj = ResponsesAPIResponse(
+            id="response-789",
+            created_at=1625247700,
+            output=[
+                ResponseFunctionToolCall(
+                    id="fc-123",
+                    type="function_call",
+                    name="get_weather",
+                    call_id="call-abc",
+                    arguments='{"location": "San Francisco", "unit": "celsius"}',
+                    status="completed"
+                )
+            ]
+        )
+
+        kwargs = {
+            "call_type": "responses",
+            "messages": [{"role": "user", "content": "What's the weather in San Francisco?"}],
+            "model": "gpt-4o",
+            "optional_params": {},
+        }
+
+        mock_span = MagicMock()
+
+        with patch('litellm.integrations.arize._utils.safe_set_attribute') as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, kwargs, response_obj)
+
+            # Verify observation output was set
+            output_calls = [
+                call for call in mock_safe_set_attribute.call_args_list
+                if call.args[1] == LangfuseSpanAttributes.OBSERVATION_OUTPUT.value
+            ]
+
+            assert len(output_calls) > 0, "observation.output should be set"
+            output_json = output_calls[0].args[2]
+            output_data = json.loads(output_json)
+
+            # Verify output contains function call
+            assert isinstance(output_data, list)
+            assert len(output_data) == 1
+
+            # Verify function call details
+            assert output_data[0]["type"] == "function_call"
+            assert output_data[0]["id"] == "fc-123"
+            assert output_data[0]["name"] == "get_weather"
+            assert output_data[0]["call_id"] == "call-abc"
+            assert output_data[0]["arguments"]["location"] == "San Francisco"
+            assert output_data[0]["arguments"]["unit"] == "celsius"
+
 
 if __name__ == "__main__":
     pytest.main([__file__]) 
