@@ -163,12 +163,12 @@ async def llm_passthrough_factory_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers=auth_headers,
+        is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        stream=is_streaming_request,  # type: ignore
     )
 
     return received_value
@@ -232,13 +232,12 @@ async def gemini_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_llm_provider="gemini",
+        is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        query_params=merged_params,  # type: ignore
-        stream=is_streaming_request,  # type: ignore
     )
 
     return received_value
@@ -285,12 +284,12 @@ async def cohere_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers={"Authorization": "Bearer {}".format(cohere_api_key)},
+        is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        stream=is_streaming_request,  # type: ignore
     )
 
     return received_value
@@ -414,12 +413,12 @@ async def mistral_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers={"Authorization": "Bearer {}".format(mistral_api_key)},
+        is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        stream=is_streaming_request,  # type: ignore
     )
 
     return received_value
@@ -606,12 +605,12 @@ async def anthropic_proxy_route(
         target=str(updated_url),
         custom_headers={"x-api-key": "{}".format(anthropic_api_key)},
         _forward_headers=True,
+        is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        stream=is_streaming_request,  # type: ignore
     )
 
     return received_value
@@ -1029,12 +1028,12 @@ async def bedrock_proxy_route(
         endpoint=endpoint,
         target=str(prepped.url),
         custom_headers=prepped.headers,  # type: ignore
+        is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        stream=is_streaming_request,  # type: ignore
         custom_body=data,  # type: ignore
         query_params={},  # type: ignore
     )
@@ -1112,12 +1111,12 @@ async def assemblyai_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers={"Authorization": "{}".format(assemblyai_api_key)},
+        is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request=request,
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
-        stream=is_streaming_request,  # type: ignore
     )
 
     return received_value
@@ -1818,13 +1817,12 @@ class BaseOpenAIPassThroughHandler:
             custom_headers=BaseOpenAIPassThroughHandler._assemble_headers(
                 api_key=api_key, request=request, extra_headers=extra_headers
             ),
+            is_streaming_request=is_streaming_request,  # type: ignore
         )  # dynamically construct pass-through endpoint based on incoming path
         received_value = await endpoint_func(
             request,
             fastapi_response,
             user_api_key_dict,
-            stream=is_streaming_request,  # type: ignore
-            query_params=dict(request.query_params),  # type: ignore
         )
 
         return received_value
