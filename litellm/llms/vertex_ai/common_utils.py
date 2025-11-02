@@ -792,8 +792,7 @@ class VertexAITokenCounter(BaseTokenCounter):
 
             count_tokens_params = {
                 "model": model_to_use,
-                "contents": contents,
-                "messages": messages,  # Pass messages to handler for transformation
+                "contents": contents
             }
             count_tokens_params_request.update(count_tokens_params)
             result = await VertexAITokenCounter().acount_tokens(
