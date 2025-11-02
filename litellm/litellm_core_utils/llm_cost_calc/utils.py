@@ -63,7 +63,42 @@ def _calculate_tiered_cost(
     cost_key: str,
     fallback_cost_key: Optional[str] = None,
 ) -> float:
-    """Calculate cost using tiered pricing structure."""
+    """
+    Calculate cost for a given number of tokens based on a tiered pricing structure.
+
+    This function iterates through sorted pricing tiers, calculates the cost for the
+    number of tokens that fall into each tier's range, and sums them up to get the total cost.
+
+    Args:
+        tokens (int): The total number of tokens to calculate the cost for.
+        tiered_pricing (List[dict]): A list of dictionaries, where each dictionary
+            represents a pricing tier. The function expects the list to be sorted by range.
+        cost_key (str): The key in the tier dictionary that holds the per-token cost
+            (e.g., 'input_cost_per_token').
+        fallback_cost_key (Optional[str], optional): A fallback key to use if the
+            primary `cost_key` is not found in a tier. Defaults to None.
+
+    Returns:
+        float: The total calculated cost for the given tokens.
+
+    Example:
+        Given the following tiered pricing structure:
+
+        >>> tiered_pricing = [
+        ...     {"range": [0, 100000], "input_cost_per_token": 0.0001, "output_cost_per_token": 0.0002},
+        ...     {"range": [100000, 500000], "input_cost_per_token": 0.00005, "output_cost_per_token": 0.0001},
+        ... ]
+
+        Calculating the cost for 150,000 input tokens would be:
+        (100,000 tokens * $0.0001/token) + (50,000 tokens * $0.00005/token) = $12.5
+
+        >>> _calculate_tiered_cost(
+        ...     tokens=150000,
+        ...     tiered_pricing=tiered_pricing,
+        ...     cost_key="input_cost_per_token"
+        ... )
+        12.5
+    """
     if not tiered_pricing or tokens <= 0:
         return 0.0
 
