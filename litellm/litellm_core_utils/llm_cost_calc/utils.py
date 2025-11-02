@@ -1,8 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-from typing import Any, Literal, Optional, Tuple, TypedDict, cast, List
-from dataclasses import dataclass
+from typing import Any, Literal, Optional, Tuple, TypedDict, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -16,157 +15,6 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.utils import get_model_info
-
-
-@dataclass
-class TokenBreakdown:
-    """Token breakdown for cost calculation."""
-
-    text_tokens: int
-    cached_tokens: int
-    completion_tokens: int
-    reasoning_tokens: int
-
-
-def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
-    """Extract token counts from usage, handling cached and reasoning tokens."""
-    cached_tokens = 0
-    if usage.prompt_tokens_details and hasattr(
-        usage.prompt_tokens_details, "cached_tokens"
-    ):
-        cached_tokens = usage.prompt_tokens_details.cached_tokens or 0
-
-    # an alternate way cache tokens are passed for some providers is via _cache_read_input_tokens
-    if hasattr(usage, "_cache_read_input_tokens"):
-        cached_tokens = usage._cache_read_input_tokens or cached_tokens
-
-    text_tokens = usage.prompt_tokens - cached_tokens
-
-    reasoning_tokens = 0
-    if (
-        hasattr(usage, "completion_tokens_details")
-        and usage.completion_tokens_details
-        and hasattr(usage.completion_tokens_details, "reasoning_tokens")
-    ):
-        reasoning_tokens = usage.completion_tokens_details.reasoning_tokens or 0
-
-    completion_tokens = (usage.completion_tokens or 0) - reasoning_tokens
-
-    return TokenBreakdown(
-        text_tokens, cached_tokens, completion_tokens, reasoning_tokens
-    )
-
-
-def _calculate_tiered_cost(
-    tokens: int,
-    tiered_pricing: List[dict],
-    cost_key: str,
-    fallback_cost_key: Optional[str] = None,
-) -> float:
-    """
-    Calculate cost for a given number of tokens based on a tiered pricing structure.
-
-    This function iterates through sorted pricing tiers, calculates the cost for the
-    number of tokens that fall into each tier's range, and sums them up to get the total cost.
-
-    Args:
-        tokens (int): The total number of tokens to calculate the cost for.
-        tiered_pricing (List[dict]): A list of dictionaries, where each dictionary
-            represents a pricing tier. The function expects the list to be sorted by range.
-        cost_key (str): The key in the tier dictionary that holds the per-token cost
-            (e.g., 'input_cost_per_token').
-        fallback_cost_key (Optional[str], optional): A fallback key to use if the
-            primary `cost_key` is not found in a tier. Defaults to None.
-
-    Returns:
-        float: The total calculated cost for the given tokens.
-
-    Example:
-        Given the following tiered pricing structure:
-
-        >>> tiered_pricing = [
-        ...     {"range": [0, 100000], "input_cost_per_token": 0.0001, "output_cost_per_token": 0.0002},
-        ...     {"range": [100000, 500000], "input_cost_per_token": 0.00005, "output_cost_per_token": 0.0001},
-        ... ]
-
-        Calculating the cost for 150,000 input tokens would be:
-        (100,000 tokens * $0.0001/token) + (50,000 tokens * $0.00005/token) = $12.5
-
-        >>> _calculate_tiered_cost(
-        ...     tokens=150000,
-        ...     tiered_pricing=tiered_pricing,
-        ...     cost_key="input_cost_per_token"
-        ... )
-        12.5
-    """
-    if not tiered_pricing or tokens <= 0:
-        return 0.0
-
-    total_cost = 0.0
-    tokens_processed = 0
-
-    # Sort tiers by the start of their range to ensure correct processing
-    sorted_tiers = sorted(tiered_pricing, key=lambda x: x.get("range", [0, 0])[0])
-
-    for tier in sorted_tiers:
-        if tokens_processed >= tokens:
-            break
-
-        tier_range = tier.get("range", [])
-        if len(tier_range) != 2:
-            continue
-
-        range_start, range_end = tier_range
-
-        # Skip this tier if the tokens are below its start range
-        if tokens <= range_start:
-            continue
-
-        tier_start = max(range_start, tokens_processed)
-        tier_end = min(range_end, tokens)
-
-        if tier_end > tier_start:
-            tokens_in_tier = tier_end - tier_start
-            cost_per_token = tier.get(cost_key) or tier.get(fallback_cost_key, 0)
-            total_cost += tokens_in_tier * cost_per_token
-            tokens_processed = tier_end
-
-    return total_cost
-
-
-def _calculate_prompt_cost_with_tiers(
-    breakdown: TokenBreakdown, tiered_pricing: List[dict]
-) -> float:
-    """Calculate total prompt cost using tiered pricing."""
-    text_cost = _calculate_tiered_cost(
-        tokens=breakdown.text_tokens,
-        tiered_pricing=tiered_pricing,
-        cost_key="input_cost_per_token",
-    )
-    cache_cost = _calculate_tiered_cost(
-        tokens=breakdown.cached_tokens,
-        tiered_pricing=tiered_pricing,
-        cost_key="cache_read_input_token_cost",
-    )
-    return text_cost + cache_cost
-
-
-def _calculate_completion_cost_with_tiers(
-    breakdown: TokenBreakdown, tiered_pricing: List[dict]
-) -> float:
-    """Calculate total completion cost using tiered pricing."""
-    completion_cost = _calculate_tiered_cost(
-        tokens=breakdown.completion_tokens,
-        tiered_pricing=tiered_pricing,
-        cost_key="output_cost_per_token",
-    )
-    reasoning_cost = _calculate_tiered_cost(
-        tokens=breakdown.reasoning_tokens,
-        tiered_pricing=tiered_pricing,
-        cost_key="output_cost_per_reasoning_token",
-        fallback_cost_key="output_cost_per_token",
-    )
-    return completion_cost + reasoning_cost
 
 
 def _is_above_128k(tokens: float) -> bool:
@@ -270,21 +118,21 @@ def _generic_cost_per_character(
 def _get_service_tier_cost_key(base_key: str, service_tier: Optional[str]) -> str:
     """
     Get the appropriate cost key based on service tier.
-
+    
     Args:
         base_key: The base cost key (e.g., "input_cost_per_token")
         service_tier: The service tier ("flex", "priority", or None for standard)
-
+        
     Returns:
         str: The cost key to use (e.g., "input_cost_per_token_flex" or "input_cost_per_token")
     """
     if service_tier is None:
         return base_key
-
+    
     # Only use service tier specific keys for "flex" and "priority"
     if service_tier.lower() in [ServiceTier.FLEX.value, ServiceTier.PRIORITY.value]:
         return f"{base_key}_{service_tier.lower()}"
-
+    
     # For any other service tier, use standard pricing
     return base_key
 
@@ -304,15 +152,15 @@ def _get_token_base_cost(
     # Get service tier aware cost keys
     input_cost_key = _get_service_tier_cost_key("input_cost_per_token", service_tier)
     output_cost_key = _get_service_tier_cost_key("output_cost_per_token", service_tier)
-    cache_creation_cost_key = _get_service_tier_cost_key(
-        "cache_creation_input_token_cost", service_tier
+    cache_creation_cost_key = _get_service_tier_cost_key("cache_creation_input_token_cost", service_tier)
+    cache_read_cost_key = _get_service_tier_cost_key("cache_read_input_token_cost", service_tier)
+    
+    prompt_base_cost = cast(
+        float, _get_cost_per_unit(model_info, input_cost_key)
     )
-    cache_read_cost_key = _get_service_tier_cost_key(
-        "cache_read_input_token_cost", service_tier
+    completion_base_cost = cast(
+        float, _get_cost_per_unit(model_info, output_cost_key)
     )
-
-    prompt_base_cost = cast(float, _get_cost_per_unit(model_info, input_cost_key))
-    completion_base_cost = cast(float, _get_cost_per_unit(model_info, output_cost_key))
     cache_creation_cost = cast(
         float, _get_cost_per_unit(model_info, cache_creation_cost_key)
     )
@@ -320,7 +168,9 @@ def _get_token_base_cost(
         float,
         _get_cost_per_unit(model_info, "cache_creation_input_token_cost_above_1hr"),
     )
-    cache_read_cost = cast(float, _get_cost_per_unit(model_info, cache_read_cost_key))
+    cache_read_cost = cast(
+        float, _get_cost_per_unit(model_info, cache_read_cost_key)
+    )
 
     ## CHECK IF ABOVE THRESHOLD
     threshold: Optional[float] = None
@@ -333,6 +183,7 @@ def _get_token_base_cost(
                     1000 if "k" in threshold_str else 1
                 )
                 if usage.prompt_tokens > threshold:
+
                     prompt_base_cost = cast(
                         float, _get_cost_per_unit(model_info, key, prompt_base_cost)
                     )
@@ -427,7 +278,7 @@ def _get_cost_per_unit(
             verbose_logger.exception(
                 f"litellm.litellm_core_utils.llm_cost_calc.utils.py::calculate_cost_per_component(): Exception occured - {cost_per_unit}\nDefaulting to 0.0"
             )
-
+    
     # If the service tier key doesn't exist or is None, try to fall back to the standard key
     if cost_per_unit is None:
         # Check if any service tier suffix exists in the cost key using ServiceTier enum
@@ -435,7 +286,7 @@ def _get_cost_per_unit(
             suffix = f"_{service_tier.value}"
             if suffix in cost_key:
                 # Extract the base key by removing the matched suffix
-                base_key = cost_key.replace(suffix, "")
+                base_key = cost_key.replace(suffix, '')
                 fallback_cost = model_info.get(base_key)
                 if isinstance(fallback_cost, float):
                     return fallback_cost
@@ -449,7 +300,7 @@ def _get_cost_per_unit(
                             f"litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_cost_per_unit(): Exception occured - {fallback_cost}\nDefaulting to 0.0"
                         )
                 break  # Only try the first matching suffix
-
+    
     return default_value
 
 
@@ -644,21 +495,16 @@ def _calculate_input_cost(
 
 
 def generic_cost_per_token(
-    model: str,
-    usage: Usage,
-    custom_llm_provider: str,
-    service_tier: Optional[str] = None,
+    model: str, usage: Usage, custom_llm_provider: str, service_tier: Optional[str] = None
 ) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
-    Handles tiered pricing, context caching, and service tiers.
+    Handles context caching as well.
 
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
-        - custom_llm_provider: str, the provider for the model
-        - service_tier: Optional[str], service tier like "flex" or "priority"
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -667,21 +513,6 @@ def generic_cost_per_token(
     ## GET MODEL INFO
     model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
-    # Check for tiered pricing first
-    tiered_pricing = model_info.get("tiered_pricing")
-    if isinstance(tiered_pricing, list) and tiered_pricing:
-        breakdown = _extract_token_breakdown(usage)
-
-        prompt_cost = _calculate_prompt_cost_with_tiers(
-            breakdown=breakdown, tiered_pricing=tiered_pricing
-        )
-        completion_cost = _calculate_completion_cost_with_tiers(
-            breakdown=breakdown, tiered_pricing=tiered_pricing
-        )
-
-        return prompt_cost, completion_cost
-
-    # Fallback to flat/threshold pricing logic
     ## CALCULATE INPUT COST
     ### Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
     prompt_cost = 0.0
@@ -716,9 +547,7 @@ def generic_cost_per_token(
         cache_creation_cost,
         cache_creation_cost_above_1hr,
         cache_read_cost,
-    ) = _get_token_base_cost(
-        model_info=model_info, usage=usage, service_tier=service_tier
-    )
+    ) = _get_token_base_cost(model_info=model_info, usage=usage, service_tier=service_tier)
 
     prompt_cost = _calculate_input_cost(
         prompt_tokens_details=prompt_tokens_details,
