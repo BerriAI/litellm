@@ -1156,22 +1156,34 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         text: str,
         language: Optional[str] = None,
         entities: Optional[List[PiiEntityType]] = None,
+        request_data: Optional[dict] = None,
     ) -> str:
         """
         Apply Bedrock guardrail to the given text for testing purposes.
 
         This method allows users to test Bedrock guardrails without making actual LLM calls.
         It creates a mock request and response to test the guardrail functionality.
+        
+        Args:
+            text: The text to analyze
+            language: Optional language parameter (not used by Bedrock)
+            entities: Optional entities parameter (not used by Bedrock)
+            request_data: Optional request data dictionary for logging metadata
         """
         try:
             verbose_proxy_logger.debug("Bedrock Guardrail: Applying guardrail")
             mock_messages: List[AllMessageValues] = [
                 ChatCompletionUserMessage(role="user", content=text)
             ]
+            
+            # Use provided request_data or create a mock one for testing
+            if request_data is None:
+                request_data = {"messages": mock_messages}
+            
             bedrock_response = await self.make_bedrock_api_request(
                 source="INPUT",
                 messages=mock_messages,
-                request_data={"messages": mock_messages},
+                request_data=request_data,
             )
 
             if bedrock_response.get("action") == "BLOCKED":

@@ -491,10 +491,11 @@ class EnkryptAIGuardrails(CustomGuardrail):
         text: str,
         language: Optional[str] = None,
         entities: Optional[List[PiiEntityType]] = None,
+        request_data: Optional[dict] = None,
     ) -> str:
         result = await self._call_enkryptai_guardrails(
             prompt=text,
-            request_data={},
+            request_data=request_data or {},
         )
         # Process the guardrails response
         processed_result = self._process_enkryptai_guardrails_response(result)

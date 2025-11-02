@@ -856,6 +856,7 @@ class NomaGuardrail(CustomGuardrail):
         text: str,
         language: Optional[str] = None,
         entities: Optional[List[PiiEntityType]] = None,
+        request_data: Optional[dict] = None,
     ) -> str:
         """
         Apply Noma guardrail to the given text for testing purposes.
@@ -867,6 +868,7 @@ class NomaGuardrail(CustomGuardrail):
             text: The text to analyze
             language: Optional language parameter (not used by Noma)
             entities: Optional entities parameter (not used by Noma)
+            request_data: Optional request data dictionary for logging metadata
 
         Returns:
             The original text if allowed, or anonymized text if available
@@ -884,11 +886,15 @@ class NomaGuardrail(CustomGuardrail):
             # Create payload for Noma API
             payload = {"request": {"text": text}}
             
+            # Use provided request_data or create a mock one for testing
+            if request_data is None:
+                request_data = {"messages": [{"role": "user", "content": text}]}
+            
             # Call Noma API
             response_json = await self._call_noma_api(
                 payload=payload,
                 llm_request_id=None,
-                request_data={"messages": [{"role": "user", "content": text}]},
+                request_data=request_data,
                 user_auth=mock_user_auth,
                 extra_data={},
             )
