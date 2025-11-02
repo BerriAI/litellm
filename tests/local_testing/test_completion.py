@@ -2470,8 +2470,6 @@ def test_completion_azure_key_completion_arg():
         pytest.fail(f"Error occurred: {e}")
 
 
-
-
 async def test_re_use_azure_async_client():
     try:
         print("azure gpt-3.5 ASYNC with clie nttest\n\n")
@@ -4272,7 +4270,6 @@ def test_deepseek_reasoning_content_completion():
         pytest.skip("Model is timing out")
 
 
-
 def test_qwen_text_completion():
     # litellm._turn_on_debug()
     resp = litellm.completion(
@@ -4407,3 +4404,37 @@ def test_completion_gpt_4o_empty_str():
             messages=[{"role": "user", "content": ""}],
         )
         assert resp.choices[0].message.content is not None
+
+
+def test_edit_note():
+    litellm.callbacks = ["langfuse_otel"]
+    response = completion(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": "Your only job is to call the edit_note tool with the content specified in the user's message.",
+            },
+            {
+                "role": "user",
+                "content": "Edit the note with the content: 'This is a test note.'",
+            },
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "edit_note",
+                    "description": "Edit the note with the content specified in the user's message.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "content": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        ],
+    )
+
+    return response
