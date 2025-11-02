@@ -57,7 +57,7 @@ class PassThroughEndpointLogging:
         self.TRACKED_LANGFUSE_ROUTES = ["/langfuse/"]
 
         # Gemini
-        self.TRACKED_GEMINI_ROUTES = ["generateContent", "streamGenerateContent"]
+        self.TRACKED_GEMINI_ROUTES = ["generateContent", "streamGenerateContent", "batchGenerateContent"]
 
         # Vertex AI Live API WebSocket
         self.TRACKED_VERTEX_AI_LIVE_ROUTES = ["/vertex_ai/live"]
