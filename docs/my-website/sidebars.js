@@ -202,13 +202,14 @@ const sidebars = {
           type: "category",
           label: "Budgets + Rate Limits",
           items: [
-            "proxy/users",
+            "proxy/budgets",
             "proxy/team_budgets",
             "proxy/tag_budgets",
             "proxy/customers",
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
             "proxy/temporary_budget_increase",
+            "proxy/budget_guide",
           ],
         },
         "proxy/caching",
@@ -714,6 +715,7 @@ const sidebars = {
           items: [
             "adding_provider/directory_structure",
             "adding_provider/new_rerank_provider",
+          ]
         },
         "extras/contributing",
         "contributing",
