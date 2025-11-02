@@ -494,7 +494,6 @@ class TestVideoGeneration:
         # Test request transformation
         url, data = config.transform_video_status_retrieve_request(
             video_id="video_123",
-            model="sora-2",
             api_base="https://api.openai.com/v1/videos",
             litellm_params=MagicMock(),
             headers={}
@@ -522,7 +521,6 @@ class TestVideoGeneration:
         }
         
         response = config.transform_video_status_retrieve_response(
-            model="sora-2",
             raw_response=mock_http_response,
             logging_obj=MagicMock()
         )
@@ -655,7 +653,6 @@ class TestVideoGeneration:
         for api_base, video_id, expected_url in test_cases:
             url, data = config.transform_video_status_retrieve_request(
                 video_id=video_id,
-                model="sora-2",
                 api_base=api_base,
                 litellm_params=MagicMock(),
                 headers={}

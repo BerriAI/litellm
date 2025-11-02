@@ -231,8 +231,8 @@ PII_ENTITY_CATEGORIES_MAP = {
 
 
 class PiiEntityCategoryMap(TypedDict):
-    category: PiiEntityCategory
-    entities: List[PiiEntityType]
+    category: str
+    entities: List[str]
 
 
 class GuardrailParamUITypes(str, Enum):
@@ -589,6 +589,9 @@ class GuardrailEventHooks(str, Enum):
 class DynamicGuardrailParams(TypedDict):
     extra_body: Dict[str, Any]
 
+class GUARDRAIL_DEFINITION_LOCATION(str, Enum):
+    DB = "db"
+    CONFIG = "config"
 
 class GuardrailInfoResponse(BaseModel):
     guardrail_id: Optional[str] = None
@@ -597,7 +600,7 @@ class GuardrailInfoResponse(BaseModel):
     guardrail_info: Optional[Dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    guardrail_definition_location: Literal["config", "db"] = "config"
+    guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.CONFIG
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -608,9 +611,9 @@ class ListGuardrailsResponse(BaseModel):
 
 
 class GuardrailUIAddGuardrailSettings(BaseModel):
-    supported_entities: List[PiiEntityType]
-    supported_actions: List[PiiAction]
-    supported_modes: List[GuardrailEventHooks]
+    supported_entities: List[str]
+    supported_actions: List[str]
+    supported_modes: List[str]
     pii_entity_categories: List[PiiEntityCategoryMap]
 
 

@@ -68,7 +68,9 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
+from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.containers.main import ContainerObject
 from litellm.types.llms.openai import (
     AllMessageValues,
     Batch,
@@ -76,6 +78,7 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     OpenAIFileObject,
     OpenAIModerationResponse,
+    ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
 )
@@ -1308,6 +1311,7 @@ class Logging(LiteLLMLoggingBaseClass):
             response_cost = litellm.response_cost_calculator(
                 **response_cost_calculator_kwargs
             )
+
             verbose_logger.debug(f"response_cost: {response_cost}")
             return response_cost
         except Exception as e:  # error calculating cost
@@ -1618,9 +1622,11 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OpenAIFileObject)
             or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
             or isinstance(logging_result, OpenAIModerationResponse)
+            or isinstance(logging_result, OCRResponse)  # OCR
             or isinstance(logging_result, dict)
             and logging_result.get("object") == "vector_store.search_results.page"
-            or isinstance(logging_result, VideoObject)
+            or isinstance(logging_result, VideoObject) 
+            or isinstance(logging_result, ContainerObject)
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
             return True
@@ -2992,6 +2998,17 @@ class Logging(LiteLLMLoggingBaseClass):
         elif isinstance(result, TextCompletionResponse):
             return result
         elif isinstance(result, ResponseCompletedEvent):
+            ## return unified Usage object
+            if isinstance(result.response.usage, ResponseAPIUsage):
+                setattr(
+                    result.response,
+                    "usage",
+                    (
+                        ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                            result.response.usage
+                        )
+                    ),
+                )
             return result.response
         else:
             return None

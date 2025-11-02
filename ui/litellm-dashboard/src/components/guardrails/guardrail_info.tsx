@@ -13,7 +13,8 @@ import {
   TabPanels,
   TextInput,
 } from "@tremor/react";
-import { Button, Form, Input, Select, Divider } from "antd";
+import { Button, Form, Input, Select, Divider, Tooltip } from "antd";
+import { InfoCircleOutlined, EyeInvisibleOutlined, StopOutlined } from "@ant-design/icons";
 import {
   getGuardrailInfo,
   updateGuardrailCall,
@@ -328,6 +329,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     }
   };
 
+  const isConfigGuardrail = guardrailData.guardrail_definition_location === "config";
+
   return (
     <div className="p-4">
       <div>
@@ -411,21 +414,35 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                 </Card>
               )}
 
-            {guardrailData.guardrail_info && Object.keys(guardrailData.guardrail_info).length > 0 && (
-              <Card className="mt-6">
-                <Text>Guardrail Info</Text>
-                <div className="mt-2 space-y-2">
-                  {Object.entries(guardrailData.guardrail_info).map(([key, value]) => (
-                    <div key={key} className="flex">
-                      <Text className="font-medium w-1/3">{key}</Text>
-                      <Text className="w-2/3">
-                        {typeof value === "object" ? JSON.stringify(value, null, 2) : String(value)}
-                      </Text>
+            {guardrailData.litellm_params?.pii_entities_config &&
+              Object.keys(guardrailData.litellm_params.pii_entities_config).length > 0 && (
+                <Card className="mt-6">
+                  <Text className="mb-4 text-lg font-semibold">PII Entity Configuration</Text>
+                  <div className="border rounded-lg overflow-hidden shadow-sm">
+                    <div className="bg-gray-50 px-5 py-3 border-b flex">
+                      <Text className="flex-1 font-semibold text-gray-700">Entity Type</Text>
+                      <Text className="flex-1 font-semibold text-gray-700">Configuration</Text>
                     </div>
-                  ))}
-                </div>
-              </Card>
-            )}
+                    <div className="max-h-[400px] overflow-y-auto">
+                      {Object.entries(guardrailData.litellm_params?.pii_entities_config).map(([key, value]) => (
+                        <div key={key} className="px-5 py-3 flex border-b hover:bg-gray-50 transition-colors">
+                          <Text className="flex-1 font-medium text-gray-900">{key}</Text>
+                          <Text className="flex-1">
+                            <span
+                              className={`inline-flex items-center gap-1.5 ${
+                                value === "MASK" ? "text-blue-600" : "text-red-600"
+                              }`}
+                            >
+                              {value === "MASK" ? <EyeInvisibleOutlined /> : <StopOutlined />}
+                              {String(value)}
+                            </span>
+                          </Text>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </Card>
+              )}
           </TabPanel>
 
           {/* Settings Panel (only for admins) */}
@@ -434,7 +451,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               <Card>
                 <div className="flex justify-between items-center mb-4">
                   <Title>Guardrail Settings</Title>
-                  {!isEditing && <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>}
+                  {isConfigGuardrail && (
+                    <Tooltip title="Guardrail is defined in the config file and cannot be edited.">
+                      <InfoCircleOutlined />
+                    </Tooltip>
+                  )}
+                  {!isEditing && !isConfigGuardrail && (
+                    <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
+                  )}
                 </div>
 
                 {isEditing ? (

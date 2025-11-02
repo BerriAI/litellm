@@ -9,7 +9,6 @@ This test file follows LiteLLM's testing patterns and covers:
 - Configuration validation
 """
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -61,6 +60,7 @@ class TestPanwAirsInitialization:
         assert isinstance(handler, PanwPrismaAirsHandler)
         assert handler.guardrail_name == "test_guardrail"
 
+    @patch.dict("os.environ", {}, clear=True)
     def test_missing_api_key_raises_error(self):
         """Test that missing API key raises ValueError."""
         # Test direct handler initialization without api_key or env var
@@ -72,18 +72,17 @@ class TestPanwAirsInitialization:
                 default_on=True,
             )  
 
-    def test_missing_profile_name_raises_error(self):
-        """Test that missing profile name raises ValueError."""
-        litellm_params = SimpleNamespace(
-            api_key="test_key",
-            api_base=None,
+    def test_api_key_with_linked_profile(self):
+        """Test initialization with API key that has a linked profile (no explicit profile_name needed)."""
+        # profile_name is optional when API key has linked profile
+        handler = PanwPrismaAirsHandler(
+            guardrail_name="test_panw_airs",
+            api_key="test_api_key_with_linked_profile",
+            profile_name=None,  # Optional when API key has linked profile
             default_on=True,
-            profile_name=None,
         )
-        guardrail_config = {"guardrail_name": "test_guardrail"}
-
-        with pytest.raises(ValueError, match="profile_name is required"):
-            initialize_guardrail(litellm_params, guardrail_config)   
+        assert handler.api_key == "test_api_key_with_linked_profile"
+        assert handler.profile_name is None  # Should be None, PANW API will use linked profile   
 
 
 class TestPanwAirsPromptScanning:

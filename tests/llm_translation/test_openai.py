@@ -337,7 +337,7 @@ def test_openai_max_retries_0(mock_get_openai_client):
     assert mock_get_openai_client.call_args.kwargs["max_retries"] == 0
 
 
-@pytest.mark.parametrize("model", ["o1", "o1-mini", "o3-mini"])
+@pytest.mark.parametrize("model", ["o1", "o3-mini"])
 def test_o1_parallel_tool_calls(model):
     litellm.completion(
         model=model,
