@@ -1,10 +1,6 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Budget Guide
-
-Budgets in LiteLLM help you control spending on LLM API calls by setting spending limits at different levels. You can apply budgets to virtual keys, users, teams, team members, and end customers. When a budget is exceeded, requests can either fail (hard budget) or continue with warnings (soft budget). Budgets support automatic resets based on time periods (daily, weekly, monthly, etc.) and track spend in real-time.
-
 # Budgets, Rate Limits
 
 :::info **Budget Setup Options**
