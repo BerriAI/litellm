@@ -2052,114 +2052,37 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider in litellm.openai_compatible_providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
-            # note: if a user sets a custom base - we should ensure this works
-            # allow for the setting of dynamic and stateful api-bases
-            api_base = (
-                api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
-                or litellm.api_base
-                or get_secret("OPENAI_BASE_URL")
-                or get_secret("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+            # NOTE: This is a temporary example showing the new dispatcher pattern.
+            # In the final state, the ENTIRE if-elif chain for all providers will be 
+            # replaced by a single ProviderDispatcher.dispatch() call, not individual 
+            # dispatch calls within each branch.
+            from litellm.llms.provider_dispatcher import ProviderDispatcher
+            
+            response = ProviderDispatcher.dispatch(
+                custom_llm_provider=custom_llm_provider,
+                model=model,
+                messages=messages,
+                api_key=api_key,
+                api_base=api_base,
+                headers=headers,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logging_obj=logging,
+                acompletion=acompletion,
+                timeout=timeout,
+                client=client,
+                extra_headers=extra_headers,
+                print_verbose=print_verbose,
+                logger_fn=logger_fn,
+                shared_session=shared_session,
+                custom_prompt_dict=custom_prompt_dict,
+                encoding=encoding,
+                stream=stream,
+                provider_config=provider_config,
+                metadata=metadata,
+                organization=organization,
             )
-            organization = (
-                organization
-                or litellm.organization
-                or get_secret("OPENAI_ORGANIZATION")
-                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-            )
-            openai.organization = organization
-            # set API KEY
-            api_key = (
-                api_key
-                or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
-                or litellm.openai_key
-                or get_secret("OPENAI_API_KEY")
-            )
-
-            headers = headers or litellm.headers
-
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
-
-            if (
-                litellm.enable_preview_features and metadata is not None
-            ):  # [PREVIEW] allow metadata to be passed to OPENAI
-                optional_params["metadata"] = add_openai_metadata(metadata)
-
-            ## LOAD CONFIG - if set
-            config = litellm.OpenAIConfig.get_config()
-            for k, v in config.items():
-                if (
-                    k not in optional_params
-                ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
-                    optional_params[k] = v
-
-            ## COMPLETION CALL
-            use_base_llm_http_handler = get_secret_bool(
-                "EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER"
-            )
-
-            try:
-                if use_base_llm_http_handler:
-
-                    response = base_llm_http_handler.completion(
-                        model=model,
-                        messages=messages,
-                        api_base=api_base,
-                        custom_llm_provider=custom_llm_provider,
-                        model_response=model_response,
-                        encoding=encoding,
-                        logging_obj=logging,
-                        optional_params=optional_params,
-                        timeout=timeout,
-                        litellm_params=litellm_params,
-                        shared_session=shared_session,
-                        acompletion=acompletion,
-                        stream=stream,
-                        api_key=api_key,
-                        headers=headers,
-                        client=client,
-                        provider_config=provider_config,
-                    )
-                else:
-                    response = openai_chat_completions.completion(
-                        model=model,
-                        messages=messages,
-                        headers=headers,
-                        model_response=model_response,
-                        print_verbose=print_verbose,
-                        api_key=api_key,
-                        api_base=api_base,
-                        acompletion=acompletion,
-                        logging_obj=logging,
-                        optional_params=optional_params,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn,
-                        timeout=timeout,  # type: ignore
-                        custom_prompt_dict=custom_prompt_dict,
-                        client=client,  # pass AsyncOpenAI, OpenAI client
-                        organization=organization,
-                        custom_llm_provider=custom_llm_provider,
-                        shared_session=shared_session,
-                    )
-            except Exception as e:
-                ## LOGGING - log the original exception returned
-                logging.post_call(
-                    input=messages,
-                    api_key=api_key,
-                    original_response=str(e),
-                    additional_args={"headers": headers},
-                )
-                raise e
-
-            if optional_params.get("stream", False):
-                ## LOGGING
-                logging.post_call(
-                    input=messages,
-                    api_key=api_key,
-                    original_response=response,
-                    additional_args={"headers": headers},
-                )
 
         elif custom_llm_provider == "mistral":
             api_key = api_key or litellm.api_key or get_secret("MISTRAL_API_KEY")
