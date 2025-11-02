@@ -346,6 +346,7 @@ class LiteLLMRoutes(enum.Enum):
         "/eu.assemblyai",
         "/vllm",
         "/mistral",
+        "/milvus",
     ]
 
     #########################################################

@@ -2,7 +2,7 @@ from typing import Any, Dict, Literal, Optional
 
 from fastapi import HTTPException, Request
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -73,6 +73,11 @@ def is_allowed_to_call_vector_store_endpoint(
     1. Creating a vector store index
     2. Reading a vector store index (Search / List / Get)
     """
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        return True
     # check what allowed permissions are for the key
     key_metadata = user_api_key_dict.metadata
     team_metadata = user_api_key_dict.team_metadata
