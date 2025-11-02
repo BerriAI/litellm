@@ -1510,3 +1510,110 @@ async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
     # If no error is raised and result is None, then the test passes
     assert result is None
     print("✅ No output text in response test passed")
+
+
+@pytest.mark.asyncio
+async def test_should_raise_guardrail_blocked_exception_comprehensive():
+    """Comprehensive test for _should_raise_guardrail_blocked_exception method"""
+    from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrailResponse
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT"
+    )
+    
+    # Test 1: Empty assessments should return False
+    empty_response: BedrockGuardrailResponse = {
+        "action": "NONE",
+        "outputs": [],
+        "assessments": []
+    }
+    assert guardrail._should_raise_guardrail_blocked_exception(empty_response) is False
+    
+    # Test 2: Word policy BLOCKED action should return True
+    word_blocked_response: BedrockGuardrailResponse = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [],
+        "assessments": [{
+            "wordPolicy": {
+                "customWords": [{
+                    "match": "badword",
+                    "action": "BLOCKED"
+                }]
+            }
+        }]
+    }
+    assert guardrail._should_raise_guardrail_blocked_exception(word_blocked_response) is True
+    
+    # Test 3: Managed word list BLOCKED action should return True
+    managed_word_blocked_response: BedrockGuardrailResponse = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [],
+        "assessments": [{
+            "wordPolicy": {
+                "managedWordLists": [{
+                    "match": "profanity",
+                    "action": "BLOCKED"
+                }]
+            }
+        }]
+    }
+    assert guardrail._should_raise_guardrail_blocked_exception(managed_word_blocked_response) is True
+    
+    # Test 4: Regex BLOCKED action should return True
+    regex_blocked_response: BedrockGuardrailResponse = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [],
+        "assessments": [{
+            "sensitiveInformationPolicy": {
+                "regexes": [{
+                    "name": "custom-pattern",
+                    "match": "secret123",
+                    "action": "BLOCKED"
+                }]
+            }
+        }]
+    }
+    assert guardrail._should_raise_guardrail_blocked_exception(regex_blocked_response) is True
+    
+    # Test 5: Contextual grounding BLOCKED action should return True
+    grounding_blocked_response: BedrockGuardrailResponse = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [],
+        "assessments": [{
+            "contextualGroundingPolicy": {
+                "filters": [{
+                    "type": "GROUNDING",
+                    "threshold": 0.5,
+                    "score": 0.3,
+                    "action": "BLOCKED"
+                }]
+            }
+        }]
+    }
+    assert guardrail._should_raise_guardrail_blocked_exception(grounding_blocked_response) is True
+    
+    # Test 6: With masking enabled, should return True for BLOCKED actions
+    guardrail_with_masking = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        mask_request_content=True
+    )
+    assert guardrail_with_masking._should_raise_guardrail_blocked_exception(word_blocked_response) is True
+    
+    # Test 7: No intervention action should return False
+    no_intervention_response: BedrockGuardrailResponse = {
+        "action": "NONE",
+        "outputs": [],
+        "assessments": [{
+            "topicPolicy": {
+                "topics": [{
+                    "name": "Safe Topic",
+                    "type": "ALLOW",
+                    "action": "NONE"
+                }]
+            }
+        }]
+    }
+    assert guardrail._should_raise_guardrail_blocked_exception(no_intervention_response) is False
+    print("✅ Guardrail blocked exception test passed - all cases covered")
