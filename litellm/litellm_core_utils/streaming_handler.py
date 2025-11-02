@@ -735,6 +735,14 @@ class CustomStreamWrapper:
                 and completion_obj["function_call"] is not None
             )
             or (
+                 "tool_calls" in model_response.choices[0].delta
+                and model_response.choices[0].delta["tool_calls"] is not None
+            )
+            or (
+                "function_call" in model_response.choices[0].delta
+                and model_response.choices[0].delta["function_call"] is not None
+            )
+            or (
                 "reasoning_content" in model_response.choices[0].delta
                 and model_response.choices[0].delta.reasoning_content is not None
             )
