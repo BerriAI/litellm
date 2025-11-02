@@ -155,3 +155,144 @@ class TestS3V2UnitTests:
         assert url_download == expected_download_url, f"Expected download URL {expected_download_url}, got {url_download}"
 
         assert result == {"downloaded": "data"}
+
+@pytest.mark.asyncio
+async def test_strip_base64_removes_file_and_nontext_entries():
+    logger = S3Logger(s3_strip_base64_files=True)
+
+    payload = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello world"},
+                    {"type": "image", "file": {"file_data": "data:image/png;base64,AAAA"}},
+                    {"type": "file", "file": {"file_data": "data:application/pdf;base64,BBBB"}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Response"},
+                    {"type": "audio", "file": {"file_data": "data:audio/wav;base64,CCCC"}},
+                ],
+            },
+        ]
+    }
+
+    stripped = await logger._strip_base64_from_messages(payload)
+
+    # 1️⃣ File/image/audio entries are removed
+    assert len(stripped["messages"][0]["content"]) == 1
+    assert stripped["messages"][0]["content"][0]["text"] == "Hello world"
+
+    assert len(stripped["messages"][1]["content"]) == 1
+    assert stripped["messages"][1]["content"][0]["text"] == "Response"
+
+    # 2️⃣ No 'file' keys remain
+    for msg in stripped["messages"]:
+        for content in msg["content"]:
+            assert "file" not in content
+            assert content.get("type") == "text"
+
+
+@pytest.mark.asyncio
+async def test_strip_base64_keeps_non_file_content():
+    logger = S3Logger(s3_strip_base64_files=True)
+
+    payload = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Just text"},
+                    {"type": "text", "text": "Another message"},
+                ],
+            }
+        ]
+    }
+
+    stripped = await logger._strip_base64_from_messages(payload)
+
+    # Should not modify pure text messages
+    assert stripped["messages"][0]["content"] == payload["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_strip_base64_handles_empty_or_missing_messages():
+    logger = S3Logger(s3_strip_base64_files=True)
+
+    # Missing messages key
+    payload_no_messages = {}
+    stripped1 = await logger._strip_base64_from_messages(payload_no_messages)
+    assert stripped1 == payload_no_messages
+
+    # Empty messages list
+    payload_empty = {"messages": []}
+    stripped2 = await logger._strip_base64_from_messages(payload_empty)
+    assert stripped2 == payload_empty
+
+
+@pytest.mark.asyncio
+async def test_strip_base64_mixed_nested_objects():
+    """
+    Handles weird/nested content structures gracefully.
+    """
+    logger = S3Logger(s3_strip_base64_files=True)
+
+    payload = {
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "Keep me"},
+                    {"type": "custom", "metadata": "ignore but non-text"},
+                    {"foo": "bar"},
+                    {"file": {"file_data": "data:application/pdf;base64,XXX"}},
+                ],
+                "extra": {"trace_id": "123"},
+            }
+        ]
+    }
+
+    stripped = await logger._strip_base64_from_messages(payload)
+
+    # Custom/non-text and file entries removed
+    content = stripped["messages"][0]["content"]
+    assert len(content) == 2
+    assert {"type": "text", "text": "Keep me"} in content
+    assert {"foo": "bar"} in content
+    # Extra metadata preserved
+    assert stripped["messages"][0]["extra"]["trace_id"] == "123"
+
+
+@pytest.mark.asyncio
+async def test_strip_base64_recursive_redaction():
+    logger = S3Logger(s3_strip_base64_files=True)
+    payload = {
+        "messages": [
+            {
+                "content": [
+                    {"type": "text", "text": "normal text"},
+                    {"type": "text", "text": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg"},
+                    {"type": "text", "text": "Nested: {'data': 'data:application/pdf;base64,AAA...'}"},
+                    {"file": {"file_data": "data:application/pdf;base64,AAAA"}},
+                    {"metadata": {"preview": "data:audio/mp3;base64,AAAAA=="}},
+                ]
+            }
+        ]
+    }
+
+    result = await logger._strip_base64_from_messages(payload)
+    content = result["messages"][0]["content"]
+
+    # Dropped file-type entries
+    assert not any("file" in c for c in content)
+
+    # Base64 redacted globally
+    import json
+    for c in content:
+        if isinstance(c, dict):
+            s = json.dumps(c).lower()
+            # "[base64_redacted]" is fine, but raw base64 is not
+            assert "base64," not in s, f"Found real base64 blob in: {s}"
