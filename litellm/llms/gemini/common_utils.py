@@ -45,11 +45,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
-        return (
-            api_key
-            or (get_secret_str("GOOGLE_API_KEY"))
-            or (get_secret_str("GEMINI_API_KEY"))
-        )
+        return api_key or (get_secret_str("GOOGLE_API_KEY")) or (get_secret_str("GEMINI_API_KEY"))
 
     @staticmethod
     def get_base_model(model: str) -> Optional[str]:
@@ -94,11 +90,11 @@ class GeminiModelInfo(BaseLLMModelInfo):
         return GeminiError(
             status_code=status_code, message=error_message, headers=headers
         )
-
+    
     def get_token_counter(self) -> Optional[BaseTokenCounter]:
         """
         Factory method to create a token counter for this provider.
-
+        
         Returns:
             Optional TokenCounterInterface implementation for this provider,
             or None if token counting is not supported.
@@ -156,15 +152,13 @@ def get_api_key_from_env() -> Optional[str]:
 
 class GoogleAIStudioTokenCounter(BaseTokenCounter):
     """Token counter implementation for Google AI Studio provider."""
-
     def should_use_token_counting_api(
-        self,
+        self, 
         custom_llm_provider: Optional[str] = None,
     ) -> bool:
         from litellm.types.utils import LlmProviders
-
         return custom_llm_provider == LlmProviders.GEMINI.value
-
+    
     async def count_tokens(
         self,
         model_to_use: str,
@@ -176,11 +170,8 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         import copy
 
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
-
         deployment = deployment or {}
-        count_tokens_params_request = copy.deepcopy(
-            deployment.get("litellm_params", {})
-        )
+        count_tokens_params_request = copy.deepcopy(deployment.get("litellm_params", {}))
         count_tokens_params = {
             "model": model_to_use,
             "contents": contents,
@@ -198,5 +189,5 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
                 tokenizer_type=result.get("tokenizer_used", ""),
                 original_response=result,
             )
-
+        
         return None
