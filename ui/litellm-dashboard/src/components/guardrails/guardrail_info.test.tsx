@@ -144,7 +144,7 @@ describe("Guardrail Info", () => {
     );
 
     await waitFor(() => {
-      expect(getByText("Guardrail Info")).toBeInTheDocument();
+      expect(getByText("PII Entity Configuration")).toBeInTheDocument();
     });
   });
 });
