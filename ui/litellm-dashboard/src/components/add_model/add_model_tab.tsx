@@ -240,7 +240,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     </Typography.Text>
                   </div>
 
-                  <Form.Item label="Existing Credentials" name="litellm_credential_name">
+                  <Form.Item label="Existing Credentials" name="litellm_credential_name" initialValue={null}>
                     <AntdSelect
                       showSearch
                       placeholder="Select or search for existing credentials"
@@ -259,12 +259,6 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     />
                   </Form.Item>
 
-                  <div className="flex items-center my-4">
-                    <div className="flex-grow border-t border-gray-200"></div>
-                    <span className="px-4 text-gray-500 text-sm">OR</span>
-                    <div className="flex-grow border-t border-gray-200"></div>
-                  </div>
-
                   <Form.Item
                     noStyle
                     shouldUpdate={(prevValues, currentValues) =>
@@ -277,13 +271,18 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                       console.log("🔑 Credential Name Changed:", credentialName);
                       // Only show provider specific fields if no credentials selected
                       if (!credentialName) {
-                        return <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />;
+                        return (
+                          <>
+                            <div className="flex items-center my-4">
+                              <div className="flex-grow border-t border-gray-200"></div>
+                              <span className="px-4 text-gray-500 text-sm">OR</span>
+                              <div className="flex-grow border-t border-gray-200"></div>
+                            </div>
+                            <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+                          </>
+                        );
                       }
-                      return (
-                        <div className="text-gray-500 text-sm text-center">
-                          Using existing credentials - no additional provider fields needed
-                        </div>
-                      );
+                      return null;
                     }}
                   </Form.Item>
                   <div className="flex items-center my-4">
