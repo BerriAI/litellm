@@ -571,3 +571,40 @@ model LiteLLM_HealthCheckTable {
   @@index([checked_at])
   @@index([status])
 }
+
+// Search Tools table for storing search tool configurations
+model LiteLLM_SearchToolsTable {
+  search_tool_id String @id @default(uuid())
+  search_tool_name String @unique
+  litellm_params Json
+  search_tool_info Json?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+// SSO configuration table
+model LiteLLM_SSOConfig {
+  id String @id @default("sso_config")
+  sso_settings Json
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+model LiteLLM_ManagedVectorStoreIndexTable {
+  id String @id @default(uuid())
+  index_name String @unique
+  litellm_params Json
+  index_info Json?
+  created_at DateTime @default(now())
+  created_by String?
+  updated_at DateTime @updatedAt
+  updated_by String?
+}
+
+// Cache configuration table
+model LiteLLM_CacheConfig {
+  id String @id @default("cache_config")
+  cache_settings Json
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}

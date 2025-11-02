@@ -1,16 +1,34 @@
 model_list:
-  - model_name: db-openai-endpoint
+  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
     litellm_params:
-      model: openai/gm
-      api_key: hi
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_region_name: us-east-1
+      custom_llm_provider: bedrock
+  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_region_name: us-west-2
+      custom_llm_provider: bedrock
+    
+
+# like MCPs/vector stores
+search_tools:
+  - search_tool_name: litellm-search
+    litellm_params:
+      search_provider: perplexity
+      api_key: os.environ/PERPLEXITYAI_API_KEY
+  - search_tool_name: exa-search
+    litellm_params:
+      search_provider: exa_ai
+      api_key: os.environ/EXA_API_KEY
+  
+
+
+# for /files endpoints
+files_settings:
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
 
 
 litellm_settings:
-  callbacks: ["dynamic_rate_limiter_v3"]
-  priority_reservation: 
-    "prod": 0.9  # 90% reserved for production (9 RPM)
-    "dev": 0.1   # 10% reserved for development (1 RPM)
-  priority_reservation_settings:
-    default_priority: 0.2  # Weight (0%) assigned to keys without explicit priority metadata
-    saturation_threshold: 0.50 #  A model is saturated if it has hit 50% of its RPM limit
+  callbacks: ["datadog"]

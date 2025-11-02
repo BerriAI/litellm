@@ -437,6 +437,7 @@ def test_select_azure_base_url_called(setup_mocks):
             "agenerate_content",
             "allm_passthrough_route",
             "llm_passthrough_route",
+            "asearch",
         ]
     ],
 )
@@ -509,6 +510,18 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
             "custom_llm_provider": "azure",
             "file_id": "123",
         },
+        "avideo_content": {
+            "custom_llm_provider": "azure",
+            "video_id": "123",
+        },
+        "avideo_list": {
+            "custom_llm_provider": "azure",
+        },
+        "avideo_remix": {
+            "custom_llm_provider": "azure",
+            "video_id": "123",
+            "prompt": "A new video based on this one",
+        },
     }
 
     # Get appropriate input for this call type
@@ -542,6 +555,21 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
         patch_target = (
             "litellm.files.main.azure_files_instance.initialize_azure_sdk_client"
         )
+    elif (
+        call_type == CallTypes.avideo_content
+        or call_type == CallTypes.avideo_list
+        or call_type == CallTypes.avideo_remix
+    ):
+        # Skip video call types as they don't use Azure SDK client initialization
+        pytest.skip(f"Skipping {call_type.value} because Azure video calls don't use initialize_azure_sdk_client")
+    elif (
+        call_type == CallTypes.alist_containers
+        or call_type == CallTypes.aretrieve_container
+        or call_type == CallTypes.acreate_container
+        or call_type == CallTypes.adelete_container
+    ):
+        # Skip container call types as they're not supported for Azure (only OpenAI)
+        pytest.skip(f"Skipping {call_type.value} because Azure doesn't support container operations")
 
     # Mock the initialize_azure_sdk_client function
     with patch(patch_target) as mock_init_azure:
@@ -1484,3 +1512,23 @@ def test_get_azure_ad_token_fallback_to_default_azure_credential(setup_mocks, mo
 
     # Verify the token is what we expect from our DefaultAzureCredential mock
     assert token == "mock-default-azure-credential-token"
+
+
+@pytest.mark.parametrize(
+    "api_version,expected",
+    [
+        ("preview", True),
+        ("latest", True),
+        ("v1", True),
+        (None, False),
+        ("2023-05-15", False),
+        ("2024-01-01", False),
+        ("", False),
+    ],
+)
+def test_is_azure_v1_api_version(api_version, expected):
+    """
+    Test that _is_azure_v1_api_version correctly identifies v1 API versions.
+    """
+    result = BaseAzureLLM._is_azure_v1_api_version(api_version=api_version)
+    assert result == expected

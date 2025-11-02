@@ -19,6 +19,7 @@ import {
   getPromptsList,
 } from "../networking";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import { Team } from "../key_team_helpers/key_list";
 import TeamDropdown from "../common_components/team_dropdown";
 import { InfoCircleOutlined } from "@ant-design/icons";
@@ -910,6 +911,41 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         !premiumUser ? "Premium feature - Upgrade to set prompts by key" : "Select or enter prompts"
                       }
                       options={promptsList.map((name) => ({ value: name, label: name }))}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        Allowed Pass Through Routes{" "}
+                        <Tooltip title="Allow this key to use specific pass through routes">
+                          <a
+                            href="https://docs.litellm.ai/docs/proxy/pass_through"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="allowed_passthrough_routes"
+                    className="mt-4"
+                    help={
+                      premiumUser
+                        ? "Select existing pass through routes or enter new ones"
+                        : "Premium feature - Upgrade to set pass through routes by key"
+                    }
+                  >
+                    <PassThroughRoutesSelector
+                      onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+                      value={form.getFieldValue("allowed_passthrough_routes")}
+                      accessToken={accessToken}
+                      placeholder={
+                        !premiumUser ? "Premium feature - Upgrade to set pass through routes by key" : "Select or enter pass through routes"
+                      }
+                      disabled={!premiumUser}
+                      teamId={selectedCreateKeyTeam ? selectedCreateKeyTeam.team_id : null}
                     />
                   </Form.Item>
                   <Form.Item

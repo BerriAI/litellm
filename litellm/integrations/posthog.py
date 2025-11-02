@@ -11,11 +11,10 @@ For batching specific details see CustomBatchLogger class
 
 import asyncio
 import os
-from litellm._uuid import uuid
-from typing import Any, Dict, Optional
-
+from typing import Any, Dict, Optional, Tuple
 
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
@@ -74,6 +73,8 @@ class PostHogLogger(CustomBatchLogger):
             )
 
             api_key, api_url = self._get_credentials_for_request(kwargs)
+            if api_key is None or api_url is None:
+                raise Exception("PostHog credentials not found in kwargs")
             event_payload = self.create_posthog_event_payload(kwargs)
 
             headers = {
@@ -275,7 +276,7 @@ class PostHogLogger(CustomBatchLogger):
 
         return self._safe_uuid()
 
-    def _get_credentials_for_request(self, kwargs: Dict[str, Any]) -> tuple[str, str]:
+    def _get_credentials_for_request(self, kwargs: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
         """
         Get PostHog credentials for this request.
 

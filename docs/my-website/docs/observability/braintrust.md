@@ -75,6 +75,12 @@ It is recommended that you include the `project_id` or `project_name` to ensure 
 
 You can customize the span name in Braintrust logging by passing `span_name` in the metadata. By default, the span name is set to "Chat Completion".
 
+### Custom Span Attributes
+
+You can customize the span id, root span name and span parents in Braintrust logging by passing `span_id`, `root_span_id` and `span_parents` in the metadata. 
+`span_parents` should be a string containing a list of span ids, joined by ,
+
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 

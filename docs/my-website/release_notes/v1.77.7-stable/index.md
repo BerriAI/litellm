@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.77.7-stable - Claude Sonnet 4.5"
+title: "v1.77.7-stable - 2.9x Lower Median Latency"
 slug: "v1-77-7"
 date: 2025-10-04T10:00:00
 authors:
@@ -11,18 +11,6 @@ authors:
     title: CTO, LiteLLM
     url: https://www.linkedin.com/in/reffajnaahsi/
     image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
-  - name: Alexsander Hamir
-    title: Backend Performance Engineer
-    url: https://www.linkedin.com/in/alexsander-baptista/
-    image_url: https://media.licdn.com/dms/image/v2/D5603AQGXnziu4kqNCQ/profile-displayphoto-crop_800_800/B56ZkxEcuOKEAI-/0/1757464874550?e=1762387200&v=beta&t=9SNXLsWhx8OnYPAMQ9fqAr02oevDYEAL2vMYg2f9ieg
-  - name: Achintya Srivastava
-    title: Fullstack Engineer
-    url: https://www.linkedin.com/in/achintya-rajan/
-    image_url: https://media.licdn.com/dms/image/v2/D5603AQGdkEeyJTdljw/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1716271140869?e=1762387200&v=beta&t=9gOoLPeqR2E5z3KSX61EUj3HVZXmgo87vhVuSHeffjc
-  - name: Sameer Kankute
-    title: Backend Engineer (LLM Translation)
-    url: https://www.linkedin.com/in/sameer-kankute/
-    image_url: https://media.licdn.com/dms/image/v2/D4D03AQHB_loQYd5gjg/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1719137160975?e=1762387200&v=beta&t=0jbuX-f4eSnDxBY3olI6meuYr-LMbObhFmFbRcKF5mY
 
 hide_table_of_contents: false
 ---
@@ -102,6 +90,31 @@ View the complete configuration: [gist.github.com/AlexsanderHamir/config.yaml](h
 **Load Script (no_cache_hits.py)**
 
 View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache_hits.py](https://gist.github.com/AlexsanderHamir/42c33d7a4dc7a57f56a78b560dee3a42)
+
+### MCP OAuth 2.0 Support
+
+<Image img={require('../../img/mcp_updates.jpg')} style={{ width: '800px', height: 'auto' }} />
+
+<br/>
+
+This release adds support for OAuth 2.0 Client Credentials for MCP servers. This is great for **Internal Dev Tools** use-cases, as it enables your users to call MCP servers, with their own credentials. E.g. Allowing your developers to call the Github MCP, with their own credentials.
+
+[Set it up today on Claude Code](../../docs/tutorials/claude_responses_api#connecting-mcp-servers)
+
+### Scheduled Key Rotations
+
+<Image img={require('../../img/release_notes/schedule_key_rotations.png')}  style={{ width: '800px', height: 'auto' }} />
+
+<br/>
+
+This release brings support for scheduling virtual key rotations on LiteLLM AI Gateway. 
+ 
+From this release you can enforce Virtual Keys to rotate on a schedule of your choice e.g every 15 days/30 days/60 days etc.
+ 
+This is great for Proxy Admins who need to enforce security policies for production workloads. 
+
+[Get Started](../../docs/proxy/virtual_keys#scheduled-key-rotations)
+
 
 ## New Models / Updated Models
 

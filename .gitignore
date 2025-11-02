@@ -97,3 +97,6 @@ litellm_config.yaml
 .vscode/launch.json
 litellm/proxy/to_delete_loadtest_work/*
 update_model_cost_map.py
+tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_manager.py
+litellm/proxy/_experimental/out/guardrails/index.html
+scripts/test_vertex_ai_search.py

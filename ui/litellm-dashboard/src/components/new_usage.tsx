@@ -28,7 +28,6 @@ import {
   TableCell,
   DateRangePickerValue,
 } from "@tremor/react";
-import AdvancedDatePicker from "./shared/advanced_date_picker";
 
 import { userDailyActivityCall, userDailyActivityAggregatedCall, tagListCall } from "./networking";
 import { Tag } from "./tag_management/types";
@@ -46,6 +45,9 @@ import { valueFormatterSpend } from "./usage/utils/value_formatters";
 import CloudZeroExportModal from "./cloudzero_export_modal";
 import { ChartLoader } from "./shared/chart_loader";
 import { getProviderLogoAndName } from "./provider_info_helpers";
+import EntityUsageExportModal from "./EntityUsageExport";
+import AdvancedDatePicker from "./shared/advanced_date_picker";
+import { Button } from "@tremor/react";
 
 interface NewUsagePageProps {
   accessToken: string | null;
@@ -78,6 +80,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
   const [allTags, setAllTags] = useState<EntityList[]>([]);
   const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
+  const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
 
   const getAllTags = async () => {
     if (!accessToken) {
@@ -415,18 +418,35 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         <TabPanels>
           {/* Your Usage Panel */}
           <TabPanel>
-            <Grid numItems={2} className="gap-10 w-1/2 mb-4">
+            <Grid numItems={2} className="gap-10 w-full mb-4">
               <Col>
                 <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
               </Col>
             </Grid>
             <TabGroup>
-              <TabList variant="solid" className="mt-1">
-                <Tab>Cost</Tab>
-                <Tab>Model Activity</Tab>
-                <Tab>Key Activity</Tab>
-                <Tab>MCP Server Activity</Tab>
-              </TabList>
+              <div className="flex justify-between items-center">
+                <TabList variant="solid" className="mt-1">
+                  <Tab>Cost</Tab>
+                  <Tab>Model Activity</Tab>
+                  <Tab>Key Activity</Tab>
+                  <Tab>MCP Server Activity</Tab>
+                </TabList>
+                <Button
+                  onClick={() => setIsGlobalExportModalOpen(true)}
+                  icon={() => (
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                      />
+                    </svg>
+                  )}
+                >
+                  Export Data
+                </Button>
+              </div>
               <TabPanels>
                 {/* Cost Panel */}
                 <TabPanel>
@@ -742,6 +762,20 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         isOpen={isCloudZeroModalOpen}
         onClose={() => setIsCloudZeroModalOpen(false)}
         accessToken={accessToken}
+      />
+
+      {/* Global Usage Export Modal */}
+      <EntityUsageExportModal
+        isOpen={isGlobalExportModalOpen}
+        onClose={() => setIsGlobalExportModalOpen(false)}
+        entityType="team"
+        spendData={{
+          results: userSpendData.results,
+          metadata: userSpendData.metadata,
+        }}
+        dateRange={dateValue}
+        selectedFilters={[]}
+        customTitle="Export Usage Data"
       />
     </div>
   );

@@ -320,6 +320,16 @@ Okta requires the `GENERIC_CLIENT_STATE` parameter:
 GENERIC_CLIENT_STATE="random-string" # Required for Okta
 ```
 
+### Okta PKCE
+
+If your Okta application is configured to require PKCE (Proof Key for Code Exchange), enable it by setting:
+
+```bash
+GENERIC_CLIENT_USE_PKCE="true"
+```
+
+This is required when your Okta app settings enforce PKCE for enhanced security. LiteLLM will automatically handle PKCE parameter generation and verification during the OAuth flow.
+
 ### Common Configuration Issues
 
 #### Missing Protocol in Base URL

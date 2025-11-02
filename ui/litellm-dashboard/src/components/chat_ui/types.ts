@@ -56,6 +56,20 @@ export interface StreamingResponse {
   usage?: Usage;
 }
 
+export interface VectorStoreSearchResult {
+  score: number;
+  content: Array<{ text: string; type: string }>;
+  file_id?: string;
+  filename?: string;
+  attributes?: Record<string, any>;
+}
+
+export interface VectorStoreSearchResponse {
+  object: string;
+  search_query: string;
+  data: VectorStoreSearchResult[];
+}
+
 export interface MessageType {
   role: string;
   content: string | MultimodalContent[];
@@ -75,6 +89,7 @@ export interface MessageType {
     url: string;
     detail: string;
   };
+  searchResults?: VectorStoreSearchResponse[];
 }
 
 export interface MultimodalContent {

@@ -92,7 +92,7 @@ class TestLangfuseOtelIntegration:
 
         with patch.dict(os.environ, {'LANGFUSE_TRACING_ENVIRONMENT': test_env}):
             with patch('litellm.integrations.arize._utils.safe_set_attribute') as mock_safe_set_attribute:
-                LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, mock_kwargs)
+                LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, mock_kwargs, {})
                 
                 # safe_set_attribute(span, key, value) → positional args
                 mock_safe_set_attribute.assert_called_once_with(
@@ -130,7 +130,7 @@ class TestLangfuseOtelIntegration:
         assert extracted.get("foo") == "bar"
         assert extracted.get("enriched") is True
 
-    def test_set_langfuse_specific_attributes_full_mapping(self):
+    def test_set_langfuse_specific_attributes_metadata(self):
         """Verify every supported metadata key maps to the correct OTEL attribute and complex types are JSON-serialised."""
         # Build a sample metadata payload covering all mappings
         metadata = {
@@ -156,7 +156,7 @@ class TestLangfuseOtelIntegration:
 
         # Capture calls to safe_set_attribute
         with patch('litellm.integrations.arize._utils.safe_set_attribute') as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs)
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
 
             # Build expected calls manually for clarity
             from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
@@ -188,6 +188,109 @@ class TestLangfuseOtelIntegration:
             }
 
             assert actual == expected, "Mismatch between expected and actual OTEL attribute mapping."
+
+    def test_set_langfuse_specific_attributes_with_content(self):
+        """Test that _set_langfuse_specific_attributes correctly sets observation.output with regular content response."""
+        from litellm.types.utils import Choices, ModelResponse
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+
+        # Create response with content
+        response_obj = ModelResponse(
+            id='chatcmpl-test',
+            model='gpt-4o',
+            choices=[
+                Choices(
+                    finish_reason='stop',
+                    message={
+                        "role": "assistant",
+                        "content": "The weather in Tokyo is sunny."
+                    }
+                )
+            ],
+        )
+
+        kwargs = {
+            "messages": [{"role": "user", "content": "What's the weather in Tokyo?"}],
+        }
+
+        with patch('litellm.integrations.arize._utils.safe_set_attribute') as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, response_obj)
+
+            expect_output = {
+                LangfuseSpanAttributes.OBSERVATION_INPUT.value: [
+                    {
+                        "role": "user",
+                        "content": "What's the weather in Tokyo?"
+                    }
+                ],
+                LangfuseSpanAttributes.OBSERVATION_OUTPUT.value: {
+                    "role": "assistant",
+                    "content": "The weather in Tokyo is sunny."
+                }
+            }
+
+            # Flatten the actual calls into {key: value}
+            actual = {
+                call.args[1]: json.loads(call.args[2])
+                for call in mock_safe_set_attribute.call_args_list
+            }
+
+            assert actual == expect_output, "Mismatch in observation input/output OTEL attributes."
+
+
+    def test_set_langfuse_specific_attributes_with_tool_calls(self):
+        """Test that _set_langfuse_specific_attributes correctly sets observation.output with tool calls in Langfuse format."""
+        from litellm.types.utils import Choices, Function, ChatCompletionMessageToolCall, ModelResponse
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+
+        # Create response with tool calls
+        response_obj = ModelResponse(
+            id='chatcmpl-test',
+            model='gpt-4o',
+            choices=[
+                Choices(
+                    finish_reason='tool_calls',
+                    message={
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            ChatCompletionMessageToolCall(
+                                function=Function(
+                                    arguments='{"location":"Tokyo"}',
+                                    name='get_weather'
+                                ),
+                                id='call_123',
+                                type='function'
+                            )
+                        ]
+                    }
+                )
+            ],
+        )
+
+        with patch('litellm.integrations.arize._utils.safe_set_attribute') as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), {}, 
+            response_obj)
+
+            expected = {
+                LangfuseSpanAttributes.OBSERVATION_OUTPUT.value: [
+                        {
+                            "id": "chatcmpl-test",
+                            "name": "get_weather",
+                            "arguments": {"location": "Tokyo"},
+                            "call_id": "call_123",
+                            "type": "function_call"
+                        }
+                ]
+            }
+
+            # Flatten the actual calls into {key: value}
+            actual = {
+                call.args[1]: json.loads(call.args[2])
+                for call in mock_safe_set_attribute.call_args_list
+            }
+            assert actual == expected, "Mismatch in observation output OTEL attribute for tool calls."
+
 
     def test_construct_dynamic_otel_headers_with_langfuse_keys(self):
         """Test that construct_dynamic_otel_headers creates proper auth headers when langfuse keys are provided."""
@@ -352,7 +455,7 @@ class TestLangfuseOtelResponsesAPI:
         mock_span = MagicMock()
         
         with patch('litellm.integrations.arize._utils.safe_set_attribute') as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, kwargs)
+            LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, kwargs, {})
             
             # Verify specific attributes were set
             from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
@@ -370,8 +473,6 @@ class TestLangfuseOtelResponsesAPI:
             
             for expected_call in expected_calls:
                 mock_safe_set_attribute.assert_any_call(*expected_call)
-
-    
 
 
 if __name__ == "__main__":

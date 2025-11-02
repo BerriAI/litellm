@@ -13,7 +13,6 @@ from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConf
 
 class TestBedrockGPTOSS(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
-        litellm._turn_on_debug()
         return {
             "model": "bedrock/converse/openai.gpt-oss-20b-1:0",
         }

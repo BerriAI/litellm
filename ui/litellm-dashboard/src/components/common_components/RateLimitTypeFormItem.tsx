@@ -85,11 +85,21 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
                 </div>
               </div>
             </Option>
+            <Option value="dynamic" label="Dynamic">
+              <div style={{ padding: "4px 0" }}>
+                <div style={{ fontWeight: 500 }}>Dynamic</div>
+                <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                  If the key has a set {limitTypeUpper} (e.g. 2 {limitTypeUpper}) and there are no 429 errors, it can
+                  dynamically exceed the limit when the model being called is not erroring.
+                </div>
+              </div>
+            </Option>
           </>
         ) : (
           <>
             <Option value="best_effort_throughput">Best effort throughput</Option>
             <Option value="guaranteed_throughput">Guaranteed throughput</Option>
+            <Option value="dynamic">Dynamic</Option>
           </>
         )}
       </Select>

@@ -189,6 +189,75 @@ async def test_basic_openai_responses_api_non_streaming_with_logging():
     )
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_openai_responses_api_returns_headers(sync_mode):
+    """
+    Test that OpenAI responses API returns OpenAI headers in _hidden_params.
+    This ensures the proxy can forward these headers to clients.
+    
+    Related issue: LiteLLM responses API should return OpenAI headers like chat completions does
+    """
+    litellm._turn_on_debug()
+    litellm.set_verbose = True
+    
+    if sync_mode:
+        response = litellm.responses(
+            model="gpt-4o",
+            input="Say hello",
+            max_output_tokens=20,
+        )
+    else:
+        response = await litellm.aresponses(
+            model="gpt-4o",
+            input="Say hello",
+            max_output_tokens=20,
+        )
+    
+    # Verify response is valid
+    assert response is not None
+    assert isinstance(response, ResponsesAPIResponse)
+    
+    # Verify _hidden_params exists
+    assert hasattr(response, "_hidden_params"), "Response should have _hidden_params attribute"
+    assert response._hidden_params is not None, "_hidden_params should not be None"
+    
+    # Verify additional_headers exists in _hidden_params
+    assert "additional_headers" in response._hidden_params, \
+        "_hidden_params should contain 'additional_headers' key"
+    
+    additional_headers = response._hidden_params["additional_headers"]
+    assert isinstance(additional_headers, dict), "additional_headers should be a dictionary"
+    assert len(additional_headers) > 0, "additional_headers should not be empty"
+    
+    # Check for expected OpenAI rate limit headers
+    # These can be either direct (x-ratelimit-*) or prefixed (llm_provider-x-ratelimit-*)
+    rate_limit_headers = [
+        "x-ratelimit-remaining-tokens",
+        "x-ratelimit-limit-tokens",
+        "x-ratelimit-remaining-requests",
+        "x-ratelimit-limit-requests",
+    ]
+    
+    found_headers = []
+    for header_name in rate_limit_headers:
+        if header_name in additional_headers:
+            found_headers.append(header_name)
+        elif f"llm_provider-{header_name}" in additional_headers:
+            found_headers.append(f"llm_provider-{header_name}")
+    
+    assert len(found_headers) > 0, \
+        f"Should find at least one OpenAI rate limit header. Headers found: {list(additional_headers.keys())}"
+    
+    # Verify headers key also exists (raw headers)
+    assert "headers" in response._hidden_params, \
+        "_hidden_params should contain 'headers' key with raw response headers"
+    
+    print(f"✓ Successfully validated OpenAI headers in {'sync' if sync_mode else 'async'} mode")
+    print(f"  Found {len(additional_headers)} headers total")
+    print(f"  Rate limit headers found: {found_headers}")
+
+
 def validate_stream_event(event):
     """
     Validate that a streaming event from litellm.responses() or litellm.aresponses()
@@ -1508,3 +1577,29 @@ async def test_basic_openai_responses_with_websearch(stream):
             print("chunk=", json.dumps(chunk, indent=4, default=str))
     else:
         print("response=", json.dumps(response, indent=4, default=str))
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_api_token_limit_error():
+    """
+    Relevant issue: https://github.com/BerriAI/litellm/issues/15785
+
+
+    When this fails you'll see:
+    "pydantic_core._pydantic_core.ValidationError: 3 validation errors for ErrorEvent"
+    in the console.
+    """
+    litellm._turn_on_debug()
+
+    # Generate text with >400k tokens to trigger token limit error
+    oversized_text = "This is a test sentence. " * 50000  # ~400k tokens
+
+    # This will raise ValidationError instead of showing the real error
+    response = await litellm.aresponses(
+        model="gpt-5-mini",
+        input=oversized_text,
+        stream=True
+    )
+
+    async for event in response:
+        print(event)  # Never reaches here - ValidationError is raised

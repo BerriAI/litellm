@@ -10,10 +10,14 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
+    ApplyGuardrailRequest,
+    ApplyGuardrailResponse,
     BedrockGuardrailConfigModel,
     Guardrail,
     GuardrailEventHooks,
@@ -251,6 +255,7 @@ async def create_guardrail(request: CreateGuardrailRequest):
     }
     ```
     """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -260,6 +265,22 @@ async def create_guardrail(request: CreateGuardrailRequest):
         result = await GUARDRAIL_REGISTRY.add_guardrail_to_db(
             guardrail=request.guardrail, prisma_client=prisma_client
         )
+
+        guardrail_name = result.get("guardrail_name", "Unknown")
+        guardrail_id = result.get("guardrail_id", "Unknown")
+
+        try:
+            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+                guardrail=cast(Guardrail, result)
+            )
+            verbose_proxy_logger.info(
+                f"Immediate sync: Successfully initialized guardrail '{guardrail_name}' (ID: {guardrail_id})"
+            )
+        except Exception as init_error:
+            verbose_proxy_logger.warning(
+                f"Immediate sync: Failed to initialize guardrail '{guardrail_name}' (ID: {guardrail_id}) in memory: {init_error}"
+            )
+
         return result
     except Exception as e:
         verbose_proxy_logger.exception(f"Error adding guardrail to db: {e}")
@@ -323,6 +344,7 @@ async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
     }
     ```
     """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -344,6 +366,21 @@ async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
             guardrail=request.guardrail,
             prisma_client=prisma_client,
         )
+
+        guardrail_name = result.get("guardrail_name", "Unknown")
+
+        try:
+            IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
+                guardrail_id=guardrail_id, guardrail=cast(Guardrail, result)
+            )
+            verbose_proxy_logger.info(
+                f"Immediate sync: Successfully updated guardrail '{guardrail_name}' (ID: {guardrail_id})"
+            )
+        except Exception as update_error:
+            verbose_proxy_logger.warning(
+                f"Immediate sync: Failed to update '{guardrail_name}' (ID: {guardrail_id}) in memory: {update_error}"
+            )
+
         return result
     except HTTPException as e:
         raise e
@@ -396,10 +433,20 @@ async def delete_guardrail(guardrail_id: str):
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
 
-        # delete in memory guardrail
-        IN_MEMORY_GUARDRAIL_HANDLER.delete_in_memory_guardrail(
-            guardrail_id=guardrail_id,
-        )
+        guardrail_name = result.get("guardrail_name", "Unknown")
+
+        try:
+            IN_MEMORY_GUARDRAIL_HANDLER.delete_in_memory_guardrail(
+                guardrail_id=guardrail_id,
+            )
+            verbose_proxy_logger.info(
+                f"Immediate sync: Successfully removed guardrail '{guardrail_name}' (ID: {guardrail_id}) from memory"
+            )
+        except Exception as delete_error:
+            verbose_proxy_logger.warning(
+                f"Immediate sync: Failed to remove guardrail '{guardrail_name}' (ID: {guardrail_id}) from memory: {delete_error}"
+            )
+
         return result
     except HTTPException as e:
         raise e
@@ -514,11 +561,21 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
             prisma_client=prisma_client,
         )
 
-        # update in memory guardrail
-        IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
-            guardrail_id=guardrail_id,
-            guardrail=guardrail,
-        )
+        guardrail_name = result.get("guardrail_name", "Unknown")
+
+        try:
+            IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
+                guardrail_id=guardrail_id,
+                guardrail=guardrail,
+            )
+            verbose_proxy_logger.info(
+                f"Immediate sync: Successfully updated guardrail '{guardrail_name}' (ID: {guardrail_id})"
+            )
+        except Exception as update_error:
+            verbose_proxy_logger.warning(
+                f"Immediate sync: Failed to update '{guardrail_name}' (ID: {guardrail_id}) in memory: {update_error}"
+            )
+
         return result
     except HTTPException as e:
         raise e
@@ -573,11 +630,13 @@ async def get_guardrail_info(guardrail_id: str):
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
+    from litellm.types.guardrails import GUARDRAIL_DEFINITION_LOCATION
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
+        guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.DB
         result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
@@ -585,6 +644,7 @@ async def get_guardrail_info(guardrail_id: str):
             result = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(
                 guardrail_id=guardrail_id
             )
+            guardrail_definition_location = GUARDRAIL_DEFINITION_LOCATION.CONFIG
 
         if result is None:
             raise HTTPException(
@@ -612,6 +672,7 @@ async def get_guardrail_info(guardrail_id: str):
             guardrail_info=dict(result.get("guardrail_info") or {}),
             created_at=result.get("created_at"),
             updated_at=result.get("updated_at"),
+            guardrail_definition_location=guardrail_definition_location,
         )
     except HTTPException as e:
         raise e
@@ -636,12 +697,15 @@ async def get_guardrail_ui_settings():
     # Convert the PII_ENTITY_CATEGORIES_MAP to the format expected by the UI
     category_maps = []
     for category, entities in PII_ENTITY_CATEGORIES_MAP.items():
-        category_maps.append({"category": category, "entities": entities})
+        category_maps.append({
+            "category": category.value,
+            "entities": [entity.value for entity in entities]
+        })
 
     return GuardrailUIAddGuardrailSettings(
-        supported_entities=list(PiiEntityType),
-        supported_actions=list(PiiAction),
-        supported_modes=list(GuardrailEventHooks),
+        supported_entities=[entity.value for entity in PiiEntityType],
+        supported_actions=[action.value for action in PiiAction],
+        supported_modes=[mode.value for mode in GuardrailEventHooks],
         pii_entity_categories=category_maps,
     )
 
@@ -756,11 +820,109 @@ def _get_list_element_options(field_annotation: Any) -> Optional[List[str]]:
     return None
 
 
+def _should_skip_optional_params(field_name: str, field_annotation: Any) -> bool:
+    """Check if optional_params field should be skipped (not meaningfully overridden)."""
+    if field_name != "optional_params":
+        return False
+    
+    if field_annotation is None:
+        return True
+    
+    # Check if the annotation is still a generic TypeVar (not specialized)
+    if isinstance(field_annotation, TypeVar) or (
+        hasattr(field_annotation, "__origin__")
+        and field_annotation.__origin__ is TypeVar
+    ):
+        return True
+    
+    # Also skip if it's a generic type that wasn't specialized
+    if hasattr(field_annotation, "__name__") and field_annotation.__name__ in (
+        "T",
+        "TypeVar",
+    ):
+        return True
+    
+    # Handle Optional[T] where T is still a TypeVar
+    if hasattr(field_annotation, "__args__"):
+        non_none_args = [arg for arg in field_annotation.__args__ if arg is not type(None)]
+        if non_none_args and isinstance(non_none_args[0], TypeVar):
+            return True
+    
+    return False
+
+
+def _unwrap_optional_type(field_annotation: Any) -> Any:
+    """Unwrap Optional types to get the actual type."""
+    if (
+        hasattr(field_annotation, "__origin__")
+        and field_annotation.__origin__ is Union
+        and hasattr(field_annotation, "__args__")
+    ):
+        # For Optional[BaseModel], get the non-None type
+        args = field_annotation.__args__
+        non_none_args = [arg for arg in args if arg is not type(None)]
+        if non_none_args:
+            return non_none_args[0]
+    return field_annotation
+
+
+def _build_field_dict(
+    field: Any,
+    field_annotation: Any,
+    description: str,
+    required: bool,
+) -> Dict[str, Any]:
+    """Build field dictionary for non-nested fields."""
+    # Determine the field type from annotation
+    field_type = _get_field_type_from_annotation(field_annotation)
+
+    # Check for custom UI type override
+    field_json_schema_extra = getattr(field, "json_schema_extra", {})
+    if field_json_schema_extra and "ui_type" in field_json_schema_extra:
+        field_type = field_json_schema_extra["ui_type"].value
+    elif field_json_schema_extra and "type" in field_json_schema_extra:
+        field_type = field_json_schema_extra["type"]
+
+    # Add the field to the dictionary
+    field_dict = {
+        "description": description,
+        "required": required,
+        "type": field_type,
+    }
+
+    # Extract options from type annotations
+    if field_type == "dict":
+        # For Dict[Literal[...], T] types, extract key options
+        dict_key_options = _get_dict_key_options(field_annotation)
+        if dict_key_options:
+            field_dict["dict_key_options"] = dict_key_options
+
+        # Extract value type for the dict values
+        dict_value_type = _get_dict_value_type(field_annotation)
+        field_dict["dict_value_type"] = dict_value_type
+
+    elif field_type == "array":
+        # For List[Literal[...]] types, extract element options
+        list_element_options = _get_list_element_options(field_annotation)
+        if list_element_options:
+            field_dict["options"] = list_element_options
+            field_dict["type"] = "multiselect"
+
+    # Add options if they exist in json_schema_extra (this takes precedence)
+    if field_json_schema_extra and "options" in field_json_schema_extra:
+        field_dict["options"] = field_json_schema_extra["options"]
+
+    # Add default value if it exists
+    if field.default is not None and field.default is not ...:
+        field_dict["default_value"] = field.default
+
+    return field_dict
+
+
 def _extract_fields_recursive(
     model: Type[BaseModel],
     depth: int = 0,
 ) -> Dict[str, Any]:
-
     # Check if we've exceeded the maximum recursion depth
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise HTTPException(
@@ -771,48 +933,21 @@ def _extract_fields_recursive(
     fields = {}
 
     for field_name, field in model.model_fields.items():
-        # Skip optional_params if it's not meaningfully overridden
-        if field_name == "optional_params":
-            field_annotation = field.annotation
-            if field_annotation is None:
-                continue
-            # Check if the annotation is still a generic TypeVar (not specialized)
-            if isinstance(field_annotation, TypeVar) or (
-                hasattr(field_annotation, "__origin__")
-                and field_annotation.__origin__ is TypeVar
-            ):
-                # Skip this field as it's not meaningfully overridden
-                continue
-            # Also skip if it's a generic type that wasn't specialized
-            if hasattr(field_annotation, "__name__") and field_annotation.__name__ in (
-                "T",
-                "TypeVar",
-            ):
-                continue
-
-        # Get field metadata
-        description = field.description or field_name
-
-        # Check if this field is required
-        required = field.is_required()
-
-        # Check if the field annotation is a BaseModel subclass
         field_annotation = field.annotation
+        
+        # Skip optional_params if it's not meaningfully overridden
+        if _should_skip_optional_params(field_name=field_name, field_annotation=field_annotation):
+            continue
 
         # Handle Optional types and get the actual type
         if field_annotation is None:
             continue
 
-        if (
-            hasattr(field_annotation, "__origin__")
-            and field_annotation.__origin__ is Union
-            and hasattr(field_annotation, "__args__")
-        ):
-            # For Optional[BaseModel], get the non-None type
-            args = field_annotation.__args__
-            non_none_args = [arg for arg in args if arg is not type(None)]
-            if non_none_args:
-                field_annotation = non_none_args[0]
+        field_annotation = _unwrap_optional_type(field_annotation=field_annotation)
+
+        # Get field metadata
+        description = field.description or field_name
+        required = field.is_required()
 
         # Check if this is a BaseModel subclass
         is_basemodel_subclass = (
@@ -833,50 +968,12 @@ def _extract_fields_recursive(
                 "fields": nested_fields,
             }
         else:
-            # Determine the field type from annotation
-            field_type = _get_field_type_from_annotation(field_annotation)
-
-            # Check for custom UI type override
-            field_json_schema_extra = getattr(field, "json_schema_extra", {})
-            if field_json_schema_extra and "ui_type" in field_json_schema_extra:
-                field_type = field_json_schema_extra["ui_type"].value
-            elif field_json_schema_extra and "type" in field_json_schema_extra:
-                field_type = field_json_schema_extra["type"]
-
-            # Add the field to the dictionary
-            field_dict = {
-                "description": description,
-                "required": required,
-                "type": field_type,
-            }
-
-            # Extract options from type annotations
-            if field_type == "dict":
-                # For Dict[Literal[...], T] types, extract key options
-                dict_key_options = _get_dict_key_options(field_annotation)
-                if dict_key_options:
-                    field_dict["dict_key_options"] = dict_key_options
-
-                # Extract value type for the dict values
-                dict_value_type = _get_dict_value_type(field_annotation)
-                field_dict["dict_value_type"] = dict_value_type
-
-            elif field_type == "array":
-                # For List[Literal[...]] types, extract element options
-                list_element_options = _get_list_element_options(field_annotation)
-                if list_element_options:
-                    field_dict["options"] = list_element_options
-                    field_dict["type"] = "multiselect"
-
-            # Add options if they exist in json_schema_extra (this takes precedence)
-            if field_json_schema_extra and "options" in field_json_schema_extra:
-                field_dict["options"] = field_json_schema_extra["options"]
-
-            # Add default value if it exists
-            if field.default is not None and field.default is not ...:
-                field_dict["default_value"] = field.default
-
-            fields[field_name] = field_dict
+            fields[field_name] = _build_field_dict(
+                field=field,
+                field_annotation=field_annotation,
+                description=description,
+                required=required,
+            )
 
     return fields
 
@@ -970,3 +1067,37 @@ async def get_provider_specific_params():
             provider_params[guardrail_name] = fields
 
     return provider_params
+
+@router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
+@router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
+async def apply_guardrail(
+    request: ApplyGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Apply a guardrail to text input and return the processed result.
+    
+    This endpoint allows testing guardrails by applying them to custom text inputs.
+    """
+    from litellm.proxy.utils import handle_exception_on_proxy
+    
+    try:
+        active_guardrail: Optional[
+            CustomGuardrail
+        ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+            guardrail_name=request.guardrail_name
+        )
+        if active_guardrail is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Guardrail '{request.guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
+            )
+
+        response_text = await active_guardrail.apply_guardrail(
+            text=request.text, language=request.language, entities=request.entities
+        )
+
+        return ApplyGuardrailResponse(response_text=response_text)
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
+

@@ -68,8 +68,9 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     {
       key: "api_base",
       label: "API Base",
-      type: "select",
-      options: ["https://api.openai.com/v1", "https://eu.api.openai.com"],
+      type: "text",
+      placeholder: "https://api.openai.com/v1",
+      tooltip: "Common endpoints: https://api.openai.com/v1, https://eu.api.openai.com, https://us.api.openai.com",
       defaultValue: "https://api.openai.com/v1",
     },
     {
@@ -88,8 +89,9 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     {
       key: "api_base",
       label: "API Base",
-      type: "select",
-      options: ["https://api.openai.com/v1", "https://eu.api.openai.com"],
+      type: "text",
+      placeholder: "https://api.openai.com/v1",
+      tooltip: "Common endpoints: https://api.openai.com/v1, https://eu.api.openai.com, https://us.api.openai.com",
       defaultValue: "https://api.openai.com/v1",
     },
     {
@@ -573,6 +575,14 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       placeholder: "http://localhost:7997",
     },
   ],
+  [Providers.FalAI]: [
+    {
+      key: "api_key",
+      label: "API Key",
+      type: "password",
+      required: true,
+    }
+  ],
 };
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, uploadProps }) => {
@@ -651,7 +661,11 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
                 <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
               </Upload>
             ) : (
-              <TextInput placeholder={field.placeholder} type={field.type === "password" ? "password" : "text"} />
+              <TextInput
+                placeholder={field.placeholder}
+                type={field.type === "password" ? "password" : "text"}
+                defaultValue={field.defaultValue}
+              />
             )}
           </Form.Item>
 

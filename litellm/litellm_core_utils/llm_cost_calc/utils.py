@@ -11,8 +11,8 @@ from litellm.types.utils import (
     ImageResponse,
     ModelInfo,
     PassthroughCallTypes,
-    Usage,
     ServiceTier,
+    Usage,
 )
 from litellm.utils import get_model_info
 
@@ -693,6 +693,15 @@ class CostCalculatorUtils:
                 model=model,
                 image_response=completion_response,
             )
+        elif custom_llm_provider == litellm.LlmProviders.COMETAPI.value:
+            from litellm.llms.cometapi.image_generation.cost_calculator import (
+                cost_calculator as cometapi_image_cost_calculator,
+            )
+
+            return cometapi_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
         elif custom_llm_provider == litellm.LlmProviders.GEMINI.value:
             from litellm.llms.gemini.image_generation.cost_calculator import (
                 cost_calculator as gemini_image_cost_calculator,
@@ -704,6 +713,15 @@ class CostCalculatorUtils:
             )
         elif custom_llm_provider == litellm.LlmProviders.AZURE_AI.value:
             return azure_ai_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
+        elif custom_llm_provider == litellm.LlmProviders.FAL_AI.value:
+            from litellm.llms.fal_ai.cost_calculator import (
+                cost_calculator as fal_ai_image_cost_calculator,
+            )
+
+            return fal_ai_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
             )

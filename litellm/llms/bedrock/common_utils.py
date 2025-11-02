@@ -440,7 +440,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Abbreviations of regions AWS Bedrock supports for cross region inference
         """
-        return ["global", "us", "eu", "apac", "jp", "au"]
+        return ["global", "us", "eu", "apac", "jp", "au", "us-gov"]
 
     @staticmethod
     def get_bedrock_route(
@@ -826,6 +826,7 @@ class CommonBatchFilesUtils:
             Tuple of (bucket_name, object_key)
         """
         import time
+
         from litellm._uuid import uuid
 
         # Get bucket name

@@ -12,16 +12,16 @@ interface EndpointSelectorProps {
 /**
  * A reusable component for selecting API endpoints
  */
-const EndpointSelector: React.FC<EndpointSelectorProps> = ({ endpointType, onEndpointChange, className }) => {
-  // Map endpoint types to their display labels
-  const endpointOptions = [
-    { value: EndpointType.CHAT, label: "/v1/chat/completions" },
-    { value: EndpointType.RESPONSES, label: "/v1/responses" },
-    { value: EndpointType.ANTHROPIC_MESSAGES, label: "/v1/messages" },
-    { value: EndpointType.IMAGE, label: "/v1/images/generations" },
-    { value: EndpointType.IMAGE_EDITS, label: "/v1/images/edits" },
-  ];
+export const endpointOptions = [
+  { value: EndpointType.CHAT, label: "/v1/chat/completions" },
+  { value: EndpointType.RESPONSES, label: "/v1/responses" },
+  { value: EndpointType.ANTHROPIC_MESSAGES, label: "/v1/messages" },
+  { value: EndpointType.IMAGE, label: "/v1/images/generations" },
+  { value: EndpointType.IMAGE_EDITS, label: "/v1/images/edits" },
+  { value: EndpointType.EMBEDDINGS, label: "/v1/embeddings" },
+];
 
+const EndpointSelector: React.FC<EndpointSelectorProps> = ({ endpointType, onEndpointChange, className }) => {
   return (
     <div className={className}>
       <Text>Endpoint Type:</Text>
