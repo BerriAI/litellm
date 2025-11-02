@@ -3,7 +3,7 @@ from unittest.mock import patch, PropertyMock
 
 import pytest
 
-moke_response = {
+mock_response = {
     "request_id": "e86a0b4e-53e3-97dc-a5f7-82e451376b23",
     "intermediate_results": {
         "templating": [{"content": "Say hello", "role": "user"}],
@@ -39,7 +39,7 @@ moke_response = {
         "usage": {"completion_tokens": 7, "prompt_tokens": 3, "total_tokens": 10},
     },
 }
-moke_stream_response = [
+mock_stream_response = [
     b'data: {"request_id": "a07127d3-cb74-9427-a4dc-ef9bf424fb43", "intermediate_results": {"templating": [{"content": "Hi", "role": "user"}]}, "final_result": {"id": \'\', "object": \'\', "created": 0, "model": \'\', "system_fingerprint": null, "choices": [{"index": 0, "delta": {"content": ""}}]}}\n\n',
     b'data: {"request_id": "a07127d3-cb74-9427-a4dc-ef9bf424fb43", "intermediate_results": {"llm": {"id": "chatcmpl-HelloMsg", "object": "chat.completion.chunk", "created": 1761319270, "model": "gpt-4o-2024-08-06", "system_fingerprint": "fp_HelloMsg", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello "}}]}}, "final_result": {"id": "chatcmpl-HelloMsg", "object": "chat.completion.chunk", "created": 1761319270, "model": "gpt-4o-2024-08-06", "system_fingerprint": "fp_HelloMsg", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello "}}]}}\n\n',
     b'data: {"request_id": "a07127d3-cb74-9427-a4dc-ef9bf424fb43", "intermediate_results": {"llm": {"id": "chatcmpl-CUDtFmLex96SxakzBIzhLq2h8Axmk", "object": "chat.completion.chunk", "created": 1761319269, "model": "gpt-4o-2024-08-06", "system_fingerprint": "fp_4a331a0222", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "from SAP!"}, "finish_reason": "stop"}]}}, "final_result": {"id": "chatcmpl-CUDtFmLex96SxakzBIzhLq2h8Axmk", "object": "chat.completion.chunk", "created": 1761319269, "model": "gpt-4o-2024-08-06", "system_fingerprint": "fp_4a331a0222", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "from SAP!"}, "finish_reason": "stop"}]}}\n\n',
@@ -49,22 +49,22 @@ moke_stream_response = [
 
 @pytest.fixture
 def sap_api_response():
-    return moke_response
+    return mock_response
 
 
 @pytest.fixture
 def sap_api_stream_response():
-    return moke_response
+    return mock_response
 
 
 @pytest.fixture
 def fake_token_creator():
-    return lambda: "Bearer FAKE_TOKEN", "https://api.ai.moke-sap.com", "fake-group"
+    return lambda: "Bearer FAKE_TOKEN", "https://api.ai.mock-sap.com", "fake-group"
 
 
 @pytest.fixture
 def fake_deployment_url():
-    return "https://api.ai.moke-sap.com/v2/inference/deployments/mokeid"
+    return "https://api.ai.mock-sap.com/v2/inference/deployments/mockid"
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -127,7 +127,7 @@ async def test_sap_streaming(
         respx_mock.post(f"{fake_deployment_url}/v2/completion").mock(
             return_value=httpx.Response(
                 200,
-                content=moke_stream_response,
+                content=mock_stream_response,
                 headers={"Content-Type": "text/event-stream"},
             )
         )
