@@ -78,8 +78,9 @@ def setup_proxy_logging_object(monkeypatch, llm_router: Router) -> ProxyLogging:
 
 def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router):
     """
-    Asserts 'create_file' is called with the correct arguments
+    Tests that sending an invalid 'purpose' to /v1/files returns a 400 error.
     """
+    mocker.stopall()  # Stop any active mocks from previous tests, ensuring a clean state.
     # Create a simple test file content
     test_file_content = b"test audio content"
     test_file = ("test.wav", test_file_content, "audio/wav")
