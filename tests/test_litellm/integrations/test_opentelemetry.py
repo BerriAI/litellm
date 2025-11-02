@@ -40,7 +40,7 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
         }
 
         # Create a kwargs dict with standard_logging_object containing guardrail information
-        kwargs = {"standard_logging_object": {"guardrail_information": guardrail_info}}
+        kwargs = {"standard_logging_object": {"guardrail_information": [ guardrail_info ]}}
 
         # Call the method
         otel._create_guardrail_span(kwargs=kwargs, context=None)
@@ -156,7 +156,7 @@ class TestOpenTelemetry(unittest.TestCase):
         }
 
         # Create a kwargs dict with standard_logging_object containing guardrail information
-        kwargs = {"standard_logging_object": {"guardrail_information": guardrail_info}}
+        kwargs = {"standard_logging_object": {"guardrail_information": [ guardrail_info ]}}
 
         # Call the method
         otel._create_guardrail_span(kwargs=kwargs, context=None)
