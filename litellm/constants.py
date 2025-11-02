@@ -357,6 +357,7 @@ LITELLM_CHAT_PROVIDERS = [
     "vercel_ai_gateway",
     "wandb",
     "ovhcloud",
+    "io_intelligence",
     "lemonade"
 ]
 
@@ -541,6 +542,7 @@ openai_compatible_providers: List = [
     "vercel_ai_gateway",
     "aiml",
     "wandb",
+    "io_intelligence",
     "cometapi",
     "clarifai",
 ]

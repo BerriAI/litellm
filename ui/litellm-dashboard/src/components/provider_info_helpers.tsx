@@ -20,6 +20,7 @@ export enum Providers {
   GradientAI = "GradientAI",
   Groq = "Groq",
   Hosted_Vllm = "vllm",
+  IOIntelligence = "IO Intelligence",    
   Infinity = "Infinity",
   JinaAI = "Jina AI",
   MistralAI = "Mistral AI",
@@ -49,6 +50,7 @@ export const provider_map: Record<string, string> = {
   Azure_AI_Studio: "azure_ai",
   Anthropic: "anthropic",
   Google_AI_Studio: "gemini",
+  IOIntelligence: "io_intelligence",
   Bedrock: "bedrock",
   Groq: "groq",
   MistralAI: "mistral",
@@ -127,6 +129,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
   [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
   [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`,
+  [Providers.IOIntelligence]: `${asset_logos_folder}io_intelligence.png`,
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string; displayName: string } => {

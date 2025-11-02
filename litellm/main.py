@@ -4761,6 +4761,28 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
                 litellm_params={},
             )
+        elif custom_llm_provider == "io_intelligence":
+            api_key = api_key or litellm.api_key or get_secret_str("IO_INTELLIGENCE_API_KEY")
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("IO_INTELLIGENCE_API_BASE")
+                or "https://api.intelligence.io.solutions/api/v1"
+            )
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={},
+            )
         elif custom_llm_provider == "cometapi":
             api_key = (
                 api_key
