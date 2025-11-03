@@ -37,9 +37,7 @@ class VertexAIOCRConfig(MistralOCRConfig):
         model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        vertex_project: Optional[str] = None,
-        vertex_location: Optional[str] = None,
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = None,
+        litellm_params: Optional[dict] = None,
         **kwargs,
     ) -> Dict:
         """
@@ -47,6 +45,13 @@ class VertexAIOCRConfig(MistralOCRConfig):
         
         Vertex AI uses Bearer token authentication with access token from credentials.
         """
+        # Extract Vertex AI parameters using safe helpers from VertexBase
+        # Use safe_get_* methods that don't mutate litellm_params dict
+        litellm_params = litellm_params or {}
+        
+        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
+        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params=litellm_params)
+        
         # Get access token from Vertex credentials
         access_token, project_id = self.vertex_base.get_access_token(
             credentials=vertex_credentials,
@@ -66,8 +71,7 @@ class VertexAIOCRConfig(MistralOCRConfig):
         api_base: Optional[str],
         model: str,
         optional_params: dict,
-        vertex_project: Optional[str] = None,
-        vertex_location: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
         **kwargs,
     ) -> str:
         """
@@ -80,11 +84,17 @@ class VertexAIOCRConfig(MistralOCRConfig):
             api_base: Vertex AI API base URL (optional)
             model: Model name (not used in URL construction)
             optional_params: Optional parameters
-            vertex_project: Google Cloud project ID
-            vertex_location: Vertex AI region
+            litellm_params: LiteLLM parameters containing vertex_project, vertex_location
             
         Returns: Complete URL for Vertex AI OCR endpoint
         """
+        # Extract Vertex AI parameters using safe helpers from VertexBase
+        # Use safe_get_* methods that don't mutate litellm_params dict
+        litellm_params = litellm_params or {}
+        
+        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
+        vertex_location = VertexBase.safe_get_vertex_ai_location(litellm_params=litellm_params)
+        
         if vertex_project is None:
             raise ValueError(
                 "Missing vertex_project - Set VERTEXAI_PROJECT environment variable or pass vertex_project parameter"
