@@ -78,7 +78,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
     async def call_prompt_security_guardrail(self, data: dict) -> dict:
         headers = { 'APP-ID': self.api_key, 'Content-Type': 'application/json' }
         response = await self.async_handler.post(
-            f"${self.api_base}/api/protect",
+            f"{self.api_base}/api/protect",
             headers=headers,
             json={"messages": data.get("messages", [])},
         )
@@ -95,7 +95,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
     async def call_prompt_security_guardrail_on_output(self, output: str) -> dict:
         response = await self.async_handler.post(
-            f"${self.api_base}/api/protect",
+            f"{self.api_base}/api/protect",
             headers = { 'APP-ID': self.api_key, 'Content-Type': 'application/json' },
             json = { "response": output }
         )
