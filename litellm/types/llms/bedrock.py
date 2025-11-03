@@ -1,12 +1,7 @@
 import json
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from typing_extensions import (
-    TYPE_CHECKING,
-    Required,
-    TypedDict,
-    override,
-)
+from typing_extensions import TYPE_CHECKING, Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -377,9 +372,14 @@ TWELVELABS_EMBEDDING_INPUT_TYPES = Literal["text", "image", "video", "audio"]
 TWELVELABS_EMBEDDING_OPTIONS = Literal["visual-text", "visual-image", "audio"]
 
 
+class TwelveLabsS3Location(TypedDict, total=False):
+    uri: str
+    bucketOwner: str
+
+
 class TwelveLabsMediaSource(TypedDict, total=False):
     base64String: str
-    s3Location: dict  # {"uri": str, "bucketOwner": str}
+    s3Location: TwelveLabsS3Location
 
 
 class TwelveLabsMarengoEmbeddingRequest(TypedDict, total=False):
@@ -399,6 +399,32 @@ class TwelveLabsMarengoEmbeddingResponse(TypedDict):
     embeddingOption: TWELVELABS_EMBEDDING_OPTIONS
     startSec: float
     endSec: float
+
+
+class TwelveLabsS3OutputDataConfig(TypedDict):
+    s3Uri: str
+
+
+class TwelveLabsOutputDataConfig(TypedDict):
+    s3OutputDataConfig: TwelveLabsS3OutputDataConfig
+
+
+class TwelveLabsAsyncInvokeRequest(TypedDict):
+    modelId: str
+    modelInput: TwelveLabsMarengoEmbeddingRequest
+    outputDataConfig: TwelveLabsOutputDataConfig
+
+
+class TwelveLabsAsyncInvokeStatusResponse(TypedDict):
+    invocationArn: str
+    modelArn: str
+    status: str  # "InProgress" | "Completed" | "Failed"
+    submitTime: str
+    lastModifiedTime: str
+    endTime: Optional[str]
+    outputDataConfig: TwelveLabsOutputDataConfig
+    clientRequestToken: Optional[str]
+    failureMessage: Optional[str]
 
 
 AmazonEmbeddingRequest = Union[
@@ -435,6 +461,15 @@ class AmazonStability3TextToImageResponse(TypedDict, total=False):
     images: List[str]
     seeds: List[str]
     finish_reasons: List[str]
+
+
+class AmazonTitanTextToImageParams(TypedDict, total=False):
+    """
+    Params for Amazon Titan Text to Image API
+    """
+
+    text: Required[str]
+    negativeText: str
 
 
 class AmazonNovaCanvasRequestBase(TypedDict, total=False):
@@ -543,6 +578,16 @@ class AmazonNovaCanvasInpaintingRequest(
 
     taskType: Literal["INPAINTING"]
     inpaintingParams: AmazonNovaCanvasInpaintingParams
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
+class AmazonTitanImageGenerationRequestBody(TypedDict, total=False):
+    """
+    Config for Amazon Titan Image Generation API
+    """
+
+    taskType: Literal["TEXT_IMAGE", "COLOR_GUIDED_GENERATION", "INPAINTING"]
+    textToImageParams: AmazonTitanTextToImageParams
     imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
 
 

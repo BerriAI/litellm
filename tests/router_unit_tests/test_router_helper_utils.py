@@ -94,6 +94,33 @@ def test_print_deployment(model_list):
     assert 10 * "*" in printed_deployment["litellm_params"]["api_key"]
 
 
+def test_print_deployment_with_redact_enabled(model_list):
+    """Test if sensitive credentials are masked when redact_user_api_key_info is enabled"""
+    import litellm
+
+    router = Router(model_list=model_list)
+    deployment = {
+        "model_name": "bedrock-claude",
+        "litellm_params": {
+            "model": "bedrock/anthropic.claude-v2",
+            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "aws_region_name": "us-west-2",
+        },
+    }
+
+    original_setting = litellm.redact_user_api_key_info
+    try:
+        litellm.redact_user_api_key_info = True
+        printed_deployment = router.print_deployment(deployment)
+
+        assert "*" in printed_deployment["litellm_params"]["aws_access_key_id"]
+        assert "*" in printed_deployment["litellm_params"]["aws_secret_access_key"]
+        assert "us-west-2" == printed_deployment["litellm_params"]["aws_region_name"]
+    finally:
+        litellm.redact_user_api_key_info = original_setting
+
+
 def test_completion(model_list):
     """Test if the completion function is working correctly"""
     router = Router(model_list=model_list)
@@ -1384,7 +1411,8 @@ def test_generate_model_id_with_deployment_model_name(model_list):
             "Expected TypeError when model_group is None - this confirms our fix is needed"
         )
     except TypeError as e:
-        assert "unsupported operand type(s) for +=" in str(e)
+        # After optimization, error message changed but still fails appropriately on None
+        assert "unsupported operand type(s) for +=" in str(e) or "expected str instance, NoneType found" in str(e)
         print(f"✓ Correctly failed with None model_group (as expected): {e}")
     except Exception as e:
         pytest.fail(f"Unexpected error with None model_group: {e}")
@@ -1725,3 +1753,185 @@ def test_get_metadata_variable_name_from_kwargs(model_list):
     }
     result = router._get_metadata_variable_name_from_kwargs(kwargs_other)
     assert result == "metadata"
+
+
+@pytest.fixture
+def search_tools():
+    """Fixture for search tools configuration"""
+    return [
+        {
+            "search_tool_name": "test-search-tool",
+            "litellm_params": {
+                "search_provider": "perplexity",
+                "api_key": "test-api-key",
+                "api_base": "https://api.perplexity.ai",
+            }
+        },
+        {
+            "search_tool_name": "test-search-tool",
+            "litellm_params": {
+                "search_provider": "perplexity",
+                "api_key": "test-api-key-2",
+                "api_base": "https://api.perplexity.ai",
+            }
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_asearch_with_fallbacks(search_tools):
+    """
+    Test _asearch_with_fallbacks method of Router.
+    
+    Tests that the _asearch_with_fallbacks method correctly:
+    - Accepts search parameters
+    - Calls async_function_with_fallbacks with correct configuration
+    - Returns SearchResponse
+    """
+    from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
+    
+    router = Router(search_tools=search_tools)
+    
+    # Create a mock search response
+    mock_response = SearchResponse(
+        object="search",
+        results=[
+            SearchResult(
+                title="Test Result",
+                url="https://example.com",
+                snippet="Test snippet content"
+            )
+        ]
+    )
+    
+    # Mock the async_function_with_fallbacks to return our mock response
+    with patch.object(router, 'async_function_with_fallbacks', new_callable=AsyncMock) as mock_fallbacks:
+        mock_fallbacks.return_value = mock_response
+        
+        # Mock original function
+        async def mock_asearch(**kwargs):
+            return mock_response
+        
+        # Call _asearch_with_fallbacks
+        response = await router._asearch_with_fallbacks(
+            original_function=mock_asearch,
+            search_tool_name="test-search-tool",
+            query="test query",
+            max_results=5
+        )
+        
+        # Verify async_function_with_fallbacks was called
+        assert mock_fallbacks.called
+        
+        # Verify the response
+        assert isinstance(response, SearchResponse)
+        assert response.object == "search"
+        assert len(response.results) == 1
+        assert response.results[0].title == "Test Result"
+
+
+@pytest.mark.asyncio
+async def test_asearch_with_fallbacks_helper(search_tools):
+    """
+    Test _asearch_with_fallbacks_helper method of Router.
+    
+    Tests that the _asearch_with_fallbacks_helper method correctly:
+    - Selects a search tool from available options
+    - Calls the original search function with correct provider parameters
+    - Returns SearchResponse
+    """
+    from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
+    
+    router = Router(search_tools=search_tools)
+    
+    # Create a mock search response
+    mock_response = SearchResponse(
+        object="search",
+        results=[
+            SearchResult(
+                title="Helper Test Result",
+                url="https://example.com/helper",
+                snippet="Helper test snippet"
+            )
+        ]
+    )
+    
+    # Mock the original generic function
+    async def mock_original_function(**kwargs):
+        # Verify correct parameters are passed
+        assert "search_provider" in kwargs
+        assert kwargs["search_provider"] == "perplexity"
+        assert "api_key" in kwargs
+        assert kwargs["query"] == "helper test query"
+        return mock_response
+    
+    # Call _asearch_with_fallbacks_helper
+    response = await router._asearch_with_fallbacks_helper(
+        model="test-search-tool",
+        original_generic_function=mock_original_function,
+        query="helper test query",
+        max_results=3
+    )
+    
+    # Verify the response
+    assert isinstance(response, SearchResponse)
+    assert response.object == "search"
+    assert len(response.results) == 1
+    assert response.results[0].title == "Helper Test Result"
+    assert response.results[0].url == "https://example.com/helper"
+
+
+@pytest.mark.asyncio
+async def test_asearch_with_fallbacks_helper_missing_search_tool():
+    """
+    Test _asearch_with_fallbacks_helper raises error when search tool not found.
+    
+    Tests that the helper method raises a ValueError when the requested
+    search tool name doesn't exist in the router's search_tools configuration.
+    """
+    # Create router with no search tools
+    router = Router(model_list=[])
+    
+    async def mock_original_function(**kwargs):
+        return None
+    
+    # Should raise ValueError for missing search tool
+    with pytest.raises(ValueError, match="Search tool 'nonexistent-tool' not found"):
+        await router._asearch_with_fallbacks_helper(
+            model="nonexistent-tool",
+            original_generic_function=mock_original_function,
+            query="test query"
+        )
+
+
+@pytest.mark.asyncio
+async def test_asearch_with_fallbacks_helper_missing_search_provider():
+    """
+    Test _asearch_with_fallbacks_helper raises error when search_provider not configured.
+    
+    Tests that the helper method raises a ValueError when a search tool
+    is found but doesn't have search_provider in its litellm_params.
+    """
+    # Create router with misconfigured search tool (missing search_provider)
+    search_tools_bad = [
+        {
+            "search_tool_name": "bad-tool",
+            "litellm_params": {
+                "api_key": "test-key"
+                # Missing search_provider
+            }
+        }
+    ]
+    
+    router = Router(search_tools=search_tools_bad)
+    
+    async def mock_original_function(**kwargs):
+        return None
+    
+    # Should raise ValueError for missing search_provider
+    with pytest.raises(ValueError, match="search_provider not found in litellm_params"):
+        await router._asearch_with_fallbacks_helper(
+            model="bad-tool",
+            original_generic_function=mock_original_function,
+            query="test query"
+        )

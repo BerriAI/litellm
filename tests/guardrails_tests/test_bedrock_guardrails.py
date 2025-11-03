@@ -86,6 +86,87 @@ async def test_bedrock_guardrails_pii_masking_content_list():
     
 
 
+@pytest.mark.asyncio
+async def test_bedrock_guardrails_block_messages_api():
+    """
+    Test that guardrails block messages API requests containing 'coffee' and raise the expected exception.
+    """
+    from fastapi import HTTPException
+    
+    # Create proper mock objects
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="ff6ujrregl1q",
+        guardrailVersion="DRAFT",
+    )
+
+    request_data = {
+        "model": "claude-3-5-sonnet-20240620",
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": "Hello, my phone number is +1 412 555 1212"},
+                {"type": "text", "text": "what time is it?"},
+            ]},
+            {
+                "role": "user",
+                "content": "tell me about coffee"
+            }
+        ],
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.async_pre_call_hook(
+            data=request_data,
+            user_api_key_dict=mock_user_api_key_dict,
+            call_type="anthropic_messages",
+            cache=MagicMock(spec=DualCache),
+        )
+    
+    exception = exc_info.value
+    assert exception.status_code == 400
+    detail = exception.detail
+    assert isinstance(detail, dict)
+    assert detail["error"] == "Violated guardrail policy"
+    assert detail["bedrock_guardrail_response"] == "Sorry, the model cannot answer this question. coffee guardrail applied "
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrails_block_responses_api():
+    """
+    Test that guardrails block responses API requests containing 'coffee' and raise the expected exception.
+    """
+    from fastapi import HTTPException
+    
+    # Create proper mock objects
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="ff6ujrregl1q",
+        guardrailVersion="DRAFT",
+    )
+
+    request_data = {
+        "model": "gpt-4.1",
+        "input": "Tell me a three sentence bedtime story about a unicorn drinking coffee",
+        "stream": False,
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.async_pre_call_hook(
+            data=request_data,
+            user_api_key_dict=mock_user_api_key_dict,
+            call_type="responses",
+            cache=MagicMock(spec=DualCache),
+        )
+    
+    exception = exc_info.value
+    assert exception.status_code == 400
+    detail = exception.detail
+    assert isinstance(detail, dict)
+    assert detail["error"] == "Violated guardrail policy"
+    assert detail["bedrock_guardrail_response"] == "Sorry, the model cannot answer this question. coffee guardrail applied "
+
+
 
 @pytest.mark.asyncio
 async def test_bedrock_guardrails_with_streaming():
@@ -1384,28 +1465,34 @@ async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
         guardrailVersion="DRAFT"
     )
     
-    # Mock Bedrock API with no output text
-    mock_bedrock_response = MagicMock()
-    mock_bedrock_response.status_code = 200
-    mock_bedrock_response.json.return_value = {
-        "output": {
-            "message": {
-                "role": "assistant",
-                "content": [
-                    {
-                        "toolUse": {
-                            "toolUseId": "tooluse_kZJMlvQmRJ6eAyJE5GIl7Q",
-                            "name": "top_song",
-                            "input": {
-                                "sign": "WZPZ"
-                            }
-                        }
-                    }
-                ]
-            }
-        },
-        "stopReason": "tool_use"
-    }
+    # Create a ModelResponse with tool calls (no text content)
+    # This simulates a response where the LLM is making a tool call
+    mock_response = litellm.ModelResponse(
+        id="test-id",
+        choices=[
+            litellm.Choices(
+                index=0,
+                message=litellm.Message(
+                    role="assistant",
+                    content=None,  # No text content
+                    tool_calls=[
+                        litellm.utils.ChatCompletionMessageToolCall(
+                            id="tooluse_kZJMlvQmRJ6eAyJE5GIl7Q",
+                            function=litellm.utils.Function(
+                                name="top_song",
+                                arguments='{"sign": "WZPZ"}'
+                            ),
+                            type="function"
+                        )
+                    ]
+                ),
+                finish_reason="tool_calls"
+            )
+        ],
+        created=1234567890,
+        model="gpt-4o",
+        object="chat.completion"
+    )
         
     data = {
         "model": "gpt-4o",
@@ -1415,10 +1502,11 @@ async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
     } 
     mock_user_api_key_dict = UserAPIKeyAuth()
 
-    return await guardrail.async_post_call_success_hook(
+    result = await guardrail.async_post_call_success_hook(
         data=data,
-        response=mock_bedrock_response, 
+        response=mock_response, 
         user_api_key_dict=mock_user_api_key_dict,
     )
-    # If no error is raised, then the test passes
+    # If no error is raised and result is None, then the test passes
+    assert result is None
     print("✅ No output text in response test passed")

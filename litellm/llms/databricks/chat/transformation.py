@@ -43,6 +43,7 @@ from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolChoiceFunctionParam,
     ChatCompletionToolChoiceObjectParam,
+    ChatCompletionToolParam,
 )
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -216,6 +217,21 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         databricks_tool = self.convert_anthropic_tool_to_databricks_tool(tool)
         return databricks_tool
+
+    def remove_cache_control_flag_from_messages_and_tools(
+        self,
+        model: str,  # allows overrides to selectively run this
+        messages: List[AllMessageValues],
+        tools: Optional[List["ChatCompletionToolParam"]] = None,
+    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
+        """
+        Override the parent class method to preserve cache_control for models on Databricks.
+        Databricks supports Anthropic-style cache control for Claude models.
+        Databricks ignores the cache_control flag with other models.
+        """
+        # TODO: Think about how to best design the request transformation so that 
+        # every request doesn't have to be transformed for to OpenAI and Anthropic request formats.
+        return messages, tools
 
     def map_openai_params(
         self,

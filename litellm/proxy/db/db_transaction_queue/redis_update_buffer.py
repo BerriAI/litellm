@@ -380,6 +380,7 @@ class RedisUpdateBuffer:
             team_list_transactions={},
             team_member_list_transactions={},
             org_list_transactions={},
+            tag_list_transactions={},
         )
 
         # Define the transaction fields to process
@@ -390,6 +391,7 @@ class RedisUpdateBuffer:
             "team_list_transactions",
             "team_member_list_transactions",
             "org_list_transactions",
+            "tag_list_transactions",
         ]
 
         # Loop through each transaction and combine the values

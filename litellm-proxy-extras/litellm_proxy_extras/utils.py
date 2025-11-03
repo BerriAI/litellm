@@ -131,7 +131,9 @@ class ProxyExtrasDBManager:
         )
 
     @staticmethod
-    def _resolve_all_migrations(migrations_dir: str, schema_path: str):
+    def _resolve_all_migrations(
+        migrations_dir: str, schema_path: str, mark_all_applied: bool = True
+    ):
         """
         1. Compare the current database state to schema.prisma and generate a migration for the diff.
         2. Run prisma migrate deploy to apply any pending migrations.
@@ -210,6 +212,8 @@ class ProxyExtrasDBManager:
             logger.warning("Migration diff application timed out.")
 
         # 3. Mark all migrations as applied
+        if not mark_all_applied:
+            return
         migration_names = ProxyExtrasDBManager._get_migration_names(migrations_dir)
         logger.info(f"Resolving {len(migration_names)} migrations")
         for migration_name in migration_names:
@@ -263,6 +267,13 @@ class ProxyExtrasDBManager:
                         logger.info(f"prisma migrate deploy stdout: {result.stdout}")
 
                         logger.info("prisma migrate deploy completed")
+
+                        # Run sanity check to ensure DB matches schema
+                        logger.info("Running post-migration sanity check...")
+                        ProxyExtrasDBManager._resolve_all_migrations(
+                            migrations_dir, schema_path, mark_all_applied=False
+                        )
+                        logger.info("✅ Post-migration sanity check completed")
                         return True
                     except subprocess.CalledProcessError as e:
                         logger.info(f"prisma db error: {e.stderr}, e: {e.stdout}")

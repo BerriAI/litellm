@@ -5,6 +5,9 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
+from litellm.integrations.langfuse.langfuse_otel_attributes import (
+    LangfuseLLMObsOTELAttributes,
+)
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.types.integrations.langfuse_otel import (
     LangfuseOtelConfig,
@@ -33,11 +36,9 @@ LANGFUSE_CLOUD_EU_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT = "https://us.cloud.langfuse.com/api/public/otel"
 
 
-
 class LangfuseOtelLogger(OpenTelemetry):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
 
     @staticmethod
     def set_langfuse_otel_attributes(span: Span, kwargs, response_obj):
@@ -45,14 +46,14 @@ class LangfuseOtelLogger(OpenTelemetry):
         Sets OpenTelemetry span attributes for Langfuse observability.
         Uses the same attribute setting logic as Arize Phoenix for consistency.
         """
-        _utils.set_attributes(span, kwargs, response_obj)
+
+        _utils.set_attributes(span, kwargs, response_obj, LangfuseLLMObsOTELAttributes)
 
         #########################################################
-        # Set Langfuse specific attributes eg Langfuse Environment
+        # Set Langfuse specific attributes
         #########################################################
         LangfuseOtelLogger._set_langfuse_specific_attributes(
-            span=span,
-            kwargs=kwargs
+            span=span, kwargs=kwargs, response_obj=response_obj
         )
         return
 
@@ -86,7 +87,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         return metadata
 
     @staticmethod
-    def _set_langfuse_specific_attributes(span: Span, kwargs):
+    def _set_langfuse_specific_attributes(span: Span, kwargs, response_obj):
         """
         Sets Langfuse specific metadata attributes onto the OTEL span.
 
@@ -96,6 +97,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         compatibility.
         """
         from litellm.integrations.arize._utils import safe_set_attribute
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
         # 1) Environment variable override
         langfuse_environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
@@ -140,6 +142,118 @@ class LangfuseOtelLogger(OpenTelemetry):
                     except Exception:
                         value = str(value)
                 safe_set_attribute(span, enum_attr.value, value)
+
+        # 3) Set observation input/output for better UI display
+        #
+        # These Langfuse-specific attributes provide better UI display,
+        # especially for tool calls and function calling.
+        # Set observation input (messages)
+        messages = kwargs.get("messages")
+        if messages:
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.OBSERVATION_INPUT.value,
+                safe_dumps(messages),
+            )
+
+        # Set observation output (response with tool_calls if present)
+        if response_obj and hasattr(response_obj, "get"):
+            # Handle chat completions API (choices field)
+            choices = response_obj.get("choices", [])
+            if choices:
+                # Extract the first choice's message
+                first_choice = choices[0]
+                message = first_choice.get("message", {})
+
+                # Check if there are tool_calls
+                tool_calls = message.get("tool_calls")
+                if tool_calls:
+                    # Transform tool_calls to Langfuse-expected format
+                    transformed_tool_calls = []
+                    for tool_call in tool_calls:
+                        function = tool_call.get("function", {})
+                        arguments_str = function.get("arguments", "{}")
+
+                        # Parse arguments from JSON string to object
+                        try:
+                            arguments_obj = (
+                                json.loads(arguments_str)
+                                if isinstance(arguments_str, str)
+                                else arguments_str
+                            )
+                        except json.JSONDecodeError:
+                            arguments_obj = {}
+
+                        # Create Langfuse-compatible tool call object
+                        langfuse_tool_call = {
+                            "id": response_obj.get("id", ""),
+                            "name": function.get("name", ""),
+                            "call_id": tool_call.get("id", ""),
+                            "type": "function_call",
+                            "arguments": arguments_obj,
+                        }
+                        transformed_tool_calls.append(langfuse_tool_call)
+
+                    # Set the observation output with transformed tool_calls
+                    safe_set_attribute(
+                        span,
+                        LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
+                        safe_dumps(transformed_tool_calls),
+                    )
+                else:
+                    # No tool_calls, use regular content-based output
+                    output_data = {}
+
+                    if message.get("role"):
+                        output_data["role"] = message.get("role")
+
+                    if message.get("content") is not None:
+                        output_data["content"] = message.get("content")
+
+                    if output_data:
+                        safe_set_attribute(
+                            span,
+                            LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
+                            safe_dumps(output_data),
+                        )
+
+            # Handle responses API (output field)
+            output = response_obj.get("output", [])
+            if output:
+                output_data = []
+                for item in output:
+                    if hasattr(item, "type"):
+                        item_type = item.type
+                    
+                        if item_type == "reasoning" and hasattr(item, "summary"):
+                            for summary in item.summary:
+                                if hasattr(summary, "text"):
+                                    output_data.append({
+                                        "role": "reasoning_summary",
+                                        "content": summary.text
+                                    })
+                        elif item_type == "message":
+                            output_data.append({
+                                "role": getattr(item, "role", "assistant"),
+                                "content": getattr(getattr(item, "content", [{}])[0], "text", "")
+                            })
+                        elif item_type == "function_call":
+                            arguments_str = getattr(item, "arguments", "{}")
+                            arguments_obj = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
+                            langfuse_tool_call = {
+                                "id": getattr(item, "id", ""),
+                                "name": getattr(item, "name", ""),
+                                "call_id": getattr(item, "call_id", ""),
+                                "type": "function_call",
+                                "arguments": arguments_obj,
+                            }
+                            output_data.append(langfuse_tool_call)
+                if output_data:
+                    safe_set_attribute(
+                        span,
+                        LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
+                        safe_dumps(output_data),
+                    )
 
     @staticmethod
     def _get_langfuse_otel_host() -> Optional[str]:
@@ -191,8 +305,7 @@ class LangfuseOtelLogger(OpenTelemetry):
             verbose_logger.debug(f"Using Langfuse US cloud endpoint: {endpoint}")
 
         auth_header = LangfuseOtelLogger._get_langfuse_authorization_header(
-            public_key=public_key,
-            secret_key=secret_key
+            public_key=public_key, secret_key=secret_key
         )
         otlp_auth_headers = f"Authorization={auth_header}"
 
@@ -203,7 +316,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         return LangfuseOtelConfig(
             otlp_auth_headers=otlp_auth_headers, protocol="otlp_http"
         )
-    
+
     @staticmethod
     def _get_langfuse_authorization_header(public_key: str, secret_key: str) -> str:
         """
@@ -211,11 +324,10 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         auth_string = f"{public_key}:{secret_key}"
         auth_header = base64.b64encode(auth_string.encode()).decode()
-        return f'Basic {auth_header}'
-    
+        return f"Basic {auth_header}"
+
     def construct_dynamic_otel_headers(
-        self, 
-        standard_callback_dynamic_params: StandardCallbackDynamicParams
+        self, standard_callback_dynamic_params: StandardCallbackDynamicParams
     ) -> Optional[dict]:
         """
         Construct dynamic Langfuse headers from standard callback dynamic params
@@ -227,13 +339,17 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         dynamic_headers = {}
 
-        dynamic_langfuse_public_key = standard_callback_dynamic_params.get("langfuse_public_key")
-        dynamic_langfuse_secret_key = standard_callback_dynamic_params.get("langfuse_secret_key")
+        dynamic_langfuse_public_key = standard_callback_dynamic_params.get(
+            "langfuse_public_key"
+        )
+        dynamic_langfuse_secret_key = standard_callback_dynamic_params.get(
+            "langfuse_secret_key"
+        )
         if dynamic_langfuse_public_key and dynamic_langfuse_secret_key:
             auth_header = LangfuseOtelLogger._get_langfuse_authorization_header(
                 public_key=dynamic_langfuse_public_key,
-                secret_key=dynamic_langfuse_secret_key
+                secret_key=dynamic_langfuse_secret_key,
             )
             dynamic_headers["Authorization"] = auth_header
-        
+
         return dynamic_headers

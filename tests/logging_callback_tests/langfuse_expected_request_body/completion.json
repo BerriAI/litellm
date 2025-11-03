@@ -37,7 +37,11 @@
                         "cache_key": null,
                         "api_base": "https://api.openai.com",
                         "response_cost": 3.5e-05,
-                        "additional_headers": {}
+                        "additional_headers": {},
+                        "litellm_overhead_time_ms": null,
+                        "batch_models": null,
+                        "litellm_model_name": "gpt-3.5-turbo",
+                        "usage_object": null
                     },
                     "litellm_response_cost": 3.5e-05,
                     "cache_hit": false,
@@ -62,7 +66,9 @@
                 "endTime": "2025-01-16T11:28:55.124353-08:00",
                 "completionStartTime": "2025-01-16T11:28:55.124353-08:00",
                 "model": "gpt-3.5-turbo",
-                "modelParameters": {"extra_body": "{}"},
+                "modelParameters": {
+                    "extra_body": "{}"
+                },
                 "usage": {
                     "input": 10,
                     "output": 20,
@@ -70,11 +76,12 @@
                     "totalCost": 3.5e-05
                 },
                 "usageDetails": {
-                        "cache_creation_input_tokens": 0,
-                        "cache_read_input_tokens": 0,
-                        "input": 10,
-                        "output": 20
-                    },
+                    "input": 10,
+                    "output": 20,
+                    "total": 30,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0
+                },
                 "traceId": "litellm-test-6a51ae70-a4e7-499e-afcd-dce2a3b31850"
             },
             "timestamp": "2025-01-16T19:28:55.125258Z"

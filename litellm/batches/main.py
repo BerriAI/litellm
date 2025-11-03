@@ -59,18 +59,22 @@ def _resolve_timeout(
 ) -> float:
     """
     Resolve timeout value from various sources and handle httpx.Timeout objects.
-    
+
     Args:
         optional_params: GenericLiteLLMParams object containing timeout
         kwargs: Additional kwargs that may contain request_timeout
         custom_llm_provider: Provider name for httpx timeout support check
         default_timeout: Default timeout value to use
-        
+
     Returns:
         Resolved timeout as float
     """
-    timeout = optional_params.timeout or kwargs.get("request_timeout", default_timeout) or default_timeout
-    
+    timeout = (
+        optional_params.timeout
+        or kwargs.get("request_timeout", default_timeout)
+        or default_timeout
+    )
+
     # Handle httpx.Timeout objects
     if isinstance(timeout, httpx.Timeout):
         if supports_httpx_timeout(custom_llm_provider) is False:
@@ -81,11 +85,11 @@ def _resolve_timeout(
             # For providers that support httpx.Timeout, we still need to return a float
             # This case might need to be handled differently based on the actual use case
             return float(timeout.read or default_timeout)
-    
+
     # Handle None case
     if timeout is None:
         return float(default_timeout)
-    
+
     # Handle numeric values (int, float, string representations)
     return float(timeout)
 
@@ -163,15 +167,19 @@ def create_batch(
         try:
             if model is not None:
                 model, _, _, _ = get_llm_provider(
-                                model=model, 
-                                custom_llm_provider=None,
-                        )
+                    model=model,
+                    custom_llm_provider=None,
+                )
         except Exception as e:
-            verbose_logger.exception(f"litellm.batches.main.py::create_batch() - Error inferring custom_llm_provider - {str(e)}")
-            
+            verbose_logger.exception(
+                f"litellm.batches.main.py::create_batch() - Error inferring custom_llm_provider - {str(e)}"
+            )
+
         _is_async = kwargs.pop("acreate_batch", False) is True
         litellm_params = dict(GenericLiteLLMParams(**kwargs))
-        litellm_logging_obj: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None))
+        litellm_logging_obj: LiteLLMLoggingObj = cast(
+            LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None)
+        )
         ### TIMEOUT LOGIC ###
         timeout = _resolve_timeout(optional_params, kwargs, custom_llm_provider)
         litellm_logging_obj.update_environment_variables(
@@ -189,7 +197,6 @@ def create_batch(
             },
             custom_llm_provider=custom_llm_provider,
         )
-        
 
         _create_batch_request = CreateBatchRequest(
             completion_window=completion_window,
@@ -378,6 +385,7 @@ async def aretrieve_batch(
     except Exception as e:
         raise e
 
+
 def _handle_retrieve_batch_providers_without_provider_config(
     batch_id: str,
     optional_params: GenericLiteLLMParams,
@@ -497,6 +505,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
         )
     return response
 
+
 @client
 def retrieve_batch(
     batch_id: str,
@@ -513,7 +522,9 @@ def retrieve_batch(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
-        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj", None)
+        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
+            "litellm_logging_obj", None
+        )
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         litellm_params = get_litellm_params(
@@ -549,7 +560,26 @@ def retrieve_batch(
 
         _is_async = kwargs.pop("aretrieve_batch", False) is True
         client = kwargs.get("client", None)
-        
+
+        # Check if this is an async invoke ARN (different from regular batch ARN)
+        # Async invoke ARNs have format: arn:aws(-[^:]+)?:bedrock:[a-z0-9-]{1,20}:[0-9]{12}:async-invoke/[a-z0-9]{12}
+        if (
+            batch_id.startswith("arn:aws")
+            and ":bedrock:" in batch_id
+            and ":async-invoke/" in batch_id
+        ):
+            # Handle async invoke status check
+            # Remove aws_region_name from kwargs to avoid duplicate parameter
+            async_kwargs = kwargs.copy()
+            async_kwargs.pop("aws_region_name", None)
+
+            return _handle_async_invoke_status(
+                batch_id=batch_id,
+                aws_region_name=kwargs.get("aws_region_name", "us-east-1"),
+                logging_obj=litellm_logging_obj,
+                **async_kwargs,
+            )
+
         # Try to use provider config first (for providers like bedrock)
         model: Optional[str] = kwargs.get("model", None)
         if model is not None:
@@ -559,7 +589,7 @@ def retrieve_batch(
             )
         else:
             provider_config = None
-            
+
         if provider_config is not None:
             response = base_llm_http_handler.retrieve_batch(
                 batch_id=batch_id,
@@ -568,7 +598,8 @@ def retrieve_batch(
                 headers=extra_headers or {},
                 api_base=optional_params.api_base,
                 api_key=optional_params.api_key,
-                logging_obj=litellm_logging_obj or LiteLLMLoggingObj(
+                logging_obj=litellm_logging_obj
+                or LiteLLMLoggingObj(
                     model=model or "bedrock/unknown",
                     messages=[],
                     stream=False,
@@ -586,7 +617,6 @@ def retrieve_batch(
                 model=model,
             )
             return response
-        
 
         #########################################################
         # Handle providers without provider config
@@ -600,7 +630,7 @@ def retrieve_batch(
             _is_async=_is_async,
             timeout=timeout,
         )
-        
+
     except Exception as e:
         raise e
 
@@ -933,3 +963,79 @@ def cancel_batch(
         return response
     except Exception as e:
         raise e
+
+
+def _handle_async_invoke_status(
+    batch_id: str, aws_region_name: str, logging_obj=None, **kwargs
+) -> "LiteLLMBatch":
+    """
+    Handle async invoke status check for AWS Bedrock.
+
+    Args:
+        batch_id: The async invoke ARN
+        aws_region_name: AWS region name
+        **kwargs: Additional parameters
+
+    Returns:
+        dict: Status information including status, output_file_id (S3 URL), etc.
+    """
+    import asyncio
+
+    from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+
+    async def _async_get_status():
+        # Create embedding handler instance
+        embedding_handler = BedrockEmbedding()
+
+        # Get the status of the async invoke job
+        status_response = await embedding_handler._get_async_invoke_status(
+            invocation_arn=batch_id,
+            aws_region_name=aws_region_name,
+            logging_obj=logging_obj,
+            **kwargs,
+        )
+
+        # Transform response to a LiteLLMBatch object
+        from litellm.types.utils import LiteLLMBatch
+
+        result = LiteLLMBatch(
+            id=status_response["invocationArn"],
+            object="batch",
+            status=status_response["status"],
+            created_at=status_response["submitTime"],
+            in_progress_at=status_response["lastModifiedTime"],
+            completed_at=status_response.get("endTime"),
+            failed_at=status_response.get("endTime")
+            if status_response["status"] == "failed"
+            else None,
+            request_counts={
+                "total": 1,
+                "completed": 1 if status_response["status"] == "completed" else 0,
+                "failed": 1 if status_response["status"] == "failed" else 0,
+            },
+            metadata={
+                "output_file_id": status_response["outputDataConfig"][
+                    "s3OutputDataConfig"
+                ]["s3Uri"],
+                "failure_message": status_response.get("failureMessage"),
+                "model_arn": status_response["modelArn"],
+            },
+        )
+
+        return result
+
+    # Since this function is called from within an async context via run_in_executor,
+    # we need to create a new event loop in a thread to avoid conflicts
+    import concurrent.futures
+
+    def run_in_thread():
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        try:
+            return new_loop.run_until_complete(_async_get_status())
+        finally:
+            new_loop.close()
+
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(run_in_thread)
+        return future.result()

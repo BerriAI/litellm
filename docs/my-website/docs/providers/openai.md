@@ -4,6 +4,10 @@ import TabItem from '@theme/TabItem';
 # OpenAI
 LiteLLM supports OpenAI Chat + Embedding calls.
 
+:::tip
+**We recommend using `litellm.responses()` / Responses API** for the latest OpenAI models (GPT-5, gpt-5-codex, o3-mini, etc.)
+:::
+
 ### Required API Keys
 
 ```python
@@ -171,6 +175,7 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 | gpt-5-2025-08-07 | `response = completion(model="gpt-5-2025-08-07", messages=messages)` |
 | gpt-5-mini-2025-08-07 | `response = completion(model="gpt-5-mini-2025-08-07", messages=messages)` |
 | gpt-5-nano-2025-08-07 | `response = completion(model="gpt-5-nano-2025-08-07", messages=messages)` |
+| gpt-5-pro | `response = completion(model="gpt-5-pro", messages=messages)` |
 | gpt-4.1 | `response = completion(model="gpt-4.1", messages=messages)` |
 | gpt-4.1-mini | `response = completion(model="gpt-4.1-mini", messages=messages)` |
 | gpt-4.1-nano | `response = completion(model="gpt-4.1-nano", messages=messages)` |
@@ -338,6 +343,72 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 | fine tuned `gpt-3.5-turbo-1106` | `response = completion(model="ft:gpt-3.5-turbo-1106", messages=messages)` |
 | fine tuned `gpt-3.5-turbo-0613` | `response = completion(model="ft:gpt-3.5-turbo-0613", messages=messages)` |
 
+## Getting Reasoning Content in `/chat/completions`
+
+GPT-5 models return reasoning content when called via the Responses API. You can call these models via the `/chat/completions` endpoint by using the `openai/responses/` prefix.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+```python
+response = litellm.completion(
+    model="openai/responses/gpt-5-mini", # tells litellm to call the model via the Responses API
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort="low",
+)
+```
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{ 
+    "model": "openai/responses/gpt-5-mini",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "reasoning_effort": "low"
+}'
+```
+</TabItem>
+</Tabs>
+
+Expected Response:
+```json
+{
+  "id": "chatcmpl-6382a222-43c9-40c4-856b-22e105d88075",
+  "created": 1760146746,
+  "model": "gpt-5-mini",
+  "object": "chat.completion",
+  "system_fingerprint": null,
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Paris",
+        "role": "assistant",
+        "tool_calls": null,
+        "function_call": null,
+        "reasoning_content": "**Identifying the capital**\n\nThe user wants me to think of the capital of France and write it down. That's pretty straightforward: it's Paris. There aren't any safety issues to consider here. I think it would be best to keep it concise, so maybe just \"Paris\" would suffice. I feel confident that I should just stick to that without adding anything else. So, let's write it down!",
+        "provider_specific_fields": null
+      }
+    }
+  ],
+  "usage": {
+    "completion_tokens": 7,
+    "prompt_tokens": 18,
+    "total_tokens": 25,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cached_tokens": 0,
+      "text_tokens": null,
+      "image_tokens": null
+    }
+  }
+}
+
+```
 
 ## OpenAI Chat Completion to Responses API Bridge
 
@@ -750,3 +821,29 @@ In your logs you should see the forwarded org id
 LiteLLM:DEBUG: utils.py:255 - Request to litellm:
 LiteLLM:DEBUG: utils.py:255 - litellm.acompletion(... organization='my-special-org',)
 ```
+
+## GPT-5 Pro Special Notes
+
+GPT-5 Pro is OpenAI's most advanced reasoning model with unique characteristics:
+
+- **Responses API Only**: GPT-5 Pro is only available through the `/v1/responses` endpoint
+- **No Streaming**: Does not support streaming responses
+- **High Reasoning**: Designed for complex reasoning tasks with highest effort reasoning
+- **Context Window**: 400,000 tokens input, 272,000 tokens output
+- **Pricing**: $15.00 input / $120.00 output per 1M tokens (Standard), $7.50 input / $60.00 output (Batch)
+- **Tools**: Supports Web Search, File Search, Image Generation, MCP (but not Code Interpreter or Computer Use)
+- **Modalities**: Text and Image input, Text output only
+
+```python
+# GPT-5 Pro usage example
+response = completion(
+    model="gpt-5-pro", 
+    messages=[{"role": "user", "content": "Solve this complex reasoning problem..."}]
+)
+```
+
+## Video Generation
+
+LiteLLM supports OpenAI's video generation models including Sora.
+
+For detailed documentation on video generation, see [OpenAI Video Generation →](./openai/video_generation.md)

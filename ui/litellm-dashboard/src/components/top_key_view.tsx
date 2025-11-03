@@ -1,70 +1,94 @@
-import React, { useState } from "react"
-import { BarChart } from "@tremor/react"
-import KeyInfoView from "./templates/key_info_view"
-import { keyInfoV1Call } from "./networking"
-import { transformKeyInfo } from "../components/key_team_helpers/transform_key_info"
-import { DataTable } from "./view_logs/table"
-import { Tooltip } from "antd"
-import { Button } from "@tremor/react"
-import { formatNumberWithCommas } from "../utils/dataUtils"
+import React, { useState } from "react";
+import { BarChart } from "@tremor/react";
+import KeyInfoView from "./templates/key_info_view";
+import { keyInfoV1Call } from "./networking";
+import { transformKeyInfo } from "../components/key_team_helpers/transform_key_info";
+import { DataTable } from "./view_logs/table";
+import { Tooltip } from "antd";
+import { Button } from "@tremor/react";
+import { formatNumberWithCommas } from "../utils/dataUtils";
+import { TagUsage } from "./usage/types";
+import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
 
 interface TopKeyViewProps {
-  topKeys: any[]
-  accessToken: string | null
-  userID: string | null
-  userRole: string | null
-  teams: any[] | null
-  premiumUser: boolean
+  topKeys: any[];
+  accessToken: string | null;
+  userID: string | null;
+  userRole: string | null;
+  teams: any[] | null;
+  premiumUser: boolean;
+  showTags?: boolean;
 }
 
-const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, accessToken, userID, userRole, teams, premiumUser }) => {
-  const [isModalOpen, setIsModalOpen] = useState<boolean>(false)
-  const [selectedKey, setSelectedKey] = useState<string | null>(null)
-  const [keyData, setKeyData] = useState<any | undefined>(undefined)
-  const [viewMode, setViewMode] = useState<"chart" | "table">("table")
+const TopKeyView: React.FC<TopKeyViewProps> = ({
+  topKeys,
+  accessToken,
+  userID,
+  userRole,
+  teams,
+  premiumUser,
+  showTags = false,
+}) => {
+  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [keyData, setKeyData] = useState<any | undefined>(undefined);
+  const [viewMode, setViewMode] = useState<"chart" | "table">("table");
+  const [expandedTags, setExpandedTags] = useState<Set<string>>(new Set());
+
+  const toggleTagsExpansion = (apiKey: string) => {
+    setExpandedTags((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(apiKey)) {
+        newSet.delete(apiKey);
+      } else {
+        newSet.add(apiKey);
+      }
+      return newSet;
+    });
+  };
 
   const handleKeyClick = async (item: any) => {
-    if (!accessToken) return
+    if (!accessToken) return;
 
     try {
-      const keyInfo = await keyInfoV1Call(accessToken, item.api_key)
-      const transformedKeyData = transformKeyInfo(keyInfo)
+      const keyInfo = await keyInfoV1Call(accessToken, item.api_key);
+      const transformedKeyData = transformKeyInfo(keyInfo);
 
-      setKeyData(transformedKeyData)
-      setSelectedKey(item.api_key)
-      setIsModalOpen(true) // Open modal when key is clicked
+      setKeyData(transformedKeyData);
+      setSelectedKey(item.api_key);
+      setIsModalOpen(true); // Open modal when key is clicked
     } catch (error) {
-      console.error("Error fetching key info:", error)
+      console.error("Error fetching key info:", error);
     }
-  }
+  };
 
   const handleClose = () => {
-    setIsModalOpen(false)
-    setSelectedKey(null)
-    setKeyData(undefined)
-  }
+    setIsModalOpen(false);
+    setSelectedKey(null);
+    setKeyData(undefined);
+  };
 
   // Handle clicking outside the modal
   const handleOutsideClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget) {
-      handleClose()
+      handleClose();
     }
-  }
+  };
 
   // Handle escape key
   React.useEffect(() => {
     const handleEscapeKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && isModalOpen) {
-        handleClose()
+        handleClose();
       }
-    }
+    };
 
-    document.addEventListener("keydown", handleEscapeKey)
-    return () => document.removeEventListener("keydown", handleEscapeKey)
-  }, [isModalOpen])
+    document.addEventListener("keydown", handleEscapeKey);
+    return () => document.removeEventListener("keydown", handleEscapeKey);
+  }, [isModalOpen]);
 
   // Define columns for the table view
-  const columns = [
+  const baseColumns = [
     {
       header: "Key ID",
       accessorKey: "api_key",
@@ -88,17 +112,79 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, accessToken, userID, u
       accessorKey: "key_alias",
       cell: (info: any) => info.getValue() || "-",
     },
-    {
-      header: "Spend (USD)",
-      accessorKey: "spend",
-      cell: (info: any) => `$${formatNumberWithCommas(info.getValue(), 2)}`,
+  ];
+
+  const tagsColumn = {
+    header: "Tags",
+    accessorKey: "tags",
+    cell: (info: any) => {
+      const tags = info.getValue() as TagUsage[] | undefined;
+      const apiKey = info.row.original.api_key;
+      const isExpanded = expandedTags.has(apiKey);
+
+      if (!tags || tags.length === 0) {
+        return "-";
+      }
+
+      const sortedTags = tags.sort((a, b) => b.usage - a.usage);
+      const displayTags = isExpanded ? sortedTags : sortedTags.slice(0, 2);
+      const hasMoreTags = tags.length > 2;
+
+      return (
+        <div className="overflow-hidden">
+          <div className="flex flex-wrap items-center gap-1">
+            {displayTags.map((tag, index) => (
+              <Tooltip
+                key={index}
+                title={
+                  <div>
+                    <div>
+                      <span className="text-gray-300">Tag Name:</span> {tag.tag}
+                    </div>
+                    <div>
+                      <span className="text-gray-300">Spend:</span>{" "}
+                      {tag.usage > 0 && tag.usage < 0.01 ? "<$0.01" : `$${formatNumberWithCommas(tag.usage, 2)}`}
+                    </div>
+                  </div>
+                }
+              >
+                <span className="px-2 py-1 bg-gray-100 rounded-full text-xs">{tag.tag.slice(0, 7)}...</span>
+              </Tooltip>
+            ))}
+            {hasMoreTags && (
+              <button
+                onClick={() => toggleTagsExpansion(apiKey)}
+                className="ml-1 p-1 hover:bg-gray-200 rounded-full transition-colors"
+                title={isExpanded ? "Show fewer tags" : "Show all tags"}
+              >
+                {isExpanded ? (
+                  <ChevronUpIcon className="h-3 w-3 text-gray-500" />
+                ) : (
+                  <ChevronDownIcon className="h-3 w-3 text-gray-500" />
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+      );
     },
-  ]
+  };
+
+  const spendColumn = {
+    header: "Spend (USD)",
+    accessorKey: "spend",
+    cell: (info: any) => {
+      const value = info.getValue();
+      return value > 0 && value < 0.01 ? "<$0.01" : `$${formatNumberWithCommas(value, 2)}`;
+    },
+  };
+
+  const columns = showTags ? [...baseColumns, tagsColumn, spendColumn] : [...baseColumns, spendColumn];
 
   const processedTopKeys = topKeys.map((k) => ({
     ...k,
     display_key_alias: k.key_alias && k.key_alias.length > 10 ? `${k.key_alias.slice(0, 10)}...` : k.key_alias || "-",
-  }))
+  }));
 
   return (
     <>
@@ -136,7 +222,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, accessToken, userID, u
             onValueChange={(item) => handleKeyClick(item)}
             showTooltip={true}
             customTooltip={(props) => {
-              const item = props.payload?.[0]?.payload
+              const item = props.payload?.[0]?.payload;
               return (
                 <div className="relative z-50 p-3 bg-black/90 shadow-lg rounded-lg text-white max-w-xs">
                   <div className="space-y-1.5">
@@ -154,7 +240,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, accessToken, userID, u
                     </div>
                   </div>
                 </div>
-              )
+              );
             }}
           />
         </div>
@@ -208,7 +294,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, accessToken, userID, u
           </div>
         ))}
     </>
-  )
-}
+  );
+};
 
-export default TopKeyView
+export default TopKeyView;

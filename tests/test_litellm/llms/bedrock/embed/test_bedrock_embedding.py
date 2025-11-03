@@ -59,14 +59,21 @@ def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_re
 
         input_data = test_image_base64 if input_type == "image" else test_input
 
-        response = litellm.embedding(
-            model=model,
-            input=input_data,
-            client=client,
-            aws_region_name="us-east-1",
-            aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
-            api_key=test_api_key
-        )
+        # Add inputType parameter for TwelveLabs Marengo models
+        kwargs = {
+            "model": model,
+            "input": input_data,
+            "client": client,
+            "aws_region_name": "us-east-1",
+            "aws_bedrock_runtime_endpoint": "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "api_key": test_api_key
+        }
+        
+        # Add input_type parameter for TwelveLabs Marengo models (maps to inputType)
+        if "twelvelabs.marengo-embed" in model:
+            kwargs["input_type"] = input_type
+            
+        response = litellm.embedding(**kwargs)
 
         assert isinstance(response, litellm.EmbeddingResponse)
         assert isinstance(response.data[0]['embedding'], list)
@@ -242,3 +249,159 @@ def test_bedrock_titan_v2_encoding_format_base64():
         request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
         assert "embeddingTypes" in request_body
         assert request_body["embeddingTypes"] == ["binary"]
+
+
+def test_twelvelabs_input_type_parameter_mapping():
+    """Test that input_type parameter is correctly mapped to inputType for TwelveLabs models"""
+    litellm.set_verbose = True
+    client = HTTPHandler()
+    test_api_key = "test-bearer-token-12345"
+    model = "bedrock/twelvelabs.marengo-embed-2-7-v1:0"
+
+    twelvelabs_response = {
+        "data": [{
+            "embedding": [0.1, 0.2, 0.3],
+            "inputTextTokenCount": 10
+        }]
+    }
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(twelvelabs_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        # Test with input_type parameter (new LiteLLM parameter)
+        response = litellm.embedding(
+            model=model,
+            input=test_input,
+            client=client,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+            api_key=test_api_key,
+            input_type="text"  # New parameter that should map to inputType
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        assert isinstance(response.data[0]['embedding'], list)
+        assert len(response.data[0]['embedding']) == 3
+
+        # Verify that the request contains inputType (mapped from input_type)
+        request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
+        assert "inputType" in request_body
+        assert request_body["inputType"] == "text"
+        assert "input_type" not in request_body  # Should be mapped, not passed through
+
+
+def test_twelvelabs_input_type_parameter_mapping_async_invoke():
+    """Test that input_type parameter is correctly mapped to inputType for TwelveLabs async invoke models"""
+    litellm.set_verbose = True
+    client = HTTPHandler()
+    test_api_key = "test-bearer-token-12345"
+    model = "bedrock/async_invoke/twelvelabs.marengo-embed-2-7-v1:0"
+
+    async_invoke_response = {
+        "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456"
+    }
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(async_invoke_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        # Test with input_type parameter for async invoke
+        response = litellm.embedding(
+            model=model,
+            input=test_input,
+            client=client,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+            api_key=test_api_key,
+            output_s3_uri="s3://test-bucket/async-invoke-output/",
+            input_type="text"  # New parameter that should map to inputType
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        assert hasattr(response, '_hidden_params')
+        assert response._hidden_params is not None
+        assert hasattr(response._hidden_params, '_invocation_arn')
+
+        # Verify that the request contains inputType in modelInput (mapped from input_type)
+        request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
+        assert "modelInput" in request_body
+        assert "inputType" in request_body["modelInput"]
+        assert request_body["modelInput"]["inputType"] == "text"
+        assert "input_type" not in request_body  # Should be mapped, not passed through
+
+
+def test_twelvelabs_missing_input_type_error():
+    """Test that missing input_type parameter defaults to 'text' for TwelveLabs models"""
+    litellm.set_verbose = True
+    client = HTTPHandler()
+    test_api_key = "test-bearer-token-12345"
+    
+    # Test TwelveLabs model - should default to 'text' when input_type is missing
+    twelvelabs_model = "bedrock/twelvelabs.marengo-embed-2-7-v1:0"
+    twelvelabs_response = {
+        "data": [{
+            "embedding": [0.1, 0.2, 0.3],
+            "inputTextTokenCount": 10
+        }]
+    }
+    
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(twelvelabs_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        # Test that missing input_type defaults to "text" for TwelveLabs
+        response = litellm.embedding(
+            model=twelvelabs_model,
+            input=test_input,
+            client=client,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+            api_key=test_api_key
+            # No input_type parameter - should default to "text"
+        )
+        
+        # Verify the response is successful
+        assert isinstance(response, litellm.EmbeddingResponse)
+        
+        # Verify that the request contains inputType: "text" by default
+        request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
+        assert "inputType" in request_body
+        assert request_body["inputType"] == "text"
+    
+    # Test Amazon Titan model - should NOT throw error (input_type not required)
+    titan_model = "bedrock/amazon.titan-embed-text-v1"
+    titan_response = {
+        "embedding": [0.1, 0.2, 0.3],
+        "inputTextTokenCount": 10
+    }
+    
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(titan_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        # Test that missing input_type does NOT throw an error for Amazon Titan
+        response = litellm.embedding(
+            model=titan_model,
+            input=test_input,
+            client=client,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+            api_key=test_api_key
+            # No input_type parameter - should work fine
+        )
+        
+        # Should succeed without input_type
+        assert isinstance(response, litellm.EmbeddingResponse)

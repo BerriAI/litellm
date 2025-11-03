@@ -17,6 +17,8 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.router import ModelGroupInfo
 from litellm.utils import get_utc_datetime
 
+from .rate_limiter_utils import convert_priority_to_percent
+
 
 class DynamicRateLimiterCache:
     """
@@ -99,6 +101,11 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             - active_projects: int or null
         """
         try:
+            # Get model info first for conversion
+            model_group_info: Optional[
+                ModelGroupInfo
+            ] = self.llm_router.get_model_group_info(model_group=model)
+            
             weight: float = 1
             if (
                 litellm.priority_reservation is None
@@ -115,7 +122,8 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                         "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/proxy/enterprise."
                     )
                 else:
-                    weight = litellm.priority_reservation[priority]
+                    value = litellm.priority_reservation[priority]
+                    weight = convert_priority_to_percent(value, model_group_info)
 
             active_projects = await self.internal_usage_cache.async_get_cache(
                 model=model
@@ -124,9 +132,6 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 current_model_tpm,
                 current_model_rpm,
             ) = await self.llm_router.get_model_group_usage(model_group=model)
-            model_group_info: Optional[
-                ModelGroupInfo
-            ] = self.llm_router.get_model_group_info(model_group=model)
             total_model_tpm: Optional[int] = None
             total_model_rpm: Optional[int] = None
             if model_group_info is not None:
@@ -198,6 +203,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
+            "anthropic_messages",
         ],
     ) -> Optional[
         Union[Exception, str, dict]

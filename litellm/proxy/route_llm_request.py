@@ -25,6 +25,17 @@ ROUTE_ENDPOINT_MAPPING = {
     "alist_input_items": "/responses/{response_id}/input_items",
     "aimage_edit": "/images/edits",
     "acancel_responses": "/responses/{response_id}/cancel",
+    "aocr": "/ocr",
+    "asearch": "/search",
+    "avideo_generation": "/videos",
+    "avideo_list": "/videos",
+    "avideo_status": "/videos/{video_id}",
+    "avideo_content": "/videos/{video_id}/content",
+    "avideo_remix": "/videos/{video_id}/remix",
+    "acreate_container": "/containers",
+    "alist_containers": "/containers",
+    "aretrieve_container": "/containers/{container_id}",
+    "adelete_container": "/containers/{container_id}",
 }
 
 
@@ -55,6 +66,23 @@ def get_team_id_from_data(data: dict) -> Optional[str]:
     return None
 
 
+def add_shared_session_to_data(data: dict) -> None:
+    """
+    Add shared aiohttp session for connection reuse (prevents cold starts).
+    Silently continues without session reuse if import fails or session is unavailable.
+    
+    Args:
+        data: Dictionary to add the shared session to
+    """
+    try:
+        from litellm.proxy.proxy_server import shared_aiohttp_session
+        if shared_aiohttp_session is not None and not shared_aiohttp_session.closed:
+            data["shared_session"] = shared_aiohttp_session
+    except Exception:
+        # Silently continue without session reuse if import fails or session unavailable
+        pass
+
+
 async def route_request(
     data: dict,
     llm_router: Optional[LitellmRouter],
@@ -81,11 +109,24 @@ async def route_request(
         "allm_passthrough_route",
         "avector_store_search",
         "avector_store_create",
+        "aocr",
+        "asearch",
+        "avideo_generation",
+        "avideo_list",
+        "avideo_status",
+        "avideo_content",
+        "avideo_remix",
+        "acreate_container",
+        "alist_containers",
+        "aretrieve_container",
+        "adelete_container",
     ],
 ):
     """
     Common helper to route the request
     """
+    add_shared_session_to_data(data)
+    
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
 
@@ -119,6 +160,18 @@ async def route_request(
             models = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
     elif llm_router is not None:
+        # Skip model-based routing for container operations
+        if route_type in ["acreate_container", "alist_containers", "aretrieve_container", "adelete_container"]:
+            return getattr(llm_router, f"{route_type}")(**data)
+        if route_type in [
+            "avideo_list",
+            "avideo_status",
+            "avideo_content",
+            "avideo_remix",
+        ] and (data.get("model") is None or data.get("model") == ""):
+            # These video endpoints don't need a model, use custom_llm_provider
+            return getattr(litellm, f"{route_type}")(**data)
+        
         team_model_name = (
             llm_router.map_team_model(data["model"], team_id)
             if team_id is not None
@@ -161,6 +214,11 @@ async def route_request(
                 "alist_input_items",
                 "avector_store_create",
                 "avector_store_search",
+                "asearch",
+                "acreate_container",
+                "alist_containers",
+                "aretrieve_container",
+                "adelete_container",
             ]:
                 # moderation endpoint does not require `model` parameter
                 return getattr(llm_router, f"{route_type}")(**data)

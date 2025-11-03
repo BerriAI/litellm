@@ -1,5 +1,4 @@
 import { LogEntry } from "./columns";
-import { message } from "antd";
 import NotificationsManager from "../molecules/notifications_manager";
 
 interface RequestResponsePanelProps {
@@ -31,24 +30,24 @@ export function RequestResponsePanel({
         return true;
       } else {
         // Fallback for non-secure contexts (like 0.0.0.0)
-        const textArea = document.createElement('textarea');
+        const textArea = document.createElement("textarea");
         textArea.value = text;
-        textArea.style.position = 'fixed';
-        textArea.style.opacity = '0';
+        textArea.style.position = "fixed";
+        textArea.style.opacity = "0";
         document.body.appendChild(textArea);
         textArea.focus();
         textArea.select();
-        
-        const successful = document.execCommand('copy');
+
+        const successful = document.execCommand("copy");
         document.body.removeChild(textArea);
-        
+
         if (!successful) {
-          throw new Error('execCommand failed');
+          throw new Error("execCommand failed");
         }
         return true;
       }
     } catch (error) {
-      console.error('Copy failed:', error);
+      console.error("Copy failed:", error);
       return false;
     }
   };
@@ -56,18 +55,18 @@ export function RequestResponsePanel({
   const handleCopyRequest = async () => {
     const success = await copyToClipboard(JSON.stringify(getRawRequest(), null, 2));
     if (success) {
-      NotificationsManager.success('Request copied to clipboard');
+      NotificationsManager.success("Request copied to clipboard");
     } else {
-      NotificationsManager.fromBackend('Failed to copy request');
+      NotificationsManager.fromBackend("Failed to copy request");
     }
   };
 
   const handleCopyResponse = async () => {
     const success = await copyToClipboard(JSON.stringify(formattedResponse(), null, 2));
     if (success) {
-      NotificationsManager.success('Response copied to clipboard');
+      NotificationsManager.success("Response copied to clipboard");
     } else {
-      NotificationsManager.fromBackend('Failed to copy response');
+      NotificationsManager.fromBackend("Failed to copy response");
     }
   };
 
@@ -77,19 +76,27 @@ export function RequestResponsePanel({
       <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
         <div className="flex justify-between items-center p-4 border-b">
           <h3 className="text-lg font-medium">Request</h3>
-          <button 
-            onClick={handleCopyRequest}
-            className="p-1 hover:bg-gray-200 rounded"
-            title="Copy request"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <button onClick={handleCopyRequest} className="p-1 hover:bg-gray-200 rounded" title="Copy request">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
             </svg>
           </button>
         </div>
         <div className="p-4 overflow-auto max-h-96 w-full max-w-full box-border">
-          <pre className="text-xs font-mono whitespace-pre-wrap break-all w-full max-w-full overflow-hidden break-words">{JSON.stringify(getRawRequest(), null, 2)}</pre>
+          <pre className="text-xs font-mono whitespace-pre-wrap break-all w-full max-w-full overflow-hidden break-words">
+            {JSON.stringify(getRawRequest(), null, 2)}
+          </pre>
         </div>
       </div>
 
@@ -98,19 +105,25 @@ export function RequestResponsePanel({
         <div className="flex justify-between items-center p-4 border-b">
           <h3 className="text-lg font-medium">
             Response
-            {hasError && (
-              <span className="ml-2 text-sm text-red-600">
-                • HTTP code {errorInfo?.error_code || 400}
-              </span>
-            )}
+            {hasError && <span className="ml-2 text-sm text-red-600">• HTTP code {errorInfo?.error_code || 400}</span>}
           </h3>
-          <button 
+          <button
             onClick={handleCopyResponse}
             className="p-1 hover:bg-gray-200 rounded"
             title="Copy response"
             disabled={!hasResponse}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
             </svg>
@@ -118,7 +131,9 @@ export function RequestResponsePanel({
         </div>
         <div className="p-4 overflow-auto max-h-96 bg-gray-50 w-full max-w-full box-border">
           {hasResponse ? (
-            <pre className="text-xs font-mono whitespace-pre-wrap break-all w-full max-w-full overflow-hidden break-words">{JSON.stringify(formattedResponse(), null, 2)}</pre>
+            <pre className="text-xs font-mono whitespace-pre-wrap break-all w-full max-w-full overflow-hidden break-words">
+              {JSON.stringify(formattedResponse(), null, 2)}
+            </pre>
           ) : (
             <div className="text-gray-500 text-sm italic text-center py-4">Response data not available</div>
           )}
@@ -126,4 +141,4 @@ export function RequestResponsePanel({
       </div>
     </div>
   );
-} 
+}

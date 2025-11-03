@@ -221,6 +221,8 @@ litellm_settings:
 
 2. Make a request with the custom metadata labels
 
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
@@ -244,6 +246,34 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
     }
 }'
 ```
+</TabItem>
+<TabItem value="key" label="on Key">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "foo": "hello world"
+    }
+}'
+```
+</TabItem>
+<TabItem value="team" label="on Team">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/team/new' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "foo": "hello world"
+    }
+}'
+```
+</TabItem>
+</Tabs>
 
 3. Check your `/metrics` endpoint for the custom metrics  
 

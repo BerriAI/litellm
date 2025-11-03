@@ -203,6 +203,89 @@ async def test_redaction_responses_api_stream():
 
 
 @pytest.mark.asyncio
+async def test_redaction_responses_api_with_reasoning_summary():
+    """Test that reasoning summary in ResponsesAPIResponse output is properly redacted"""
+    from litellm.litellm_core_utils.redact_messages import perform_redaction
+    
+    # Create a simple mock object with output items that have reasoning summaries
+    class MockResponsesAPIResponse:
+        def __init__(self):
+            self.output = [
+                # Reasoning item with summary
+                type('obj', (object,), {
+                    'type': 'reasoning',
+                    'id': 'rs_123',
+                    'summary': [
+                        type('obj', (object,), {
+                            'text': 'This is a detailed reasoning summary that should be redacted',
+                            'type': 'summary_text'
+                        })()
+                    ]
+                })(),
+                # Message item with content
+                type('obj', (object,), {
+                    'type': 'message',
+                    'id': 'msg_123',
+                    'content': [
+                        type('obj', (object,), {
+                            'text': 'This is the actual message content',
+                            'type': 'output_text'
+                        })()
+                    ]
+                })()
+            ]
+            self.reasoning = {"effort": "low", "summary": "auto"}
+    
+    # Mock as ResponsesAPIResponse so perform_redaction recognizes it
+    mock_response = MockResponsesAPIResponse()
+    mock_response.__class__.__name__ = 'ResponsesAPIResponse'
+    
+    # Patch isinstance to recognize our mock as ResponsesAPIResponse
+    import litellm
+    original_isinstance = isinstance
+    def patched_isinstance(obj, cls):
+        if cls == litellm.ResponsesAPIResponse and obj.__class__.__name__ == 'ResponsesAPIResponse':
+            return True
+        return original_isinstance(obj, cls)
+    
+    import builtins
+    builtins.isinstance = patched_isinstance
+    
+    try:
+        model_call_details = {
+            "messages": [{"role": "user", "content": "test"}],
+            "prompt": "test prompt",
+            "input": "test input"
+        }
+        
+        # Perform redaction
+        redacted_result = perform_redaction(model_call_details, mock_response)
+        
+        # Verify reasoning summary text is redacted
+        reasoning_item = redacted_result.output[0]
+        assert reasoning_item.summary[0].text == "redacted-by-litellm", \
+            "Reasoning summary text should be redacted"
+        
+        # Verify message content is also redacted
+        message_item = redacted_result.output[1]
+        assert message_item.content[0].text == "redacted-by-litellm", \
+            "Message content text should be redacted"
+        
+        # Verify top-level reasoning field is removed
+        assert redacted_result.reasoning is None, \
+            "Top-level reasoning field should be None"
+        
+        # Verify input messages are redacted
+        assert model_call_details["messages"][0]["content"] == "redacted-by-litellm", \
+            "Input messages should be redacted"
+        
+        print("✓ Reasoning summary redaction test passed")
+    finally:
+        # Restore original isinstance
+        builtins.isinstance = original_isinstance
+
+
+@pytest.mark.asyncio
 async def test_redaction_with_coroutine_objects():
     """Test that redaction handles coroutine objects correctly without pickle errors"""
     from litellm.litellm_core_utils.redact_messages import perform_redaction
@@ -279,3 +362,89 @@ async def test_redaction_with_streaming_response():
         "logged standard logging payload for streaming with coroutine handling",
         json.dumps(standard_logging_payload, indent=2),
     )
+
+
+@pytest.mark.asyncio
+async def test_disable_redaction_header_responses_api():
+    """
+    Test that LiteLLM-Disable-Message-Redaction header works for Responses API.
+    
+    This test verifies the fix for the issue where the header wasn't respected
+    because Responses API uses 'litellm_metadata' instead of 'metadata'.
+    """
+    litellm.turn_off_message_logging = True
+    test_custom_logger = TestCustomLogger()
+    litellm.callbacks = [test_custom_logger]
+    
+    # Mock a ResponsesAPIResponse-style response
+    mock_response = {
+        "output": [{"text": "This is a test response"}],
+        "model": "gpt-3.5-turbo",
+        "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10}
+    }
+    
+    # Pass the header via litellm_metadata (as the proxy does for Responses API)
+    response = await litellm.aresponses(
+        model="gpt-3.5-turbo",
+        input="hi",
+        mock_response=mock_response,
+        litellm_metadata={
+            "headers": {
+                "litellm-disable-message-redaction": "true"
+            }
+        }
+    )
+
+    await asyncio.sleep(1)
+    standard_logging_payload = test_custom_logger.logged_standard_logging_payload
+    assert standard_logging_payload is not None
+    
+    # Verify that messages are NOT redacted because the header was set
+    print(
+        "logged standard logging payload for ResponsesAPI with disable header",
+        json.dumps(standard_logging_payload, indent=2, default=str),
+    )
+    
+    # The content should NOT be redacted
+    assert standard_logging_payload["response"] != {"text": "redacted-by-litellm"}
+    assert standard_logging_payload["messages"][0]["content"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_redaction_with_metadata_completion_api():
+    """
+    Test redaction behavior with metadata field for Completion API.
+    
+    This test verifies that get_metadata_variable_name_from_kwargs properly
+    selects the appropriate metadata field for header detection.
+    """
+    litellm.turn_off_message_logging = True
+    test_custom_logger = TestCustomLogger()
+    litellm.callbacks = [test_custom_logger]
+    
+    # When metadata is passed, the system uses get_metadata_variable_name_from_kwargs
+    # to determine which field to check
+    response = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hello",
+        metadata={
+            "headers": {
+                "litellm-disable-message-redaction": "true"
+            }
+        }
+    )
+
+    await asyncio.sleep(1)
+    standard_logging_payload = test_custom_logger.logged_standard_logging_payload
+    assert standard_logging_payload is not None
+    
+    print(
+        "logged standard logging payload for Completion API with metadata",
+        json.dumps(standard_logging_payload, indent=2),
+    )
+    
+    # Verify the helper function works correctly - with get_metadata_variable_name_from_kwargs,
+    # the system checks the appropriate field for headers
+    assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
+    assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
