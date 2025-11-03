@@ -2033,11 +2033,36 @@ def completion(  # type: ignore # noqa: PLR0915
             logging.post_call(
                 input=messages, api_key=api_key, original_response=response
             )
+        elif custom_llm_provider == "perplexity":
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                timeout=timeout,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
+                provider_config=provider_config,
+            )
+
+            ## LOGGING - Call after response has been processed by transform_response
+            logging.post_call(
+                input=messages, api_key=api_key, original_response=response
+            )
+            
         elif (
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "deepinfra"
-            or custom_llm_provider == "perplexity"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
             or custom_llm_provider == "baseten"
