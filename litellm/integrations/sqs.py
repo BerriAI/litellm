@@ -256,6 +256,8 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             standard_logging_payload = kwargs.get("standard_logging_object")
             if standard_logging_payload is None:
                 raise ValueError("standard_logging_payload is None")
+            if self.sqs_strip_base64_files:
+                standard_logging_payload = await self._strip_base64_from_messages(standard_logging_payload)
 
             self.log_queue.append(standard_logging_payload)
             verbose_logger.debug(
