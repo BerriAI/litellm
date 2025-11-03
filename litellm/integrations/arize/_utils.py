@@ -1,6 +1,5 @@
 import json
-from abc import ABC
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Type
 
 from typing_extensions import override
 
@@ -101,7 +100,6 @@ def set_attributes(
         SpanAttributes,
         ToolCallAttributes,
     )
-    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
     try:
         optional_params = kwargs.get("optional_params", {})
