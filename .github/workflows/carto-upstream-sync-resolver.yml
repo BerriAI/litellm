@@ -807,35 +807,12 @@ jobs:
             echo "[Resolver] ⚠️ No resolution PR found - keeping original PR open"
           fi
 
-  # Job 4: Monitor resolution PR for CI results and trigger fixes if needed
-  monitor-resolution-pr:
-    name: Monitor Resolution PR CI
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    needs: [security-check, check-eligibility, claude-resolve]
-    if: needs.claude-resolve.outcome == 'success'
-
-    steps:
-      - name: Get resolution PR number
-        id: get-pr
-        env:
-          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+      - name: Note about CI monitoring
+        if: always()
         run: |
-          RESOLUTION_PR_NUMBER=$(gh pr list \
-            --repo ${{ github.repository }} \
-            --head upstream-sync-resolver/${{ needs.check-eligibility.outputs.pr-number }} \
-            --json number \
-            --jq '.[0].number' || echo "")
+          echo "::notice::CI monitoring is handled by the 'carto-upstream-sync-ci-fixer' workflow"
+          echo "::notice::It will automatically trigger when CI checks fail on the resolution PR"
 
-          if [ -z "${RESOLUTION_PR_NUMBER}" ]; then
-            echo "[Monitor] ❌ No resolution PR found to monitor"
-            exit 1
-          fi
-
-          echo "pr-number=${RESOLUTION_PR_NUMBER}" >> $GITHUB_OUTPUT
-          echo "[Monitor] 🔍 Monitoring PR #${RESOLUTION_PR_NUMBER}"
-
-      - name: Wait for CI checks to complete
         env:
           GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
         run: |
