@@ -184,7 +184,7 @@ class VertexAIOCRConfig(MistralOCRConfig):
         Returns:
             OCRRequestData with JSON data
         """
-        verbose_logger.debug(f"Vertex AI OCR transform_ocr_request (sync) - model: {model}")
+        verbose_logger.debug("Vertex AI OCR transform_ocr_request (sync) called")
         
         if not isinstance(document, dict):
             raise ValueError(f"Expected document dict, got {type(document)}")
