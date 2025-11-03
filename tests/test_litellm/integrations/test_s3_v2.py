@@ -30,6 +30,7 @@ class TestS3V2UnitTests:
     def test_s3_v2_endpoint_url(self, mock_periodic_flush, mock_create_task):
         """testing s3 endpoint url"""
         from unittest.mock import AsyncMock, MagicMock
+
         from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 
         # Mock periodic_flush and create_task to prevent async task creation during init
@@ -264,6 +265,187 @@ async def test_strip_base64_mixed_nested_objects():
     assert {"foo": "bar"} in content
     # Extra metadata preserved
     assert stripped["messages"][0]["extra"]["trace_id"] == "123"
+
+
+@pytest.mark.asyncio
+async def test_s3_verify_false_handling():
+    """
+    Test that s3_verify=False is properly handled and not treated as None.
+    
+    This is a regression test for the bug where s3_verify=False was being
+    ignored because 'False or s3_verify' would evaluate to s3_verify (None).
+    """
+    from unittest.mock import AsyncMock, patch
+
+    import litellm
+
+    # Set up s3_callback_params with s3_verify=False
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "test-bucket",
+        "s3_endpoint_url": "https://localhost:443",
+        "s3_aws_access_key_id": "minioadmin",
+        "s3_aws_secret_access_key": "minioadmin",
+        "s3_region_name": "us-east-1",
+        "s3_verify": False,  # This should NOT be ignored
+        "s3_use_ssl": False,  # This should also NOT be ignored
+    }
+    
+    with patch('asyncio.create_task'):
+        with patch('litellm.integrations.s3_v2.get_async_httpx_client') as mock_get_client:
+            mock_client = AsyncMock()
+            mock_get_client.return_value = mock_client
+            
+            # Create logger
+            logger = S3Logger()
+            
+            # Verify s3_verify is False, not None
+            assert logger.s3_verify is False, f"Expected s3_verify=False, got {logger.s3_verify}"
+            assert logger.s3_use_ssl is False, f"Expected s3_use_ssl=False, got {logger.s3_use_ssl}"
+            
+            # Verify that get_async_httpx_client was called with ssl_verify=False
+            mock_get_client.assert_called_once()
+            call_kwargs = mock_get_client.call_args.kwargs
+            assert 'params' in call_kwargs, "params should be passed to get_async_httpx_client"
+            assert call_kwargs['params'] == {'ssl_verify': False}, f"Expected ssl_verify=False in params, got {call_kwargs.get('params')}"
+    
+    # Clean up
+    litellm.s3_callback_params = None
+
+
+@pytest.mark.asyncio
+async def test_s3_verify_none_handling():
+    """
+    Test that s3_verify=None uses default behavior.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    import litellm
+
+    # Set up s3_callback_params without s3_verify
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "test-bucket",
+        "s3_aws_access_key_id": "test-key",
+        "s3_aws_secret_access_key": "test-secret",
+        "s3_region_name": "us-east-1",
+    }
+    
+    with patch('asyncio.create_task'):
+        with patch('litellm.integrations.s3_v2.get_async_httpx_client') as mock_get_client:
+            mock_client = AsyncMock()
+            mock_get_client.return_value = mock_client
+            
+            # Create logger without explicit s3_verify
+            logger = S3Logger()
+            
+            # Verify s3_verify is None (default)
+            assert logger.s3_verify is None, f"Expected s3_verify=None, got {logger.s3_verify}"
+            
+            # Verify that get_async_httpx_client was called
+            mock_get_client.assert_called_once()
+            call_kwargs = mock_get_client.call_args.kwargs
+            # When s3_verify is None, params={'ssl_verify': None} which is fine - uses default behavior
+            # The important thing is it's not False
+            if 'params' in call_kwargs and call_kwargs['params'] is not None:
+                assert call_kwargs['params'].get('ssl_verify') is None
+            # Either params is None or params={'ssl_verify': None} is acceptable
+    
+    # Clean up
+    litellm.s3_callback_params = None
+
+
+@pytest.mark.asyncio
+async def test_s3_verify_false_creates_httpx_client_with_verify_false():
+    """
+    Test that when s3_verify=False, the actual httpx client has verify=False.
+    
+    This validates that ssl_verify=False flows through to the httpx.AsyncClient.
+    """
+    from unittest.mock import patch
+
+    import litellm
+
+    # Set up s3_callback_params with s3_verify=False
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "test-bucket",
+        "s3_endpoint_url": "https://localhost:443",
+        "s3_aws_access_key_id": "minioadmin",
+        "s3_aws_secret_access_key": "minioadmin",
+        "s3_region_name": "us-east-1",
+        "s3_verify": False,
+    }
+    
+    with patch('asyncio.create_task'):
+        # Create logger - this creates the httpx client
+        logger = S3Logger()
+        
+        # Verify the logger has s3_verify=False
+        assert logger.s3_verify is False
+        
+        # Check the actual httpx client has verify=False
+        # The async_httpx_client.client is the actual httpx.AsyncClient
+        if hasattr(logger.async_httpx_client, 'client'):
+            httpx_client = logger.async_httpx_client.client
+            # Check the _verify attribute (httpx internal)
+            if hasattr(httpx_client, '_verify'):
+                assert httpx_client._verify is False, f"Expected httpx client _verify=False, got {httpx_client._verify}"
+    
+    # Clean up
+    litellm.s3_callback_params = None
+
+
+@pytest.mark.asyncio
+async def test_s3_verify_false_async_client():
+    """
+    Test that the async httpx client respects s3_verify=False.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import litellm
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    # Set up s3_callback_params with s3_verify=False
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "test-bucket",
+        "s3_endpoint_url": "https://localhost:443",
+        "s3_aws_access_key_id": "minioadmin",
+        "s3_aws_secret_access_key": "minioadmin",
+        "s3_region_name": "us-east-1",
+        "s3_verify": False,
+    }
+    
+    with patch('asyncio.create_task'):
+        logger = S3Logger()
+        
+        # Verify s3_verify is False
+        assert logger.s3_verify is False
+        
+        # Create test element
+        test_element = s3BatchLoggingElement(
+            s3_object_key="2025-11-03/test-key.json",
+            payload={"test": "data"},
+            s3_object_download_filename="test-file.json"
+        )
+        
+        # Mock the async httpx client's put method
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        logger.async_httpx_client.put = AsyncMock(return_value=mock_response)
+        
+        # Call async upload
+        await logger.async_upload_data_to_s3(test_element)
+        
+        # Verify put was called
+        assert logger.async_httpx_client.put.called
+        
+        # Check that the async httpx client was created with verify=False
+        if hasattr(logger.async_httpx_client, 'client'):
+            httpx_client = logger.async_httpx_client.client
+            if hasattr(httpx_client, '_verify'):
+                assert httpx_client._verify is False, f"Expected async httpx client _verify=False, got {httpx_client._verify}"
+    
+    # Clean up
+    litellm.s3_callback_params = None
 
 
 @pytest.mark.asyncio
