@@ -1286,12 +1286,12 @@ class BaseLLMHTTPHandler:
         Returns: (headers, complete_url, data, files)
         """
         from litellm.llms.base_llm.ocr.transformation import OCRRequestData
-
         headers = provider_config.validate_environment(
             api_key=api_key,
             api_base=api_base,
             headers=headers or {},
             model=model,
+            litellm_params=litellm_params,
         )
 
         complete_url = provider_config.get_complete_url(
@@ -1358,12 +1358,14 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             headers=headers or {},
             model=model,
+            litellm_params=litellm_params,
         )
 
         complete_url = provider_config.get_complete_url(
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         # Use async transform (providers can override this method if they need async operations)
