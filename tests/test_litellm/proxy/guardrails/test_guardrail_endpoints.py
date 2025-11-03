@@ -930,3 +930,69 @@ async def test_apply_guardrail_execution_error(mocker):
     
     # Verify error is properly handled
     assert "Bedrock guardrail failed" in str(exc_info.value.message)
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_endpoint_config_guardrail(mocker):
+    """
+    Test get_guardrail_info endpoint returns proper response when guardrail is found in config.
+    """
+    from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_info
+
+    # Mock prisma_client to not be None (patch at the source where it's imported from)
+    mock_prisma = mocker.Mock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    # Mock the GUARDRAIL_REGISTRY to return None from DB (so it checks config)
+    mock_registry = mocker.Mock()
+    mock_registry.get_guardrail_by_id_from_db = AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
+
+    # Mock IN_MEMORY_GUARDRAIL_HANDLER at its source to return config guardrail
+    mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.get_guardrail_by_id.return_value = MOCK_CONFIG_GUARDRAIL
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_in_memory_handler)
+
+    # Mock _get_masked_values to return values as-is
+    mocker.patch(
+        "litellm.litellm_core_utils.litellm_logging._get_masked_values",
+        side_effect=lambda x, **kwargs: x
+    )
+
+    # Call endpoint and expect GuardrailInfoResponse
+    result = await get_guardrail_info(guardrail_id="test-config-guardrail")
+
+    # Verify the response is of the correct type
+    assert isinstance(result, GuardrailInfoResponse)
+    assert result.guardrail_id == "test-config-guardrail"
+    assert result.guardrail_name == "Test Config Guardrail"
+    assert result.guardrail_definition_location == "config"
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_endpoint_db_guardrail(mocker):
+    """
+    Test get_guardrail_info endpoint returns proper response when guardrail is found in DB.
+    """
+    from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_info
+
+    # Mock prisma_client to not be None (patch at the source where it's imported from)
+    mock_prisma = mocker.Mock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    # Mock the GUARDRAIL_REGISTRY to return a guardrail from DB
+    mock_registry = mocker.Mock()
+    mock_registry.get_guardrail_by_id_from_db = AsyncMock(return_value=MOCK_DB_GUARDRAIL)
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
+
+    # Mock IN_MEMORY_GUARDRAIL_HANDLER to return None
+    mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.get_guardrail_by_id.return_value = None
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_in_memory_handler)
+
+    # Call endpoint and expect GuardrailInfoResponse
+    result = await get_guardrail_info(guardrail_id="test-db-guardrail")
+
+    # Verify the response is of the correct type
+    assert isinstance(result, GuardrailInfoResponse)
+    assert result.guardrail_id == "test-db-guardrail"
+    assert result.guardrail_name == "Test DB Guardrail"
+    assert result.guardrail_definition_location == "db"

@@ -745,12 +745,8 @@ class LangFuseLogger:
                     ):
                         total_tokens = prompt_tokens + completion_tokens
 
-                    cache_creation_input_tokens = usage_dict.get(
-                        "cache_creation_input_tokens", 0
-                    )
-                    cache_read_input_tokens = usage_dict.get(
-                        "cache_read_input_tokens", 0
-                    )
+                    cache_creation_input_tokens = usage_dict.get("cache_creation_input_tokens", 0)
+                    cache_read_input_tokens = usage_dict.get("cache_read_input_tokens", 0)
 
                     if (
                         prompt_tokens is not None
@@ -857,7 +853,7 @@ class LangFuseLogger:
         """
         Get the responses API content for Langfuse logging
         """
-        if hasattr(response_obj, 'output') and response_obj.output:
+        if hasattr(response_obj, "output") and response_obj.output:
             # ResponsesAPIResponse.output is a list of strings
             return response_obj.output
         else:
@@ -943,21 +939,44 @@ class LangFuseLogger:
             verbose_logger.debug("Not logging guardrail information as span because guardrail_information is None")
             return
 
-        span = trace.span(
-            name="guardrail",
-            input=guardrail_information.get("guardrail_request", None),
-            output=guardrail_information.get("guardrail_response", None),
-            metadata={
-                "guardrail_name": guardrail_information.get("guardrail_name", None),
-                "guardrail_mode": guardrail_information.get("guardrail_mode", None),
-                "guardrail_masked_entity_count": guardrail_information.get("masked_entity_count", None),
-            },
-            start_time=guardrail_information.get("start_time", None),  # type: ignore
-            end_time=guardrail_information.get("end_time", None),  # type: ignore
-        )
+        if not guardrail_information:
+            verbose_logger.debug("Not logging guardrail information as span because guardrail_information is empty")
+            return
 
-        verbose_logger.debug(f"Logged guardrail information as span: {span}")
-        span.end()
+        if isinstance(guardrail_information, dict):
+            guardrail_entries: List[Dict[str, Any]] = [guardrail_information]
+        elif isinstance(guardrail_information, list):
+            guardrail_entries = guardrail_information
+        else:
+            verbose_logger.debug(
+                "Not logging guardrail information as span because guardrail_information has unexpected type: %s",
+                type(guardrail_information),
+            )
+            return
+
+        for guardrail_entry in guardrail_entries:
+            if not isinstance(guardrail_entry, dict):
+                verbose_logger.debug(
+                    "Skipping guardrail entry with unexpected type: %s",
+                    type(guardrail_entry),
+                )
+                continue
+
+            span = trace.span(
+                name="guardrail",
+                input=guardrail_entry.get("guardrail_request", None),
+                output=guardrail_entry.get("guardrail_response", None),
+                metadata={
+                    "guardrail_name": guardrail_entry.get("guardrail_name", None),
+                    "guardrail_mode": guardrail_entry.get("guardrail_mode", None),
+                    "guardrail_masked_entity_count": guardrail_entry.get("masked_entity_count", None),
+                },
+                start_time=guardrail_entry.get("start_time", None),  # type: ignore
+                end_time=guardrail_entry.get("end_time", None),  # type: ignore
+            )
+
+            verbose_logger.debug(f"Logged guardrail information as span: {span}")
+            span.end()
 
 
 def _add_prompt_to_generation_params(

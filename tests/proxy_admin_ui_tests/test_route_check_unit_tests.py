@@ -83,7 +83,7 @@ def test_is_llm_api_route():
     )
     assert (
         RouteChecks.is_llm_api_route(
-            "/openai/deployments/anthropic/claude-3-5-sonnet-20240620/chat/completions"
+            "/openai/deployments/anthropic/claude-sonnet-4-5-20250929/chat/completions"
         )
         is True
     )

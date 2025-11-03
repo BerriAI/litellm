@@ -1,41 +1,97 @@
 import json
-from typing import TYPE_CHECKING, Any, Optional, Union
+from abc import ABC
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
+
+from typing_extensions import override
 
 from litellm._logging import verbose_logger
+from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (
+    BaseLLMObsOTELAttributes,
+    safe_set_attribute,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
-    Span = Union[_Span, Any]
-else:
-    Span = Any
+    from opentelemetry.trace import Span
 
 
-def cast_as_primitive_value_type(value) -> Union[str, bool, int, float]:
-    """
-    Converts a value to an OTEL-supported primitive for Arize/Phoenix observability.
-    """
-    if value is None:
-        return ""
-    if isinstance(value, (str, bool, int, float)):
-        return value
-    try:
-        return str(value)
-    except Exception:
-        return ""
+class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
+
+    @staticmethod
+    @override
+    def set_messages(span: "Span", kwargs: Dict[str, Any]):
+        from litellm.integrations._types.open_inference import (
+            MessageAttributes,
+            SpanAttributes,
+        )
+
+        messages = kwargs.get("messages")
+
+        # for /chat/completions
+        # https://docs.arize.com/arize/large-language-models/tracing/semantic-conventions
+        if messages:
+            last_message = messages[-1]
+            safe_set_attribute(
+                span,
+                SpanAttributes.INPUT_VALUE,
+                last_message.get("content", ""),
+            )
+
+            # LLM_INPUT_MESSAGES shows up under `input_messages` tab on the span page.
+            for idx, msg in enumerate(messages):
+                prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}"
+                # Set the role per message.
+                safe_set_attribute(
+                    span, f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role")
+                )
+                # Set the content per message.
+                safe_set_attribute(
+                    span,
+                    f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
+                    msg.get("content", ""),
+                )
+
+    @staticmethod
+    @override
+    def set_response_output_messages(span: "Span", response_obj):
+        """
+        Sets output message attributes on the span from the LLM response.
+
+        Args:
+            span: The OpenTelemetry span to set attributes on
+            response_obj: The response object containing choices with messages
+        """
+        from litellm.integrations._types.open_inference import (
+            MessageAttributes,
+            SpanAttributes,
+        )
+
+        for idx, choice in enumerate(response_obj.get("choices", [])):
+            response_message = choice.get("message", {})
+            safe_set_attribute(
+                span,
+                SpanAttributes.OUTPUT_VALUE,
+                response_message.get("content", ""),
+            )
+
+            # This shows up under `output_messages` tab on the span page.
+            prefix = f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{idx}"
+            safe_set_attribute(
+                span,
+                f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
+                response_message.get("role"),
+            )
+            safe_set_attribute(
+                span,
+                f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
+                response_message.get("content", ""),
+            )
 
 
-def safe_set_attribute(span: Span, key: str, value: Any):
-    """
-    Sets a span attribute safely with OTEL-compliant primitive typing for Arize/Phoenix.
-    """
-    primitive_value = cast_as_primitive_value_type(value)
-    span.set_attribute(key, primitive_value)
-
-
-def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
+def set_attributes(
+    span: "Span", kwargs, response_obj, attributes: Type[BaseLLMObsOTELAttributes]
+):  # noqa: PLR0915
     """
     Populates span with OpenInference-compliant LLM attributes for Arize and Phoenix tracing.
     """
@@ -45,6 +101,7 @@ def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
         SpanAttributes,
         ToolCallAttributes,
     )
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
     try:
         optional_params = kwargs.get("optional_params", {})
@@ -151,31 +208,7 @@ def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
             SpanAttributes.OPENINFERENCE_SPAN_KIND,
             OpenInferenceSpanKindValues.LLM.value,
         )
-        messages = kwargs.get("messages")
-
-        # for /chat/completions
-        # https://docs.arize.com/arize/large-language-models/tracing/semantic-conventions
-        if messages:
-            last_message = messages[-1]
-            safe_set_attribute(
-                span,
-                SpanAttributes.INPUT_VALUE,
-                last_message.get("content", ""),
-            )
-
-            # LLM_INPUT_MESSAGES shows up under `input_messages` tab on the span page.
-            for idx, msg in enumerate(messages):
-                prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}"
-                # Set the role per message.
-                safe_set_attribute(
-                    span, f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role")
-                )
-                # Set the content per message.
-                safe_set_attribute(
-                    span,
-                    f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
-                    msg.get("content", ""),
-                )
+        attributes.set_messages(span, kwargs)
 
         # Capture tools (function definitions) used in the LLM call.
         tools = optional_params.get("tools")
@@ -235,6 +268,7 @@ def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
 
         # Captures response tokens, message, and content.
         if hasattr(response_obj, "get"):
+            # Handle chat completions API (choices field)
             for idx, choice in enumerate(response_obj.get("choices", [])):
                 response_message = choice.get("message", {})
                 safe_set_attribute(
@@ -256,6 +290,51 @@ def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
                     response_message.get("content", ""),
                 )
 
+            # Handle responses API (output field)
+            output_items = response_obj.get("output", [])
+            if output_items:
+                for i, item in enumerate(output_items):
+                    prefix = f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.{i}"
+
+                    if hasattr(item, "type"):
+                        item_type = item.type
+
+                        # Extract reasoning summary
+                        if item_type == "reasoning" and hasattr(item, "summary"):
+                            for summary in item.summary:
+                                if hasattr(summary, "text"):
+                                    safe_set_attribute(
+                                        span,
+                                        f"{prefix}.{MessageAttributes.MESSAGE_REASONING_SUMMARY}",
+                                        summary.text,
+                                    )
+
+                        # Extract message content
+                        elif item_type == "message" and hasattr(item, "content"):
+                            message_content = ""
+
+                            content_list = item.content
+                            if content_list and len(content_list) > 0:
+                                first_content = content_list[0]
+                                message_content = getattr(first_content, "text", "")
+                            message_role = getattr(item, "role", "assistant")
+
+                            safe_set_attribute(
+                                span,
+                                SpanAttributes.OUTPUT_VALUE,
+                                message_content,
+                            )
+                            safe_set_attribute(
+                                span,
+                                f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
+                                message_content,
+                            )
+                            safe_set_attribute(
+                                span,
+                                f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
+                                message_role,
+                            )
+
             # Token usage info.
             usage = response_obj and response_obj.get("usage")
             if usage:
@@ -266,18 +345,33 @@ def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
                 )
 
                 # The number of tokens used in the LLM response (completion).
-                safe_set_attribute(
-                    span,
-                    SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
-                    usage.get("completion_tokens"),
-                )
+                # Responses API uses "output_tokens", chat completions uses "completion_tokens"
+                completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
+                if completion_tokens:
+                    safe_set_attribute(
+                        span,
+                        SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
+                        completion_tokens,
+                    )
 
                 # The number of tokens used in the LLM prompt.
-                safe_set_attribute(
-                    span,
-                    SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
-                    usage.get("prompt_tokens"),
-                )
+                # Responses API uses "input_tokens", chat completions uses "prompt_tokens"
+                prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
+                if prompt_tokens:
+                    safe_set_attribute(
+                        span,
+                        SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
+                        prompt_tokens,
+                    )
+
+                # The number of reasoning tokens in the output, if available.
+                reasoning_tokens = usage.get("output_tokens_details", {}).get("reasoning_tokens")
+                if reasoning_tokens:
+                    safe_set_attribute(
+                        span,
+                        SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
+                        reasoning_tokens,
+                    )
 
     except Exception as e:
         verbose_logger.error(

@@ -9,7 +9,6 @@ from typing import (
     Literal,
     Mapping,
     Optional,
-    Tuple,
     Union,
 )
 
@@ -280,7 +279,7 @@ class CallTypes(str, Enum):
     file_content = "file_content"
     create_fine_tuning_job = "create_fine_tuning_job"
     acreate_fine_tuning_job = "acreate_fine_tuning_job"
-    
+
     #########################################################
     # Video Generation Call Types
     #########################################################
@@ -298,6 +297,19 @@ class CallTypes(str, Enum):
     avideo_retrieve_job = "avideo_retrieve_job"
     video_delete = "video_delete"
     avideo_delete = "avideo_delete"
+    
+    #########################################################
+    # Container Call Types
+    #########################################################
+    create_container = "create_container"
+    acreate_container = "acreate_container"
+    list_containers = "list_containers"
+    alist_containers = "alist_containers"
+    retrieve_container = "retrieve_container"
+    aretrieve_container = "aretrieve_container"
+    delete_container = "delete_container"
+    adelete_container = "adelete_container"
+    
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
     alist_fine_tuning_jobs = "alist_fine_tuning_jobs"
@@ -1179,8 +1191,6 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         super().__init__(**kwargs)
 
 
-
-
 class ModelResponseBase(OpenAIObject):
     id: str
     """A unique identifier for the completion."""
@@ -1282,7 +1292,7 @@ class ModelResponse(ModelResponseBase):
     choices: List[Union[Choices, StreamingChoices]]
     """The list of completion choices the model generated for the input prompt."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         id=None,
         choices=None,
@@ -2190,7 +2200,7 @@ class StandardLoggingPayload(TypedDict):
     error_information: Optional[StandardLoggingPayloadErrorInformation]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
-    guardrail_information: Optional[StandardLoggingGuardrailInformation]
+    guardrail_information: Optional[list[StandardLoggingGuardrailInformation]]
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams]
 
 
@@ -2501,6 +2511,7 @@ class LlmProviders(str, Enum):
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
     MISTRAL = "mistral"
+    MILVUS = "milvus"
     GROQ = "groq"
     NVIDIA_NIM = "nvidia_nim"
     CEREBRAS = "cerebras"
@@ -2576,6 +2587,7 @@ class SearchProviders(str, Enum):
     Enum for search provider types.
     Separate from LlmProviders for semantic clarity.
     """
+
     PERPLEXITY = "perplexity"
     TAVILY = "tavily"
     PARALLEL_AI = "parallel_ai"
@@ -2822,13 +2834,13 @@ CostResponseTypes = Union[
 class PriorityReservationDict(TypedDict, total=False):
     """
     Dictionary format for priority reservation values.
-    
+
     Used in litellm.priority_reservation to specify how much capacity to reserve
     for each priority level. Supports three formats:
     1. Percentage-based: {"type": "percent", "value": 0.9} -> 90% of capacity
     2. RPM-based: {"type": "rpm", "value": 900} -> 900 requests per minute
     3. TPM-based: {"type": "tpm", "value": 900000} -> 900,000 tokens per minute
-    
+
     Attributes:
         type: The type of value - "percent", "rpm", or "tpm". Defaults to "percent".
         value: The numeric value. For percent (0.0-1.0), for rpm/tpm (absolute value).

@@ -1244,6 +1244,9 @@ def test_completion_fireworks_ai_dynamic_params(api_key, api_base):
 # @pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api():
     try:
+        import httpx
+        import json
+        
         response_object = {
             "id": "a8f37485-026e-45da-81a9-cf0184896840",
             "model": "llama-3-sonar-small-32k-online",
@@ -1270,25 +1273,17 @@ def test_completion_perplexity_api():
             ],
         }
 
-        from openai import OpenAI
-        from openai.types.chat.chat_completion import ChatCompletion
+        def mock_post(*args, **kwargs):
+            # Create a mock response
+            mock_response = MagicMock(spec=httpx.Response)
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response.json.return_value = response_object
+            mock_response.text = json.dumps(response_object)
+            return mock_response
 
-        pydantic_obj = ChatCompletion(**response_object)
-
-        def _return_pydantic_obj(*args, **kwargs):
-            new_response = MagicMock()
-            new_response.headers = {"hello": "world"}
-
-            new_response.parse.return_value = pydantic_obj
-            return new_response
-
-        openai_client = OpenAI()
-
-        with patch.object(
-            openai_client.chat.completions.with_raw_response,
-            "create",
-            side_effect=_return_pydantic_obj,
-        ) as mock_client:
+        # Mock at the HTTP handler level
+        with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", side_effect=mock_post):
             # litellm.set_verbose= True
             messages = [
                 {"role": "system", "content": "You're a good bot"},
@@ -1302,10 +1297,9 @@ def test_completion_perplexity_api():
                 },
             ]
             response = completion(
-                model="mistral-7b-instruct",
+                model="perplexity/llama-3-sonar-small-32k-online",
                 messages=messages,
-                api_base="https://api.perplexity.ai",
-                client=openai_client,
+                api_key="fake-api-key",
             )
             print(response)
             assert hasattr(response, "citations")
@@ -2468,8 +2462,6 @@ def test_completion_azure_key_completion_arg():
     except Exception as e:
         os.environ["AZURE_API_KEY"] = old_key
         pytest.fail(f"Error occurred: {e}")
-
-
 
 
 async def test_re_use_azure_async_client():
@@ -4272,7 +4264,6 @@ def test_deepseek_reasoning_content_completion():
         pytest.skip("Model is timing out")
 
 
-
 def test_qwen_text_completion():
     # litellm._turn_on_debug()
     resp = litellm.completion(
@@ -4407,3 +4398,37 @@ def test_completion_gpt_4o_empty_str():
             messages=[{"role": "user", "content": ""}],
         )
         assert resp.choices[0].message.content is not None
+
+
+def test_edit_note():
+    litellm.callbacks = ["langfuse_otel"]
+    response = completion(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": "Your only job is to call the edit_note tool with the content specified in the user's message.",
+            },
+            {
+                "role": "user",
+                "content": "Edit the note with the content: 'This is a test note.'",
+            },
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "edit_note",
+                    "description": "Edit the note with the content specified in the user's message.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "content": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        ],
+    )
+
+    return response
