@@ -1298,6 +1298,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         # Transform the request to get data and files
