@@ -590,7 +590,7 @@ model LiteLLM_SSOConfig {
   updated_at DateTime @updatedAt
 }
 
-model LiteLLM_IndexTable {
+model LiteLLM_ManagedVectorStoreIndexTable {
   id String @id @default(uuid())
   index_name String @unique
   litellm_params Json

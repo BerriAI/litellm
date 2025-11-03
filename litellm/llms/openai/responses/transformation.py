@@ -15,7 +15,7 @@ from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
-
+from litellm.litellm_core_utils.core_helpers import process_response_headers
 from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
@@ -171,13 +171,19 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             raise OpenAIError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
+        raw_response_headers = dict(raw_response.headers)
+        processed_headers = process_response_headers(raw_response_headers)
         try:
-            return ResponsesAPIResponse(**raw_response_json)
+            response = ResponsesAPIResponse(**raw_response_json)
         except Exception:
             verbose_logger.debug(
                 f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct"
             )
-            return ResponsesAPIResponse.model_construct(**raw_response_json)
+            response = ResponsesAPIResponse.model_construct(**raw_response_json)
+        
+        response._hidden_params["additional_headers"] = processed_headers
+        response._hidden_params["headers"] = raw_response_headers
+        return response
 
     def validate_environment(
         self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
@@ -376,14 +382,21 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> ResponsesAPIResponse:
         """
         Transform the get response API response into a ResponsesAPIResponse
-        """
+        """        
         try:
             raw_response_json = raw_response.json()
         except Exception:
             raise OpenAIError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
-        return ResponsesAPIResponse(**raw_response_json)
+        raw_response_headers = dict(raw_response.headers)
+        processed_headers = process_response_headers(raw_response_headers)
+        
+        response = ResponsesAPIResponse(**raw_response_json)
+        response._hidden_params["additional_headers"] = processed_headers
+        response._hidden_params["headers"] = raw_response_headers
+        
+        return response
 
     #########################################################
     ########## LIST INPUT ITEMS TRANSFORMATION #############
@@ -460,4 +473,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             raise OpenAIError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
-        return ResponsesAPIResponse(**raw_response_json)
+        raw_response_headers = dict(raw_response.headers)
+        processed_headers = process_response_headers(raw_response_headers)
+        
+        response = ResponsesAPIResponse(**raw_response_json)
+        response._hidden_params["additional_headers"] = processed_headers
+        response._hidden_params["headers"] = raw_response_headers
+        
+        return response
