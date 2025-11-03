@@ -3,7 +3,7 @@
 """
 Script to lint and format "model_prices_and_context_window.json" files.
 
-Models are sorted alphabetically. Small floats are formatted in e-06
+Models are sorted alphabetically. Some floats are formatted in e-06
 notation to make prices easier to interpret ('per million') and to
 enforce consistency across models.
 
@@ -28,9 +28,6 @@ FILES_TO_PROCESS: List[Path] = [
     Path("./litellm/model_prices_and_context_window_backup.json"),
 ]
 
-# Floats below this value are formatted in e-06 notation
-TINY_FLOAT_THRESHOLD = 0.001
-
 
 def _detect_duplicates(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
     seen_keys = set()
@@ -47,8 +44,8 @@ def _detect_duplicates(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
 
 
 # Internal placeholders used to bypass standard JSON float formatting
-_PLACEHOLDER_PREFIX = "_TINYFLOAT_PLACEHOLDER_START_"
-_PLACEHOLDER_SUFFIX = "_TINYFLOAT_PLACEHOLDER_END_"
+_PLACEHOLDER_PREFIX = "_FLOAT_PLACEHOLDER_START_"
+_PLACEHOLDER_SUFFIX = "_FLOAT_PLACEHOLDER_END_"
 
 
 class CustomJSONEncoder(json.JSONEncoder):
@@ -71,13 +68,16 @@ class CustomJSONEncoder(json.JSONEncoder):
 JSONData = Union[Dict[str, Any], List[Any], str, int, float, bool, None]
 
 
-def _format_numbers(item: JSONData) -> JSONData:
+FORMAT_PER_MILLION_FOR_KEYS = ["_per_token", "_token_cost"]
+
+
+def _format_numbers(item: JSONData, key="") -> JSONData:
     """
     Apply custom number formatting rules.
     """
     # Format objects recursively
     if isinstance(item, dict):
-        return {k: _format_numbers(v) for k, v in item.items()}
+        return {k: _format_numbers(v, k) for k, v in item.items()}
 
     if isinstance(item, list):
         return [_format_numbers(x) for x in item]
@@ -87,13 +87,18 @@ def _format_numbers(item: JSONData) -> JSONData:
         if item.is_integer():
             return int(item)
 
-        # Format small floats as e-06 for 'per million'-style pricing
+        # Override the exponent for certain floats to make price data easier to read
         # e.g., 0.0000015 -> "1.5e-06" (to represent $1.50 per million)
-        if 0 < item <= TINY_FLOAT_THRESHOLD:
+        if any(substring in key for substring in FORMAT_PER_MILLION_FOR_KEYS):
             formatted_float_str = f"{item * 1e6:g}e-06"
             return f"{_PLACEHOLDER_PREFIX}{formatted_float_str}{_PLACEHOLDER_SUFFIX}"
 
-        return item
+        # Always format very small floats as e-06
+        if 0 < item < 100e-6:
+            formatted_float_str = f"{item * 1e6:g}e-06"
+            return f"{_PLACEHOLDER_PREFIX}{formatted_float_str}{_PLACEHOLDER_SUFFIX}"
+
+        return float(item)
 
     # Other types
     return item
