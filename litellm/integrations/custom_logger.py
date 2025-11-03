@@ -576,17 +576,21 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         try:
             import litellm
+            from litellm._logging import verbose_logger
             
-            all_callbacks = []
-            all_callbacks.extend(litellm.callbacks or [])  # type: ignore
-            all_callbacks.extend(litellm._async_success_callback or [])  # type: ignore
-            all_callbacks.extend(litellm.success_callback or [])  # type: ignore
-                        
+            all_callbacks = litellm.logging_callback_manager._get_all_callbacks()
+            
             for callback_obj in all_callbacks:
                 if hasattr(callback_obj, 'increment_callback_logging_failure'):
+                    verbose_logger.debug(f"Incrementing callback failure metric for {callback_name}")
                     callback_obj.increment_callback_logging_failure(callback_name=callback_name)  # type: ignore
-                    break
+                    return
+            
+            verbose_logger.debug(
+                f"No callback with increment_callback_logging_failure method found for {callback_name}. "
+                "Ensure 'prometheus' is in your callbacks config."
+            )
                     
         except Exception as e:
             from litellm._logging import verbose_logger
-            verbose_logger.debug(f"Error in handle_callback_failure: {str(e)}")
+            verbose_logger.debug(f"Error in handle_callback_failure for {callback_name}: {str(e)}")

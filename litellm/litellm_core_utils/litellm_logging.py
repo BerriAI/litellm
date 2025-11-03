@@ -2485,10 +2485,7 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             callback_name = self._get_callback_name(callback)
             
-            all_callbacks = []
-            all_callbacks.extend(litellm.callbacks or [])  # type: ignore
-            all_callbacks.extend(litellm._async_success_callback or [])  # type: ignore
-            all_callbacks.extend(litellm.success_callback or [])  # type: ignore
+            all_callbacks = litellm.logging_callback_manager._get_all_callbacks()
                         
             for callback_obj in all_callbacks:
                 if hasattr(callback_obj, 'increment_callback_logging_failure'):
