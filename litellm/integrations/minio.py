@@ -102,6 +102,17 @@ class MinioLogger(CustomLogger):
             verbose_logger.debug(f"minio logger using endpoint url {minio_endpoint_url}")
             
             # Create an S3 client configured for MinIO
+            verbose_logger.debug(
+                f"minio logger boto3.client args: endpoint_url={minio_endpoint_url}, "
+                f"aws_access_key_id={'***' if minio_access_key_id else None}, "
+                f"aws_secret_access_key={'***' if minio_secret_access_key else None}, "
+                f"region_name={minio_region_name or 'us-east-1'}, "
+                f"api_version={minio_api_version}, "
+                f"use_ssl={minio_use_ssl}, "
+                f"verify={minio_verify}, "
+                f"aws_session_token={'***' if minio_session_token else None}, "
+                f"config={minio_config}"
+            )
             self.s3_client = boto3.client(
                 "s3",
                 endpoint_url=minio_endpoint_url,
