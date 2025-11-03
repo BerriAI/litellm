@@ -161,7 +161,7 @@ def test_custom_pricing_with_router_model_id():
             {
                 "model_name": "prod/claude-3-5-sonnet-20240620",
                 "litellm_params": {
-                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                     "api_key": "test_api_key",
                 },
                 "model_info": {
@@ -175,7 +175,7 @@ def test_custom_pricing_with_router_model_id():
             {
                 "model_name": "claude-3-5-sonnet-20240620",
                 "litellm_params": {
-                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                     "api_key": "test_api_key",
                 },
                 "model_info": {
@@ -204,7 +204,7 @@ def test_custom_pricing_with_router_model_id():
     )
 
     model_info = router.get_deployment_model_info(
-        model_id="my-unique-model-id", model_name="anthropic/claude-3-5-sonnet-20240620"
+        model_id="my-unique-model-id", model_name="anthropic/claude-sonnet-4-5-20250929"
     )
     assert model_info is not None
     assert model_info["input_cost_per_token"] == 0.000006

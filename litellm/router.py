@@ -919,6 +919,28 @@ class Router:
         self.avideo_remix = self.factory_function(avideo_remix, call_type="avideo_remix")
         self.video_remix = self.factory_function(video_remix, call_type="video_remix")
 
+        # Container routes
+        #########################################################
+        from litellm.containers import (
+            acreate_container,
+            create_container,
+            alist_containers,
+            list_containers,
+            aretrieve_container,
+            retrieve_container,
+            adelete_container,
+            delete_container,
+        )
+
+        self.acreate_container = self.factory_function(acreate_container, call_type="acreate_container")
+        self.create_container = self.factory_function(create_container, call_type="create_container")
+        self.alist_containers = self.factory_function(alist_containers, call_type="alist_containers")
+        self.list_containers = self.factory_function(list_containers, call_type="list_containers")
+        self.aretrieve_container = self.factory_function(aretrieve_container, call_type="aretrieve_container")
+        self.retrieve_container = self.factory_function(retrieve_container, call_type="retrieve_container")
+        self.adelete_container = self.factory_function(adelete_container, call_type="adelete_container")
+        self.delete_container = self.factory_function(delete_container, call_type="delete_container")
+
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
         Validate the fallbacks parameter.
@@ -3663,7 +3685,15 @@ class Router:
             "avideo_content",
             "video_content",
             "avideo_remix",
-            "video_remix"
+            "video_remix",
+            "acreate_container",
+            "create_container",
+            "alist_containers",
+            "list_containers",
+            "aretrieve_container",
+            "retrieve_container",
+            "adelete_container",
+            "delete_container"
         ] = "assistants",
     ):
         """
@@ -3687,6 +3717,10 @@ class Router:
             "video_status",
             "video_content",
             "video_remix",
+            "create_container",
+            "list_containers",
+            "retrieve_container",
+            "delete_container",
         ):
 
             def sync_wrapper(
@@ -3741,6 +3775,10 @@ class Router:
                 "avideo_status",
                 "avideo_content",
                 "avideo_remix",
+                "acreate_container",
+                "alist_containers",
+                "aretrieve_container",
+                "adelete_container",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

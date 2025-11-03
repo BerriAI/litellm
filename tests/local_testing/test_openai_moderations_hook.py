@@ -28,13 +28,15 @@ from litellm.caching.caching import DualCache
 
 
 @pytest.mark.asyncio
-async def test_openai_moderation_error_raising():
+async def test_openai_moderation_error_raising(monkeypatch):
     """
     Tests to see OpenAI Moderation raises an error for a flagged response
     """
-
+    from unittest.mock import AsyncMock, MagicMock
+    from litellm.types.llms.openai import OpenAIModerationResponse
+    
+    litellm.openai_moderations_model_name = "text-moderation-latest"
     openai_mod = _ENTERPRISE_OpenAI_Moderation()
-    litellm.openai_moderations_model_name = "omni-moderation-latest"
     _api_key = "sk-12345"
     _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
@@ -45,14 +47,23 @@ async def test_openai_moderation_error_raising():
     llm_router = litellm.Router(
         model_list=[
             {
-                "model_name": "omni-moderation-latest",
+                "model_name": "text-moderation-latest",
                 "litellm_params": {
-                    "model": "omni-moderation-latest",
-                    "api_key": os.environ["OPENAI_API_KEY"],
+                    "model": "text-moderation-latest",
+                    "api_key": os.environ.get("OPENAI_API_KEY", "fake-key"),
                 },
             }
         ]
     )
+
+    # Mock the amoderation call to return a flagged response
+    mock_response = MagicMock(spec=OpenAIModerationResponse)
+    mock_response.results = [MagicMock(flagged=True)]
+    
+    async def mock_amoderation(*args, **kwargs):
+        return mock_response
+    
+    llm_router.amoderation = mock_amoderation
 
     setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
 

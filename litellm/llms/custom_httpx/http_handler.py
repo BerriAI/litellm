@@ -18,7 +18,7 @@ from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_KEEPALIVE_TIMEOUT,
     AIOHTTP_TTL_DNS_CACHE,
-    DEFAULT_SSL_CIPHERS
+    DEFAULT_SSL_CIPHERS,
 )
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
@@ -141,11 +141,11 @@ def get_ssl_configuration(
 
     if ssl_verify is not False:
         custom_ssl_context = ssl.create_default_context(cafile=cafile)
-        
+
         # Optimize SSL handshake performance
         # Set minimum TLS version to 1.2 for better performance
         custom_ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
-        
+
         # Configure cipher suites for optimal performance
         if ssl_security_level and isinstance(ssl_security_level, str):
             # User provided custom cipher configuration (e.g., via SSL_SECURITY_LEVEL env var)
@@ -753,7 +753,7 @@ class AsyncHTTPHandler:
                     keepalive_timeout=AIOHTTP_KEEPALIVE_TIMEOUT,
                     ttl_dns_cache=AIOHTTP_TTL_DNS_CACHE,
                     enable_cleanup_closed=True,
-                    **connector_kwargs
+                    **connector_kwargs,
                 ),
                 trust_env=trust_env,
             ),
@@ -1043,7 +1043,7 @@ class HTTPHandler:
         if litellm.force_ipv4:
             return HTTPTransport(local_address="0.0.0.0")
         else:
-            return getattr(litellm, 'sync_transport', None)
+            return getattr(litellm, "sync_transport", None)
 
 
 def get_async_httpx_client(

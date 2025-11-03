@@ -9,7 +9,6 @@ from typing import (
     Literal,
     Mapping,
     Optional,
-    Tuple,
     Union,
 )
 
@@ -298,6 +297,19 @@ class CallTypes(str, Enum):
     avideo_retrieve_job = "avideo_retrieve_job"
     video_delete = "video_delete"
     avideo_delete = "avideo_delete"
+    
+    #########################################################
+    # Container Call Types
+    #########################################################
+    create_container = "create_container"
+    acreate_container = "acreate_container"
+    list_containers = "list_containers"
+    alist_containers = "alist_containers"
+    retrieve_container = "retrieve_container"
+    aretrieve_container = "aretrieve_container"
+    delete_container = "delete_container"
+    adelete_container = "adelete_container"
+    
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
     alist_fine_tuning_jobs = "alist_fine_tuning_jobs"
@@ -1179,8 +1191,6 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         super().__init__(**kwargs)
 
 
-
-
 class ModelResponseBase(OpenAIObject):
     id: str
     """A unique identifier for the completion."""
@@ -1282,7 +1292,7 @@ class ModelResponse(ModelResponseBase):
     choices: List[Union[Choices, StreamingChoices]]
     """The list of completion choices the model generated for the input prompt."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         id=None,
         choices=None,
@@ -2190,7 +2200,7 @@ class StandardLoggingPayload(TypedDict):
     error_information: Optional[StandardLoggingPayloadErrorInformation]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
-    guardrail_information: Optional[StandardLoggingGuardrailInformation]
+    guardrail_information: Optional[list[StandardLoggingGuardrailInformation]]
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams]
 
 
@@ -2501,6 +2511,7 @@ class LlmProviders(str, Enum):
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
     MISTRAL = "mistral"
+    MILVUS = "milvus"
     GROQ = "groq"
     NVIDIA_NIM = "nvidia_nim"
     CEREBRAS = "cerebras"
@@ -2577,6 +2588,7 @@ class SearchProviders(str, Enum):
     Enum for search provider types.
     Separate from LlmProviders for semantic clarity.
     """
+
     PERPLEXITY = "perplexity"
     TAVILY = "tavily"
     PARALLEL_AI = "parallel_ai"

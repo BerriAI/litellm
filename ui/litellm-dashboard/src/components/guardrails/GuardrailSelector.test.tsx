@@ -1,8 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import GuardrailSelector from "./GuardrailSelector";
+import { render, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "../networking";
+import GuardrailSelector from "./GuardrailSelector";
 
 vi.mock("../networking");
 
@@ -48,13 +47,7 @@ describe("GuardrailSelector", () => {
       guardrails: mockGuardrails,
     });
 
-    render(
-      <GuardrailSelector
-        accessToken={mockAccessToken}
-        onChange={mockOnChange}
-        value={[]}
-      />
-    );
+    render(<GuardrailSelector accessToken={mockAccessToken} onChange={mockOnChange} value={[]} />);
 
     // Verify API was called with correct token
     await waitFor(() => {
@@ -62,4 +55,3 @@ describe("GuardrailSelector", () => {
     });
   });
 });
-
