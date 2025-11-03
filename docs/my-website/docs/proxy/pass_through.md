@@ -107,6 +107,7 @@ general_settings:
   pass_through_endpoints:
     - path: "/v1/rerank"                                  # Route on LiteLLM Proxy
       target: "https://api.cohere.com/v1/rerank"          # Target endpoint
+      auth: true                                          # Require virtual key (Enterprise)
       headers:                                            # Headers to forward
         Authorization: "bearer os.environ/COHERE_API_KEY"
         content-type: application/json
@@ -183,65 +184,119 @@ general_settings:
 
 ---
 
-## Advanced: Custom Adapters
+## Authentication & Access Control✨ 
 
-For complex integrations (like Anthropic/Bedrock clients), you can create custom adapters that translate between different API schemas.
+Control who can access your pass-through endpoints using LiteLLM's virtual key authentication.
 
-### 1. Create an Adapter
+:::info
 
-```python
-from litellm import adapter_completion
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicResponse
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://www.litellm.ai/#pricing)
 
-class AnthropicAdapter(CustomLogger):
-    def translate_completion_input_params(self, kwargs):
-        """Translate Anthropic format to OpenAI format"""
-        request_body = AnthropicMessagesRequest(**kwargs)
-        return litellm.AnthropicConfig().translate_anthropic_to_openai(
-            anthropic_message_request=request_body
-        )
+:::
 
-    def translate_completion_output_params(self, response):
-        """Translate OpenAI response back to Anthropic format"""
-        return litellm.AnthropicConfig().translate_openai_response_to_anthropic(
-            response=response
-        )
+### Enable Authentication on Pass-Through Endpoints
 
-anthropic_adapter = AnthropicAdapter()
-```
+When `auth: true` is set, the endpoint requires a valid LiteLLM virtual key. This enables centralized access control, spend tracking, and budgeting.
 
-### 2. Configure the Endpoint
+#### Config.yaml Example
 
 ```yaml
-model_list:
-  - model_name: my-claude-endpoint
-    litellm_params:
-      model: gpt-3.5-turbo
-      api_key: os.environ/OPENAI_API_KEY
-
 general_settings:
   master_key: sk-1234
   pass_through_endpoints:
-    - path: "/v1/messages"
-      target: custom_callbacks.anthropic_adapter
+    - path: "/v1/rerank"
+      target: "https://api.cohere.com/v1/rerank"
+      auth: true  # Require LiteLLM virtual key authentication
       headers:
-        litellm_user_api_key: "x-api-key"
+        Authorization: "bearer os.environ/COHERE_API_KEY"
+      forward_headers: true
 ```
 
-### 3. Test Custom Endpoint
+#### Making Authenticated Requests
 
-```bash
-curl --location 'http://0.0.0.0:4000/v1/messages' \
-  -H 'x-api-key: sk-1234' \
-  -H 'anthropic-version: 2023-06-01' \
-  -H 'content-type: application/json' \
-  -d '{
-    "model": "my-claude-endpoint",
-    "max_tokens": 1024,
-    "messages": [{"role": "user", "content": "Hello, world"}]
+Once `auth: true` is enabled, clients must include a valid LiteLLM virtual key in their requests:
+
+```shell
+curl --request POST \
+  --url http://localhost:4000/v1/rerank \
+  --header 'Authorization: Bearer <your-litellm-virtual-key>' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "model": "rerank-english-v3.0",
+    "query": "What is the capital of the United States?",
+    "top_n": 3,
+    "documents": ["Carson City is the capital city of the American state of Nevada."]
   }'
 ```
+
+### Virtual Key Access to Pass-Through Endpoints
+
+LiteLLM virtual keys can access pass-through endpoints in two ways:
+
+#### 1. Automatic Access via `llm_api_routes`
+
+Virtual keys with `llm_api_routes` in their `allowed_routes` automatically get access to **all** pass-through endpoints.
+
+**Example: Generate a key with full pass-through access**
+
+```shell
+curl 'http://localhost:4000/key/generate' \
+  --header 'Authorization: Bearer <master-key>' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "allowed_routes": ["llm_api_routes"],
+    "models": ["gpt-3.5-turbo"]
+  }'
+```
+
+This key can access:
+- All standard LLM endpoints (`/chat/completions`, `/embeddings`, etc.)
+- **All pass-through endpoints** (including those from both config.yaml and UI)
+
+#### 2. Specific Access via `allowed_routes`
+
+To restrict access to specific pass-through endpoints, include the exact path in `allowed_routes`:
+
+**Example: Generate a key with restricted pass-through access**
+
+```shell
+curl 'http://localhost:4000/key/generate' \
+  --header 'Authorization: Bearer <master-key>' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "allowed_routes": ["/v1/rerank", "/chat/completions"],
+    "models": ["gpt-3.5-turbo"]
+  }'
+```
+
+This key can only access:
+- `/chat/completions` endpoint
+- `/v1/rerank` pass-through endpoint (and no other pass-through endpoints)
+
+#### 3. Specific Access via `allowed_passthrough_routes`
+
+Use `allowed_passthrough_routes` to grant access **only** to pass-through endpoints without specifying LLM routes. This is useful when you want to restrict a key to pass-through endpoints only.
+
+**Example: Generate a key with access to specific pass-through endpoints**
+
+```shell
+curl 'http://localhost:4000/key/generate' \
+  --header 'Authorization: Bearer <master-key>' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "allowed_passthrough_routes": ["/v1/rerank", "/bria/*"],
+    "max_budget": 100
+  }'
+```
+
+This key can only access:
+- `/v1/rerank` pass-through endpoint
+- Any routes under `/bria/` (e.g., `/bria/v1/text-to-image`, `/bria/v1/enhance_image`)
+- **No access** to standard LLM routes like `/chat/completions` or `/embeddings`
+
+:::note
+If `allowed_routes` is specified, `allowed_passthrough_routes` is ignored. Use `allowed_passthrough_routes` when you want to restrict access to pass-through endpoints only, without needing to specify LLM routes.
+:::
 
 ---
 
