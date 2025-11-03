@@ -196,7 +196,7 @@ Control who can access your pass-through endpoints using LiteLLM's virtual key a
 
 ### Enable Authentication on Pass-Through Endpoints
 
-When `auth: true` is set, the endpoint requires a valid LiteLLM virtual key. This enables centralized access control, spend tracking, and budgeting.
+When `auth: true` is set, the endpoint requires a valid LiteLLM virtual key with access to that pass-through endpoint. 
 
 #### Config.yaml Example
 
@@ -212,70 +212,10 @@ general_settings:
       forward_headers: true
 ```
 
-#### Making Authenticated Requests
-
-Once `auth: true` is enabled, clients must include a valid LiteLLM virtual key in their requests:
-
-```shell
-curl --request POST \
-  --url http://localhost:4000/v1/rerank \
-  --header 'Authorization: Bearer <your-litellm-virtual-key>' \
-  --header 'Content-Type: application/json' \
-  --data '{
-    "model": "rerank-english-v3.0",
-    "query": "What is the capital of the United States?",
-    "top_n": 3,
-    "documents": ["Carson City is the capital city of the American state of Nevada."]
-  }'
-```
 
 ### Virtual Key Access to Pass-Through Endpoints
 
-LiteLLM virtual keys can access pass-through endpoints in two ways:
-
-#### 1. Automatic Access via `llm_api_routes`
-
-Virtual keys with `llm_api_routes` in their `allowed_routes` automatically get access to **all** pass-through endpoints.
-
-**Example: Generate a key with full pass-through access**
-
-```shell
-curl 'http://localhost:4000/key/generate' \
-  --header 'Authorization: Bearer <master-key>' \
-  --header 'Content-Type: application/json' \
-  --data '{
-    "allowed_routes": ["llm_api_routes"],
-    "models": ["gpt-3.5-turbo"]
-  }'
-```
-
-This key can access:
-- All standard LLM endpoints (`/chat/completions`, `/embeddings`, etc.)
-- **All pass-through endpoints** (including those from both config.yaml and UI)
-
-#### 2. Specific Access via `allowed_routes`
-
-To restrict access to specific pass-through endpoints, include the exact path in `allowed_routes`:
-
-**Example: Generate a key with restricted pass-through access**
-
-```shell
-curl 'http://localhost:4000/key/generate' \
-  --header 'Authorization: Bearer <master-key>' \
-  --header 'Content-Type: application/json' \
-  --data '{
-    "allowed_routes": ["/v1/rerank", "/chat/completions"],
-    "models": ["gpt-3.5-turbo"]
-  }'
-```
-
-This key can only access:
-- `/chat/completions` endpoint
-- `/v1/rerank` pass-through endpoint (and no other pass-through endpoints)
-
-#### 3. Specific Access via `allowed_passthrough_routes`
-
-Use `allowed_passthrough_routes` to grant access **only** to pass-through endpoints without specifying LLM routes. This is useful when you want to restrict a key to pass-through endpoints only.
+Use `allowed_passthrough_routes` to grant access to pass-through endpoints with a virtual key. 
 
 **Example: Generate a key with access to specific pass-through endpoints**
 
@@ -288,15 +228,67 @@ curl 'http://localhost:4000/key/generate' \
     "max_budget": 100
   }'
 ```
+---
 
-This key can only access:
-- `/v1/rerank` pass-through endpoint
-- Any routes under `/bria/` (e.g., `/bria/v1/text-to-image`, `/bria/v1/enhance_image`)
-- **No access** to standard LLM routes like `/chat/completions` or `/embeddings`
+## Advanced: Custom Adapters
 
-:::note
-If `allowed_routes` is specified, `allowed_passthrough_routes` is ignored. Use `allowed_passthrough_routes` when you want to restrict access to pass-through endpoints only, without needing to specify LLM routes.
-:::
+For complex integrations (like Anthropic/Bedrock clients), you can create custom adapters that translate between different API schemas.
+
+### 1. Create an Adapter
+
+```python
+from litellm import adapter_completion
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicResponse
+
+class AnthropicAdapter(CustomLogger):
+    def translate_completion_input_params(self, kwargs):
+        """Translate Anthropic format to OpenAI format"""
+        request_body = AnthropicMessagesRequest(**kwargs)
+        return litellm.AnthropicConfig().translate_anthropic_to_openai(
+            anthropic_message_request=request_body
+        )
+
+    def translate_completion_output_params(self, response):
+        """Translate OpenAI response back to Anthropic format"""
+        return litellm.AnthropicConfig().translate_openai_response_to_anthropic(
+            response=response
+        )
+
+anthropic_adapter = AnthropicAdapter()
+```
+
+### 2. Configure the Endpoint
+
+```yaml
+model_list:
+  - model_name: my-claude-endpoint
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  master_key: sk-1234
+  pass_through_endpoints:
+    - path: "/v1/messages"
+      target: custom_callbacks.anthropic_adapter
+      headers:
+        litellm_user_api_key: "x-api-key"
+```
+
+### 3. Test Custom Endpoint
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/messages' \
+  -H 'x-api-key: sk-1234' \
+  -H 'anthropic-version: 2023-06-01' \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "my-claude-endpoint",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Hello, world"}]
+  }'
+```
 
 ---
 
