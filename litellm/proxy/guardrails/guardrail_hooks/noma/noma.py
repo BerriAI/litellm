@@ -396,17 +396,16 @@ class NomaGuardrail(CustomGuardrail):
         Returns:
             The anonymized content string if available, None otherwise
         """
-        original_response = response_json.get("originalResponse", {})
-
-        if message_type == USER_ROLE:
-            prompt_data = original_response.get("prompt", {})
-            anonymized_data = prompt_data.get("anonymizedContent", {})
-            return anonymized_data.get("anonymized")
-        elif message_type == ASSISTANT_ROLE:
-            response_data = original_response.get("response", {})
-            anonymized_data = response_data.get("anonymizedContent", {})
-            return anonymized_data.get("anonymized")
-
+        # Extract from new scanResult structure
+        scan_result = response_json.get("scanResult", [])
+        if not scan_result:
+            return None
+        
+        # Find the scan result matching the message type (role)
+        for result_item in scan_result:
+            if result_item.get("role") == message_type:
+                return result_item.get("results", {}).get("anonymizedContent", {}).get("anonymized", "")
+        
         return None
 
     def _should_anonymize(self, response_json: dict, message_type: MessageRole) -> bool:
@@ -438,17 +437,18 @@ class NomaGuardrail(CustomGuardrail):
             return True
 
         # If aggregatedScanResult is True (unsafe), check if only sensitive data detectors triggered
-        original_response = response_json.get("originalResponse", {})
-
-        if message_type == USER_ROLE:
-            classification_obj = original_response.get("prompt", {})
-        elif message_type == ASSISTANT_ROLE:
-            classification_obj = original_response.get("response", {})
-        else:
+        scan_result = response_json.get("scanResult", [])
+        if not scan_result:
             return False
+        
+        if not isinstance(scan_result, list) or len(scan_result) == 0:
+            return False
+        
+        for result_item in scan_result:
+            if result_item.get("role") == message_type:
+                return self._should_only_sensitive_data_failed(result_item.get("results", {}))
 
-        # Anonymize only if solely sensitive data (PII/PCI/secrets) was detected
-        return self._should_only_sensitive_data_failed(classification_obj)
+        return False
 
     def _is_result_true(self, result_obj: Optional[Dict[str, Any]]) -> bool:
         """
