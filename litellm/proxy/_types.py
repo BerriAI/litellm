@@ -329,6 +329,19 @@ class LiteLLMRoutes(enum.Enum):
         # OCR
         "/ocr",
         "/v1/ocr",
+        # videos    
+        "/videos",
+        "/v1/videos",
+        "/videos/{video_id}",
+        "/v1/videos/{video_id}",
+        "/videos/{video_id}/content",
+        "/v1/videos/{video_id}/content",
+        "/videos/{video_id}/delete",
+        "/v1/videos/{video_id}/delete",
+        "/videos/{video_id}/remix",
+        "/v1/videos/{video_id}/remix",
+        "/videos/{video_id}/status",
+        "/v1/videos/{video_id}/status",
     ]
 
     mapped_pass_through_routes = [

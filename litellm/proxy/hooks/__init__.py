@@ -7,6 +7,7 @@ from .max_budget_limiter import _PROXY_MaxBudgetLimiter
 from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
 from .parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
 from .responses_id_security import ResponsesIDSecurity
+from .video_id_security import VideoIDSecurity
 
 ### CHECK IF ENTERPRISE HOOKS ARE AVAILABLE ###
 
@@ -21,6 +22,7 @@ PROXY_HOOKS = {
     "parallel_request_limiter": _PROXY_MaxParallelRequestsHandler_v3,
     "cache_control_check": _PROXY_CacheControlCheck,
     "responses_id_security": ResponsesIDSecurity,
+    "video_id_security": VideoIDSecurity,
 }
 
 ## FEATURE FLAG HOOKS ##

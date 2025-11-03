@@ -2786,6 +2786,10 @@ class SpecialEnums(Enum):
         "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
     )
 
+    LITELLM_MANAGED_VIDEO_API_VIDEO_ID_COMPLETE_STR = (
+        "litellm_proxy:videos_api:video_id:{};user_id:{};team_id:{}"
+    )
+
 
 class ServiceTier(Enum):
     """Enum for service tier types used in cost calculations."""

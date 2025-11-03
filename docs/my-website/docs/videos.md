@@ -598,6 +598,71 @@ The response follows OpenAI's video generation format with the following structu
 | `usage` | object | Token usage and duration information |
 
 
+## **Video ID Security**
+
+:::tip Security Feature
+
+By default, LiteLLM Proxy enforces **video ID security** to ensure that only the user/team that created a video can access it. This prevents unauthorized access to videos across different users and teams.
+
+:::
+
+### How It Works
+
+When a video is created:
+1. The video ID is encrypted with the creator's `user_id` and `team_id`
+2. The encrypted ID is returned in the response
+3. Future requests (status, content, remix, delete) automatically validate the user/team has access
+
+### Example
+
+```python
+from litellm import video_generation, video_status
+import os
+
+os.environ["OPENAI_API_KEY"] = "sk-.."
+
+# User A creates a video with key-A
+response = video_generation(
+    model="openai/sora-2",
+    prompt="A cat playing",
+    api_key="key-A"  # Belongs to user_id: user_123, team_id: team_456
+)
+
+video_id = response.id  # Encrypted ID with user_123 and team_456 embedded
+
+# ✅ User A can access their own video
+status = video_status(
+    video_id=video_id,
+    api_key="key-A"  # Same user/team - allowed
+)
+
+# ❌ User B cannot access User A's video
+status = video_status(
+    video_id=video_id,
+    api_key="key-B"  # Different user/team - FORBIDDEN (403)
+)
+```
+
+### Disabling Security (Not Recommended)
+
+If you need to disable this security feature (e.g., for testing), add to your `config.yaml`:
+
+```yaml
+general_settings:
+  disable_video_id_security: true  # Allows any user to access any video
+```
+
+:::warning Security Risk
+
+Disabling video ID security means any user with any valid API key can access videos created by other users. Only disable this in controlled environments.
+
+:::
+
+### Proxy Admin Access
+
+Users with `proxy_admin` role can access all videos regardless of who created them, even when security is enabled.
+
+
 ## **Supported Providers**
 
 | Provider    | Link to Usage      |
