@@ -229,6 +229,12 @@ class MinioLogger(CustomLogger):
             print_verbose(f"\nMinIO Logger - Logging payload = {payload_str}")
 
             # Upload to MinIO using simple boto3 put_object
+            verbose_logger.debug(
+                f"minio logger put_object args: Bucket={self.bucket_name}, "
+                f"Key={s3_object_key}, "
+                f"Body=<{len(payload_str)} bytes>, "
+                f"ContentType=application/json"
+            )
             response = self.s3_client.put_object(
                 Bucket=self.bucket_name,
                 Key=s3_object_key,
