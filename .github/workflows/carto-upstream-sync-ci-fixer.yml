@@ -6,8 +6,9 @@ name: CARTO Upstream Sync - CI Failure Auto-Fix
 on:
   workflow_run:
     workflows:
-      - "Test LiteLLM Proxy"
+      - "LiteLLM Mock Tests (folder - tests/test_litellm)"
       - "CARTO - Deploy Docker Image (CI)"
+      - "LiteLLM Linting"
     types:
       - completed
     branches:
