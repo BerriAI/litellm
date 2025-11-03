@@ -111,7 +111,8 @@ class VertexAIOCRConfig(MistralOCRConfig):
         api_base = api_base.rstrip("/")
         
         # Vertex AI OCR endpoint format for Mistral publisher
-        return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/ocr"
+        # Format: https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/publishers/mistralai/models/{model}:rawPredict
+        return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
 
     def _convert_url_to_data_uri_sync(self, url: str) -> str:
         """
