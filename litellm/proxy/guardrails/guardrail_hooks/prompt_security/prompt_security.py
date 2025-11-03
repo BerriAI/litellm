@@ -5,10 +5,7 @@ from fastapi import HTTPException
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
-    httpxSpecialProvider,
-)
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, httpxSpecialProvider
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import (
     Choices,
@@ -22,28 +19,22 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
-
 class PromptSecurityGuardrailMissingSecrets(Exception):
     pass
 
-
 class PromptSecurityGuardrail(CustomGuardrail):
-    def __init__(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs
-    ):
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs):
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.api_key = api_key or os.environ.get("PROMPT_SECURITY_API_KEY")
-        if not self.api_key:
+        self.api_base = api_base or os.environ.get("PROMPT_SECURITY_API_BASE")
+        if not self.api_key or not self.api_base:
             msg = (
-                "Couldn't get Prompt Security api key, either set the `PROMPT_SECURITY_API_KEY` in the environment or "
-                "pass it as a parameter to the guardrail in the config file"
+                "Couldn't get Prompt Security api base or key, "
+                "either set the `PROMPT_SECURITY_API_BASE` and `PROMPT_SECURITY_API_KEY` in the environment "
+                "or pass them as parameters to the guardrail in the config file"
             )
             raise PromptSecurityGuardrailMissingSecrets(msg)
-        self.api_base = (
-            api_base or os.environ.get("PROMPT_SECURITY_API_BASE") or ""
-        )
+        
         super().__init__(**kwargs)
 
     async def async_pre_call_hook(
@@ -64,10 +55,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             "anthropic_messages",
         ],
     ) -> Union[Exception, str, dict, None]:
-        verbose_proxy_logger.debug("Inside PROMPT_SECURITY Pre-Call Hook")
-        return await self.call_prompt_security_guardrail(
-            data, hook="pre_call", key_alias=user_api_key_dict.key_alias
-        )
+        return await self.call_prompt_security_guardrail(data)
 
     async def async_moderation_hook(
         self,
@@ -84,22 +72,13 @@ class PromptSecurityGuardrail(CustomGuardrail):
             "anthropic_messages",
         ],
     ) -> Union[Exception, str, dict, None]:
-        verbose_proxy_logger.debug("Inside PROMPT_SECURITY Moderation Hook")
-
-        await self.call_prompt_security_guardrail(
-            data, hook="moderation", key_alias=user_api_key_dict.key_alias
-        )
+        await self.call_prompt_security_guardrail(data)
         return data
 
-    async def call_prompt_security_guardrail(
-        self, data: dict, hook: str, key_alias: Optional[str]
-    ) -> dict:
-        headers = {
-            'APP-ID': '73a4a369-ca52-4802-8e17-5c9f62e113ca',
-            'Content-Type': 'application/json'
-        }
+    async def call_prompt_security_guardrail(self, data: dict) -> dict:
+        headers = { 'APP-ID': self.api_key, 'Content-Type': 'application/json' }
         response = await self.async_handler.post(
-            f"https://staging-eu.prompt.security/api/protect",
+            f"${self.api_base}/api/protect",
             headers=headers,
             json={"messages": data.get("messages", [])},
         )
@@ -108,31 +87,16 @@ class PromptSecurityGuardrail(CustomGuardrail):
         result = res.get("result", {}).get("prompt", {})
         action = result.get("action")
         if action == "block":
-            self._handle_block_action({}, "")
+            raise HTTPException(status_code=400, detail="Blocked by Prompt Security")
         elif action == "modify":
             data["messages"] = result.get("modified_messages", [])
-        else:
-            verbose_proxy_logger.error(f"Prompt Security: {action} action")
         return data
+    
 
-    def _handle_block_action(self, analysis_result: Any, required_action: Any) -> None:
-        detection_message = required_action.get("detection_message", None)
-        verbose_proxy_logger.info(
-            "Prompt Security: Violation detected enabled policies: {policies}".format(
-                policies=list(analysis_result["policy_drill_down"].keys()),
-            ),
-        )
-        raise HTTPException(status_code=400, detail=detection_message)
-
-    async def call_prompt_security_guardrail_on_output(
-        self, request_data: dict, output: str, hook: str, key_alias: Optional[str]
-    ) -> dict:
+    async def call_prompt_security_guardrail_on_output(self, output: str) -> dict:
         response = await self.async_handler.post(
-            f"https://staging-eu.prompt.security/api/protect",
-            headers = {
-                'APP-ID': '73a4a369-ca52-4802-8e17-5c9f62e113ca',
-                'Content-Type': 'application/json'
-            },
+            f"${self.api_base}/api/protect",
+            headers = { 'APP-ID': self.api_key, 'Content-Type': 'application/json' },
             json = { "response": output }
         )
         response.raise_for_status()
@@ -148,7 +112,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
     ) -> Any:
         if (isinstance(response, ModelResponse) and response.choices and isinstance(response.choices[0], Choices)):
             content = response.choices[0].message.content or ""
-            ret = await self.call_prompt_security_guardrail_on_output(data, content, "output", None)
+            ret = await self.call_prompt_security_guardrail_on_output(content)
             if ret.get("action") == "block":
                 raise HTTPException(status_code=400, detail="Blocked by Prompt Security")
             elif ret.get("action") == "modify":
@@ -180,7 +144,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                     else:
                         chunk, buffer = buffer,''
 
-                    ret = await self.call_prompt_security_guardrail_on_output(request_data, chunk, "streaming", None)
+                    ret = await self.call_prompt_security_guardrail_on_output(chunk)
                     if ret.get("action") == "block":
                         from litellm.proxy.proxy_server import StreamingCallbackError
                         raise StreamingCallbackError("Blocked by Prompt Security")
@@ -199,5 +163,4 @@ class PromptSecurityGuardrail(CustomGuardrail):
         from litellm.types.proxy.guardrails.guardrail_hooks.prompt_security import (
             PromptSecurityGuardrailConfigModel,
         )
-
         return PromptSecurityGuardrailConfigModel
