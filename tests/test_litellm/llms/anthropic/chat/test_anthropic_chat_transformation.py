@@ -364,3 +364,50 @@ def test_get_supported_params_thinking():
     config = AnthropicConfig()
     params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
     assert "thinking" in params
+
+
+def test_prompt_cache_key_removed_from_request():
+    """
+    Test that prompt_cache_key is removed from the request before sending to Anthropic.
+    
+    This prevents the error: "prompt_cache_key: Extra inputs are not permitted"
+    
+    Related issue: https://github.com/BerriAI/litellm/issues/xxxxx
+    """
+    config = AnthropicConfig()
+    
+    # Simulate a request with prompt_cache_key
+    messages = [
+        {"role": "user", "content": "Hello, how are you?"}
+    ]
+    
+    optional_params = {
+        "max_tokens": 100,
+        "temperature": 0.7,
+        "prompt_cache_key": "test-cache-key-12345",  # This should be removed
+    }
+    
+    litellm_params = {}
+    headers = {"anthropic-version": "2023-06-01"}
+    
+    # Transform the request
+    result = config.transform_request(
+        model="claude-3-7-sonnet-20250219",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+    )
+    
+    # Verify prompt_cache_key is NOT in the result
+    assert "prompt_cache_key" not in result, "prompt_cache_key should be removed from the request"
+    
+    # Verify other parameters are still present
+    assert "max_tokens" in result
+    assert result["max_tokens"] == 100
+    assert "temperature" in result
+    assert result["temperature"] == 0.7
+    assert "model" in result
+    assert "messages" in result
+    
+    print("✅ Test passed: prompt_cache_key successfully removed from Anthropic request")

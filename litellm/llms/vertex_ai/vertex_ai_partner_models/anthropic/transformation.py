@@ -68,6 +68,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         )
 
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
+        data.pop("prompt_cache_key", None)  # vertex anthropic doesn't accept 'prompt_cache_key' parameter
         return data
 
     def transform_response(
