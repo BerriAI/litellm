@@ -74,6 +74,7 @@ class MistralOCRConfig(BaseOCRConfig):
         model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
         **kwargs,
     ) -> Dict:
         """
@@ -104,6 +105,7 @@ class MistralOCRConfig(BaseOCRConfig):
         api_base: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: Optional[dict] = None,
         **kwargs,
     ) -> str:
         """

@@ -470,6 +470,7 @@ const sidebars = {
             "providers/vertex_self_deployed",
             "providers/vertex_image",
             "providers/vertex_batch",
+            "providers/vertex_ocr",
           ]
         },
         {
