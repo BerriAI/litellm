@@ -23,12 +23,20 @@ search_tools:
       api_key: os.environ/EXA_API_KEY
   
 
-
-# for /files endpoints
-files_settings:
-  - custom_llm_provider: openai
-    api_key: os.environ/OPENAI_API_KEY
-
-
 litellm_settings:
-  callbacks: ["datadog"]
+  # Comprehensive logging settings
+  store_audit_logs: true
+  verbose: true
+  log_level: "DEBUG"  # Options: DEBUG, INFO, WARNING, ERROR
+  success_callback: ["s3_v2"]
+  s3_callback_params:
+    s3_endpoint_url: "https://mgtd-ai-m01.dcs.leidos.com:9000"  # Replace with your Minio server URL and port
+    s3_aws_access_key_id: ""
+    s3_aws_secret_access_key: ""
+    s3_region_name: "minio"  # This can be any value for Minio
+    s3_bucket_name: "litellm-logs"  # Replace with your bucket name
+    s3_use_ssl: False
+    s3_verify: False
+  cache: True
+  cache_params:
+    type: local
