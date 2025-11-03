@@ -1,0 +1,502 @@
+name: CARTO Upstream Sync - CI Failure Auto-Fix
+
+# This workflow automatically fixes CI failures in upstream sync resolution PRs.
+# Triggered when CI checks fail on PRs created by the conflict resolver.
+
+on:
+  workflow_run:
+    workflows:
+      - "Test LiteLLM Proxy"
+      - "CARTO - Deploy Docker Image (CI)"
+    types:
+      - completed
+    branches:
+      - 'upstream-sync-resolver/**'
+
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: "PR number to fix CI for"
+        required: true
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  check-ci-status:
+    name: Check CI Status
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'failure' || github.event_name == 'workflow_dispatch'
+
+    outputs:
+      should-fix: ${{ steps.check.outputs.should-fix }}
+      pr-number: ${{ steps.check.outputs.pr-number }}
+      branch-name: ${{ steps.check.outputs.branch-name }}
+
+    steps:
+      - name: Get PR information
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+        run: |
+          echo "::group::Determining PR and branch"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Manual trigger
+            PR_NUMBER="${{ github.event.inputs.pr-number }}"
+            PR_JSON=$(gh pr view ${PR_NUMBER} --repo ${{ github.repository }} --json headRefName,labels)
+            BRANCH_NAME=$(echo "${PR_JSON}" | jq -r '.headRefName')
+            LABELS=$(echo "${PR_JSON}" | jq -r '.labels[].name')
+          else
+            # Automatic trigger from workflow_run
+            BRANCH_NAME="${{ github.event.workflow_run.head_branch }}"
+            
+            # Find PR for this branch
+            PR_JSON=$(gh pr list \
+              --repo ${{ github.repository }} \
+              --head "${BRANCH_NAME}" \
+              --json number,labels \
+              --jq '.[0]')
+            
+            if [[ "${PR_JSON}" == "null" || -z "${PR_JSON}" ]]; then
+              echo "[Fixer] ❌ No PR found for branch ${BRANCH_NAME}"
+              echo "should-fix=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            
+            PR_NUMBER=$(echo "${PR_JSON}" | jq -r '.number')
+            LABELS=$(echo "${PR_JSON}" | jq -r '.labels[].name')
+          fi
+
+          echo "[Fixer] Branch: ${BRANCH_NAME}"
+          echo "[Fixer] PR: #${PR_NUMBER}"
+          echo "[Fixer] Labels: ${LABELS}"
+
+          # Only fix PRs with 'conflict-resolution' or 'automated' labels
+          if [[ ! "${LABELS}" =~ "conflict-resolution" && ! "${LABELS}" =~ "automated" ]]; then
+            echo "[Fixer] ❌ PR doesn't have required labels - skipping"
+            echo "should-fix=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Only fix upstream-sync-resolver branches
+          if [[ ! "${BRANCH_NAME}" =~ ^upstream-sync-resolver/ ]]; then
+            echo "[Fixer] ❌ Not an upstream-sync-resolver branch - skipping"
+            echo "should-fix=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "should-fix=true" >> $GITHUB_OUTPUT
+          echo "pr-number=${PR_NUMBER}" >> $GITHUB_OUTPUT
+          echo "branch-name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+
+          echo "::endgroup::"
+
+  fix-ci-failures:
+    name: Fix CI Failures with Claude
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: check-ci-status
+    if: needs.check-ci-status.outputs.should-fix == 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check-ci-status.outputs.branch-name }}
+          fetch-depth: 0
+          token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+
+      - name: Configure git
+        run: |
+          git config --global user.name "Cartofante"
+          git config --global user.email "cartofante@carto.com"
+
+      - name: Get failed workflow details
+        id: failures
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+        run: |
+          echo "::group::Analyzing CI failures"
+
+          PR_NUMBER="${{ needs.check-ci-status.outputs.pr-number }}"
+
+          # Get PR head SHA
+          HEAD_SHA=$(gh pr view ${PR_NUMBER} --repo ${{ github.repository }} --json headRefOid --jq '.headRefOid')
+
+          # Get all failed workflow runs for this commit
+          gh run list \
+            --repo ${{ github.repository }} \
+            --commit ${HEAD_SHA} \
+            --status failure \
+            --json databaseId,name,conclusion,url \
+            --limit 10 > /tmp/failed_runs.json
+
+          FAILED_COUNT=$(cat /tmp/failed_runs.json | jq 'length')
+
+          echo "[Fixer] Found ${FAILED_COUNT} failed workflow runs"
+          cat /tmp/failed_runs.json | jq -r '.[] | "  - \(.name): \(.url)"'
+
+          # Get check runs details
+          gh pr checks ${PR_NUMBER} \
+            --repo ${{ github.repository }} \
+            --json name,conclusion,detailsUrl \
+            > /tmp/check_runs.json
+
+          FAILED_CHECKS=$(cat /tmp/check_runs.json | jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "TIMED_OUT")]')
+          echo "${FAILED_CHECKS}" > /tmp/failed_checks.json
+
+          echo "[Fixer] Failed checks:"
+          echo "${FAILED_CHECKS}" | jq -r '.[] | "  - \(.name): \(.conclusion)"'
+
+          echo "failed-count=${FAILED_COUNT}" >> $GITHUB_OUTPUT
+          echo "head-sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
+
+          echo "::endgroup::"
+
+      - name: Download workflow logs
+        if: steps.failures.outputs.failed-count > 0
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+        run: |
+          echo "::group::Downloading workflow logs"
+
+          mkdir -p /tmp/workflow-logs
+
+          # Download logs for each failed run
+          cat /tmp/failed_runs.json | jq -r '.[] | .databaseId' | while read RUN_ID; do
+            echo "[Fixer] 📥 Downloading logs for run ${RUN_ID}..."
+            gh run download ${RUN_ID} \
+              --repo ${{ github.repository }} \
+              --dir /tmp/workflow-logs/${RUN_ID} 2>/dev/null || true
+          done
+
+          # List downloaded logs
+          echo "[Fixer] Downloaded logs:"
+          find /tmp/workflow-logs -type f -name "*.txt" | head -20
+
+          echo "::endgroup::"
+
+      - name: Comment on PR - Starting Fix
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+        run: |
+          PR_NUMBER="${{ needs.check-ci-status.outputs.pr-number }}"
+
+          FAILED_CHECKS=$(cat /tmp/failed_checks.json | jq -r '.[] | "- **\(.name)**: \(.conclusion)"' | head -10)
+
+          gh pr comment ${PR_NUMBER} \
+            --repo ${{ github.repository }} \
+            --body "$(cat <<EOF
+          ## 🔧 Auto-Fixing CI Failures
+
+          Claude Code is analyzing and fixing the failed CI checks.
+
+          **Failed Checks:**
+          ${FAILED_CHECKS}
+
+          **Workflow:** [Run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+          _This may take 15-30 minutes..._
+          EOF
+          )"
+
+      - name: Run Claude Code to fix failures
+        id: claude-fix
+        uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          show_full_output: true
+          claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 150 --allowed-tools Read,Write,Edit,Bash,Grep,Glob"
+          prompt: |
+            # Fix CI Failures in Upstream Sync Resolution PR
+
+            You are fixing CI failures in PR #${{ needs.check-ci-status.outputs.pr-number }}.
+
+            **Context:**
+            - Branch: `${{ needs.check-ci-status.outputs.branch-name }}`
+            - This PR resolves conflicts from an upstream sync
+            - CI checks have failed and need to be fixed
+
+            ## Step 1: Understand What Failed
+
+            Check the PR status and failed checks:
+            ```bash
+            gh pr view ${{ needs.check-ci-status.outputs.pr-number }} --repo ${{ github.repository }}
+            gh pr checks ${{ needs.check-ci-status.outputs.pr-number }} --repo ${{ github.repository }}
+            ```
+
+            ## Step 2: Identify Common Issues
+
+            **Most common failures in conflict resolution:**
+
+            1. **Leftover conflict markers** (causes syntax errors) - **FIX THESE**
+               ```bash
+               # Search for conflict markers
+               grep -r "^<<<<<<< \|^=======$\|^>>>>>>>" --include="*.py" litellm/ tests/
+               ```
+
+            2. **Import errors** (incomplete resolution) - **FIX THESE**
+               - Check test output for `ImportError`, `ModuleNotFoundError`
+               - Missing imports from upstream or CARTO code
+
+            3. **Syntax errors** (incomplete code blocks) - **FIX THESE**
+               - Run: `python -m py_compile <file>` on suspected files
+               - Look for unbalanced brackets, quotes
+
+            4. **Test assertion failures** (behavior changes) - **CHECK UPSTREAM FIRST**
+               - These might be pre-existing failures in upstream
+               - **IMPORTANT:** Check if test also fails on upstream/main before fixing
+
+            ## Step 2.5: Check if Test Failures Exist in Upstream
+
+            **CRITICAL: Before spending time fixing test failures, check if they also fail upstream!**
+
+            ```bash
+            # Fetch upstream main
+            git fetch upstream main
+
+            # Check out upstream main in a separate worktree
+            git worktree add /tmp/upstream-main upstream/main
+
+            # Run the same failing test on upstream
+            cd /tmp/upstream-main
+            make install-dev
+            pytest <path-to-failing-test> -v
+
+            # Return to our branch
+            cd -
+            git worktree remove /tmp/upstream-main
+            ```
+
+            **Decision tree for test failures:**
+
+            1. **Test fails on BOTH our branch AND upstream/main:**
+               - This is an **upstream issue**, not caused by our conflict resolution
+               - **Action:** Skip/xfail the test and document why
+               - Add comment to PR explaining it's an upstream issue
+               - Don't waste time trying to fix complex upstream bugs
+
+            2. **Test fails ONLY on our branch (passes on upstream/main):**
+               - This is caused by our conflict resolution
+               - **Action:** Fix the conflict resolution issue
+               - Could be: incomplete merge, wrong choice in conflict, missing CARTO customization
+
+            3. **Test passes on our branch but expected to fail:**
+               - Rare, but check if test expectations need updating
+
+            **How to skip tests that fail upstream:**
+
+            ```python
+            # Add to the test file or conftest.py
+            import pytest
+
+            @pytest.mark.skip(reason="Upstream test failure - see BerriAI/litellm#<issue-number>")
+            def test_that_fails_upstream():
+                ...
+            ```
+
+            Or use pytest's xfail:
+            ```python
+            @pytest.mark.xfail(reason="Known upstream failure")
+            def test_that_fails_upstream():
+                ...
+            ```
+
+            ## Step 3: Analyze Test Logs
+
+            Workflow logs are available in `/tmp/workflow-logs/*/`.
+
+            Look for:
+            - `SyntaxError: invalid syntax` → conflict markers
+            - `ImportError` / `ModuleNotFoundError` → missing imports
+            - `FAILED tests/...` → test assertion failures
+            - Build errors in Docker logs
+
+            ## Step 4: Fix Issues Systematically
+
+            ### For Conflict Markers:
+            ```bash
+            # Find them
+            grep -rn "^<<<<<<< \|^=======$\|^>>>>>>>" litellm/ tests/ requirements.txt
+
+            # Remove manually or with sed (carefully!)
+            # Then verify file syntax
+            ```
+
+            ### For Import Errors:
+            ```bash
+            # Read the file with missing imports
+            # Check what was removed during conflict resolution
+            # Restore necessary imports from either CARTO or upstream version
+            ```
+
+            ### For Test Failures:
+            ```bash
+            # Run failing test locally to understand
+            pytest tests/path/to/failing_test.py -v
+
+            # Fix the root cause (usually conflict resolution issue)
+            ```
+
+            ## Step 5: Run Tests Locally
+
+            **CRITICAL:** Verify fixes before pushing:
+
+            ```bash
+            # Install dependencies
+            make install-dev
+
+            # Run linting
+            make lint
+
+            # Run type checks
+            make lint-mypy
+
+            # Run unit tests
+            make test-unit
+
+            # If specific tests failed, run them directly
+            pytest tests/specific/test_file.py -v
+            ```
+
+            ## Step 6: Commit and Push Fixes
+
+            ```bash
+            git add <fixed-files>
+            git commit -m "fix: resolve CI failures
+
+            - Fixed syntax errors from leftover conflict markers
+            - Restored missing imports
+            - <specific fixes>
+
+            Failures fixed:
+            - <list failed checks>
+            "
+
+            git push origin ${{ needs.check-ci-status.outputs.branch-name }}
+            ```
+
+            ## Step 7: Comment on PR with Summary
+
+            **If you fixed conflict-resolution issues:**
+            ```bash
+            gh pr comment ${{ needs.check-ci-status.outputs.pr-number }} \
+              --repo ${{ github.repository }} \
+              --body "✅ Fixed CI failures caused by conflict resolution.
+
+            **Fixes applied:**
+            - Removed leftover conflict markers in <files>
+            - Restored missing imports in <files>
+            - Fixed syntax errors in <files>
+
+            All tests now pass (or are properly skipped for upstream issues).
+            "
+            ```
+
+            **If you skipped upstream test failures:**
+            ```bash
+            gh pr comment ${{ needs.check-ci-status.outputs.pr-number }} \
+              --repo ${{ github.repository }} \
+              --body "⚠️ CI failures addressed - some tests skipped due to upstream issues.
+
+            **Fixes applied:**
+            - Fixed conflict resolution issues: <list>
+
+            **Tests skipped (upstream failures):**
+            - \`tests/path/to/test.py::test_name\` - Also fails on upstream/main
+              - Reason: <brief explanation>
+              - Will be addressed in carto/main if needed after manual QA
+
+            **Note for reviewers:**
+            These skipped tests represent upstream issues, not problems with our conflict resolution.
+            During manual QA, we can decide if these need to be fixed in carto/main separately.
+            "
+            ```
+
+            ## Important Notes
+
+            - Focus on **fixing actual errors**, not refactoring
+            - Don't introduce new changes unrelated to the failures
+            - **Check upstream first** for test failures - don't fix upstream bugs
+            - If you can't fix something, explain why in a PR comment
+            - The most common issue is **conflict markers** - search thoroughly!
+            - Test locally before pushing to avoid repeated failures
+
+            ## Handling Docker Build Failures
+
+            If the Docker build fails:
+
+            1. **Check the build logs** in `/tmp/workflow-logs/*/`
+            2. **Common Docker issues:**
+               - Missing files referenced in Dockerfile
+               - Syntax errors in scripts called during build
+               - Dependency installation failures
+            3. **Test Docker build locally:**
+               ```bash
+               docker build -f docker/Dockerfile.non_root -t test-build .
+               ```
+            4. **If it's a complex Docker issue:**
+               - Comment on PR explaining the issue
+               - Tag it for manual review
+               - Don't attempt complex Docker fixes without testing
+
+            ## Success Criteria
+
+            - [ ] All syntax errors resolved
+            - [ ] No conflict markers remain
+            - [ ] All imports are present
+            - [ ] `make lint` passes locally
+            - [ ] `make test-unit` passes locally
+            - [ ] Changes committed and pushed
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+          GITHUB_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+
+      - name: Comment on PR - Result
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+        run: |
+          PR_NUMBER="${{ needs.check-ci-status.outputs.pr-number }}"
+
+          if [ "${{ steps.claude-fix.outcome }}" == "success" ]; then
+            gh pr comment ${PR_NUMBER} \
+              --repo ${{ github.repository }} \
+              --body "$(cat <<EOF
+          ## ✅ CI Fix Attempt Complete
+
+          Claude Code has analyzed and attempted to fix the CI failures.
+
+          **Next Steps:**
+          - CI will re-run automatically on the new commits
+          - Monitor the check results on this PR
+          - If failures persist, manual review may be needed
+
+          **Workflow:** [Run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          EOF
+          )"
+          else
+            gh pr comment ${PR_NUMBER} \
+              --repo ${{ github.repository }} \
+              --body "$(cat <<EOF
+          ## ❌ CI Fix Failed
+
+          Claude Code encountered an error while trying to fix the CI failures.
+
+          **Manual intervention needed:**
+          - Check the workflow logs: [Run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          - Review the error messages
+          - May need human debugging
+
+          **Common issues:**
+          - Complex merge conflicts requiring human judgment
+          - Multiple interrelated failures
+          - Test failures requiring code logic changes
+          EOF
+          )"
+          fi
