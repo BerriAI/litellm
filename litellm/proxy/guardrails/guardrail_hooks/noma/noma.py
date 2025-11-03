@@ -790,6 +790,11 @@ class NomaGuardrail(CustomGuardrail):
                 "type": "input_image",
                 "image_url": user_message.get("image_url", {}).get("url", "")
             }
+        elif user_message.get("type", "") == "text":
+            return {
+                "type": "input_text",
+                "text": user_message.get("text", "")
+            }
         else:
             return None
 
