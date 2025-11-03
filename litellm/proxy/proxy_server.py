@@ -566,6 +566,7 @@ def cleanup_router_config_variables():
 async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+    verbose_proxy_logger.info(f"server_root_path: {server_root_path}")
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
@@ -903,6 +904,47 @@ try:
     ui_path = os.path.join(current_dir, "_experimental", "out")
     litellm_asset_prefix = "/litellm-asset-prefix"
 
+    # For non-root Docker, copy UI files to writable directory
+    if os.getenv("LITELLM_NON_ROOT") == "true":
+        import shutil
+        writable_ui_path = "/app/ui_cache"
+        
+        # Check for pre-built UI from Docker build stage
+        prebuilt_ui_path = "/app/litellm_ui_build"
+        source_ui_path = ui_path
+        
+        # Prefer pre-built UI from Docker build stage if it exists
+        if os.path.exists(prebuilt_ui_path) and os.listdir(prebuilt_ui_path):
+            verbose_proxy_logger.info(f"Using pre-built UI from Docker build stage: {prebuilt_ui_path}")
+            source_ui_path = prebuilt_ui_path
+        elif not os.path.exists(ui_path):
+            verbose_proxy_logger.error(f"UI not found in package at {ui_path} or pre-built at {prebuilt_ui_path}")
+        
+        # Check if we need to populate the cache
+        needs_copy = False
+        if not os.path.exists(writable_ui_path):
+            needs_copy = True
+        elif not os.listdir(writable_ui_path):
+            needs_copy = True
+        
+        if needs_copy:
+            # Only copy if cache doesn't exist or is empty (first run)
+            if os.path.exists(writable_ui_path):
+                shutil.rmtree(writable_ui_path)
+            if os.path.exists(source_ui_path) and os.listdir(source_ui_path):
+                verbose_proxy_logger.info(f"Copying UI files from {source_ui_path} to {writable_ui_path} for non-root Docker")
+                shutil.copytree(source_ui_path, writable_ui_path)
+                verbose_proxy_logger.info(f"UI files copied successfully. Files in cache: {len(os.listdir(writable_ui_path))}")
+            else:
+                verbose_proxy_logger.error(f"UI path not found or empty: {source_ui_path}. UI will not be available.")
+        
+        # Only use writable path if it exists and has content
+        if os.path.exists(writable_ui_path) and os.listdir(writable_ui_path):
+            ui_path = writable_ui_path
+            verbose_proxy_logger.info(f"Using writable UI path: {ui_path}")
+        else:
+            verbose_proxy_logger.warning(f"Writable UI path is empty or doesn't exist. Falling back to original path.")
+
     # Only modify files if a custom server root path is set
     if server_root_path and server_root_path != "/":
         # Iterate through files in the UI directory
@@ -974,7 +1016,10 @@ try:
             dst = os.path.join(folder_path, "index.html")
             os.rename(src, dst)
 
-except Exception:
+except Exception as e:
+    verbose_proxy_logger.error(f"Failed to setup UI: {str(e)}")
+    import traceback
+    verbose_proxy_logger.error(f"UI setup traceback: {traceback.format_exc()}")
     pass
 current_dir = os.path.dirname(os.path.abspath(__file__))
 # ui_path = os.path.join(current_dir, "_experimental", "out")
