@@ -12,7 +12,7 @@ from litellm._logging import verbose_logger
 
 
 
-VIDEO_ID_PREFIX = "vid_"
+VIDEO_ID_PREFIX = "video_"
 
 
 def encode_video_id_with_provider(
