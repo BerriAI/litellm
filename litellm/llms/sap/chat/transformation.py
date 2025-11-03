@@ -96,11 +96,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             or model == "gpt-4"
         ):
             params.remove("response_format")
-        if model.startswith("gemini"):
+        if model.startswith("gemini") or model.startswith("amazon"):
             params.remove("tool_choice")
-        if model=="ibm--granite-13b-chat" or model=="alephalpha-pharia-1-7b-control":
-            params.remove("stream_options")
-            params.remove("stream")
         return params
 
 
