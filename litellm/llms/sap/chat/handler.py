@@ -267,9 +267,9 @@ class GenAIHubOrchestration(BaseLLM):
         self._base_url = None
         self._resource_group = None
 
-    def run_env_setup(self) -> None:
+    def run_env_setup(self, service_key: Optional[str] = None) -> None:
         try:
-            self.token_creator, self._base_url, self._resource_group = get_token_creator() # type: ignore
+            self.token_creator, self._base_url, self._resource_group = get_token_creator(service_key) # type: ignore
         except ValueError as err:
             raise GenAIHubOrchestrationError(status_code=400, message=err.args[0])
 
@@ -505,8 +505,11 @@ class GenAIHubOrchestration(BaseLLM):
         extra_headers: Optional[Dict[str, str]] = None,
         shared_session: Optional[ClientSession] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
+        api_key: Optional[str] = None,
         **kwargs,
     ):
+        if api_key:
+            self.run_env_setup(api_key)
         stream = optional_params.get("stream", None)
         api_base, hdrs = self.validate_environment("chat_completions")
 
@@ -519,7 +522,7 @@ class GenAIHubOrchestration(BaseLLM):
         # logging
         logging_obj.pre_call(
             input=messages,
-            api_key="",
+            api_key=api_key,
             additional_args={
                 "complete_input_dict": config,
                 "api_base": api_base,
