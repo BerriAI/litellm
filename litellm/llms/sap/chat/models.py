@@ -67,6 +67,8 @@ class SAPMessage(BaseModel):
     role: Literal["system", "developer"] = "system"
     content: str
 
+    _content_validator = field_validator("content", mode="before")(validate_different_content)
+
 
 class SAPUserMessage(BaseModel):
     role: Literal["user"] = "user"
