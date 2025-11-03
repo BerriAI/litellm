@@ -7396,8 +7396,10 @@ class ProviderConfigManager:
         if litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
-            # Check if it's an O-series model
-            if model and ("o_series" in model.lower() or supports_reasoning(model)):
+            # Check if it's an O-series model (o1, o3, o4, etc.)
+            # Note: We check for specific O-series model names, not just "supports_reasoning"
+            # since GPT-5 supports reasoning but is NOT an O-series model
+            if model and ("o_series" in model.lower() or "o1" in model or "o3" in model or "o4" in model):
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:
                 return litellm.AzureOpenAIResponsesAPIConfig()

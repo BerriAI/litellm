@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any, Dict
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
-from litellm.utils import supports_reasoning
 
 from .transformation import AzureOpenAIResponsesAPIConfig
 
@@ -79,15 +78,15 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         """
         Check if the model is an O-series model.
         
+        O-series models include o1, o3, o4, etc. families (e.g., o1-preview, o3-mini).
+        Note: This is different from models that support reasoning - GPT-5 supports
+        reasoning but is NOT an O-series model.
+        
         Args:
             model: The model name to check
             
         Returns:
             True if it's an O-series model, False otherwise
         """
-        # Check if model name contains o_series or if it's a known O-series model
-        if "o_series" in model.lower():
-            return True
-            
-        # Check if the model supports reasoning (which is O-series specific)
-        return supports_reasoning(model) 
+        # Check for explicit o_series prefix or o1/o3/o4 model names
+        return "o_series" in model.lower() or "o1" in model or "o3" in model or "o4" in model 

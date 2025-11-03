@@ -194,9 +194,25 @@ def test_o_series_model_detection():
     assert config.is_o_series_model("o_series/gpt-o1") == True
     assert config.is_o_series_model("azure/o_series/gpt-o3") == True
 
+    # Test O1 models
+    assert config.is_o_series_model("o1") == True
+    assert config.is_o_series_model("o1-preview") == True
+    assert config.is_o_series_model("o1-mini") == True
+    assert config.is_o_series_model("azure/o1-preview") == True
+
+    # Test O3 models
+    assert config.is_o_series_model("o3") == True
+    assert config.is_o_series_model("o3-mini") == True
+    assert config.is_o_series_model("azure/o3-mini") == True
+
     # Test regular models
     assert config.is_o_series_model("gpt-4o") == False
     assert config.is_o_series_model("gpt-3.5-turbo") == False
+    
+    # Test GPT-5 (supports reasoning but is NOT an O-series model)
+    assert config.is_o_series_model("gpt-5") == False
+    assert config.is_o_series_model("gpt-5-turbo") == False
+    assert config.is_o_series_model("azure/gpt-5") == False
 
 
 @pytest.mark.serial
@@ -211,12 +227,34 @@ def test_provider_config_manager_o_series_selection():
     )
     assert isinstance(o_series_config, AzureOpenAIOSeriesResponsesAPIConfig)
 
+    # Test O1 model selection
+    o1_config = ProviderConfigManager.get_provider_responses_api_config(
+        provider=litellm.LlmProviders.AZURE, model="o1-preview"
+    )
+    assert isinstance(o1_config, AzureOpenAIOSeriesResponsesAPIConfig)
+
+    # Test O3 model selection
+    o3_config = ProviderConfigManager.get_provider_responses_api_config(
+        provider=litellm.LlmProviders.AZURE, model="o3-mini"
+    )
+    assert isinstance(o3_config, AzureOpenAIOSeriesResponsesAPIConfig)
+
     # Test regular model selection
     regular_config = ProviderConfigManager.get_provider_responses_api_config(
         provider=litellm.LlmProviders.AZURE, model="gpt-4o"
     )
     assert isinstance(regular_config, AzureOpenAIResponsesAPIConfig)
     assert not isinstance(regular_config, AzureOpenAIOSeriesResponsesAPIConfig)
+
+    # Test GPT-5 model selection (supports reasoning but is NOT O-series)
+    gpt5_config = ProviderConfigManager.get_provider_responses_api_config(
+        provider=litellm.LlmProviders.AZURE, model="gpt-5"
+    )
+    assert isinstance(gpt5_config, AzureOpenAIResponsesAPIConfig)
+    assert not isinstance(gpt5_config, AzureOpenAIOSeriesResponsesAPIConfig)
+    # Verify temperature is supported for GPT-5
+    gpt5_params = gpt5_config.get_supported_openai_params("gpt-5")
+    assert "temperature" in gpt5_params, "GPT-5 should support temperature parameter"
 
     # Test with no model specified (should default to regular)
     default_config = ProviderConfigManager.get_provider_responses_api_config(
