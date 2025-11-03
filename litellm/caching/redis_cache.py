@@ -85,6 +85,10 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
 
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
+    
+    # Default Redis major version to assume when version cannot be determined
+    # Using 7 as it's the modern version that supports LPOP with count parameter
+    DEFAULT_REDIS_MAJOR_VERSION = 7
 
     def __init__(
         self,
@@ -206,6 +210,35 @@ class RedisCache(BaseCache):
             key = self.namespace + ":" + key
 
         return key
+
+    def _parse_redis_major_version(self) -> int:
+        """
+        Parse Redis version to extract the major version number.
+        
+        Handles multiple version formats:
+        - Strings: "7.0.0", "6", "7.0.0-rc1", " 7.0.0 "
+        - Floats: 7.0 (e.g., from AWS ElastiCache Valkey)
+        - Integers: 7
+        - Malformed: "latest", "", "Unknown" (defaults to DEFAULT_REDIS_MAJOR_VERSION)
+        
+        Returns:
+            int: The major version number (defaults to DEFAULT_REDIS_MAJOR_VERSION if unparseable)
+        """
+        if self.redis_version == "Unknown":
+            return self.DEFAULT_REDIS_MAJOR_VERSION
+        
+        try:
+            version_str = str(self.redis_version).strip()
+            # Handle cases where there's no dot (e.g., "7" or 7)
+            if "." in version_str:
+                major_version = int(version_str.split(".")[0])
+            else:
+                # Direct integer or single-digit string
+                major_version = int(float(version_str))
+            return major_version
+        except (ValueError, AttributeError):
+            # Fallback for unparseable versions (e.g., "v7.0.0", "latest")
+            return self.DEFAULT_REDIS_MAJOR_VERSION
 
     def set_cache(self, key, value, **kwargs):
         ttl = self.get_ttl(**kwargs)
@@ -1259,11 +1292,7 @@ class RedisCache(BaseCache):
         start_time = time.time()
         print_verbose(f"LPOP from Redis list: key: {key}, count: {count}")
         try:
-            major_version: int = 7
-            # Check Redis version and use appropriate method
-            if self.redis_version != "Unknown":
-                # Parse version string like "6.0.0" to get major version
-                major_version = int(self.redis_version.split(".")[0])
+            major_version = self._parse_redis_major_version()
 
             if count is not None and major_version < 7:
                 # For Redis < 7.0, use pipeline to execute multiple LPOP commands
