@@ -95,8 +95,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             or model.startswith("alephalpha")
             or model == "gpt-4"
         ):
-            return [p for p in params if p != "response_format"]
-
+            params.remove("response_format")
+        if model.startswith("gemini") or model.startswith("amazon"):
+            params.remove("tool_choice")
         return params
 
 
