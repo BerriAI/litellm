@@ -839,10 +839,336 @@ class TestBackgroundProcessing:
             mock_create_background.assert_called_once()
 
 
-class TestNomaApplyGuardrail:
-    """
-    Test the apply_guardrail method for Noma guardrails
-    """
+class TestNomaImageProcessing:
+    """Test image processing functionality for multimodal content"""
+
+    @pytest.fixture
+    def noma_guardrail(self):
+        """Create a NomaGuardrail instance for testing"""
+        return NomaGuardrail(
+            api_key="test-api-key",
+            api_base="https://api.test.noma.security/",
+            application_id="test-app",
+            monitor_mode=False,
+            block_failures=True,
+            guardrail_name="test-noma-guardrail",
+            event_hook="pre_call",
+            default_on=True,
+        )
+
+    @pytest.fixture
+    def mock_user_api_key_dict(self):
+        """Create a mock UserAPIKeyAuth object"""
+        return UserAPIKeyAuth(
+            user_id="test-user-id",
+            user_email="test@example.com",
+            key_name="test-key",
+            api_key="test-api-key",
+            permissions={},
+            models=[],
+            spend=0.0,
+            metadata={},
+        )
+
+    def test_extract_user_message_with_image_url(self, noma_guardrail):
+        """Test extracting user message with image_url content"""
+        import asyncio
+        
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/image.jpg"
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+
+        message = asyncio.run(noma_guardrail._extract_user_message(data))
+        assert message is not None
+        assert len(message) == 1
+        assert message[0]["type"] == "input_image"
+        assert message[0]["image_url"] == "https://example.com/image.jpg"
+
+    def test_extract_user_message_with_mixed_content(self, noma_guardrail):
+        """Test extracting user message with mixed text and image content"""
+        import asyncio
+        
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "What's in this image?"
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/image.jpg"
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+
+        message = asyncio.run(noma_guardrail._extract_user_message(data))
+        assert message is not None
+        assert len(message) == 2
+        # First item should be text
+        assert message[0]["type"] == "input_text"
+        assert message[0]["text"] == "What's in this image?"
+        # Second item should be image
+        assert message[1]["type"] == "input_image"
+        assert message[1]["image_url"] == "https://example.com/image.jpg"
+
+    def test_extract_user_message_with_multiple_images(self, noma_guardrail):
+        """Test extracting user message with multiple images"""
+        import asyncio
+        
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Compare these images"
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/image1.jpg"
+                            }
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/image2.jpg"
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+
+        message = asyncio.run(noma_guardrail._extract_user_message(data))
+        assert message is not None
+        assert len(message) == 3
+        assert message[0]["type"] == "input_text"
+        assert message[1]["type"] == "input_image"
+        assert message[1]["image_url"] == "https://example.com/image1.jpg"
+        assert message[2]["type"] == "input_image"
+        assert message[2]["image_url"] == "https://example.com/image2.jpg"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_with_image_content(
+        self, noma_guardrail, mock_user_api_key_dict
+    ):
+        """Test pre-call hook with image content"""
+        request_data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/test-image.jpg"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "litellm_call_id": "test-call-id",
+            "metadata": {"requester_ip_address": "192.168.1.1"},
+        }
+
+        # Mock Noma API response for image content
+        noma_response = {
+            "aggregatedScanResult": False,  # False means safe
+            "scanResult": [
+                {
+                    "role": "user",
+                    "type": "message",
+                    "results": {
+                        "harmfulContent": {"result": False, "probability": 0.1, "status": "SUCCESS"}
+                    }
+                }
+            ]
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = noma_response
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            noma_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            result = await noma_guardrail.async_pre_call_hook(
+                user_api_key_dict=mock_user_api_key_dict,
+                cache=MagicMock(),
+                data=request_data,
+                call_type="completion",
+            )
+
+            assert result == request_data
+            mock_post.assert_called_once()
+
+            # Verify the API call payload includes image
+            call_args = mock_post.call_args
+            payload = call_args[1]["json"]
+            assert "input" in payload
+            assert len(payload["input"]) > 0
+            assert payload["input"][0]["role"] == "user"
+            assert "content" in payload["input"][0]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_with_mixed_content(
+        self, noma_guardrail, mock_user_api_key_dict
+    ):
+        """Test pre-call hook with mixed text and image content"""
+        request_data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Analyze this image for harmful content"
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/test-image.jpg"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "litellm_call_id": "test-call-id",
+        }
+
+        # Mock Noma API response
+        noma_response = {
+            "aggregatedScanResult": False,
+            "scanResult": [
+                {
+                    "role": "user",
+                    "type": "message",
+                    "results": {
+                        "harmfulContent": {"result": False, "probability": 0.05, "status": "SUCCESS"}
+                    }
+                }
+            ]
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = noma_response
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            noma_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            result = await noma_guardrail.async_pre_call_hook(
+                user_api_key_dict=mock_user_api_key_dict,
+                cache=MagicMock(),
+                data=request_data,
+                call_type="completion",
+            )
+
+            assert result == request_data
+            mock_post.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_image_content_blocked(
+        self, noma_guardrail, mock_user_api_key_dict
+    ):
+        """Test that image content can be blocked by Noma"""
+        request_data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/inappropriate-image.jpg"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "litellm_call_id": "test-call-id",
+        }
+
+        # Mock Noma API response indicating harmful content in image
+        noma_response = {
+            "aggregatedScanResult": True,  # True means unsafe
+            "scanResult": [
+                {
+                    "role": "user",
+                    "type": "message",
+                    "results": {
+                        "harmfulContent": {"result": True, "probability": 0.95, "status": "SUCCESS"}
+                    }
+                }
+            ]
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = noma_response
+        mock_response.raise_for_status = MagicMock()
+
+        from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaBlockedMessage
+
+        with patch.object(
+            noma_guardrail.async_handler, "post", return_value=mock_response
+        ):
+            with pytest.raises(NomaBlockedMessage) as exc_info:
+                await noma_guardrail.async_pre_call_hook(
+                    user_api_key_dict=mock_user_api_key_dict,
+                    cache=MagicMock(),
+                    data=request_data,
+                    call_type="completion",
+                )
+
+            assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_image_with_base64_data(self, noma_guardrail):
+        """Test extracting image with base64 data URL"""
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+
+        message = await noma_guardrail._extract_user_message(data)
+        assert message is not None
+        assert len(message) == 1
+        assert message[0]["type"] == "input_image"
+        assert message[0]["image_url"].startswith("data:image/jpeg;base64,")
+
+
 class TestIntegration:
     @pytest.mark.asyncio
     async def test_full_guardrail_flow(self):
