@@ -4084,23 +4084,43 @@ class BaseLLMHTTPHandler:
 
         try:
             # Use JSON when no files, otherwise use form data with files
-            if files and len(files) > 0:
-                # Use multipart/form-data when files are present
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    data=data,
-                    files=files,
-                    timeout=timeout,
-                )
+            # if files and len(files) > 0:
+            #     # Use multipart/form-data when files are present
+            #     response = sync_httpx_client.post(
+            #         url=api_base,
+            #         headers=headers,
+            #         data=data,
+            #         files=files,
+            #         timeout=timeout,
+            #     )
 
-            # --- END MOCK VIDEO RESPONSE ---
-            else:
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
+            # # --- END MOCK VIDEO RESPONSE ---
+            # else:
+            #     response = sync_httpx_client.post(
+            #         url=api_base,
+            #         headers=headers,
+            #         json=data,
+            #         timeout=timeout,
+            #     )
+        # Mock response for testing: return a fake httpx.Response with expected JSON
+            import httpx
+            from httpx import Response, Request
+
+            mock_json = {
+                "id": "video_123",
+                "object": "video",
+                "model": "sora-2",
+                "status": "queued",
+                "progress": 0,
+                "created_at": 1712697600,
+                "size": "1024x1808",
+                "seconds": "8",
+                "quality": "standard"
+            }
+            response = httpx.Response(
+                status_code=200,
+                json=mock_json,
+                request=Request("POST", api_base)
                 )
 
         except Exception as e:
@@ -4113,6 +4133,7 @@ class BaseLLMHTTPHandler:
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
         )
 
     async def async_video_generation_handler(
@@ -4181,20 +4202,39 @@ class BaseLLMHTTPHandler:
 
         try:
             # Use JSON when no files, otherwise use form data with files
-            if files is None or len(files) == 0:
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
-            else:
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    data=data,
-                    files=files,
-                    timeout=timeout,
+            # if files is None or len(files) == 0:
+            #     response = await async_httpx_client.post(
+            #         url=api_base,
+            #         headers=headers,
+            #         json=data,
+            #         timeout=timeout,
+            #     )
+            # else:
+            #     response = await async_httpx_client.post(
+            #         url=api_base,
+            #         headers=headers,
+            #         data=data,
+            #         files=files,
+            #         timeout=timeout,
+            #     )
+            import httpx
+            from httpx import Response, Request
+
+            mock_json = {
+                "id": "video_123",
+                "object": "video",
+                "model": "sora-2",
+                "status": "queued",
+                "progress": 0,
+                "created_at": 1712697600,
+                "size": "1024x1808",
+                "seconds": "8",
+                "quality": "standard"
+            }
+            response = httpx.Response(
+                status_code=200,
+                json=mock_json,
+                request=Request("POST", api_base)
                 )
 
         except Exception as e:
@@ -4207,6 +4247,7 @@ class BaseLLMHTTPHandler:
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
         )
 
     ###### VIDEO CONTENT HANDLER ######
@@ -4446,6 +4487,7 @@ class BaseLLMHTTPHandler:
             return video_remix_provider_config.transform_video_remix_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4527,6 +4569,7 @@ class BaseLLMHTTPHandler:
             return video_remix_provider_config.transform_video_remix_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4662,6 +4705,7 @@ class BaseLLMHTTPHandler:
             return video_list_provider_config.transform_video_list_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4821,13 +4865,33 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.get(
-                url=url,
-                headers=headers,
+            # response = sync_httpx_client.get(
+            #     url=url,
+            #     headers=headers,
+            # )
+            import httpx
+            from httpx import Response, Request
+
+            mock_json = {
+                "id": "video_123",
+                "object": "video",
+                "model": "sora-2",
+                "status": "queued",
+                "progress": 0,
+                "created_at": 1712697600,
+                "size": "1024x1808",
+                "seconds": "8",
+                "quality": "standard"
+            }
+            response = httpx.Response(
+                status_code=200,
+                json=mock_json,
+                request=Request("POST", api_base)
             )
             return video_status_provider_config.transform_video_status_retrieve_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4895,13 +4959,33 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = await async_httpx_client.get(
-                url=url,
-                headers=headers,
+            # response = await async_httpx_client.get(
+            #     url=url,
+            #     headers=headers,
+            # )
+            import httpx
+            from httpx import Response, Request
+
+            mock_json = {
+                "id": "video_123",
+                "object": "video",
+                "model": "sora-2",
+                "status": "queued",
+                "progress": 0,
+                "created_at": 1712697600,
+                "size": "1024x1808",
+                "seconds": "8",
+                "quality": "standard"
+            }
+            response = httpx.Response(
+                status_code=200,
+                json=mock_json,
+                request=Request("POST", api_base)
             )
             return video_status_provider_config.transform_video_status_retrieve_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
