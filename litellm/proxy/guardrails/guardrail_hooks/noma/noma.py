@@ -46,6 +46,10 @@ from typing import (
     Union,
 )
 
+from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+from litellm.main import stream_chunk_builder
+from litellm.types.utils import TextCompletionResponse
+
 # Constants
 USER_ROLE: Final[Literal["user"]] = "user"
 ASSISTANT_ROLE: Final[Literal["assistant"]] = "assistant"
@@ -886,10 +890,6 @@ class NomaGuardrail(CustomGuardrail):
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """Process streaming response chunks with Noma guardrail."""
-
-        from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
-        from litellm.main import stream_chunk_builder
-        from litellm.types.utils import TextCompletionResponse
 
         all_chunks: List[ModelResponseStream] = []
         async for chunk in response:
