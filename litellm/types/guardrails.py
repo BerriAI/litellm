@@ -589,6 +589,9 @@ class GuardrailEventHooks(str, Enum):
 class DynamicGuardrailParams(TypedDict):
     extra_body: Dict[str, Any]
 
+class GUARDRAIL_DEFINITION_LOCATION(str, Enum):
+    DB = "db"
+    CONFIG = "config"
 
 class GuardrailInfoResponse(BaseModel):
     guardrail_id: Optional[str] = None
@@ -597,7 +600,7 @@ class GuardrailInfoResponse(BaseModel):
     guardrail_info: Optional[Dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    guardrail_definition_location: Literal["config", "db"] = "config"
+    guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.CONFIG
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

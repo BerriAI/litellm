@@ -123,7 +123,7 @@ def test_bad_request_bad_param_error():
 def test_anthropic_with_responses_api():
     client = get_test_client()
     response = client.responses.create(
-        model="anthropic/claude-3-5-sonnet-20240620", 
+        model="anthropic/claude-sonnet-4-5-20250929", 
         input="just respond with the word 'ping'",
         previous_response_id="hi",
     )

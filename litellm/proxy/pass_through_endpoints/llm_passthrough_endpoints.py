@@ -35,7 +35,11 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     websocket_passthrough_request,
 )
 from litellm.proxy.utils import is_known_model
+from litellm.proxy.vector_store_endpoints.utils import (
+    is_allowed_to_call_vector_store_endpoint,
+)
 from litellm.secret_managers.main import get_secret_str
+from litellm.utils import ProviderConfigManager
 
 from .passthrough_endpoint_router import PassthroughEndpointRouter
 
@@ -989,6 +993,11 @@ async def assemblyai_proxy_route(
 
 
 @router.api_route(
+    "/azure_ai/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Azure AI Pass-through", "pass-through"],
+)
+@router.api_route(
     "/azure/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["Azure Pass-through", "pass-through"],
@@ -1014,9 +1023,21 @@ async def azure_proxy_route(
 
     if len(parts) > 1 and llm_router:
         for part in parts:
+            # check if LLM MODEL
             is_router_model = is_passthrough_request_using_router_model(
                 request_body={"model": part}, llm_router=llm_router
             )
+            # check if vector store index
+            is_vector_store_index = (
+                (
+                    litellm.vector_store_index_registry.is_vector_store_index(
+                        vector_store_index_name=part
+                    )
+                )
+                if litellm.vector_store_index_registry is not None
+                else False
+            )
+
             if is_router_model:
                 request_body = await get_request_body(request)
                 is_streaming_request = is_passthrough_request_streaming(request_body)
@@ -1074,6 +1095,66 @@ async def azure_proxy_route(
                         custom_headers=None,
                     ),
                 )
+            elif is_vector_store_index:
+                # get the api key from the provider config
+                provider_config = (
+                    ProviderConfigManager.get_provider_vector_stores_config(
+                        provider=litellm.LlmProviders.AZURE_AI
+                    )
+                )
+                if provider_config is None:
+                    raise Exception("Provider config not found for Azure AI")
+                # get the index from registry
+                if litellm.vector_store_registry is None:
+                    raise Exception("Vector store registry not found")
+
+                is_allowed_to_call_vector_store_endpoint(
+                    index_name=part,
+                    provider=litellm.LlmProviders.AZURE_AI,
+                    request=request,
+                    user_api_key_dict=user_api_key_dict,
+                )
+                # get the vector store name from index registry
+                index_object = (
+                    (
+                        litellm.vector_store_index_registry.get_vector_store_index_by_name(
+                            vector_store_index_name=part
+                        )
+                    )
+                    if litellm.vector_store_index_registry is not None
+                    else None
+                )
+                if index_object is None:
+                    raise Exception(f"Vector store index not found for {part}")
+
+                vector_store_name = index_object.litellm_params.vector_store_name
+
+                vector_store = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry_by_name(
+                    vector_store_name=vector_store_name
+                )
+                if vector_store is None:
+                    raise Exception(f"Vector store not found for {vector_store_name}")
+                litellm_params = vector_store.get("litellm_params") or {}
+                auth_credentials = provider_config.get_auth_credentials(
+                    litellm_params=litellm_params
+                )
+
+                extra_headers = auth_credentials.get("headers") or {}
+
+                base_target_url = litellm_params.get("api_base")
+                if base_target_url is None:
+                    raise Exception(f"API base not found for {part}")
+                return await BaseOpenAIPassThroughHandler._base_openai_pass_through_handler(
+                    endpoint=endpoint,
+                    request=request,
+                    fastapi_response=fastapi_response,
+                    user_api_key_dict=user_api_key_dict,
+                    base_target_url=base_target_url,
+                    api_key=None,
+                    custom_llm_provider=litellm.LlmProviders.AZURE_AI,
+                    extra_headers=cast(dict, extra_headers),
+                )
+
     base_target_url = get_secret_str(secret_name="AZURE_API_BASE")
     if base_target_url is None:
         raise Exception(
@@ -1577,8 +1658,9 @@ class BaseOpenAIPassThroughHandler:
         fastapi_response: Response,
         user_api_key_dict: UserAPIKeyAuth,
         base_target_url: str,
-        api_key: str,
+        api_key: Optional[str],
         custom_llm_provider: litellm.LlmProviders,
+        extra_headers: Optional[dict] = None,
     ):
         encoded_endpoint = httpx.URL(endpoint).path
         # Ensure endpoint starts with '/' for proper URL construction
@@ -1603,7 +1685,7 @@ class BaseOpenAIPassThroughHandler:
             endpoint=endpoint,
             target=str(updated_url),
             custom_headers=BaseOpenAIPassThroughHandler._assemble_headers(
-                api_key=api_key, request=request
+                api_key=api_key, request=request, extra_headers=extra_headers
             ),
         )  # dynamically construct pass-through endpoint based on incoming path
         received_value = await endpoint_func(
@@ -1629,11 +1711,17 @@ class BaseOpenAIPassThroughHandler:
         return headers
 
     @staticmethod
-    def _assemble_headers(api_key: str, request: Request) -> dict:
-        base_headers = {
-            "authorization": "Bearer {}".format(api_key),
-            "api-key": "{}".format(api_key),
-        }
+    def _assemble_headers(
+        api_key: Optional[str], request: Request, extra_headers: Optional[dict] = None
+    ) -> dict:
+        base_headers = {}
+        if api_key is not None:
+            base_headers = {
+                "authorization": "Bearer {}".format(api_key),
+                "api-key": "{}".format(api_key),
+            }
+        if extra_headers is not None:
+            base_headers.update(extra_headers)
         return BaseOpenAIPassThroughHandler._append_openai_beta_header(
             headers=base_headers,
             request=request,

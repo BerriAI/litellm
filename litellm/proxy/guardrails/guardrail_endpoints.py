@@ -10,10 +10,14 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
+    ApplyGuardrailRequest,
+    ApplyGuardrailResponse,
     BedrockGuardrailConfigModel,
     Guardrail,
     GuardrailEventHooks,
@@ -626,11 +630,13 @@ async def get_guardrail_info(guardrail_id: str):
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
+    from litellm.types.guardrails import GUARDRAIL_DEFINITION_LOCATION
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
+        guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.DB
         result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
@@ -638,6 +644,7 @@ async def get_guardrail_info(guardrail_id: str):
             result = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(
                 guardrail_id=guardrail_id
             )
+            guardrail_definition_location = GUARDRAIL_DEFINITION_LOCATION.CONFIG
 
         if result is None:
             raise HTTPException(
@@ -665,6 +672,7 @@ async def get_guardrail_info(guardrail_id: str):
             guardrail_info=dict(result.get("guardrail_info") or {}),
             created_at=result.get("created_at"),
             updated_at=result.get("updated_at"),
+            guardrail_definition_location=guardrail_definition_location,
         )
     except HTTPException as e:
         raise e
@@ -1056,3 +1064,37 @@ async def get_provider_specific_params():
             provider_params[guardrail_name] = fields
 
     return provider_params
+
+@router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
+@router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
+async def apply_guardrail(
+    request: ApplyGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Apply a guardrail to text input and return the processed result.
+    
+    This endpoint allows testing guardrails by applying them to custom text inputs.
+    """
+    from litellm.proxy.utils import handle_exception_on_proxy
+    
+    try:
+        active_guardrail: Optional[
+            CustomGuardrail
+        ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+            guardrail_name=request.guardrail_name
+        )
+        if active_guardrail is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Guardrail '{request.guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
+            )
+
+        response_text = await active_guardrail.apply_guardrail(
+            text=request.text, language=request.language, entities=request.entities
+        )
+
+        return ApplyGuardrailResponse(response_text=response_text)
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
+

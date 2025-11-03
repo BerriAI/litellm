@@ -3715,7 +3715,7 @@ def test_unit_test_perplexity_citations_chunk():
     "model",
     [
         "gpt-3.5-turbo",
-        "claude-3-5-sonnet-20240620",
+        "claude-sonnet-4-5-20250929",
         "anthropic.claude-3-sonnet-20240229-v1:0",
         # "vertex_ai/claude-3-5-sonnet@20240620",
     ],
@@ -3982,7 +3982,7 @@ def test_streaming_finish_reason():
 
     ## Anthropic
     response = litellm.completion(
-        model="anthropic/claude-3-5-sonnet-latest",
+        model="anthropic/claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "What is the capital of France?"}],
         stream=True,
         stream_options={"include_usage": True},

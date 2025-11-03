@@ -50,7 +50,7 @@ Register your datastore once. Reference it by ID.
 vector_store_registry:
   - vector_store_name: "vertex-ai-litellm-website-knowledgebase"
     litellm_params:
-      vector_store_id: "litellm-docs_1761094140318"
+      vector_store_id: "my-datastore"
       custom_llm_provider: "vertex_ai/search_api"
       vertex_app_id: "test-litellm-app_1761094730750"
       vertex_project: "test-vector-store-db"

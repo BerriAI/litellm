@@ -340,6 +340,7 @@ class LiteLLMRoutes(enum.Enum):
         "/anthropic",
         "/langfuse",
         "/azure",
+        "/azure_ai",
         "/openai",
         "/assemblyai",
         "/eu.assemblyai",
@@ -777,6 +778,11 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
+class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
+    index_name: str
+    index_permissions: List[Literal["read", "write"]]
+
+
 class KeyRequestBase(GenerateRequestBase):
     key: Optional[str] = None
     budget_id: Optional[str] = None
@@ -784,6 +790,7 @@ class KeyRequestBase(GenerateRequestBase):
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
     allowed_passthrough_routes: Optional[list] = None
+    allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     rpm_limit_type: Optional[
         Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
@@ -1311,6 +1318,7 @@ class NewTeamRequest(TeamBase):
         None  # allow user to set TPM limit for all team members
     )
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
+    allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1359,6 +1367,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     allowed_passthrough_routes: Optional[list] = None
     model_rpm_limit: Optional[Dict[str, int]] = None
     model_tpm_limit: Optional[Dict[str, int]] = None
+    allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -3177,11 +3186,10 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "model_tpm_limit",
     "rpm_limit_type",
     "tpm_limit_type",
-    "guardrails",
-    "tags",
     "enforced_params",
     "temp_budget_increase",
     "temp_budget_expiry",
+    "allowed_vector_store_indexes",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [

@@ -203,6 +203,89 @@ async def test_redaction_responses_api_stream():
 
 
 @pytest.mark.asyncio
+async def test_redaction_responses_api_with_reasoning_summary():
+    """Test that reasoning summary in ResponsesAPIResponse output is properly redacted"""
+    from litellm.litellm_core_utils.redact_messages import perform_redaction
+    
+    # Create a simple mock object with output items that have reasoning summaries
+    class MockResponsesAPIResponse:
+        def __init__(self):
+            self.output = [
+                # Reasoning item with summary
+                type('obj', (object,), {
+                    'type': 'reasoning',
+                    'id': 'rs_123',
+                    'summary': [
+                        type('obj', (object,), {
+                            'text': 'This is a detailed reasoning summary that should be redacted',
+                            'type': 'summary_text'
+                        })()
+                    ]
+                })(),
+                # Message item with content
+                type('obj', (object,), {
+                    'type': 'message',
+                    'id': 'msg_123',
+                    'content': [
+                        type('obj', (object,), {
+                            'text': 'This is the actual message content',
+                            'type': 'output_text'
+                        })()
+                    ]
+                })()
+            ]
+            self.reasoning = {"effort": "low", "summary": "auto"}
+    
+    # Mock as ResponsesAPIResponse so perform_redaction recognizes it
+    mock_response = MockResponsesAPIResponse()
+    mock_response.__class__.__name__ = 'ResponsesAPIResponse'
+    
+    # Patch isinstance to recognize our mock as ResponsesAPIResponse
+    import litellm
+    original_isinstance = isinstance
+    def patched_isinstance(obj, cls):
+        if cls == litellm.ResponsesAPIResponse and obj.__class__.__name__ == 'ResponsesAPIResponse':
+            return True
+        return original_isinstance(obj, cls)
+    
+    import builtins
+    builtins.isinstance = patched_isinstance
+    
+    try:
+        model_call_details = {
+            "messages": [{"role": "user", "content": "test"}],
+            "prompt": "test prompt",
+            "input": "test input"
+        }
+        
+        # Perform redaction
+        redacted_result = perform_redaction(model_call_details, mock_response)
+        
+        # Verify reasoning summary text is redacted
+        reasoning_item = redacted_result.output[0]
+        assert reasoning_item.summary[0].text == "redacted-by-litellm", \
+            "Reasoning summary text should be redacted"
+        
+        # Verify message content is also redacted
+        message_item = redacted_result.output[1]
+        assert message_item.content[0].text == "redacted-by-litellm", \
+            "Message content text should be redacted"
+        
+        # Verify top-level reasoning field is removed
+        assert redacted_result.reasoning is None, \
+            "Top-level reasoning field should be None"
+        
+        # Verify input messages are redacted
+        assert model_call_details["messages"][0]["content"] == "redacted-by-litellm", \
+            "Input messages should be redacted"
+        
+        print("✓ Reasoning summary redaction test passed")
+    finally:
+        # Restore original isinstance
+        builtins.isinstance = original_isinstance
+
+
+@pytest.mark.asyncio
 async def test_redaction_with_coroutine_objects():
     """Test that redaction handles coroutine objects correctly without pickle errors"""
     from litellm.litellm_core_utils.redact_messages import perform_redaction

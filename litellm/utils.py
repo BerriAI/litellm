@@ -9,9 +9,9 @@
 
 import ast
 import asyncio
-import contextvars
 import base64
 import binascii
+import contextvars
 import copy
 import datetime
 import hashlib
@@ -258,6 +258,7 @@ from litellm.llms.base_llm.base_utils import (
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
+from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -273,7 +274,6 @@ from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
-from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -5010,7 +5010,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "output_cost_per_token_above_200k_tokens", None
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
-                output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
+                output_cost_per_video_per_second=_model_info.get(
+                    "output_cost_per_video_per_second", None
+                ),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get(
@@ -7585,6 +7587,12 @@ class ProviderConfigManager:
             )
 
             return AzureAIVectorStoreConfig()
+        elif litellm.LlmProviders.MILVUS == provider:
+            from litellm.llms.milvus.vector_stores.transformation import (
+                MilvusVectorStoreConfig,
+            )
+
+            return MilvusVectorStoreConfig()
         return None
 
     @staticmethod
@@ -7646,11 +7654,17 @@ class ProviderConfigManager:
             )
 
             return LiteLLMProxyImageGenerationConfig()
+        elif LlmProviders.FAL_AI == provider:
+            from litellm.llms.fal_ai.image_generation import (
+                get_fal_ai_image_generation_config,
+            )
+
+            return get_fal_ai_image_generation_config(model)
         return None
 
     @staticmethod
     def get_provider_video_config(
-        model: str,
+        model: Optional[str],
         provider: LlmProviders,
     ) -> Optional[BaseVideoConfig]:
         if LlmProviders.OPENAI == provider:
@@ -7668,7 +7682,9 @@ class ProviderConfigManager:
         provider: LlmProviders,
     ) -> Optional[BaseContainerConfig]:
         if LlmProviders.OPENAI == provider:
-            from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
+            from litellm.llms.openai.containers.transformation import (
+                OpenAIContainerConfig,
+            )
 
             return OpenAIContainerConfig()
         return None

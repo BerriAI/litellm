@@ -834,7 +834,7 @@ client = OpenAI(
 batch_input_file = client.files.create(
     file=open("mydata.jsonl", "rb"),
     purpose="batch",
-    extra_body={"custom_llm_provider": "azure"}
+    extra_headers={"custom-llm-provider": "azure"}
 )
 file_id = batch_input_file.id
 ```
@@ -870,7 +870,7 @@ batch = client.batches.create( # re use client from above
     endpoint="/v1/chat/completions",
     completion_window="24h",
     metadata={"description": "My batch job"},
-    extra_body={"custom_llm_provider": "azure"}
+    extra_headers={"custom-llm-provider": "azure"}
 )
 ```
 
@@ -898,7 +898,7 @@ curl http://localhost:4000/v1/batches \
 ```python
 retrieved_batch = client.batches.retrieve(
     batch.id,
-    extra_query={"custom_llm_provider": "azure"}
+    extra_headers={"custom-llm-provider": "azure"}
 )
 ```
 
@@ -922,7 +922,7 @@ curl http://localhost:4000/v1/batches/batch_abc123 \
 ```python
 cancelled_batch = client.batches.cancel(
     batch.id,
-    extra_body={"custom_llm_provider": "azure"}
+    extra_headers={"custom-llm-provider": "azure"}
 )
 ```
 
@@ -945,7 +945,7 @@ curl http://localhost:4000/v1/batches/batch_abc123/cancel \
 <TabItem value="sdk" label="OpenAI Python SDK">
 
 ```python
-client.batches.list(extra_query={"custom_llm_provider": "azure"})
+client.batches.list(extra_headers={"custom-llm-provider": "azure"})
 ```
 
 </TabItem>

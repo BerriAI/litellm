@@ -3,6 +3,9 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
+    StandardBuiltInToolCostTracking,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
@@ -116,6 +119,20 @@ class OpenAIContainerConfig(BaseContainerConfig):
 
         # Transform the response data
         container_obj = ContainerObject(**response_data)  # type: ignore[arg-type]
+
+        # Add cost for container creation (OpenAI containers are code interpreter sessions)
+        # https://platform.openai.com/docs/pricing
+        # Each container creation is 1 code interpreter session
+        container_cost = StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(
+            sessions=1,
+            provider="openai",
+        )
+        
+        if not hasattr(container_obj, "_hidden_params") or container_obj._hidden_params is None:
+            container_obj._hidden_params = {}
+        if "additional_headers" not in container_obj._hidden_params:
+            container_obj._hidden_params["additional_headers"] = {}
+        container_obj._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = container_cost
 
         return container_obj
 

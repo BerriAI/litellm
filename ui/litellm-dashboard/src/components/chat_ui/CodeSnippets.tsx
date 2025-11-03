@@ -493,6 +493,17 @@ else:
 `;
       }
       break;
+    case EndpointType.EMBEDDINGS:
+      endpointSpecificCode = `
+response = client.embeddings.create(
+	input="${inputMessage || "Your string here"}",
+	model="${modelNameForCode}",
+	encoding_format="base64" # or "float"
+)
+
+print(response.data[0].embedding)
+`;
+      break;
     default:
       endpointSpecificCode = "\n# Code generation for this endpoint is not implemented yet.";
   }

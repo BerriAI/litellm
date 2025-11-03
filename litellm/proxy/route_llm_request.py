@@ -163,6 +163,14 @@ async def route_request(
         # Skip model-based routing for container operations
         if route_type in ["acreate_container", "alist_containers", "aretrieve_container", "adelete_container"]:
             return getattr(llm_router, f"{route_type}")(**data)
+        if route_type in [
+            "avideo_list",
+            "avideo_status",
+            "avideo_content",
+            "avideo_remix",
+        ] and (data.get("model") is None or data.get("model") == ""):
+            # These video endpoints don't need a model, use custom_llm_provider
+            return getattr(litellm, f"{route_type}")(**data)
         
         team_model_name = (
             llm_router.map_team_model(data["model"], team_id)
