@@ -52,6 +52,7 @@ class SupportedGuardrailIntegrations(Enum):
     JAVELIN = "javelin"
     ENKRYPTAI = "enkryptai"
     IBM_GUARDRAILS = "ibm_guardrails"
+    PROMPT_SECURITY = "prompt_security"
 
 
 class Role(Enum):
