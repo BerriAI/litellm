@@ -5,13 +5,11 @@ Relevant Issue: https://github.com/BerriAI/litellm/issues/13764
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
-from numpy import isin
 from pydantic import BaseModel
 from typing_extensions import override
 
-import litellm
 from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (
     BaseLLMObsOTELAttributes,
     safe_set_attribute,
