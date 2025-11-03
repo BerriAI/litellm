@@ -540,14 +540,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     def _map_reasoning_effort(self, reasoning_effort: str) -> Optional[Reasoning]:
         if reasoning_effort == "high":
-            return Reasoning(effort="high", summary="detailed")
+            return Reasoning(effort="high")
         elif reasoning_effort == "medium":
-            # docs say "summary": "concise" is also an option, but it was rejected in practice, so defaulting "auto"
-            return Reasoning(effort="medium", summary="auto")
+            return Reasoning(effort="medium")
         elif reasoning_effort == "low":
-            return Reasoning(effort="low", summary="auto")
+            return Reasoning(effort="low")
         elif reasoning_effort == "minimal":
-            return Reasoning(effort="minimal", summary="auto")
+            return Reasoning(effort="minimal")
         return None
 
     def _map_responses_status_to_finish_reason(self, status: Optional[str]) -> str:
