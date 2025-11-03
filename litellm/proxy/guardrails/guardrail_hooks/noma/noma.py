@@ -53,7 +53,7 @@ from litellm.types.utils import TextCompletionResponse
 # Constants
 USER_ROLE: Final[Literal["user"]] = "user"
 ASSISTANT_ROLE: Final[Literal["assistant"]] = "assistant"
-SENSITIVE_DATA_DETECTOR_KEYS: Final[list[str]] = ["sensitiveData"]
+SENSITIVE_DATA_DETECTOR_KEYS: Final[list[str]] = ["sensitiveData", "dataDetector"]
 
 # Type aliases
 MessageRole = Literal["user", "assistant"]
@@ -865,8 +865,9 @@ class NomaGuardrail(CustomGuardrail):
                 verbose_proxy_logger.warning(msg)
             else:
                 verbose_proxy_logger.debug(msg)
+                original_response = response_json.get("scanResult", {})
                 # Use the full response as the original response for error details
-                raise NomaBlockedMessage(response_json)
+                raise NomaBlockedMessage(original_response)
         else:  # False = safe, allow it
             msg = f"Noma guardrail allowed {type} message: {message}"
             if self.monitor_mode:
@@ -874,112 +875,6 @@ class NomaGuardrail(CustomGuardrail):
             else:
                 verbose_proxy_logger.debug(msg)
         
-    async def apply_guardrail(
-        self,
-        text: str,
-        language: Optional[str] = None,
-        entities: Optional[List[PiiEntityType]] = None,
-        request_data: Optional[dict] = None,
-    ) -> str:
-        """
-        Apply Noma guardrail to the given text for testing purposes.
-
-        This method allows users to test Noma guardrails without making actual LLM calls.
-        It creates a mock request to test the guardrail functionality.
-
-        Args:
-            text: The text to analyze
-            language: Optional language parameter (not used by Noma)
-            entities: Optional entities parameter (not used by Noma)
-            request_data: Optional request data dictionary for logging metadata
-
-        Returns:
-            The original text if allowed, or anonymized text if available
-
-        Raises:
-            Exception: If the content is blocked by Noma guardrail
-        """
-        try:
-            verbose_proxy_logger.debug("Noma Guardrail: Applying guardrail")
-            
-            # Create a mock user auth object for testing
-            from litellm.proxy._types import UserAPIKeyAuth
-            mock_user_auth = UserAPIKeyAuth()
-            
-            # Create payload for Noma API
-            payload = {
-                "input": [
-                    {
-                        "type": "message",
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_text",
-                                "text": text
-                            }
-                        ]
-                    }
-                ]
-            }
-            
-            # Use provided request_data or create a mock one for testing
-            if request_data is None:
-                request_data = {"messages": [{"role": "user", "content": text}]}
-            
-            # Call Noma API
-            response_json = await self._call_noma_api(
-                payload=payload,
-                llm_request_id=None,
-                request_data=request_data,
-                user_auth=mock_user_auth,
-                extra_data={},
-            )
-
-            # Check if content is blocked
-            # aggregatedScanResult=True means unsafe (block), False means safe (allow)
-            aggregated_scan_result = response_json.get("aggregatedScanResult", False)
-            
-            if aggregated_scan_result:  # True = unsafe, block it
-                # Check if we should anonymize instead of blocking
-                if self.anonymize_input and self._should_anonymize(response_json, USER_ROLE):
-                    anonymized_content = self._extract_anonymized_content(
-                        response_json, USER_ROLE
-                    )
-                    if anonymized_content:
-                        verbose_proxy_logger.debug(
-                            "Noma Guardrail: Content anonymized"
-                        )
-                        return anonymized_content
-                
-                # Content is blocked
-                scan_result = response_json.get("scanResult", {})
-                raise Exception(
-                    f"Content blocked by Noma guardrail: {scan_result}"
-                )
-
-            # Check if anonymization is available even for allowed content
-            if self.anonymize_input:
-                anonymized_content = self._extract_anonymized_content(
-                    response_json, USER_ROLE
-                )
-                if anonymized_content:
-                    verbose_proxy_logger.debug(
-                        "Noma Guardrail: Content anonymized"
-                    )
-                    return anonymized_content
-
-            verbose_proxy_logger.debug(
-                "Noma Guardrail: Successfully applied guardrail"
-            )
-
-            return text
-
-        except Exception as e:
-            verbose_proxy_logger.error(
-                "Noma Guardrail: Failed to apply guardrail: %s", str(e)
-            )
-            raise Exception(f"Noma guardrail failed: {str(e)}")
-    
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
         from litellm.types.proxy.guardrails.guardrail_hooks.noma import (
