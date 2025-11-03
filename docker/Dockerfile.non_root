@@ -8,16 +8,29 @@ ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
 FROM $LITELLM_BUILD_IMAGE AS builder
 WORKDIR /app
 
-# Install build dependencies
+# Install build dependencies including Node.js for UI build
 USER root
-RUN apk add --no-cache build-base bash \
+RUN apk add --no-cache build-base bash curl git nodejs npm \
   && pip install --no-cache-dir --upgrade pip build
 
 # Copy project files
 COPY . .
 
-# Build Admin UI
+# Build Admin UI (custom enterprise UI if configured)
 RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
+
+# Build standard UI if not already built by enterprise script
+RUN if [ ! -d "litellm/proxy/_experimental/out" ] || [ -z "$(ls -A litellm/proxy/_experimental/out 2>/dev/null)" ]; then \
+        echo "Building standard Admin UI..."; \
+        cd ui/litellm-dashboard && \
+        npm install && \
+        npm run build && \
+        mkdir -p ../../litellm/proxy/_experimental/out && \
+        cp -r ./out/* ../../litellm/proxy/_experimental/out/ || echo "UI build failed, continuing without UI"; \
+        cd ../..; \
+    else \
+        echo "UI already built (enterprise build), skipping standard build"; \
+    fi
 
 # Build package and wheel dependencies
 RUN rm -rf dist/* && python -m build && \
@@ -48,6 +61,13 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
   && rm -f *.whl \
   && rm -rf /wheels
 
+# Copy built UI from builder stage to dedicated non-root accessible location
+# UI was built in builder stage at /app/litellm/proxy/_experimental/out
+RUN mkdir -p /app/litellm_ui_build
+COPY --from=builder /app/litellm/proxy/_experimental/out /app/litellm_ui_build/
+RUN chmod -R 755 /app/litellm_ui_build && \
+    echo "UI copied from builder. Files: $(ls /app/litellm_ui_build 2>/dev/null | wc -l)"
+
 # Install semantic_router and aurelio-sdk using script
 RUN chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
 
@@ -67,7 +87,7 @@ RUN pip install --no-cache-dir prisma && \
   chmod +x docker/prod_entrypoint.sh
 
 # Create directories and set permissions for non-root user
-RUN mkdir -p /nonexistent /.npm && \
+RUN mkdir -p /nonexistent /.npm /app/ui_cache /app/litellm_ui_build && \
   chown -R nobody:nogroup /app && \
   chown -R nobody:nogroup /nonexistent /.npm && \
   PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
@@ -81,12 +101,18 @@ RUN PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__f
   LITELLM_PROXY_EXTRAS_PATH=$(python -c "import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))" 2>/dev/null || echo "") && \
   # Set group ownership to 0 (root group) for OpenShift compatibility && \
   chgrp -R 0 $PRISMA_PATH && \
+  chgrp -R 0 /app/ui_cache && \
+  chgrp -R 0 /app/litellm_ui_build && \
   [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chgrp -R 0 $LITELLM_PROXY_EXTRAS_PATH || true && \
   # Mirror owner permissions to group (g=u) as recommended by Red Hat && \
   chmod -R g=u $PRISMA_PATH && \
+  chmod -R g=u /app/ui_cache && \
+  chmod -R g=u /app/litellm_ui_build && \
   [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u $LITELLM_PROXY_EXTRAS_PATH || true && \
   # Ensure directories are writable by group && \
   chmod -R g+w $PRISMA_PATH && \
+  chmod -R g+w /app/ui_cache && \
+  chmod -R g+w /app/litellm_ui_build && \
   [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w $LITELLM_PROXY_EXTRAS_PATH || true
 
 # Switch to non-root user
@@ -94,6 +120,8 @@ USER nobody
 
 # Set HOME for prisma generate to have a writable directory
 ENV HOME=/app
+# Set flag to indicate non-root mode for UI file handling
+ENV LITELLM_NON_ROOT=true
 RUN prisma generate
 # --- End of Prisma Handling ---
 
