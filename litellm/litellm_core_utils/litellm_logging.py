@@ -144,6 +144,7 @@ from ..integrations.langsmith import LangsmithLogger
 from ..integrations.literal_ai import LiteralAILogger
 from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
+from ..integrations.minio import MinioLogger
 from ..integrations.openmeter import OpenMeterLogger
 from ..integrations.opik.opik import OpikLogger
 from ..integrations.posthog import PostHogLogger
@@ -3367,6 +3368,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _s3_v2_logger = S3V2Logger()
             _in_memory_loggers.append(_s3_v2_logger)
             return _s3_v2_logger  # type: ignore
+        elif logging_integration == "minio":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, MinioLogger):
+                    return callback  # type: ignore
+
+            _minio_logger = MinioLogger()
+            _in_memory_loggers.append(_minio_logger)
+            return _minio_logger  # type: ignore
         elif logging_integration == "aws_sqs":
             for callback in _in_memory_loggers:
                 if isinstance(callback, SQSLogger):
@@ -3802,6 +3811,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, S3V2Logger):
                     return callback
+        elif logging_integration == "minio":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, MinioLogger):
+                    return callback  # type: ignore
         elif logging_integration == "aws_sqs":
             for callback in _in_memory_loggers:
                 if isinstance(callback, SQSLogger):
