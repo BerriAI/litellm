@@ -94,13 +94,9 @@ model_list:
       rpm: 1000
     model_info:
       health_check_timeout: 1
-  - model_name: "gpt-4o-mini"
+  - model_name: "*"
     litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: claude-sonnet-4
-    litellm_params:
-      model: openai/gpt-4o-mini
+      model: openai/*
       api_key: os.environ/OPENAI_API_KEY
   
 
