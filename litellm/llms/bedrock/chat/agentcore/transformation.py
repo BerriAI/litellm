@@ -74,17 +74,22 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         # Parse ARN to get region
         region = self._extract_region_from_arn(agent_runtime_arn)
         
-        endpoint_url, _ = self.get_runtime_endpoint(
-            api_base=api_base,
-            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
-            aws_region_name=region,
-            endpoint_type="agentcore",
-        )
-
-        # AgentCore uses a different endpoint structure
-        # The actual endpoint will be constructed based on the service
-        # For now, we'll use the base endpoint and let AWS SDK handle the routing
-        endpoint_url = f"{endpoint_url}/invoke-agent-runtime"
+        # Build the base endpoint URL for AgentCore
+        # Note: We don't use get_runtime_endpoint as AgentCore has its own endpoint structure
+        if aws_bedrock_runtime_endpoint:
+            base_url = aws_bedrock_runtime_endpoint
+        else:
+            base_url = f"https://bedrock-agentcore.{region}.amazonaws.com"
+        
+        # Based on boto3 client.invoke_agent_runtime, the path is:
+        # /runtimes/{URL-ENCODED-ARN}/invocations?qualifier=<value>
+        from urllib.parse import quote
+        encoded_arn = quote(agent_runtime_arn, safe='')
+        endpoint_url = f"{base_url}/runtimes/{encoded_arn}/invocations"
+        
+        # Add qualifier as query parameter if provided
+        if "qualifier" in optional_params:
+            endpoint_url = f"{endpoint_url}?qualifier={optional_params['qualifier']}"
 
         return endpoint_url
 
@@ -155,32 +160,98 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         headers: dict,
     ) -> dict:
         """
-        Transform the request to AgentCore format
+        Transform the request to AgentCore format.
+        
+        Based on boto3's implementation:
+        - Session ID goes in header: X-Amzn-Bedrock-AgentCore-Runtime-Session-Id
+        - Qualifier goes as query parameter
+        - Only the payload goes in the request body
         """
         # Use the last message content as the prompt
         prompt = convert_content_list_to_str(messages[-1])
         
-        # Create the payload
+        # Create the payload - this is what goes in the body (raw JSON)
         payload_dict = {"prompt": prompt}
-        payload_json = json.dumps(payload_dict)
         
-        # Get agent runtime ARN
-        agent_runtime_arn = self._get_agent_runtime_arn(model)
-        
-        # Get or generate session ID
+        # Get or generate session ID - this goes in the header
         runtime_session_id = self._get_runtime_session_id(optional_params)
+        headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] = runtime_session_id
         
-        request_data = {
-            "agentRuntimeArn": agent_runtime_arn,
-            "runtimeSessionId": runtime_session_id,
-            "payload": payload_json,
+        # The request data is the payload dict (will be JSON encoded by the HTTP handler)
+        # Qualifier will be handled as a query parameter in get_complete_url
+        
+        return payload_dict
+
+    def _parse_sse_stream(self, response_text: str) -> dict:
+        """
+        Parse Server-Sent Events (SSE) stream format.
+        Each line starts with 'data:' followed by JSON.
+        """
+        lines = response_text.strip().split('\n')
+        
+        final_message = None
+        usage_data = None
+        content_blocks = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line or not line.startswith('data:'):
+                continue
+            
+            # Remove 'data:' prefix and parse JSON
+            json_str = line[5:].strip()
+            if not json_str:
+                continue
+                
+            try:
+                data = json.loads(json_str)
+                
+                # Some lines contain JSON strings instead of JSON objects - skip those
+                if not isinstance(data, dict):
+                    verbose_logger.debug(f"Skipping non-dict data: {type(data)}")
+                    continue
+                
+                # Check for final message with complete content
+                if "message" in data and isinstance(data["message"], dict):
+                    final_message = data["message"]
+                
+                # Check for usage metadata
+                if "event" in data and isinstance(data["event"], dict):
+                    event = data["event"]
+                    if "metadata" in event and "usage" in event["metadata"]:
+                        usage_data = event["metadata"]["usage"]
+                    
+                    # Collect content deltas for building the response
+                    if "contentBlockDelta" in event:
+                        delta = event["contentBlockDelta"].get("delta", {})
+                        if "text" in delta:
+                            content_blocks.append(delta["text"])
+                
+            except json.JSONDecodeError:
+                # Skip lines that aren't valid JSON
+                verbose_logger.debug(f"Skipping non-JSON line: {line[:100]}")
+                continue
+        
+        # If we have a final message, use that; otherwise build from content blocks
+        if final_message and "content" in final_message:
+            content_list = final_message["content"]
+            if content_list and isinstance(content_list, list):
+                # Extract text from content blocks
+                content = ""
+                for block in content_list:
+                    if isinstance(block, dict) and "text" in block:
+                        content += block["text"]
+            else:
+                content = ""
+        else:
+            # Build content from collected deltas
+            content = "".join(content_blocks)
+        
+        return {
+            "content": content,
+            "usage": usage_data,
+            "final_message": final_message
         }
-        
-        # Add optional qualifier if provided
-        if "qualifier" in optional_params:
-            request_data["qualifier"] = optional_params["qualifier"]
-        
-        return request_data
 
     def transform_response(
         self,
@@ -197,24 +268,21 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         """
-        Transform the AgentCore response to LiteLLM ModelResponse format
+        Transform the AgentCore response to LiteLLM ModelResponse format.
+        AgentCore returns responses as SSE (Server-Sent Events) stream.
         """
         try:
-            # Parse the response
-            response_data = raw_response.json()
-            verbose_logger.debug(f"AgentCore response data: {response_data}")
+            # Parse the SSE stream
+            response_text = raw_response.text
+            verbose_logger.debug(f"AgentCore response (first 500 chars): {response_text[:500]}")
             
-            # Extract the response content
-            # The actual structure may vary based on AgentCore API
-            # Adjust this based on actual response format
-            content = ""
-            if "response" in response_data:
-                if isinstance(response_data["response"], dict):
-                    content = response_data["response"].get("text", "")
-                else:
-                    content = str(response_data["response"])
-            else:
-                content = str(response_data)
+            parsed_data = self._parse_sse_stream(response_text)
+            
+            content = parsed_data["content"]
+            usage_data = parsed_data["usage"]
+            
+            verbose_logger.debug(f"Parsed content length: {len(content)}")
+            verbose_logger.debug(f"Usage data: {usage_data}")
             
             # Create the message
             message = Message(content=content, role="assistant")
@@ -227,12 +295,11 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             model_response.model = model
             
             # Add usage information if available
-            if "usage" in response_data:
+            if usage_data:
                 usage = Usage(
-                    prompt_tokens=response_data["usage"].get("inputTokens", 0),
-                    completion_tokens=response_data["usage"].get("outputTokens", 0),
-                    total_tokens=response_data["usage"].get("inputTokens", 0)
-                    + response_data["usage"].get("outputTokens", 0),
+                    prompt_tokens=usage_data.get("inputTokens", 0),
+                    completion_tokens=usage_data.get("outputTokens", 0),
+                    total_tokens=usage_data.get("totalTokens", 0),
                 )
                 setattr(model_response, "usage", usage)
             
