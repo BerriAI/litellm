@@ -812,7 +812,6 @@ class NomaGuardrail(CustomGuardrail):
     ) -> dict:
         call_id = request_data.get("litellm_call_id")
         headers = {
-            "X-Noma-AIDR-Application-ID": self.application_id,
             **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}),
             **({"X-Noma-Request-ID": call_id} if call_id else {}),
         }
@@ -825,11 +824,11 @@ class NomaGuardrail(CustomGuardrail):
             headers=headers,
             json={
                 **payload,
-                "context": {
+                "x-noma-context": {
                     "applicationId": extra_data.get("application_id")
                     or request_data.get("metadata", {})
                     .get("headers", {})
-                    .get("x-noma-application-id"),
+                    .get("x-noma-application-id") or self.application_id,
                     "ipAddress": request_data.get("metadata", {}).get(
                         "requester_ip_address", None
                     ),
