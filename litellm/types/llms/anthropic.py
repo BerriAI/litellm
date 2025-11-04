@@ -70,7 +70,7 @@ class AnthropicCodeExecutionTool(TypedDict, total=False):
 
 
 class AnthropicMemoryTool(TypedDict, total=False):
-    type: Required[Literal["memory_20250818"]]
+    type: Required[str]
     name: Required[Literal["memory"]]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
@@ -533,6 +533,7 @@ class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     TEXT_EDITOR = "text_editor"
     CODE_EXECUTION = "code_execution"
     WEB_FETCH = "web_fetch"
+    MEMORY = "memory"
 
 
 class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):

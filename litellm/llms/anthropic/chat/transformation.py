@@ -251,8 +251,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _computer_tool["display_number"] = _display_number
 
             returned_tool = _computer_tool
-        elif tool["type"] == "memory_20250818":
-            returned_tool = AnthropicMemoryTool(type="memory_20250818", name="memory")
         elif any(tool["type"].startswith(t) for t in ANTHROPIC_HOSTED_TOOLS):
             function_name = tool.get("name", tool.get("function", {}).get("name"))
             if function_name is None or not isinstance(function_name, str):
@@ -658,6 +656,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 headers[
                     "anthropic-beta"
                 ] = ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value
+            elif tool.get("type", None) and tool.get("type").startswith(
+                ANTHROPIC_HOSTED_TOOLS.MEMORY.value
+            ):
+                headers[
+                    "anthropic-beta"
+                ] = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
         return headers
 
     def transform_request(
