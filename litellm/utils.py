@@ -7208,6 +7208,12 @@ class ProviderConfigManager:
                 )
 
                 return AmazonInvokeAgentConfig()
+            elif bedrock_route == "agentcore":
+                from litellm.llms.bedrock.chat.agentcore.transformation import (
+                    AmazonAgentCoreConfig,
+                )
+
+                return AmazonAgentCoreConfig()
             elif bedrock_invoke_provider == "amazon":  # amazon titan llms
                 return litellm.AmazonTitanConfig()
             elif bedrock_invoke_provider == "anthropic":
