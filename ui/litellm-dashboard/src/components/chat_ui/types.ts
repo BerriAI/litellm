@@ -75,6 +75,7 @@ export interface MessageType {
   content: string | MultimodalContent[];
   model?: string;
   isImage?: boolean;
+  isAudio?: boolean;
   reasoningContent?: string;
   timeToFirstToken?: number;
   usage?: {

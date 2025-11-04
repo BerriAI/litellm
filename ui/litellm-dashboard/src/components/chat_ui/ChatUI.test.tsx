@@ -1,6 +1,11 @@
-import { render } from "@testing-library/react";
-import { describe, it, expect } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it } from "vitest";
 import ChatUI from "./ChatUI";
+
+// Mock scrollIntoView which is not available in jsdom
+beforeEach(() => {
+  Element.prototype.scrollIntoView = () => {};
+});
 
 describe("ChatUI", () => {
   it("should render the chat UI", () => {
@@ -14,5 +19,55 @@ describe("ChatUI", () => {
       />,
     );
     expect(getByText("Test Key")).toBeInTheDocument();
+  });
+
+  it("should show the voice selector when the endpoint type is audio_speech", async () => {
+    const { getByText, container } = render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    // Wait for the component to render
+    await waitFor(() => {
+      expect(getByText("Test Key")).toBeInTheDocument();
+    });
+
+    // Find the endpoint selector by looking for the "Endpoint Type:" text and its associated Select
+    const endpointTypeText = getByText("Endpoint Type:");
+    const selectContainer = endpointTypeText.parentElement;
+    const selectElement = selectContainer?.querySelector(".ant-select-selector");
+
+    expect(selectElement).toBeInTheDocument();
+
+    // Click on the select to open the dropdown
+    if (selectElement) {
+      fireEvent.mouseDown(selectElement);
+    }
+
+    // Wait for the dropdown to appear and find the audio_speech option
+    await waitFor(() => {
+      const audioSpeechOption = screen.getByText("/v1/audio/speech");
+      expect(audioSpeechOption).toBeInTheDocument();
+    });
+
+    // Click on the audio_speech option
+    const audioSpeechOption = screen.getByText("/v1/audio/speech");
+    fireEvent.click(audioSpeechOption);
+
+    // Verify the voice selector appears
+    await waitFor(() => {
+      expect(getByText("Voice")).toBeInTheDocument();
+    });
+
+    // Verify the voice select component is present
+    const voiceText = getByText("Voice");
+    const voiceSelectContainer = voiceText.parentElement;
+    const voiceSelectElement = voiceSelectContainer?.querySelector(".ant-select");
+    expect(voiceSelectElement).toBeInTheDocument();
   });
 });
