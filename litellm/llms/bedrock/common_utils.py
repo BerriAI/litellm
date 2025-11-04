@@ -445,17 +445,18 @@ class BedrockModelInfo(BaseLLMModelInfo):
     @staticmethod
     def get_bedrock_route(
         model: str,
-    ) -> Literal["converse", "invoke", "converse_like", "agent", "async_invoke"]:
+    ) -> Literal["converse", "invoke", "converse_like", "agent", "agentcore", "async_invoke"]:
         """
         Get the bedrock route for the given model.
         """
         route_mappings: Dict[
-            str, Literal["invoke", "converse_like", "converse", "agent", "async_invoke"]
+            str, Literal["invoke", "converse_like", "converse", "agent", "agentcore", "async_invoke"]
         ] = {
             "invoke/": "invoke",
             "converse_like/": "converse_like",
             "converse/": "converse",
             "agent/": "agent",
+            "agentcore/": "agentcore",
             "async_invoke/": "async_invoke",
         }
 
@@ -493,6 +494,13 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Check if the model is an explicit agent route.
         """
         return "agent/" in model
+
+    @staticmethod
+    def _explicit_agentcore_route(model: str) -> bool:
+        """
+        Check if the model is an explicit agentcore route.
+        """
+        return "agentcore/" in model
 
     @staticmethod
     def _explicit_converse_like_route(model: str) -> bool:
