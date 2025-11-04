@@ -325,6 +325,22 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             for i in range(0, len(full_text), self.CHUNK_SIZE)
         ]
 
+        # Add cost to usage object if include_cost_in_streaming_usage is True
+        if litellm.include_cost_in_streaming_usage and logging_obj is not None:
+            usage_obj: Optional[ResponseAPIUsage] = getattr(
+                transformed, "usage", None
+            )
+            if usage_obj is not None:
+                try:
+                    cost: Optional[float] = logging_obj._response_cost_calculator(
+                        result=transformed
+                    )
+                    if cost is not None:
+                        setattr(usage_obj, "cost", cost)
+                except Exception:
+                    # If cost calculation fails, continue without cost
+                    pass
+
         # append the completed event
         self._events = deltas + [
             ResponseCompletedEvent(
