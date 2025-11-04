@@ -70,35 +70,6 @@ curl -X POST http://localhost:4000/ocr \
   }'
 ```
 
-## Authentication
-
-Azure Document Intelligence uses subscription key authentication.
-
-### Environment Variables
-
-```python showLineNumbers title="Environment Variable Auth"
-import os
-
-os.environ["AZURE_DOCUMENT_INTELLIGENCE_API_KEY"] = "your-subscription-key"
-os.environ["AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"] = "https://your-resource.cognitiveservices.azure.com"
-
-response = litellm.ocr(
-    model="azure_ai/doc-intelligence/prebuilt-layout",
-    document={"type": "document_url", "document_url": "https://..."}
-)
-```
-
-### Direct Parameters
-
-```python showLineNumbers title="Parameter Auth"
-response = litellm.ocr(
-    model="azure_ai/doc-intelligence/prebuilt-layout",
-    document={"type": "document_url", "document_url": "https://..."},
-    api_key="your-subscription-key",
-    api_base="https://your-resource.cognitiveservices.azure.com"
-)
-```
-
 ## Supported Models
 
 Azure Document Intelligence offers several prebuilt models optimized for different use cases:
