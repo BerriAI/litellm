@@ -1552,10 +1552,10 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        return self._transform_ocr_response(
-            provider_config=provider_config,
+        # Use async response transform for async operations
+        return await provider_config.async_transform_ocr_response(
             model=model,
-            response=response,
+            raw_response=response,
             logging_obj=logging_obj,
         )
 
