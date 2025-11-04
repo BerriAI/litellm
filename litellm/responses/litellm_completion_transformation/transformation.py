@@ -184,7 +184,6 @@ class LiteLLMCompletionResponsesConfig:
         litellm_completion_request = {
             k: v for k, v in litellm_completion_request.items() if v is not None
         }
-        print(f"litellm_completion_request: {litellm_completion_request.keys()}")
         return litellm_completion_request
 
     @staticmethod
