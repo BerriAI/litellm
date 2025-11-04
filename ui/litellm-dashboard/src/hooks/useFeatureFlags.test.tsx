@@ -65,9 +65,9 @@ describe("useFeatureFlags", () => {
 
       // Mock window.location to be on a custom UI path
       delete (window as any).location;
-      window.location = {
+      (window as any).location = {
         pathname: "/my-custom-path/ui/",
-      } as Location;
+      };
 
       renderHook(() => useFeatureFlags(), {
         wrapper: FeatureFlagsProvider,
@@ -85,9 +85,9 @@ describe("useFeatureFlags", () => {
 
       // Mock window.location to be on standard UI path
       delete (window as any).location;
-      window.location = {
+      (window as any).location = {
         pathname: "/ui/",
-      } as Location;
+      };
 
       renderHook(() => useFeatureFlags(), {
         wrapper: FeatureFlagsProvider,
@@ -105,9 +105,9 @@ describe("useFeatureFlags", () => {
 
       // Mock window.location to be on a non-UI path
       delete (window as any).location;
-      window.location = {
+      (window as any).location = {
         pathname: "/some-other-path/",
-      } as Location;
+      };
 
       renderHook(() => useFeatureFlags(), {
         wrapper: FeatureFlagsProvider,
@@ -126,9 +126,49 @@ describe("useFeatureFlags", () => {
 
       // Mock window.location to be at root
       delete (window as any).location;
-      window.location = {
+      (window as any).location = {
         pathname: "/",
-      } as Location;
+      };
+
+      renderHook(() => useFeatureFlags(), {
+        wrapper: FeatureFlagsProvider,
+      });
+
+      // Wait for timeout
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      expect(mockReplace).not.toHaveBeenCalled();
+    });
+
+    it("should not redirect when on whitelisted /keys route", async () => {
+      // Set flag to false to trigger redirect logic
+      Storage.prototype.getItem = vi.fn(() => "false");
+
+      // Mock window.location to be on /keys path
+      delete (window as any).location;
+      (window as any).location = {
+        pathname: "/keys",
+      };
+
+      renderHook(() => useFeatureFlags(), {
+        wrapper: FeatureFlagsProvider,
+      });
+
+      // Wait for timeout
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      expect(mockReplace).not.toHaveBeenCalled();
+    });
+
+    it("should not redirect when on nested whitelisted route /keys/{uuid}", async () => {
+      // Set flag to false to trigger redirect logic
+      Storage.prototype.getItem = vi.fn(() => "false");
+
+      // Mock window.location to be on nested keys path
+      delete (window as any).location;
+      (window as any).location = {
+        pathname: "/keys/test-123-456",
+      };
 
       renderHook(() => useFeatureFlags(), {
         wrapper: FeatureFlagsProvider,
@@ -173,10 +213,7 @@ describe("useFeatureFlags", () => {
 
       result.current.setRefactoredUIFlag(true);
 
-      expect(setItemMock).toHaveBeenCalledWith(
-        "feature.refactoredUIFlag",
-        "true"
-      );
+      expect(setItemMock).toHaveBeenCalledWith("feature.refactoredUIFlag", "true");
     });
 
     it("should handle malformed localStorage values gracefully", () => {
@@ -203,9 +240,9 @@ describe("useFeatureFlags", () => {
 
       // Mock location to be on wrong path
       delete (window as any).location;
-      window.location = {
+      (window as any).location = {
         pathname: "/wrong-path/",
-      } as Location;
+      };
 
       renderHook(() => useFeatureFlags(), {
         wrapper: FeatureFlagsProvider,
@@ -261,10 +298,7 @@ describe("useFeatureFlags", () => {
       window.dispatchEvent(storageEvent);
 
       await waitFor(() => {
-        expect(setItemMock).toHaveBeenCalledWith(
-          "feature.refactoredUIFlag",
-          "false"
-        );
+        expect(setItemMock).toHaveBeenCalledWith("feature.refactoredUIFlag", "false");
       });
     });
   });
@@ -274,9 +308,9 @@ describe("useFeatureFlags", () => {
       Storage.prototype.getItem = vi.fn(() => "false");
 
       delete (window as any).location;
-      window.location = {
+      (window as any).location = {
         pathname: "/some-path/",
-      } as Location;
+      };
 
       const { unmount } = renderHook(() => useFeatureFlags(), {
         wrapper: FeatureFlagsProvider,
@@ -293,4 +327,3 @@ describe("useFeatureFlags", () => {
     });
   });
 });
-
