@@ -736,15 +736,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
 
-        if "prompt_cache_key" in optional_params:
-            optional_params.pop("prompt_cache_key")
-
         data = {
             "model": model,
             "messages": anthropic_messages,
             **optional_params,
         }
-
         return data
 
     def _transform_response_for_json_mode(

@@ -129,11 +129,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
 
-        # 4. `prompt_cache_key` is not allowed in request body for bedrock invoke
-        if "prompt_cache_key" in anthropic_messages_request:
-            anthropic_messages_request.pop("prompt_cache_key", None)
-            
-        # 5. Handle anthropic_beta from user headers
+        # 4. Handle anthropic_beta from user headers
         anthropic_beta_list = get_anthropic_beta_from_headers(headers)
         if anthropic_beta_list:
             anthropic_messages_request["anthropic_beta"] = anthropic_beta_list

@@ -134,6 +134,7 @@ async def aresponses_api_with_mcp(
     top_p: Optional[float] = None,
     truncation: Optional[Literal["auto", "disabled"]] = None,
     user: Optional[str] = None,
+    prompt_cache_key: Optional[str] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -489,6 +490,7 @@ def responses(
     user: Optional[str] = None,
     service_tier: Optional[str] = None,
     safety_identifier: Optional[str] = None,
+    prompt_cache_key: Optional[str] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -571,6 +573,7 @@ def responses(
                 top_p=top_p,
                 truncation=truncation,
                 user=user,
+                prompt_cache_key=prompt_cache_key,
                 extra_headers=extra_headers,
                 extra_query=extra_query,
                 extra_body=extra_body,

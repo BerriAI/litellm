@@ -12,6 +12,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
+from litellm.litellm_core_utils.get_supported_openai_params import (
+    get_supported_openai_params,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
@@ -95,6 +98,23 @@ class LiteLLMCompletionResponsesConfig:
         ]
 
     @staticmethod
+    def filter_unsupported_params(
+        params: dict,
+        model: str,
+        custom_llm_provider: Optional[str] = None,
+    ) -> None:
+        """Remove params not supported by the provider."""
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        if supported_params:
+            keys_to_remove = [
+                key for key in params.keys() if key not in supported_params
+            ]
+            for key in keys_to_remove:
+                params.pop(key, None)
+
+    @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
         model: str,
         input: Union[str, ResponseInputParam],
@@ -118,6 +138,12 @@ class LiteLLMCompletionResponsesConfig:
                 text_param
             )
 
+        LiteLLMCompletionResponsesConfig.filter_unsupported_params(
+            params=responses_api_request,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+
         litellm_completion_request: dict = {
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
@@ -136,6 +162,7 @@ class LiteLLMCompletionResponsesConfig:
             "service_tier": kwargs.get("service_tier"),
             "web_search_options": web_search_options,
             "response_format": response_format,
+            "prompt_cache_key": responses_api_request.get("prompt_cache_key"),
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
@@ -157,7 +184,7 @@ class LiteLLMCompletionResponsesConfig:
         litellm_completion_request = {
             k: v for k, v in litellm_completion_request.items() if v is not None
         }
-
+        print(f"litellm_completion_request: {litellm_completion_request.keys()}")
         return litellm_completion_request
 
     @staticmethod
