@@ -20,7 +20,7 @@ model_list:
 Retrieve detailed information about each model listed in the `/model/info` endpoint, including descriptions from the `config.yaml` file, and additional model info (e.g. max tokens, cost per input token, etc.) pulled from the model_info you set and the [litellm model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). Sensitive details like API keys are excluded for security purposes.
 
 :::tip Sync Model Data
-Keep your model pricing data up to date by [syncing models from GitHub](../sync_models_github.md).
+Keep your model pricing data up to date by [syncing models from GitHub](sync_models_github.md).
 :::
 
 <Tabs
