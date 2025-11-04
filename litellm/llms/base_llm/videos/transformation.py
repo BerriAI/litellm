@@ -104,6 +104,7 @@ class BaseVideoConfig(ABC):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
     ) -> VideoObject:
         pass
 
@@ -154,6 +155,7 @@ class BaseVideoConfig(ABC):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
     ) -> VideoObject:
         pass
 
@@ -181,6 +183,7 @@ class BaseVideoConfig(ABC):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
     ) -> Dict[str,str]:
         pass
 
@@ -229,6 +232,7 @@ class BaseVideoConfig(ABC):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
     ) -> VideoObject:
         pass
 

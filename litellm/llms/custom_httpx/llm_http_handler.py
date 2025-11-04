@@ -4113,6 +4113,7 @@ class BaseLLMHTTPHandler:
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
         )
 
     async def async_video_generation_handler(
@@ -4180,7 +4181,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # Use JSON when no files, otherwise use form data with files
+            #Use JSON when no files, otherwise use form data with files
             if files is None or len(files) == 0:
                 response = await async_httpx_client.post(
                     url=api_base,
@@ -4207,6 +4208,7 @@ class BaseLLMHTTPHandler:
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
         )
 
     ###### VIDEO CONTENT HANDLER ######
@@ -4446,6 +4448,7 @@ class BaseLLMHTTPHandler:
             return video_remix_provider_config.transform_video_remix_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4527,6 +4530,7 @@ class BaseLLMHTTPHandler:
             return video_remix_provider_config.transform_video_remix_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4662,6 +4666,7 @@ class BaseLLMHTTPHandler:
             return video_list_provider_config.transform_video_list_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4825,9 +4830,11 @@ class BaseLLMHTTPHandler:
                 url=url,
                 headers=headers,
             )
+
             return video_status_provider_config.transform_video_status_retrieve_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4902,6 +4909,7 @@ class BaseLLMHTTPHandler:
             return video_status_provider_config.transform_video_status_retrieve_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:

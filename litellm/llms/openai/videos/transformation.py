@@ -9,6 +9,7 @@ from litellm.types.llms.openai import CreateVideoRequest
 from litellm.types.router import GenericLiteLLMParams
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.videos.main import VideoObject
+from litellm.types.videos.utils import encode_video_id_with_provider, decode_video_id_with_provider, extract_original_video_id
 import litellm
 from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
 if TYPE_CHECKING:
@@ -137,18 +138,16 @@ class OpenAIVideoConfig(BaseVideoConfig):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
     ) -> VideoObject:
-        """
-        Transform the OpenAI video creation response.
-        """
+        """Transform the OpenAI video creation response."""
         response_data = raw_response.json()
-        
-        # Transform the response data
     
         video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
         
-        # Create usage object with duration information for cost calculation
-        # Video generation API doesn't provide usage, so we create one with duration
+        if custom_llm_provider and video_obj.id:
+            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
+        
         usage_data = {}
         if video_obj:
             if hasattr(video_obj, 'seconds') and video_obj.seconds:
@@ -156,9 +155,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
                     usage_data["duration_seconds"] = float(video_obj.seconds)
                 except (ValueError, TypeError):
                     pass
-        # Create the response
         video_obj.usage = usage_data
-
         
         return video_obj
 
@@ -175,11 +172,13 @@ class OpenAIVideoConfig(BaseVideoConfig):
         OpenAI API expects the following request:
         - GET /v1/videos/{video_id}/content
         """
+        original_video_id = extract_original_video_id(video_id)
+        
         # Construct the URL for video content download
-        url = f"{api_base.rstrip('/')}/{video_id}/content"
+        url = f"{api_base.rstrip('/')}/{original_video_id}/content"
         
         # Add video_id as query parameter
-        params = {"video_id": video_id}
+        params = {"video_id": original_video_id}
         
         return url, params
 
@@ -198,8 +197,10 @@ class OpenAIVideoConfig(BaseVideoConfig):
         OpenAI API expects the following request:
         - POST /v1/videos/{video_id}/remix
         """
+        original_video_id = extract_original_video_id(video_id)
+        
         # Construct the URL for video remix
-        url = f"{api_base.rstrip('/')}/{video_id}/remix"
+        url = f"{api_base.rstrip('/')}/{original_video_id}/remix"
         
         # Prepare the request data
         data = {"prompt": prompt}
@@ -215,17 +216,14 @@ class OpenAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> bytes:
-        """
-        Transform the OpenAI video content download response.
-        Returns raw video content as bytes.
-        """
-        # For video content download, return the raw content as bytes
+        """Transform the OpenAI video content download response."""
         return raw_response.content
 
     def transform_video_remix_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
     ) -> VideoObject:
         """
         Transform the OpenAI video remix response.
@@ -234,6 +232,9 @@ class OpenAIVideoConfig(BaseVideoConfig):
         
         # Transform the response data
         video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
+        
+        if custom_llm_provider and video_obj.id:
+            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)
         
         # Create usage object with duration information for cost calculation
         # Video remix API doesn't provide usage, so we create one with duration
@@ -287,8 +288,20 @@ class OpenAIVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
     ) -> Dict[str,str]:
-        return raw_response.json()
+        response_data = raw_response.json()
+        
+        if custom_llm_provider and "data" in response_data:
+            for video_obj in response_data.get("data", []):
+                if isinstance(video_obj, dict) and "id" in video_obj:
+                    video_obj["id"] = encode_video_id_with_provider(
+                        video_obj["id"], 
+                        custom_llm_provider, 
+                        video_obj.get("model")
+                    )
+        
+        return response_data
 
     def transform_video_delete_request(
         self,
@@ -303,8 +316,10 @@ class OpenAIVideoConfig(BaseVideoConfig):
         OpenAI API expects the following request:
         - DELETE /v1/videos/{video_id}
         """
+        original_video_id = extract_original_video_id(video_id)
+        
         # Construct the URL for video delete
-        url = f"{api_base.rstrip('/')}/{video_id}"
+        url = f"{api_base.rstrip('/')}/{original_video_id}"
         
         # No data needed for DELETE request
         data: Dict[str, Any] = {}
@@ -336,8 +351,11 @@ class OpenAIVideoConfig(BaseVideoConfig):
         """
         Transform the OpenAI video retrieve request.
         """
+        # Extract the original video_id (remove provider encoding if present)
+        original_video_id = extract_original_video_id(video_id)
+        
         # For video retrieve, we just need to construct the URL
-        url = f"{api_base.rstrip('/')}/{video_id}"
+        url = f"{api_base.rstrip('/')}/{original_video_id}"
         
         # No additional data needed for GET request
         data: Dict[str, Any] = {}
@@ -348,6 +366,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str] = None,
     ) -> VideoObject:
         """
         Transform the OpenAI video retrieve response.
@@ -355,6 +374,9 @@ class OpenAIVideoConfig(BaseVideoConfig):
         response_data = raw_response.json()
         # Transform the response data
         video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
+        
+        if custom_llm_provider and video_obj.id:
+            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)
 
         return video_obj
 
