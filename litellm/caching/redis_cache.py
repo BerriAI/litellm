@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.constants import DEFAULT_REDIS_MAJOR_VERSION
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.types.caching import RedisPipelineIncrementOperation
@@ -85,10 +86,6 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
 
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
-    
-    # Default Redis major version to assume when version cannot be determined
-    # Using 7 as it's the modern version that supports LPOP with count parameter
-    DEFAULT_REDIS_MAJOR_VERSION = 7
 
     def __init__(
         self,
@@ -225,7 +222,7 @@ class RedisCache(BaseCache):
             int: The major version number (defaults to DEFAULT_REDIS_MAJOR_VERSION if unparseable)
         """
         if self.redis_version == "Unknown":
-            return self.DEFAULT_REDIS_MAJOR_VERSION
+            return DEFAULT_REDIS_MAJOR_VERSION
         
         try:
             version_str = str(self.redis_version).strip()
@@ -238,7 +235,7 @@ class RedisCache(BaseCache):
             return major_version
         except (ValueError, AttributeError):
             # Fallback for unparseable versions (e.g., "v7.0.0", "latest")
-            return self.DEFAULT_REDIS_MAJOR_VERSION
+            return DEFAULT_REDIS_MAJOR_VERSION
 
     def set_cache(self, key, value, **kwargs):
         ttl = self.get_ttl(**kwargs)
