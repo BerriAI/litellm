@@ -175,18 +175,33 @@ async def cli_get_key(token: Annotated[str | None, Header()] = None):
         dept_id = user_info.get('deptIdList')[0]
     if not dept_id:
         dept_id = "none_dept_id"
-    keys = await key_management_endpoints.list_keys(Request({'type': 'http', 'query_string': '',}), page=1, size=1, key_alias=org_email, user_api_key_dict=user_api_key_dict)
+    keys = await key_management_endpoints.list_keys(
+        Request({'type': 'http', 'query_string': '',}),
+        page=1, 
+        size=1, 
+        key_alias=org_email, 
+        user_api_key_dict=user_api_key_dict,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_hash=None,
+        return_full_object=False,
+        include_team_keys=False,
+        include_created_by_keys=False,
+        sort_by=None,
+        sort_order="desc"
+    )
     key_id = None
-    if keys.keys:
-        key_id = keys.keys[0] # type: ignore
+    if keys:
+        key_id = keys.get('key', [None])[0]
     if key_id is None:
         logger.info(f'user[{user_id}] create key')
-        teams = await team_endpoints.list_team(Request({'type': 'http', 'query_string': '',}), user_id=None, user_api_key_dict=user_api_key_dict)
+        teams = await team_endpoints.list_team(Request({'type': 'http', 'query_string': '',}), user_id=None, organization_id=None, user_api_key_dict=user_api_key_dict)
         team = next((x for x in teams if x.team_alias and x.team_alias.endswith(f'__{dept_id}')), None)
         if team is None:
             logger.info(f'user[{user_id}] create team')
             team_data = NewTeamRequest(team_alias=f'__{dept_id}', models=["all-proxy-models"])
-            team_res = await team_endpoints.new_team(team_data, Request({'type': 'http', 'query_string': '',}), user_api_key_dict=user_api_key_dict)
+            team_res = await team_endpoints.new_team(team_data, Request({'type': 'http', 'query_string': '',}), litellm_changed_by='ai_developer', user_api_key_dict=user_api_key_dict)
             team_id = team_res['team_id']
         else:
             team_id = team.team_id
@@ -197,7 +212,7 @@ async def cli_get_key(token: Annotated[str | None, Header()] = None):
         # key_res = await generate_key_fn(key_data, user_api_key_dict=user_api_key_dict)
     else:
         logger.info(f'user[{user_id}] recreate key')
-        key_res = await key_management_endpoints.regenerate_key_fn(key_id, user_api_key_dict=user_api_key_dict)
+        key_res = await key_management_endpoints.regenerate_key_fn(key_id, litellm_changed_by='ai_developer', user_api_key_dict=user_api_key_dict)
 
     new_key = None
     if key_res is not None:
