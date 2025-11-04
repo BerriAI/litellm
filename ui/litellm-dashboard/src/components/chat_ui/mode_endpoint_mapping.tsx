@@ -3,6 +3,7 @@
 // Define an enum for the modes as returned in model_info
 export enum ModelMode {
   IMAGE_GENERATION = "image_generation",
+  VIDEO_GENERATION = "video_generation",
   CHAT = "chat",
   RESPONSES = "responses",
   IMAGE_EDITS = "image_edits",
@@ -13,6 +14,7 @@ export enum ModelMode {
 // Define an enum for the endpoint types your UI calls
 export enum EndpointType {
   IMAGE = "image",
+  VIDEO = "video",
   CHAT = "chat",
   RESPONSES = "responses",
   IMAGE_EDITS = "image_edits",
@@ -24,6 +26,7 @@ export enum EndpointType {
 // Create a mapping between the model mode and the corresponding endpoint type
 export const litellmModeMapping: Record<ModelMode, EndpointType> = {
   [ModelMode.IMAGE_GENERATION]: EndpointType.IMAGE,
+  [ModelMode.VIDEO_GENERATION]: EndpointType.VIDEO,
   [ModelMode.CHAT]: EndpointType.CHAT,
   [ModelMode.RESPONSES]: EndpointType.RESPONSES,
   [ModelMode.IMAGE_EDITS]: EndpointType.IMAGE_EDITS,
