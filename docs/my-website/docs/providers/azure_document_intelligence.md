@@ -70,6 +70,62 @@ curl -X POST http://localhost:4000/ocr \
   }'
 ```
 
+## How It Works
+
+Azure Document Intelligence uses an asynchronous API pattern. LiteLLM AI Gateway handles the request/response transformation and polling automatically.
+
+### Complete Flow Diagram
+
+```mermaid
+sequenceDiagram
+    participant Client
+    box rgb(200, 220, 255) LiteLLM AI Gateway
+        participant LiteLLM
+    end
+    participant Azure as Azure Document Intelligence
+
+    Client->>LiteLLM: POST /ocr (Mistral format)
+    Note over LiteLLM: Transform to Azure format
+    
+    LiteLLM->>Azure: POST :analyze
+    Azure-->>LiteLLM: 202 Accepted + polling URL
+    
+    Note over LiteLLM: Automatic Polling
+    loop Every 2-10 seconds
+        LiteLLM->>Azure: GET polling URL
+        Azure-->>LiteLLM: Status: running
+    end
+    
+    LiteLLM->>Azure: GET polling URL
+    Azure-->>LiteLLM: Status: succeeded + results
+    
+    Note over LiteLLM: Transform to Mistral format
+    LiteLLM-->>Client: OCR Response (Mistral format)
+```
+
+### What LiteLLM Does For You
+
+When you call `litellm.ocr()` via SDK or `/ocr` via Proxy:
+
+1. **Request Transformation**: Converts Mistral OCR format → Azure Document Intelligence format
+2. **Submits Document**: Sends transformed request to Azure DI API
+3. **Handles 202 Response**: Captures the `Operation-Location` URL from response headers
+4. **Automatic Polling**: 
+   - Polls the operation URL at intervals specified by `retry-after` header (default: 2 seconds)
+   - Continues until status is `succeeded` or `failed`
+   - Respects Azure's rate limiting via `retry-after` headers
+5. **Response Transformation**: Converts Azure DI format → Mistral OCR format
+6. **Returns Result**: Sends unified Mistral format response to client
+
+**Polling Configuration:**
+- Default timeout: 120 seconds
+- Configurable via `AZURE_OPERATION_POLLING_TIMEOUT` environment variable
+- Uses sync (`time.sleep()`) or async (`await asyncio.sleep()`) based on call type
+
+:::info
+**Typical processing time**: 2-10 seconds depending on document size and complexity
+:::
+
 ## Supported Models
 
 Azure Document Intelligence offers several prebuilt models optimized for different use cases:
@@ -78,7 +134,19 @@ Azure Document Intelligence offers several prebuilt models optimized for differe
 
 Best for general document OCR with structure preservation.
 
-```python showLineNumbers title="Layout Model"
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers title="Layout Model - SDK"
+import litellm
+import os
+
+os.environ["AZURE_DOCUMENT_INTELLIGENCE_API_KEY"] = "your-api-key"
+os.environ["AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"] = "https://your-resource.cognitiveservices.azure.com"
+
 response = litellm.ocr(
     model="azure_ai/doc-intelligence/prebuilt-layout",
     document={
@@ -87,6 +155,30 @@ response = litellm.ocr(
     }
 )
 ```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy Config">
+
+```yaml showLineNumbers title="proxy_config.yaml"
+model_list:
+  - model_name: azure-layout
+    litellm_params:
+      model: azure_ai/doc-intelligence/prebuilt-layout
+      api_key: os.environ/AZURE_DOCUMENT_INTELLIGENCE_API_KEY
+      api_base: os.environ/AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT
+    model_info:
+      mode: ocr
+```
+
+**Usage:**
+```bash
+curl -X POST http://localhost:4000/ocr \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{"model": "azure-layout", "document": {"type": "document_url", "document_url": "https://example.com/doc.pdf"}}'
+```
+
+</TabItem>
+</Tabs>
 
 **Features:**
 - Text extraction with markdown formatting
@@ -98,9 +190,18 @@ response = litellm.ocr(
 
 ### prebuilt-read
 
-Optimized for reading text from documents.
+Optimized for reading text from documents - fastest and most cost-effective.
 
-```python showLineNumbers title="Read Model"
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers title="Read Model - SDK"
+import litellm
+import os
+
+os.environ["AZURE_DOCUMENT_INTELLIGENCE_API_KEY"] = "your-api-key"
+os.environ["AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"] = "https://your-resource.cognitiveservices.azure.com"
+
 response = litellm.ocr(
     model="azure_ai/doc-intelligence/prebuilt-read",
     document={
@@ -109,6 +210,30 @@ response = litellm.ocr(
     }
 )
 ```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy Config">
+
+```yaml showLineNumbers title="proxy_config.yaml"
+model_list:
+  - model_name: azure-read
+    litellm_params:
+      model: azure_ai/doc-intelligence/prebuilt-read
+      api_key: os.environ/AZURE_DOCUMENT_INTELLIGENCE_API_KEY
+      api_base: os.environ/AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT
+    model_info:
+      mode: ocr
+```
+
+**Usage:**
+```bash
+curl -X POST http://localhost:4000/ocr \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{"model": "azure-read", "document": {"type": "document_url", "document_url": "https://example.com/doc.pdf"}}'
+```
+
+</TabItem>
+</Tabs>
 
 **Features:**
 - Fast text extraction
@@ -119,9 +244,18 @@ response = litellm.ocr(
 
 ### prebuilt-document
 
-General-purpose document analysis.
+General-purpose document analysis with key-value pairs.
 
-```python showLineNumbers title="Document Model"
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers title="Document Model - SDK"
+import litellm
+import os
+
+os.environ["AZURE_DOCUMENT_INTELLIGENCE_API_KEY"] = "your-api-key"
+os.environ["AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"] = "https://your-resource.cognitiveservices.azure.com"
+
 response = litellm.ocr(
     model="azure_ai/doc-intelligence/prebuilt-document",
     document={
@@ -130,6 +264,30 @@ response = litellm.ocr(
     }
 )
 ```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy Config">
+
+```yaml showLineNumbers title="proxy_config.yaml"
+model_list:
+  - model_name: azure-document
+    litellm_params:
+      model: azure_ai/doc-intelligence/prebuilt-document
+      api_key: os.environ/AZURE_DOCUMENT_INTELLIGENCE_API_KEY
+      api_base: os.environ/AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT
+    model_info:
+      mode: ocr
+```
+
+**Usage:**
+```bash
+curl -X POST http://localhost:4000/ocr \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{"model": "azure-document", "document": {"type": "document_url", "document_url": "https://example.com/doc.pdf"}}'
+```
+
+</TabItem>
+</Tabs>
 
 **Pricing:** $10 per 1,000 pages
 
