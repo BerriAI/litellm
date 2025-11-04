@@ -1,5 +1,5 @@
 """
-Azure AI OCR transformation implementation.
+Vertex AI Mistral OCR transformation implementation.
 """
 from typing import Dict, Optional
 
@@ -10,24 +10,25 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 )
 from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRRequestData
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
-from litellm.secret_managers.main import get_secret_str
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
-class AzureAIOCRConfig(MistralOCRConfig):
+class VertexAIOCRConfig(MistralOCRConfig):
     """
-    Azure AI OCR transformation configuration.
+    Vertex AI Mistral OCR transformation configuration.
     
-    Azure AI uses Mistral's OCR API but with a different endpoint format.
+    Vertex AI uses Mistral's OCR API format through the Mistral publisher endpoint.
     Inherits transformation logic from MistralOCRConfig since they use the same format.
     
-    Reference: Azure AI Foundry OCR documentation
+    Reference: Vertex AI Mistral OCR documentation
     
-    Important: Azure AI only supports base64 data URIs (data:image/..., data:application/pdf;base64,...).
+    Important: Vertex AI OCR only supports base64 data URIs (data:image/..., data:application/pdf;base64,...).
     Regular URLs are not supported.
     """
 
     def __init__(self) -> None:
         super().__init__()
+        self.vertex_base = VertexBase()
 
     def validate_environment(
         self,
@@ -39,30 +40,25 @@ class AzureAIOCRConfig(MistralOCRConfig):
         **kwargs,
     ) -> Dict:
         """
-        Validate environment and return headers for Azure AI OCR.
+        Validate environment and return headers for Vertex AI OCR.
         
-        Azure AI uses Bearer token authentication with AZURE_AI_API_KEY.
+        Vertex AI uses Bearer token authentication with access token from credentials.
         """
-        # Get API key from environment if not provided
-        if api_key is None:
-            api_key = get_secret_str("AZURE_AI_API_KEY")
-
-        if api_key is None:
-            raise ValueError(
-                "Missing Azure AI API Key - A call is being made to Azure AI but no key is set either in the environment variables or via params"
-            )
-
-        # Validate API base is provided
-        if api_base is None:
-            api_base = get_secret_str("AZURE_AI_API_BASE")
+        # Extract Vertex AI parameters using safe helpers from VertexBase
+        # Use safe_get_* methods that don't mutate litellm_params dict
+        litellm_params = litellm_params or {}
         
-        if api_base is None:
-            raise ValueError(
-                "Missing Azure AI API Base - Set AZURE_AI_API_BASE environment variable or pass api_base parameter"
-            )
+        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
+        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params=litellm_params)
+        
+        # Get access token from Vertex credentials
+        access_token, project_id = self.vertex_base.get_access_token(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+        )
 
         headers = {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
             **headers,
         }
@@ -78,33 +74,50 @@ class AzureAIOCRConfig(MistralOCRConfig):
         **kwargs,
     ) -> str:
         """
-        Get complete URL for Azure AI OCR endpoint.
+        Get complete URL for Vertex AI OCR endpoint.
         
-        Azure AI endpoint format: https://<api_base>/providers/mistral/azure/ocr
+        Vertex AI endpoint format: 
+        https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/mistralai/ocr
         
         Args:
-            api_base: Azure AI API base URL
+            api_base: Vertex AI API base URL (optional)
             model: Model name (not used in URL construction)
             optional_params: Optional parameters
+            litellm_params: LiteLLM parameters containing vertex_project, vertex_location
             
-        Returns: Complete URL for Azure AI OCR endpoint
+        Returns: Complete URL for Vertex AI OCR endpoint
         """
-        if api_base is None:
+        # Extract Vertex AI parameters using safe helpers from VertexBase
+        # Use safe_get_* methods that don't mutate litellm_params dict
+        litellm_params = litellm_params or {}
+        
+        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
+        vertex_location = VertexBase.safe_get_vertex_ai_location(litellm_params=litellm_params)
+        
+        if vertex_project is None:
             raise ValueError(
-                "Missing Azure AI API Base - Set AZURE_AI_API_BASE environment variable or pass api_base parameter"
+                "Missing vertex_project - Set VERTEXAI_PROJECT environment variable or pass vertex_project parameter"
             )
+
+        if vertex_location is None:
+            vertex_location = "us-central1"
+
+        # Get API base URL
+        if api_base is None:
+            api_base = f"https://{vertex_location}-aiplatform.googleapis.com"
 
         # Ensure no trailing slash
         api_base = api_base.rstrip("/")
         
-        # Azure AI OCR endpoint format
-        return f"{api_base}/providers/mistral/azure/ocr"
+        # Vertex AI OCR endpoint format for Mistral publisher
+        # Format: https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/publishers/mistralai/models/{model}:rawPredict
+        return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
 
     def _convert_url_to_data_uri_sync(self, url: str) -> str:
         """
         Synchronously convert a URL to a base64 data URI.
         
-        Azure AI OCR doesn't have internet access, so we need to fetch URLs
+        Vertex AI OCR doesn't have internet access, so we need to fetch URLs
         and convert them to base64 data URIs.
         
         Args:
@@ -113,13 +126,13 @@ class AzureAIOCRConfig(MistralOCRConfig):
         Returns:
             Base64 data URI string
         """
-        verbose_logger.debug(f"Azure AI OCR: Converting URL to base64 data URI (sync): {url}")
+        verbose_logger.debug(f"Vertex AI OCR: Converting URL to base64 data URI (sync): {url}")
         
         # Fetch and convert to base64 data URI
         # convert_url_to_base64 already returns a full data URI like "data:image/jpeg;base64,..."
         data_uri = convert_url_to_base64(url=url)
         
-        verbose_logger.debug(f"Azure AI OCR: Converted URL to data URI (length: {len(data_uri)})")
+        verbose_logger.debug(f"Vertex AI OCR: Converted URL to data URI (length: {len(data_uri)})")
         
         return data_uri
 
@@ -127,7 +140,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
         """
         Asynchronously convert a URL to a base64 data URI.
         
-        Azure AI OCR doesn't have internet access, so we need to fetch URLs
+        Vertex AI OCR doesn't have internet access, so we need to fetch URLs
         and convert them to base64 data URIs.
         
         Args:
@@ -136,13 +149,13 @@ class AzureAIOCRConfig(MistralOCRConfig):
         Returns:
             Base64 data URI string
         """
-        verbose_logger.debug(f"Azure AI OCR: Converting URL to base64 data URI (async): {url}")
+        verbose_logger.debug(f"Vertex AI OCR: Converting URL to base64 data URI (async): {url}")
         
         # Fetch and convert to base64 data URI asynchronously
         # async_convert_url_to_base64 already returns a full data URI like "data:image/jpeg;base64,..."
         data_uri = await async_convert_url_to_base64(url=url)
         
-        verbose_logger.debug(f"Azure AI OCR: Converted URL to data URI (length: {len(data_uri)})")
+        verbose_logger.debug(f"Vertex AI OCR: Converted URL to data URI (length: {len(data_uri)})")
         
         return data_uri
 
@@ -155,9 +168,9 @@ class AzureAIOCRConfig(MistralOCRConfig):
         **kwargs,
     ) -> OCRRequestData:
         """
-        Transform OCR request for Azure AI, converting URLs to base64 data URIs (sync).
+        Transform OCR request for Vertex AI, converting URLs to base64 data URIs (sync).
         
-        Azure AI OCR doesn't have internet access, so we automatically fetch
+        Vertex AI OCR doesn't have internet access, so we automatically fetch
         any URLs and convert them to base64 data URIs synchronously.
         
         Args:
@@ -170,7 +183,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
         Returns:
             OCRRequestData with JSON data
         """
-        verbose_logger.debug(f"Azure AI OCR transform_ocr_request (sync) - model: {model}")
+        verbose_logger.debug("Vertex AI OCR transform_ocr_request (sync) called")
         
         if not isinstance(document, dict):
             raise ValueError(f"Expected document dict, got {type(document)}")
@@ -184,7 +197,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
             # If it's not already a data URI, convert it
             if document_url and not document_url.startswith("data:"):
                 verbose_logger.debug(
-                    "Azure AI OCR: Converting document URL to base64 data URI (sync)"
+                    "Vertex AI OCR: Converting document URL to base64 data URI (sync)"
                 )
                 data_uri = self._convert_url_to_data_uri_sync(url=document_url)
                 transformed_document["document_url"] = data_uri
@@ -193,7 +206,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
             # If it's not already a data URI, convert it
             if image_url and not image_url.startswith("data:"):
                 verbose_logger.debug(
-                    "Azure AI OCR: Converting image URL to base64 data URI (sync)"
+                    "Vertex AI OCR: Converting image URL to base64 data URI (sync)"
                 )
                 data_uri = self._convert_url_to_data_uri_sync(url=image_url)
                 transformed_document["image_url"] = data_uri
@@ -216,9 +229,9 @@ class AzureAIOCRConfig(MistralOCRConfig):
         **kwargs,
     ) -> OCRRequestData:
         """
-        Transform OCR request for Azure AI, converting URLs to base64 data URIs (async).
+        Transform OCR request for Vertex AI, converting URLs to base64 data URIs (async).
         
-        Azure AI OCR doesn't have internet access, so we automatically fetch
+        Vertex AI OCR doesn't have internet access, so we automatically fetch
         any URLs and convert them to base64 data URIs asynchronously.
         
         Args:
@@ -231,7 +244,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
         Returns:
             OCRRequestData with JSON data
         """
-        verbose_logger.debug(f"Azure AI OCR async_transform_ocr_request - model: {model}")
+        verbose_logger.debug(f"Vertex AI OCR async_transform_ocr_request - model: {model}")
         
         if not isinstance(document, dict):
             raise ValueError(f"Expected document dict, got {type(document)}")
@@ -245,7 +258,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
             # If it's not already a data URI, convert it
             if document_url and not document_url.startswith("data:"):
                 verbose_logger.debug(
-                    "Azure AI OCR: Converting document URL to base64 data URI (async)"
+                    "Vertex AI OCR: Converting document URL to base64 data URI (async)"
                 )
                 data_uri = await self._convert_url_to_data_uri_async(url=document_url)
                 transformed_document["document_url"] = data_uri
@@ -254,7 +267,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
             # If it's not already a data URI, convert it
             if image_url and not image_url.startswith("data:"):
                 verbose_logger.debug(
-                    "Azure AI OCR: Converting image URL to base64 data URI (async)"
+                    "Vertex AI OCR: Converting image URL to base64 data URI (async)"
                 )
                 data_uri = await self._convert_url_to_data_uri_async(url=image_url)
                 transformed_document["image_url"] = data_uri
