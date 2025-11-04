@@ -5,7 +5,8 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgen
 """
 
 import json
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import quote
 
 import httpx
 
@@ -17,6 +18,14 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.types.llms.bedrock_agentcore import (
+    AgentCoreContentBlock,
+    AgentCoreEvent,
+    AgentCoreMessage,
+    AgentCoreParsedResponse,
+    AgentCoreRequestPayload,
+    AgentCoreUsage,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
@@ -83,7 +92,6 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         
         # Based on boto3 client.invoke_agent_runtime, the path is:
         # /runtimes/{URL-ENCODED-ARN}/invocations?qualifier=<value>
-        from urllib.parse import quote
         encoded_arn = quote(agent_runtime_arn, safe='')
         endpoint_url = f"{base_url}/runtimes/{encoded_arn}/invocations"
         
@@ -166,12 +174,15 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         - Session ID goes in header: X-Amzn-Bedrock-AgentCore-Runtime-Session-Id
         - Qualifier goes as query parameter
         - Only the payload goes in the request body
+        
+        Returns:
+            dict: Payload dict containing the prompt
         """
         # Use the last message content as the prompt
         prompt = convert_content_list_to_str(messages[-1])
         
         # Create the payload - this is what goes in the body (raw JSON)
-        payload_dict = {"prompt": prompt}
+        payload: dict = {"prompt": prompt}
         
         # Get or generate session ID - this goes in the header
         runtime_session_id = self._get_runtime_session_id(optional_params)
@@ -180,78 +191,109 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         # The request data is the payload dict (will be JSON encoded by the HTTP handler)
         # Qualifier will be handled as a query parameter in get_complete_url
         
-        return payload_dict
+        return payload
 
-    def _parse_sse_stream(self, response_text: str) -> dict:
+    def _extract_sse_json(self, line: str) -> Optional[Dict]:
+        """Extract and parse JSON from an SSE data line."""
+        if not line.startswith('data:'):
+            return None
+        
+        json_str = line[5:].strip()
+        if not json_str:
+            return None
+        
+        try:
+            data = json.loads(json_str)
+            # Skip non-dict data (some lines contain JSON strings)
+            return data if isinstance(data, dict) else None
+        except json.JSONDecodeError:
+            verbose_logger.debug(f"Skipping non-JSON line: {line[:100]}")
+            return None
+
+    def _extract_usage_from_event(self, event_data: Dict) -> Optional[AgentCoreUsage]:
+        """Extract usage information from event metadata."""
+        event_payload = event_data.get("event")
+        if not event_payload:
+            return None
+        
+        metadata = event_payload.get("metadata")
+        if metadata and "usage" in metadata:
+            return metadata["usage"]  # type: ignore
+        
+        return None
+
+    def _extract_content_delta(self, event_data: Dict) -> Optional[str]:
+        """Extract text content from contentBlockDelta event."""
+        event_payload = event_data.get("event")
+        if not event_payload:
+            return None
+        
+        content_block_delta = event_payload.get("contentBlockDelta")
+        if not content_block_delta:
+            return None
+        
+        delta = content_block_delta.get("delta", {})
+        return delta.get("text")
+
+    def _extract_content_from_message(self, message: AgentCoreMessage) -> str:
+        """Extract text content from final message."""
+        content_list = message.get("content", [])
+        if not isinstance(content_list, list):
+            return ""
+        
+        return "".join(
+            block["text"]
+            for block in content_list
+            if isinstance(block, dict) and "text" in block
+        )
+
+    def _parse_sse_stream(self, response_text: str) -> AgentCoreParsedResponse:
         """
         Parse Server-Sent Events (SSE) stream format.
         Each line starts with 'data:' followed by JSON.
+        
+        Returns:
+            AgentCoreParsedResponse: Parsed response with content, usage, and message
         """
-        lines = response_text.strip().split('\n')
+        final_message: Optional[AgentCoreMessage] = None
+        usage_data: Optional[AgentCoreUsage] = None
+        content_blocks: List[str] = []
         
-        final_message = None
-        usage_data = None
-        content_blocks = []
-        
-        for line in lines:
+        for line in response_text.strip().split('\n'):
             line = line.strip()
-            if not line or not line.startswith('data:'):
+            if not line:
                 continue
             
-            # Remove 'data:' prefix and parse JSON
-            json_str = line[5:].strip()
-            if not json_str:
+            data = self._extract_sse_json(line)
+            if not data:
                 continue
+            
+            # Check for final complete message
+            if "message" in data and isinstance(data["message"], dict):
+                final_message = data["message"]  # type: ignore
+            
+            # Process event data
+            if "event" in data and isinstance(data["event"], dict):
+                # Extract usage metadata
+                if usage := self._extract_usage_from_event(data):
+                    usage_data = usage
                 
-            try:
-                data = json.loads(json_str)
-                
-                # Some lines contain JSON strings instead of JSON objects - skip those
-                if not isinstance(data, dict):
-                    verbose_logger.debug(f"Skipping non-dict data: {type(data)}")
-                    continue
-                
-                # Check for final message with complete content
-                if "message" in data and isinstance(data["message"], dict):
-                    final_message = data["message"]
-                
-                # Check for usage metadata
-                if "event" in data and isinstance(data["event"], dict):
-                    event = data["event"]
-                    if "metadata" in event and "usage" in event["metadata"]:
-                        usage_data = event["metadata"]["usage"]
-                    
-                    # Collect content deltas for building the response
-                    if "contentBlockDelta" in event:
-                        delta = event["contentBlockDelta"].get("delta", {})
-                        if "text" in delta:
-                            content_blocks.append(delta["text"])
-                
-            except json.JSONDecodeError:
-                # Skip lines that aren't valid JSON
-                verbose_logger.debug(f"Skipping non-JSON line: {line[:100]}")
-                continue
+                # Collect content deltas
+                if text := self._extract_content_delta(data):
+                    content_blocks.append(text)
         
-        # If we have a final message, use that; otherwise build from content blocks
-        if final_message and "content" in final_message:
-            content_list = final_message["content"]
-            if content_list and isinstance(content_list, list):
-                # Extract text from content blocks
-                content = ""
-                for block in content_list:
-                    if isinstance(block, dict) and "text" in block:
-                        content += block["text"]
-            else:
-                content = ""
-        else:
-            # Build content from collected deltas
-            content = "".join(content_blocks)
+        # Build final content
+        content = (
+            self._extract_content_from_message(final_message)
+            if final_message
+            else "".join(content_blocks)
+        )
         
-        return {
-            "content": content,
-            "usage": usage_data,
-            "final_message": final_message
-        }
+        return AgentCoreParsedResponse(
+            content=content,
+            usage=usage_data,
+            final_message=final_message
+        )
 
     def transform_response(
         self,
