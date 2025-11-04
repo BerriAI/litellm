@@ -1,63 +1,62 @@
-import React, { useState, useEffect, useRef } from "react";
+import { Card, Text, TextInput, Title, Button as TremorButton } from "@tremor/react";
+import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { Card, Title, Text, TextInput, Button as TremorButton } from "@tremor/react";
 import { v4 as uuidv4 } from "uuid";
-
-import { Select, Spin, Typography, Tooltip, Input, Upload, Modal, Button, Tag, Divider } from "antd";
-import { makeOpenAIChatCompletionRequest } from "./llm_calls/chat_completion";
-import { makeOpenAIImageGenerationRequest } from "./llm_calls/image_generation";
-import { makeOpenAIImageEditsRequest } from "./llm_calls/image_edits";
-import { makeOpenAIAudioSpeechRequest } from "./llm_calls/audio_speech";
-import { makeOpenAIAudioTranscriptionRequest } from "./llm_calls/audio_transcriptions";
-import { makeOpenAIResponsesRequest } from "./llm_calls/responses_api";
-import { makeAnthropicMessagesRequest } from "./llm_calls/anthropic_messages";
-import { fetchAvailableModels, ModelGroup } from "./llm_calls/fetch_models";
-import { fetchAvailableMCPTools } from "./llm_calls/fetch_mcp_tools";
-import type { MCPTool } from "./llm_calls/fetch_mcp_tools";
-import { EndpointType } from "./mode_endpoint_mapping";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
-import EndpointSelector from "./EndpointSelector";
-import TagSelector from "../tag_management/TagSelector";
-import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
-import GuardrailSelector from "../guardrails/GuardrailSelector";
-import { generateCodeSnippet } from "./CodeSnippets";
-import { MessageType } from "./types";
-import ReasoningContent from "./ReasoningContent";
-import ResponseMetrics, { TokenUsage } from "./ResponseMetrics";
-import ResponsesImageUpload from "./ResponsesImageUpload";
-import ResponsesImageRenderer from "./ResponsesImageRenderer";
-import { createMultimodalMessage, createDisplayMessage } from "./ResponsesImageUtils";
-import ChatImageUpload from "./ChatImageUpload";
-import ChatImageRenderer from "./ChatImageRenderer";
-import { createChatMultimodalMessage, createChatDisplayMessage } from "./ChatImageUtils";
-import AudioRenderer from "./AudioRenderer";
-import SessionManagement from "./SessionManagement";
-import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
-import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import {
   ApiOutlined,
-  KeyOutlined,
-  ClearOutlined,
-  RobotOutlined,
-  UserOutlined,
-  DeleteOutlined,
-  LoadingOutlined,
-  TagsOutlined,
-  DatabaseOutlined,
-  InfoCircleOutlined,
-  SafetyOutlined,
-  PictureOutlined,
-  CodeOutlined,
-  SoundOutlined,
-  ToolOutlined,
-  FilePdfOutlined,
   ArrowUpOutlined,
+  ClearOutlined,
+  CodeOutlined,
+  DatabaseOutlined,
+  DeleteOutlined,
+  FilePdfOutlined,
+  InfoCircleOutlined,
+  KeyOutlined,
+  LoadingOutlined,
+  PictureOutlined,
+  RobotOutlined,
+  SafetyOutlined,
+  SoundOutlined,
+  TagsOutlined,
+  ToolOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
+import { Button, Input, Modal, Select, Spin, Tag, Tooltip, Typography, Upload } from "antd";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+import GuardrailSelector from "../guardrails/GuardrailSelector";
 import NotificationsManager from "../molecules/notifications_manager";
-import { makeOpenAIEmbeddingsRequest } from "./llm_calls/embeddings_api";
-import { truncateString } from "./chatUtils";
+import TagSelector from "../tag_management/TagSelector";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import AudioRenderer from "./AudioRenderer";
 import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
+import ChatImageRenderer from "./ChatImageRenderer";
+import ChatImageUpload from "./ChatImageUpload";
+import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
+import { truncateString } from "./chatUtils";
+import { generateCodeSnippet } from "./CodeSnippets";
+import EndpointSelector from "./EndpointSelector";
+import { makeAnthropicMessagesRequest } from "./llm_calls/anthropic_messages";
+import { makeOpenAIAudioSpeechRequest } from "./llm_calls/audio_speech";
+import { makeOpenAIAudioTranscriptionRequest } from "./llm_calls/audio_transcriptions";
+import { makeOpenAIChatCompletionRequest } from "./llm_calls/chat_completion";
+import { makeOpenAIEmbeddingsRequest } from "./llm_calls/embeddings_api";
+import type { MCPTool } from "./llm_calls/fetch_mcp_tools";
+import { fetchAvailableMCPTools } from "./llm_calls/fetch_mcp_tools";
+import { fetchAvailableModels, ModelGroup } from "./llm_calls/fetch_models";
+import { makeOpenAIImageEditsRequest } from "./llm_calls/image_edits";
+import { makeOpenAIImageGenerationRequest } from "./llm_calls/image_generation";
+import { makeOpenAIResponsesRequest } from "./llm_calls/responses_api";
+import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
+import { EndpointType } from "./mode_endpoint_mapping";
+import ReasoningContent from "./ReasoningContent";
+import ResponseMetrics, { TokenUsage } from "./ResponseMetrics";
+import ResponsesImageRenderer from "./ResponsesImageRenderer";
+import ResponsesImageUpload from "./ResponsesImageUpload";
+import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageUtils";
+import { SearchResultsDisplay } from "./SearchResultsDisplay";
+import SessionManagement from "./SessionManagement";
+import { MessageType } from "./types";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
