@@ -7394,10 +7394,16 @@ class ProviderConfigManager:
         model: Optional[str] = None,
     ) -> Optional[BaseResponsesAPIConfig]:
         if litellm.LlmProviders.OPENAI == provider:
+            # Check if it's a GPT-5 model
+            if model and "gpt-5" in model.lower():
+                return litellm.OpenAIGPT5ResponsesAPIConfig()
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
+            # Check if it's a GPT-5 model first (takes precedence)
+            if model and "gpt-5" in model.lower():
+                return litellm.AzureOpenAIGPT5ResponsesAPIConfig()
             # Check if it's an O-series model
-            if model and ("o_series" in model.lower() or supports_reasoning(model)):
+            elif model and ("o_series" in model.lower() or supports_reasoning(model)):
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:
                 return litellm.AzureOpenAIResponsesAPIConfig()
