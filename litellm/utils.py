@@ -7399,10 +7399,15 @@ class ProviderConfigManager:
             # Check if it's an O-series model (o1, o3, o4, etc.)
             # Note: We check for specific O-series model names, not just "supports_reasoning"
             # since GPT-5 supports reasoning but is NOT an O-series model
-            if model and ("o_series" in model.lower() or "o1" in model or "o3" in model or "o4" in model):
-                return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
-            else:
-                return litellm.AzureOpenAIResponsesAPIConfig()
+            if model:
+                # Check if path contains o_series/ routing prefix
+                if "o_series/" in model:
+                    return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
+                # Check if the base model name starts with o1/o3/o4 prefixes
+                _model = model.split("/")[-1]  # could be "azure/o3" or "o3"
+                if any(_model.startswith(pfx) for pfx in ("o1", "o3", "o4")):
+                    return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
+            return litellm.AzureOpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyResponsesAPIConfig()
         return None

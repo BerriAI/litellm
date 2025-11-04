@@ -88,5 +88,10 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         Returns:
             True if it's an O-series model, False otherwise
         """
-        # Check for explicit o_series prefix or o1/o3/o4 model names
-        return "o_series" in model.lower() or "o1" in model or "o3" in model or "o4" in model 
+        # Check if path contains o_series/ routing prefix (e.g., azure/responses/o_series/model)
+        if "o_series/" in model:
+            return True
+        
+        # Check if the base model name starts with o1/o3/o4 prefixes
+        model_basename = model.split("/")[-1]  # could be "azure/o3" or "o3"
+        return any(model_basename.startswith(pfx) for pfx in ("o1", "o3", "o4")) 

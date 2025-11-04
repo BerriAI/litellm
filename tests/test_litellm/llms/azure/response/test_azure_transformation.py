@@ -213,6 +213,12 @@ def test_o_series_model_detection():
     assert config.is_o_series_model("gpt-5") == False
     assert config.is_o_series_model("gpt-5-turbo") == False
     assert config.is_o_series_model("azure/gpt-5") == False
+    
+    # Edge cases: Models with "o1", "o3", "o4" in the middle or end should NOT match
+    # (using startswith ensures only models that START with these prefixes match)
+    assert config.is_o_series_model("gpt-4o1") == False  # has "o1" but doesn't start with it
+    assert config.is_o_series_model("gpto1") == False  # has "o1" but doesn't start with it
+    assert config.is_o_series_model("model-o3-test") == False  # has "o3" but doesn't start with it
 
 
 @pytest.mark.serial
