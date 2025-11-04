@@ -197,6 +197,23 @@
         "ocr": true
       }
     },
+    "azure_ai/doc-intelligence": {
+      "display_name": "Azure AI Document Intelligence (`azure_ai/doc-intelligence`)",
+      "url": "https://docs.litellm.ai/docs/providers/azure_document_intelligence",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "ocr": true
+      }
+    },
     "azure_text": {
       "display_name": "Azure Text (`azure_text`)",
       "url": "https://docs.litellm.ai/docs/providers/azure",
