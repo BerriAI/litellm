@@ -375,10 +375,9 @@ def test_anthropic_memory_tool_auto_adds_beta_header():
     config = AnthropicConfig()
     memory_tool = [{"type": "memory_20250818", "name": "memory"}]
     messages = [{"role": "user", "content": "Remember this."}]
-    
-    headers = {} 
-    optional_params = { "tools": memory_tool }
 
+    headers = {}
+    optional_params = {"tools": memory_tool}
 
     config.transform_request(
         model="claude-3-5-sonnet-20240620",
@@ -388,7 +387,5 @@ def test_anthropic_memory_tool_auto_adds_beta_header():
         headers=headers,
     )
 
-
     assert "anthropic-beta" in headers
     assert headers["anthropic-beta"] == "context-management-2025-06-27"
-
