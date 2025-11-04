@@ -250,6 +250,45 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             if isinstance(block, dict) and "text" in block
         )
 
+    def _calculate_usage(
+        self, model: str, messages: List[AllMessageValues], content: str
+    ) -> Optional[Usage]:
+        """
+        Calculate token usage using LiteLLM's token counter.
+        
+        Args:
+            model: The model name
+            messages: Input messages
+            content: Response content
+            
+        Returns:
+            Usage object with calculated tokens, or None if calculation fails
+        """
+        try:
+            from litellm.utils import token_counter
+            
+            prompt_tokens = token_counter(model=model, messages=messages)
+            completion_tokens = token_counter(
+                model=model,
+                text=content,
+                count_response_tokens=True
+            )
+            total_tokens = prompt_tokens + completion_tokens
+            
+            verbose_logger.debug(
+                f"Calculated usage - prompt: {prompt_tokens}, "
+                f"completion: {completion_tokens}, total: {total_tokens}"
+            )
+            
+            return Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
+        except Exception as e:
+            verbose_logger.warning(f"Failed to calculate token usage: {str(e)}")
+            return None
+
     def _parse_json_response(self, response_json: dict) -> AgentCoreParsedResponse:
         """
         Parse direct JSON response (non-streaming).
@@ -397,29 +436,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             else:
                 # Calculate token usage using LiteLLM's token counter
                 verbose_logger.debug("No usage data from AgentCore - calculating tokens")
-                try:
-                    from litellm.utils import token_counter
-                    
-                    prompt_tokens = token_counter(model=model, messages=messages)
-                    completion_tokens = token_counter(
-                        model=model,
-                        text=content,
-                        count_response_tokens=True
-                    )
-                    total_tokens = prompt_tokens + completion_tokens
-                    
-                    usage = Usage(
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        total_tokens=total_tokens,
-                    )
+                usage = self._calculate_usage(model, messages, content)
+                if usage:
                     setattr(model_response, "usage", usage)
-                    verbose_logger.debug(
-                        f"Calculated usage - prompt: {prompt_tokens}, "
-                        f"completion: {completion_tokens}, total: {total_tokens}"
-                    )
-                except Exception as e:
-                    verbose_logger.warning(f"Failed to calculate token usage: {str(e)}")
             
             return model_response
 
