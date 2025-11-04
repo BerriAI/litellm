@@ -7675,6 +7675,10 @@ class ProviderConfigManager:
             from litellm.llms.azure.videos.transformation import AzureVideoConfig
 
             return AzureVideoConfig()
+        elif LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
+
+            return GeminiVideoConfig()
         return None
 
     @staticmethod

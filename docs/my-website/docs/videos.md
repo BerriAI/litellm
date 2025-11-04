@@ -9,7 +9,7 @@ Fallbacks | ✅ (Between supported models) |
 | Guardrails Support | ✅ Content moderation and safety checks |
 | Proxy Server Support | ✅ Full proxy integration with virtual keys |
 | Spend Management | ✅ Budget tracking and rate limiting |
-| Supported Providers | `openai`, `azure` |
+| Supported Providers | `openai`, `azure`, `gemini` |
 
 :::tip
 
@@ -604,3 +604,4 @@ The response follows OpenAI's video generation format with the following structu
 |-------------|--------------------|
 | OpenAI      |   [Usage](providers/openai/videos)  |
 | Azure       |   [Usage](providers/azure/videos)   |
+| Gemini       |   [Usage](providers/gemini/videos)   |
