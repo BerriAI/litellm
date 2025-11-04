@@ -263,11 +263,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     sessionStorage.setItem("selectedMCPTools", JSON.stringify(selectedMCPTools));
     sessionStorage.setItem("selectedVoice", selectedVoice);
 
-    if (selectedModel) {
-      sessionStorage.setItem("selectedModel", selectedModel);
-    } else {
-      sessionStorage.removeItem("selectedModel");
-    }
+    sessionStorage.setItem("selectedModels", JSON.stringify(selectedModels));
     if (messageTraceId) {
       sessionStorage.setItem("messageTraceId", messageTraceId);
     } else {
