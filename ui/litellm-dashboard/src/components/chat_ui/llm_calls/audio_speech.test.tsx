@@ -4,18 +4,6 @@ import OpenAI from "openai";
 
 vi.mock("openai");
 
-// Mock the chatConstants module
-vi.mock("../chatConstants", () => ({
-  OPEN_AI_VOICES: {
-    alloy: "alloy",
-    nova: "nova",
-    echo: "echo",
-    fable: "fable",
-    onyx: "onyx",
-    shimmer: "shimmer",
-  },
-}));
-
 // Mock URL.createObjectURL
 global.URL.createObjectURL = vi.fn(() => "blob:mock-audio-url");
 

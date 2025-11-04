@@ -57,7 +57,7 @@ import {
 import NotificationsManager from "../molecules/notifications_manager";
 import { makeOpenAIEmbeddingsRequest } from "./llm_calls/embeddings_api";
 import { truncateString } from "./chatUtils";
-import { OPEN_AI_VOICE_SELECT_OPTIONS } from "./chatConstants";
+import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -127,9 +127,15 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
       return [];
     }
   });
-  const [selectedVoice, setSelectedVoice] = useState<string>(() => {
+  const [selectedVoice, setSelectedVoice] = useState<OpenAIVoice>(() => {
     const saved = sessionStorage.getItem("selectedVoice");
-    return saved || "alloy";
+    if (!saved) return "alloy";
+    try {
+      return JSON.parse(saved) as OpenAIVoice;
+    } catch {
+      // If stored value is not valid JSON, treat it as a plain string
+      return saved as OpenAIVoice;
+    }
   });
   const [selectedVectorStores, setSelectedVectorStores] = useState<string[]>(() => {
     const saved = sessionStorage.getItem("selectedVectorStores");

@@ -11,7 +11,9 @@ export const OPEN_AI_VOICES = {
   ONYX: "onyx",
   SAGE: "sage",
   SHIMMER: "shimmer",
-};
+} as const;
+
+export type OpenAIVoice = (typeof OPEN_AI_VOICES)[keyof typeof OPEN_AI_VOICES];
 
 export const OPEN_AI_VOICE_LABELS = {
   ALLOY: "Alloy - Professional and confident",
@@ -26,9 +28,9 @@ export const OPEN_AI_VOICE_LABELS = {
   SHIMMER: "Shimmer - Bright and cheerful",
 };
 
-export const OPEN_AI_VOICE_SELECT_OPTIONS = Object.values(OPEN_AI_VOICES).map((voice) => ({
+export const OPEN_AI_VOICE_SELECT_OPTIONS = Object.entries(OPEN_AI_VOICES).map(([key, voice]) => ({
   value: voice,
-  label: OPEN_AI_VOICE_LABELS[voice as keyof typeof OPEN_AI_VOICE_LABELS],
+  label: OPEN_AI_VOICE_LABELS[key as keyof typeof OPEN_AI_VOICE_LABELS],
 }));
 
 export const ENDPOINT_OPTIONS = [

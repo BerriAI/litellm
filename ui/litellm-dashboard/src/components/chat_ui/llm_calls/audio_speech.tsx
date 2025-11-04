@@ -1,11 +1,11 @@
 import openai from "openai";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
-import { OPEN_AI_VOICES } from "../chatConstants";
+import type { OpenAIVoice } from "../chatConstants";
 
 export async function makeOpenAIAudioSpeechRequest(
   input: string,
-  voice: string,
+  voice: OpenAIVoice,
   updateUI: (audioUrl: string, model: string) => void,
   selectedModel: string,
   accessToken: string,
@@ -33,7 +33,7 @@ export async function makeOpenAIAudioSpeechRequest(
       {
         model: selectedModel,
         input: input,
-        voice: OPEN_AI_VOICES[voice as keyof typeof OPEN_AI_VOICES],
+        voice,
         ...(responseFormat ? { response_format: responseFormat as any } : {}),
         ...(speed ? { speed: speed } : {}),
       },
