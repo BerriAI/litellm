@@ -29,6 +29,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { valueFormatterSpend } from "./usage/utils/value_formatters";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 import { UsageExportHeader } from "./EntityUsageExport";
+import TopModelView from "./top_model_view";
 
 interface EntityMetrics {
   metrics: {
@@ -550,17 +551,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               <Col numColSpan={1}>
                 <Card>
                   <Title>Top Models</Title>
-                  <BarChart
-                    className="mt-4 h-40"
-                    data={getTopModels()}
-                    index="display_key"
-                    categories={["spend"]}
-                    colors={["cyan"]}
-                    valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
-                    layout="vertical"
-                    yAxisWidth={200}
-                    showLegend={false}
-                  />
+                  <TopModelView topModels={getTopModels()} />
                 </Card>
               </Col>
 
