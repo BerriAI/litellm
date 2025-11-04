@@ -236,7 +236,10 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         return delta.get("text")
 
     def _extract_content_from_message(self, message: AgentCoreMessage) -> str:
-        """Extract text content from final message."""
+        """
+        Extract text content from message content blocks.
+        This works for both SSE messages and JSON responses.
+        """
         content_list = message.get("content", [])
         if not isinstance(content_list, list):
             return ""
@@ -245,6 +248,30 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             block["text"]
             for block in content_list
             if isinstance(block, dict) and "text" in block
+        )
+
+    def _parse_json_response(self, response_json: dict) -> AgentCoreParsedResponse:
+        """
+        Parse direct JSON response (non-streaming).
+        
+        JSON response structure:
+        {
+            "result": {
+                "role": "assistant",
+                "content": [{"text": "..."}]
+            }
+        }
+        """
+        result = response_json.get("result", {})
+        
+        # Extract content using the same helper as SSE parsing
+        content = self._extract_content_from_message(result)  # type: ignore
+        
+        # JSON responses don't include usage data
+        return AgentCoreParsedResponse(
+            content=content,
+            usage=None,
+            final_message=result  # type: ignore
         )
 
     def _parse_sse_stream(self, response_text: str) -> AgentCoreParsedResponse:
@@ -268,15 +295,22 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             if not data:
                 continue
             
+            verbose_logger.debug(f"SSE event keys: {list(data.keys())}")
+            
             # Check for final complete message
             if "message" in data and isinstance(data["message"], dict):
                 final_message = data["message"]  # type: ignore
+                verbose_logger.debug(f"Found final message")
             
             # Process event data
             if "event" in data and isinstance(data["event"], dict):
+                event_payload = data["event"]
+                verbose_logger.debug(f"Event payload keys: {list(event_payload.keys())}")
+                
                 # Extract usage metadata
                 if usage := self._extract_usage_from_event(data):
                     usage_data = usage
+                    verbose_logger.debug(f"Found usage data: {usage_data}")
                 
                 # Collect content deltas
                 if text := self._extract_content_delta(data):
@@ -288,6 +322,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             if final_message
             else "".join(content_blocks)
         )
+        
+        verbose_logger.debug(f"Final usage_data: {usage_data}")
         
         return AgentCoreParsedResponse(
             content=content,
@@ -311,14 +347,26 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
     ) -> ModelResponse:
         """
         Transform the AgentCore response to LiteLLM ModelResponse format.
-        AgentCore returns responses as SSE (Server-Sent Events) stream.
+        AgentCore can return either JSON or SSE (Server-Sent Events) stream responses.
         """
         try:
-            # Parse the SSE stream
-            response_text = raw_response.text
-            verbose_logger.debug(f"AgentCore response (first 500 chars): {response_text[:500]}")
+            # Check Content-Type to determine response format
+            content_type = raw_response.headers.get("content-type", "").lower()
+            verbose_logger.debug(f"AgentCore response Content-Type: {content_type}")
             
-            parsed_data = self._parse_sse_stream(response_text)
+            # Parse response based on content type
+            if "application/json" in content_type:
+                # Direct JSON response
+                verbose_logger.debug("Parsing JSON response")
+                response_json = raw_response.json()
+                verbose_logger.debug(f"Response JSON: {response_json}")
+                parsed_data = self._parse_json_response(response_json)
+            else:
+                # SSE stream response (text/event-stream or default)
+                verbose_logger.debug("Parsing SSE stream response")
+                response_text = raw_response.text
+                verbose_logger.debug(f"AgentCore response (first 500 chars): {response_text[:500]}")
+                parsed_data = self._parse_sse_stream(response_text)
             
             content = parsed_data["content"]
             usage_data = parsed_data["usage"]
@@ -337,6 +385,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             model_response.model = model
             
             # Add usage information if available
+            # Note: AgentCore JSON responses don't include usage data
+            # SSE responses may include usage in metadata events
             if usage_data:
                 usage = Usage(
                     prompt_tokens=usage_data.get("inputTokens", 0),
@@ -344,6 +394,32 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                     total_tokens=usage_data.get("totalTokens", 0),
                 )
                 setattr(model_response, "usage", usage)
+            else:
+                # Calculate token usage using LiteLLM's token counter
+                verbose_logger.debug("No usage data from AgentCore - calculating tokens")
+                try:
+                    from litellm.utils import token_counter
+                    
+                    prompt_tokens = token_counter(model=model, messages=messages)
+                    completion_tokens = token_counter(
+                        model=model,
+                        text=content,
+                        count_response_tokens=True
+                    )
+                    total_tokens = prompt_tokens + completion_tokens
+                    
+                    usage = Usage(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
+                    )
+                    setattr(model_response, "usage", usage)
+                    verbose_logger.debug(
+                        f"Calculated usage - prompt: {prompt_tokens}, "
+                        f"completion: {completion_tokens}, total: {total_tokens}"
+                    )
+                except Exception as e:
+                    verbose_logger.warning(f"Failed to calculate token usage: {str(e)}")
             
             return model_response
 
