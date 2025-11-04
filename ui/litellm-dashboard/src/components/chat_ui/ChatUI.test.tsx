@@ -1,7 +1,6 @@
-import { render, waitFor, fireEvent, screen } from "@testing-library/react";
-import { describe, it, expect, beforeEach } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it } from "vitest";
 import ChatUI from "./ChatUI";
-import { EndpointType } from "./mode_endpoint_mapping";
 
 // Mock scrollIntoView which is not available in jsdom
 beforeEach(() => {
