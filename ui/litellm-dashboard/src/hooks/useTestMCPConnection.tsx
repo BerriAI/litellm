@@ -8,6 +8,7 @@ interface MCPServerConfig {
   transport?: string;
   auth_type?: string;
   mcp_info?: any;
+  static_headers?: Record<string, string>;
 }
 
 interface UseTestMCPConnectionProps {
@@ -39,6 +40,8 @@ export const useTestMCPConnection = ({
   // Check if we have the minimum required fields to fetch tools
   const canFetchTools = !!(formValues.url && formValues.transport && formValues.auth_type && accessToken);
 
+  const staticHeadersKey = JSON.stringify(formValues.static_headers ?? {});
+
   const fetchTools = async () => {
     if (!accessToken || !formValues.url) {
       return;
@@ -49,6 +52,28 @@ export const useTestMCPConnection = ({
 
     try {
       // Prepare the MCP server config from form values
+      const staticHeaders = Array.isArray(formValues.static_headers)
+        ? formValues.static_headers.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
+            const header = entry?.header?.trim();
+            if (!header) {
+              return acc;
+            }
+            acc[header] = entry?.value != null ? String(entry.value) : "";
+            return acc;
+          }, {})
+        : !Array.isArray(formValues.static_headers) && formValues.static_headers && typeof formValues.static_headers === "object"
+          ? Object.entries(formValues.static_headers).reduce(
+              (acc: Record<string, string>, [header, value]) => {
+                if (!header) {
+                  return acc;
+                }
+                acc[header] = value != null ? String(value) : "";
+                return acc;
+              },
+              {},
+            )
+          : {} as Record<string, string>;
+
       const mcpServerConfig: MCPServerConfig = {
         server_id: formValues.server_id || "",
         server_name: formValues.server_name || "",
@@ -56,6 +81,7 @@ export const useTestMCPConnection = ({
         transport: formValues.transport,
         auth_type: formValues.auth_type,
         mcp_info: formValues.mcp_info,
+        static_headers: staticHeaders,
       };
 
       const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig);
@@ -100,7 +126,7 @@ export const useTestMCPConnection = ({
       clearTools();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formValues.url, formValues.transport, formValues.auth_type, accessToken, enabled, canFetchTools]);
+  }, [formValues.url, formValues.transport, formValues.auth_type, accessToken, enabled, canFetchTools, staticHeadersKey]);
 
   return {
     tools,

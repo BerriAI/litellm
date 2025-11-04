@@ -10,7 +10,7 @@ sys.path.insert(0, "../../../../../")
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
-    _deserialize_env_dict,
+    _deserialize_json_dict,
 )
 from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -19,21 +19,21 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 class TestMCPServerManager:
     """Test MCP Server Manager stdio functionality"""
 
-    def test_deserialize_env_dict(self):
+    def test_deserialize_json_dict(self):
         """Test environment dictionary deserialization"""
         # Test JSON string
         env_json = '{"PATH": "/usr/bin", "DEBUG": "1"}'
-        result = _deserialize_env_dict(env_json)
+        result = _deserialize_json_dict(env_json)
         assert result == {"PATH": "/usr/bin", "DEBUG": "1"}
 
         # Test already dict
         env_dict = {"PATH": "/usr/bin", "DEBUG": "1"}
-        result = _deserialize_env_dict(env_dict)
+        result = _deserialize_json_dict(env_dict)
         assert result == {"PATH": "/usr/bin", "DEBUG": "1"}
 
         # Test invalid JSON
         invalid_json = '{"PATH": "/usr/bin", "DEBUG": 1'
-        result = _deserialize_env_dict(invalid_json)
+        result = _deserialize_json_dict(invalid_json)
         assert result is None
 
     def test_add_update_server_stdio(self):

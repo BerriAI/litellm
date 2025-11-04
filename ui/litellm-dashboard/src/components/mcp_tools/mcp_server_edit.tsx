@@ -32,6 +32,24 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
 
+  const initialStaticHeaders = React.useMemo(() => {
+    if (!mcpServer.static_headers) {
+      return [];
+    }
+    return Object.entries(mcpServer.static_headers).map(([header, value]) => ({
+      header,
+      value: value != null ? String(value) : "",
+    }));
+  }, [mcpServer.static_headers]);
+
+  const initialValues = React.useMemo(
+    () => ({
+      ...mcpServer,
+      static_headers: initialStaticHeaders,
+    }),
+    [mcpServer, initialStaticHeaders],
+  );
+
   // Initialize cost config from existing server data
   useEffect(() => {
     if (mcpServer.mcp_info?.mcp_server_cost_info) {
@@ -130,25 +148,39 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (!accessToken) return;
     try {
       // Ensure access groups is always a string array
-      const accessGroups = (values.mcp_access_groups || []).map((g: any) =>
+      const { static_headers: staticHeadersList, ...restValues } = values;
+
+      const accessGroups = (restValues.mcp_access_groups || []).map((g: any) =>
         typeof g === "string" ? g : g.name || String(g),
       );
 
+      const staticHeaders = Array.isArray(staticHeadersList)
+        ? staticHeadersList.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
+            const header = entry?.header?.trim();
+            if (!header) {
+              return acc;
+            }
+            acc[header] = entry?.value ?? "";
+            return acc;
+          }, {})
+        : {} as Record<string, string>;
+
       // Prepare the payload with cost configuration and permission fields
       const payload = {
-        ...values,
+        ...restValues,
         server_id: mcpServer.server_id,
         mcp_info: {
-          server_name: values.server_name || values.url,
-          description: values.description,
+          server_name: restValues.server_name || restValues.url,
+          description: restValues.description,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
         },
         mcp_access_groups: accessGroups,
-        alias: values.alias,
+        alias: restValues.alias,
         // Include permission management fields
-        extra_headers: values.extra_headers || [],
+        extra_headers: restValues.extra_headers || [],
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
-        disallowed_tools: values.disallowed_tools || [],
+        disallowed_tools: restValues.disallowed_tools || [],
+        static_headers: staticHeaders,
       };
 
       const updated = await updateMCPServer(accessToken, payload);
@@ -167,7 +199,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       </TabList>
       <TabPanels className="mt-6">
         <TabPanel>
-          <Form form={form} onFinish={handleSave} initialValues={mcpServer} layout="vertical">
+          <Form form={form} onFinish={handleSave} initialValues={initialValues} layout="vertical">
             <Form.Item
               label="MCP Server Name"
               name="server_name"

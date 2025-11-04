@@ -182,6 +182,7 @@ model LiteLLM_MCPServerTable {
   mcp_access_groups String[]
   allowed_tools String[]      @default([])
   extra_headers String[]    @default([])
+  static_headers Json?        @default("{}")
   // Health check status
   status       String?        @default("unknown")
   last_health_check DateTime?
