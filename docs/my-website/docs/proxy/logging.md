@@ -1432,9 +1432,13 @@ litellm_settings:
     # AWS Region for your SQS queue (e.g., us-east-1, eu-central-1, etc.)
     
     # --- Logging Controls ---
-    sqs_strip_base64_files: true
+    sqs_strip_base64_files: false
     # If true, LiteLLM will remove or redact base64-encoded binary data (e.g., PDFs, images, audio)
     # from logged messages to avoid large payloads. SQS has a 1 MB payload size limit.
+    s3_use_team_prefix: false
+    # If true, Litellm will add the team alias prefix to s3 path
+    s3_use_keyprefix: false
+    # If true, Litellm will add the key alias prefix to s3 path
 
 ```
 
