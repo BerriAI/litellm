@@ -2200,7 +2200,7 @@ class StandardLoggingPayload(TypedDict):
     error_information: Optional[StandardLoggingPayloadErrorInformation]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
-    guardrail_information: Optional[list[StandardLoggingGuardrailInformation]]
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams]
 
 

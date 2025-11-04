@@ -455,6 +455,7 @@ const sidebars = {
           items: [
             "providers/azure_ai",
             "providers/azure_ocr",
+            "providers/azure_document_intelligence",
             "providers/azure_ai_speech",
             "providers/azure_ai_img",
             "providers/azure_ai_vector_stores",
@@ -470,6 +471,7 @@ const sidebars = {
             "providers/vertex_self_deployed",
             "providers/vertex_image",
             "providers/vertex_batch",
+            "providers/vertex_ocr",
           ]
         },
         {

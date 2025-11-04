@@ -87,31 +87,10 @@ class LangfuseOtelLogger(OpenTelemetry):
         return metadata
 
     @staticmethod
-    def _set_langfuse_specific_attributes(span: Span, kwargs, response_obj):
-        """
-        Sets Langfuse specific metadata attributes onto the OTEL span.
-
-        All keys supported by the vanilla Langfuse integration are mapped to
-        OTEL-safe attribute names defined in LangfuseSpanAttributes.  Complex
-        values (lists/dicts) are serialised to JSON strings for OTEL
-        compatibility.
-        """
+    def _set_metadata_attributes(span: Span, metadata: dict):
+        """Helper to set metadata attributes from mapping."""
         from litellm.integrations.arize._utils import safe_set_attribute
-        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        # 1) Environment variable override
-        langfuse_environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
-        if langfuse_environment:
-            safe_set_attribute(
-                span,
-                LangfuseSpanAttributes.LANGFUSE_ENVIRONMENT.value,
-                langfuse_environment,
-            )
-
-        # 2) Dynamic metadata from kwargs / headers
-        metadata = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
-
-        # Mapping from metadata key -> OTEL attribute enum
         mapping = {
             "generation_name": LangfuseSpanAttributes.GENERATION_NAME,
             "generation_id": LangfuseSpanAttributes.GENERATION_ID,
@@ -135,7 +114,6 @@ class LangfuseOtelLogger(OpenTelemetry):
         for key, enum_attr in mapping.items():
             if key in metadata and metadata[key] is not None:
                 value = metadata[key]
-                # Lists / dicts must be stringified for OTEL
                 if isinstance(value, (list, dict)):
                     try:
                         value = json.dumps(value)
@@ -143,117 +121,105 @@ class LangfuseOtelLogger(OpenTelemetry):
                         value = str(value)
                 safe_set_attribute(span, enum_attr.value, value)
 
-        # 3) Set observation input/output for better UI display
-        #
-        # These Langfuse-specific attributes provide better UI display,
-        # especially for tool calls and function calling.
-        # Set observation input (messages)
-        messages = kwargs.get("messages")
-        if messages:
-            safe_set_attribute(
-                span,
-                LangfuseSpanAttributes.OBSERVATION_INPUT.value,
-                safe_dumps(messages),
-            )
+    @staticmethod
+    def _set_observation_output(span: Span, response_obj):
+        """Helper to set observation output attributes."""
+        from litellm.integrations.arize._utils import safe_set_attribute
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        # Set observation output (response with tool_calls if present)
-        if response_obj and hasattr(response_obj, "get"):
-            # Handle chat completions API (choices field)
-            choices = response_obj.get("choices", [])
-            if choices:
-                # Extract the first choice's message
-                first_choice = choices[0]
-                message = first_choice.get("message", {})
+        if not response_obj or not hasattr(response_obj, "get"):
+            return
 
-                # Check if there are tool_calls
-                tool_calls = message.get("tool_calls")
-                if tool_calls:
-                    # Transform tool_calls to Langfuse-expected format
-                    transformed_tool_calls = []
-                    for tool_call in tool_calls:
-                        function = tool_call.get("function", {})
-                        arguments_str = function.get("arguments", "{}")
+        choices = response_obj.get("choices", [])
+        if choices:
+            first_choice = choices[0]
+            message = first_choice.get("message", {})
+            tool_calls = message.get("tool_calls")
+            if tool_calls:
+                transformed_tool_calls = []
+                for tool_call in tool_calls:
+                    function = tool_call.get("function", {})
+                    arguments_str = function.get("arguments", "{}")
+                    try:
+                        arguments_obj = (
+                            json.loads(arguments_str)
+                            if isinstance(arguments_str, str)
+                            else arguments_str
+                        )
+                    except json.JSONDecodeError:
+                        arguments_obj = {}
+                    langfuse_tool_call = {
+                        "id": response_obj.get("id", ""),
+                        "name": function.get("name", ""),
+                        "call_id": tool_call.get("id", ""),
+                        "type": "function_call",
+                        "arguments": arguments_obj,
+                    }
+                    transformed_tool_calls.append(langfuse_tool_call)
+                safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_OUTPUT.value, safe_dumps(transformed_tool_calls))
+            else:
+                output_data = {}
+                if message.get("role"):
+                    output_data["role"] = message.get("role")
+                if message.get("content") is not None:
+                    output_data["content"] = message.get("content")
+                if output_data:
+                    safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_OUTPUT.value, safe_dumps(output_data))
 
-                        # Parse arguments from JSON string to object
-                        try:
-                            arguments_obj = (
-                                json.loads(arguments_str)
-                                if isinstance(arguments_str, str)
-                                else arguments_str
-                            )
-                        except json.JSONDecodeError:
-                            arguments_obj = {}
-
-                        # Create Langfuse-compatible tool call object
+        output = response_obj.get("output", [])
+        if output:
+            output_items_data: list[dict] = []
+            for item in output:
+                if hasattr(item, "type"):
+                    item_type = item.type
+                    if item_type == "reasoning" and hasattr(item, "summary"):
+                        for summary in item.summary:
+                            if hasattr(summary, "text"):
+                                output_items_data.append({"role": "reasoning_summary", "content": summary.text})
+                    elif item_type == "message":
+                        output_items_data.append({
+                            "role": getattr(item, "role", "assistant"),
+                            "content": getattr(getattr(item, "content", [{}])[0], "text", "")
+                        })
+                    elif item_type == "function_call":
+                        arguments_str = getattr(item, "arguments", "{}")
+                        arguments_obj = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
                         langfuse_tool_call = {
-                            "id": response_obj.get("id", ""),
-                            "name": function.get("name", ""),
-                            "call_id": tool_call.get("id", ""),
+                            "id": getattr(item, "id", ""),
+                            "name": getattr(item, "name", ""),
+                            "call_id": getattr(item, "call_id", ""),
                             "type": "function_call",
                             "arguments": arguments_obj,
                         }
-                        transformed_tool_calls.append(langfuse_tool_call)
+                        output_items_data.append(langfuse_tool_call)
+            if output_items_data:
+                safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_OUTPUT.value, safe_dumps(output_items_data))
 
-                    # Set the observation output with transformed tool_calls
-                    safe_set_attribute(
-                        span,
-                        LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
-                        safe_dumps(transformed_tool_calls),
-                    )
-                else:
-                    # No tool_calls, use regular content-based output
-                    output_data = {}
+    @staticmethod
+    def _set_langfuse_specific_attributes(span: Span, kwargs, response_obj):
+        """
+        Sets Langfuse specific metadata attributes onto the OTEL span.
 
-                    if message.get("role"):
-                        output_data["role"] = message.get("role")
+        All keys supported by the vanilla Langfuse integration are mapped to
+        OTEL-safe attribute names defined in LangfuseSpanAttributes.  Complex
+        values (lists/dicts) are serialised to JSON strings for OTEL
+        compatibility.
+        """
+        from litellm.integrations.arize._utils import safe_set_attribute
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-                    if message.get("content") is not None:
-                        output_data["content"] = message.get("content")
+        langfuse_environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
+        if langfuse_environment:
+            safe_set_attribute(span, LangfuseSpanAttributes.LANGFUSE_ENVIRONMENT.value, langfuse_environment)
 
-                    if output_data:
-                        safe_set_attribute(
-                            span,
-                            LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
-                            safe_dumps(output_data),
-                        )
+        metadata = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
+        LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata)
 
-            # Handle responses API (output field)
-            output = response_obj.get("output", [])
-            if output:
-                output_data = []
-                for item in output:
-                    if hasattr(item, "type"):
-                        item_type = item.type
-                    
-                        if item_type == "reasoning" and hasattr(item, "summary"):
-                            for summary in item.summary:
-                                if hasattr(summary, "text"):
-                                    output_data.append({
-                                        "role": "reasoning_summary",
-                                        "content": summary.text
-                                    })
-                        elif item_type == "message":
-                            output_data.append({
-                                "role": getattr(item, "role", "assistant"),
-                                "content": getattr(getattr(item, "content", [{}])[0], "text", "")
-                            })
-                        elif item_type == "function_call":
-                            arguments_str = getattr(item, "arguments", "{}")
-                            arguments_obj = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
-                            langfuse_tool_call = {
-                                "id": getattr(item, "id", ""),
-                                "name": getattr(item, "name", ""),
-                                "call_id": getattr(item, "call_id", ""),
-                                "type": "function_call",
-                                "arguments": arguments_obj,
-                            }
-                            output_data.append(langfuse_tool_call)
-                if output_data:
-                    safe_set_attribute(
-                        span,
-                        LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
-                        safe_dumps(output_data),
-                    )
+        messages = kwargs.get("messages")
+        if messages:
+            safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_INPUT.value, safe_dumps(messages))
+
+        LangfuseOtelLogger._set_observation_output(span=span, response_obj=response_obj)
 
     @staticmethod
     def _get_langfuse_otel_host() -> Optional[str]:

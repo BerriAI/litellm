@@ -1286,18 +1286,19 @@ class BaseLLMHTTPHandler:
         Returns: (headers, complete_url, data, files)
         """
         from litellm.llms.base_llm.ocr.transformation import OCRRequestData
-
         headers = provider_config.validate_environment(
             api_key=api_key,
             api_base=api_base,
             headers=headers or {},
             model=model,
+            litellm_params=litellm_params,
         )
 
         complete_url = provider_config.get_complete_url(
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         # Transform the request to get data and files
@@ -1358,12 +1359,14 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             headers=headers or {},
             model=model,
+            litellm_params=litellm_params,
         )
 
         complete_url = provider_config.get_complete_url(
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         # Use async transform (providers can override this method if they need async operations)
@@ -1549,10 +1552,10 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        return self._transform_ocr_response(
-            provider_config=provider_config,
+        # Use async response transform for async operations
+        return await provider_config.async_transform_ocr_response(
             model=model,
-            response=response,
+            raw_response=response,
             logging_obj=logging_obj,
         )
 
