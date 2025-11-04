@@ -538,7 +538,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return cast(List["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
 
-    def _map_reasoning_effort(self, reasoning_effort: str) -> Optional[Reasoning]:
+    def _map_reasoning_effort(self, reasoning_effort: Union[str, Dict[str, Any]]) -> Optional[Reasoning]:
+        # If dict is passed, convert it directly to Reasoning object
+        if isinstance(reasoning_effort, dict):
+            return Reasoning(**reasoning_effort)
+
+        # If string is passed, map without summary (default)
         if reasoning_effort == "high":
             return Reasoning(effort="high")
         elif reasoning_effort == "medium":
