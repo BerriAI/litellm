@@ -7397,7 +7397,11 @@ class ProviderConfigManager:
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
             # Check if it's an O-series model
-            if model and ("o_series" in model.lower() or supports_reasoning(model)):
+            # Note: GPT-5 supports reasoning but is NOT an O-series model and supports temperature
+            is_gpt5 = model and "gpt-5" in model.lower()
+            is_o_series = model and ("o_series" in model.lower() or (supports_reasoning(model) and not is_gpt5))
+            
+            if is_o_series:
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:
                 return litellm.AzureOpenAIResponsesAPIConfig()
