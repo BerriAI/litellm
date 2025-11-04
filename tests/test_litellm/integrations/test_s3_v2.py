@@ -479,11 +479,6 @@ async def test_strip_base64_recursive_redaction():
             # "[base64_redacted]" is fine, but raw base64 is not
             assert "base64," not in s, f"Found real base64 blob in: {s}"
 
-import pytest
-from datetime import datetime
-from unittest.mock import patch
-from litellm.integrations.s3_v2 import S3Logger
-from litellm.types.utils import StandardLoggingPayload
 
 
 # --------------------------------------------------------------
