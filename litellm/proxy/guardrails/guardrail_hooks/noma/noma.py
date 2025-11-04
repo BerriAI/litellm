@@ -9,7 +9,7 @@ import asyncio
 import copy
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, Final, List, Literal, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, Final, Literal, Optional, Type, Union
 from urllib.parse import urljoin
 
 from fastapi import HTTPException
@@ -23,7 +23,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.guardrails import GuardrailEventHooks, PiiEntityType
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import EmbeddingResponse, GuardrailStatus, ImageResponse
 
 # Constants

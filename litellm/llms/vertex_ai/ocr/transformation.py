@@ -11,7 +11,6 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRRequestData
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
 
 class VertexAIOCRConfig(MistralOCRConfig):
