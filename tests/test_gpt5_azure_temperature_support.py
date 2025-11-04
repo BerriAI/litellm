@@ -1,7 +1,5 @@
 """
 Test that Azure GPT-5 models support temperature parameter in Responses API.
-
-This test verifies the fix for: https://github.com/BerriAI/litellm/issues/XXXXX
 """
 
 import pytest
