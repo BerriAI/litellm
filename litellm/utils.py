@@ -7741,7 +7741,6 @@ class ProviderConfigManager:
         """
         Get OCR configuration for a given provider.
         """
-        from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
         from litellm.llms.vertex_ai.ocr.transformation import VertexAIOCRConfig
 
         # Special handling for Azure AI - distinguish between Mistral OCR and Document Intelligence

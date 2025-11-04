@@ -29,7 +29,7 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCRResponse,
     OCRUsageInfo,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.secret_managers.main import get_secret_str
 
 
