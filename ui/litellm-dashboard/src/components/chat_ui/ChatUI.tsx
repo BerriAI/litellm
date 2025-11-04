@@ -7,6 +7,8 @@ import { Select, Spin, Typography, Tooltip, Input, Upload, Modal, Button, Tag, D
 import { makeOpenAIChatCompletionRequest } from "./llm_calls/chat_completion";
 import { makeOpenAIImageGenerationRequest } from "./llm_calls/image_generation";
 import { makeOpenAIImageEditsRequest } from "./llm_calls/image_edits";
+import { makeOpenAIAudioSpeechRequest } from "./llm_calls/audio_speech";
+import { makeOpenAIAudioTranscriptionRequest } from "./llm_calls/audio_transcriptions";
 import { makeOpenAIResponsesRequest } from "./llm_calls/responses_api";
 import { makeAnthropicMessagesRequest } from "./llm_calls/anthropic_messages";
 import { fetchAvailableModels, ModelGroup } from "./llm_calls/fetch_models";
@@ -29,6 +31,7 @@ import { createMultimodalMessage, createDisplayMessage } from "./ResponsesImageU
 import ChatImageUpload from "./ChatImageUpload";
 import ChatImageRenderer from "./ChatImageRenderer";
 import { createChatMultimodalMessage, createChatDisplayMessage } from "./ChatImageUtils";
+import AudioRenderer from "./AudioRenderer";
 import SessionManagement from "./SessionManagement";
 import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
 import { SearchResultsDisplay } from "./SearchResultsDisplay";
@@ -46,6 +49,7 @@ import {
   SafetyOutlined,
   PictureOutlined,
   CodeOutlined,
+  SoundOutlined,
   ToolOutlined,
   FilePdfOutlined,
   ArrowUpOutlined,
@@ -53,6 +57,7 @@ import {
 import NotificationsManager from "../molecules/notifications_manager";
 import { makeOpenAIEmbeddingsRequest } from "./llm_calls/embeddings_api";
 import { truncateString } from "./chatUtils";
+import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -129,6 +134,16 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
       return [];
     }
   });
+  const [selectedVoice, setSelectedVoice] = useState<OpenAIVoice>(() => {
+    const saved = sessionStorage.getItem("selectedVoice");
+    if (!saved) return "alloy";
+    try {
+      return JSON.parse(saved) as OpenAIVoice;
+    } catch {
+      // If stored value is not valid JSON, treat it as a plain string
+      return saved as OpenAIVoice;
+    }
+  });
   const [selectedVectorStores, setSelectedVectorStores] = useState<string[]>(() => {
     const saved = sessionStorage.getItem("selectedVectorStores");
     try {
@@ -163,6 +178,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
   const [responsesImagePreviewUrl, setResponsesImagePreviewUrl] = useState<string | null>(null);
   const [chatUploadedImage, setChatUploadedImage] = useState<File | null>(null);
   const [chatImagePreviewUrl, setChatImagePreviewUrl] = useState<string | null>(null);
+  const [uploadedAudio, setUploadedAudio] = useState<File | null>(null);
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [selectedSdk, setSelectedSdk] = useState<"openai" | "azure">("openai");
@@ -207,6 +223,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
         endpointType,
         selectedModel: selectedModels[0], // Use first model for code snippet
         selectedSdk,
+        selectedVoice,
       });
       setGeneratedCode(code);
     }
@@ -244,7 +261,13 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     sessionStorage.setItem("selectedVectorStores", JSON.stringify(selectedVectorStores));
     sessionStorage.setItem("selectedGuardrails", JSON.stringify(selectedGuardrails));
     sessionStorage.setItem("selectedMCPTools", JSON.stringify(selectedMCPTools));
-    sessionStorage.setItem("selectedModels", JSON.stringify(selectedModels));
+    sessionStorage.setItem("selectedVoice", selectedVoice);
+
+    if (selectedModel) {
+      sessionStorage.setItem("selectedModel", selectedModel);
+    } else {
+      sessionStorage.removeItem("selectedModel");
+    }
     if (messageTraceId) {
       sessionStorage.setItem("messageTraceId", messageTraceId);
     } else {
@@ -324,7 +347,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     setChatHistory((prev) => {
       const last = prev[prev.length - 1];
       // if the last message is already from this same role, append
-      if (last && last.role === role && !last.isImage) {
+      if (last && last.role === role && !last.isImage && !last.isAudio) {
         // build a new object, but only set `model` if it wasn't there already
         const updated: MessageType = {
           ...last,
@@ -350,7 +373,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     setChatHistory((prevHistory) => {
       const lastMessage = prevHistory[prevHistory.length - 1];
 
-      if (lastMessage && lastMessage.role === "assistant" && !lastMessage.isImage) {
+      if (lastMessage && lastMessage.role === "assistant" && !lastMessage.isImage && !lastMessage.isAudio) {
         return [
           ...prevHistory.slice(0, prevHistory.length - 1),
           {
@@ -502,11 +525,15 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     ]);
   };
 
+  const updateAudioUI = (audioUrl: string, model: string) => {
+    setChatHistory((prevHistory) => [...prevHistory, { role: "assistant", content: audioUrl, model, isAudio: true }]);
+  };
+
   const updateChatImageUI = (imageUrl: string, model?: string) => {
     setChatHistory((prev) => {
       const last = prev[prev.length - 1];
       // If the last message is from assistant and has content, add image to it
-      if (last && last.role === "assistant" && !last.isImage) {
+      if (last && last.role === "assistant" && !last.isImage && !last.isAudio) {
         const updated = {
           ...last,
           image: {
@@ -604,12 +631,27 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     setChatImagePreviewUrl(null);
   };
 
+  const handleAudioUpload = (file: File): false => {
+    setUploadedAudio(file);
+    return false; // Prevent default upload behavior
+  };
+
+  const handleRemoveAudio = () => {
+    setUploadedAudio(null);
+  };
+
   const handleSendMessage = async () => {
-    if (inputMessage.trim() === "") return;
+    if (inputMessage.trim() === "" && endpointType !== EndpointType.TRANSCRIPTION) return;
 
     // For image edits, require both image and prompt
     if (endpointType === EndpointType.IMAGE_EDITS && uploadedImages.length === 0) {
       NotificationsManager.fromBackend("Please upload at least one image for editing");
+      return;
+    }
+
+    // For audio transcriptions, require audio file
+    if (endpointType === EndpointType.TRANSCRIPTION && !uploadedAudio) {
+      NotificationsManager.fromBackend("Please upload an audio file for transcription");
       return;
     }
 
@@ -674,6 +716,12 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
         chatImagePreviewUrl || undefined,
         chatUploadedImage.name,
       );
+    } else if (endpointType === EndpointType.TRANSCRIPTION && uploadedAudio) {
+      // For audio transcription, show the audio file name and optional prompt
+      const audioMessage = inputMessage
+        ? `🎵 Audio file: ${uploadedAudio.name}\nPrompt: ${inputMessage}`
+        : `🎵 Audio file: ${uploadedAudio.name}`;
+      displayMessage = createDisplayMessage(audioMessage, false);
     } else {
       displayMessage = createDisplayMessage(inputMessage, false);
     }
@@ -690,7 +738,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
           // For chat completions, we preserve the multimodal content structure
           const apiChatHistory = [
             ...chatHistory
-              .filter((msg) => !msg.isImage)
+              .filter((msg) => !msg.isImage && !msg.isAudio)
               .map(({ role, content }) => ({
                 role,
                 content: typeof content === "string" ? content : "",
@@ -725,6 +773,17 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
             selectedTags,
             signal,
           );
+        } else if (endpointType === EndpointType.SPEECH) {
+          // For audio speech
+          await makeOpenAIAudioSpeechRequest(
+            inputMessage,
+            selectedVoice,
+            (audioUrl, model) => updateAudioUI(audioUrl, model),
+            selectedModel || "",
+            effectiveApiKey,
+            selectedTags,
+            signal,
+          );
         } else if (endpointType === EndpointType.IMAGE_EDITS) {
           // For image edits
           if (uploadedImages.length > 0) {
@@ -748,7 +807,9 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
           } else {
             // When using UI session management or starting new API session, send full history
             apiChatHistory = [
-              ...chatHistory.filter((msg) => !msg.isImage).map(({ role, content }) => ({ role, content })),
+              ...chatHistory
+                .filter((msg) => !msg.isImage && !msg.isAudio)
+                .map(({ role, content }) => ({ role, content })),
               newUserMessage,
             ];
           }
@@ -773,7 +834,9 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [
-            ...chatHistory.filter((msg) => !msg.isImage).map(({ role, content }) => ({ role, content })),
+            ...chatHistory
+              .filter((msg) => !msg.isImage && !msg.isAudio)
+              .map(({ role, content }) => ({ role, content })),
             newUserMessage,
           ];
 
@@ -800,6 +863,18 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
             effectiveApiKey,
             selectedTags,
           );
+        } else if (endpointType === EndpointType.TRANSCRIPTION) {
+          // For audio transcriptions
+          if (uploadedAudio) {
+            await makeOpenAIAudioTranscriptionRequest(
+              uploadedAudio,
+              (transcription, model) => updateTextUI("assistant", transcription, model),
+              selectedModel,
+              effectiveApiKey,
+              selectedTags,
+              signal,
+            );
+          }
         }
       }
     } catch (error) {
@@ -824,12 +899,23 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
       if (endpointType === EndpointType.CHAT && chatUploadedImage) {
         handleRemoveChatImage();
       }
+      // Clear audio after successful request for transcription
+      if (endpointType === EndpointType.TRANSCRIPTION && uploadedAudio) {
+        handleRemoveAudio();
+      }
     }
 
     setInputMessage("");
   };
 
   const clearChatHistory = () => {
+    // Clean up audio object URLs before clearing history
+    chatHistory.forEach((message) => {
+      if (message.isAudio && typeof message.content === "string") {
+        URL.revokeObjectURL(message.content);
+      }
+    });
+
     setChatHistory([]);
     setMessageTraceId(null);
     setResponsesSessionId(null); // Clear responses session ID
@@ -837,6 +923,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     handleRemoveAllImages(); // Clear any uploaded images for image edits
     handleRemoveResponsesImage(); // Clear any uploaded images for responses
     handleRemoveChatImage(); // Clear any uploaded images for chat completions
+    handleRemoveAudio(); // Clear any uploaded audio for transcription
     sessionStorage.removeItem("chatHistory");
     sessionStorage.removeItem("messageTraceId");
     sessionStorage.removeItem("responsesSessionId");
@@ -1006,6 +1093,26 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
                   className="mb-4"
                 />
 
+                {/* Voice Selector for Speech Endpoint */}
+                {endpointType === EndpointType.SPEECH && (
+                  <div className="mb-4">
+                    <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                      <SoundOutlined className="mr-2" />
+                      Voice
+                    </Text>
+                    <Select
+                      value={selectedVoice}
+                      onChange={(value) => {
+                        setSelectedVoice(value);
+                        sessionStorage.setItem("selectedVoice", value);
+                      }}
+                      style={{ width: "100%" }}
+                      className="rounded-md"
+                      options={OPEN_AI_VOICE_SELECT_OPTIONS}
+                    />
+                  </div>
+                )}
+
                 {/* Session Management Component */}
                 <SessionManagement
                   endpointType={endpointType}
@@ -1146,7 +1253,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
               {chatHistory.length === 0 && (
                 <div className="h-full flex flex-col items-center justify-center text-gray-400">
                   <RobotOutlined style={{ fontSize: "48px", marginBottom: "16px" }} />
-                  <Text>Start a conversation or generate an image</Text>
+                  <Text>Start a conversation, generate an image, or handle audio</Text>
                 </div>
               )}
 
@@ -1214,6 +1321,8 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
                             className="max-w-full rounded-md border border-gray-200 shadow-sm"
                             style={{ maxHeight: "500px" }}
                           />
+                        ) : message.isAudio ? (
+                          <AudioRenderer message={message} />
                         ) : (
                           <>
                             {/* Show attached image for user messages based on current endpoint */}
@@ -1334,12 +1443,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
               {endpointType === EndpointType.IMAGE_EDITS && (
                 <div className="mb-4">
                   {uploadedImages.length === 0 ? (
-                    <Dragger
-                      beforeUpload={handleImageUpload}
-                      accept="image/*"
-                      showUploadList={false}
-                      className="border-dashed border-2 border-gray-300 rounded-lg p-4"
-                    >
+                    <Dragger beforeUpload={handleImageUpload} accept="image/*" showUploadList={false}>
                       <p className="ant-upload-drag-icon">
                         <PictureOutlined style={{ fontSize: "24px", color: "#666" }} />
                       </p>
@@ -1390,6 +1494,44 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
                   )}
                 </div>
               )}
+
+              {/* Audio Upload Section for Transcriptions */}
+              {endpointType === EndpointType.TRANSCRIPTION && (
+                <div className="mb-4">
+                  {!uploadedAudio ? (
+                    <Dragger
+                      beforeUpload={handleAudioUpload}
+                      accept="audio/*,.mp3,.mp4,.mpeg,.mpga,.m4a,.wav,.webm"
+                      showUploadList={false}
+                    >
+                      <p className="ant-upload-drag-icon">
+                        <SoundOutlined style={{ fontSize: "24px", color: "#666" }} />
+                      </p>
+                      <p className="ant-upload-text text-sm">Click or drag audio file to upload</p>
+                      <p className="ant-upload-hint text-xs text-gray-500">
+                        Support for MP3, MP4, MPEG, MPGA, M4A, WAV, WEBM formats. Max file size: 25 MB.
+                      </p>
+                    </Dragger>
+                  ) : (
+                    <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                      <div className="flex items-center gap-2 flex-1">
+                        <SoundOutlined style={{ fontSize: "20px", color: "#666" }} />
+                        <span className="text-sm font-medium">{uploadedAudio.name}</span>
+                        <span className="text-xs text-gray-500">
+                          ({(uploadedAudio.size / 1024 / 1024).toFixed(2)} MB)
+                        </span>
+                      </div>
+                      <button
+                        className="bg-white shadow-sm border border-gray-200 rounded px-2 py-1 text-red-500 hover:bg-red-50 text-xs"
+                        onClick={handleRemoveAudio}
+                      >
+                        <DeleteOutlined /> Remove
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Show file previews above input when files are uploaded */}
               {endpointType === EndpointType.RESPONSES && responsesUploadedImage && (
                 <div className="mb-2">
@@ -1490,7 +1632,11 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
                         ? "Type your message... (Shift+Enter for new line)"
                         : endpointType === EndpointType.IMAGE_EDITS
                           ? "Describe how you want to edit the image..."
-                          : "Describe the image you want to generate..."
+                          : endpointType === EndpointType.SPEECH
+                            ? "Enter text to convert to speech..."
+                            : endpointType === EndpointType.TRANSCRIPTION
+                              ? "Optional: Add context or prompt for transcription..."
+                              : "Describe the image you want to generate..."
                     }
                     disabled={isLoading}
                     className="flex-1"
@@ -1509,7 +1655,9 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
                   {/* Right: send button - matching blue theme */}
                   <TremorButton
                     onClick={handleSendMessage}
-                    disabled={isLoading || !inputMessage.trim()}
+                    disabled={
+                      isLoading || (endpointType === EndpointType.TRANSCRIPTION ? !uploadedAudio : !inputMessage.trim())
+                    }
                     className="flex-shrink-0 ml-2 !w-8 !h-8 !min-w-8 !p-0 !rounded-full !bg-blue-600 hover:!bg-blue-700 disabled:!bg-gray-300 !border-none !text-white disabled:!text-gray-500 !flex !items-center !justify-center"
                   >
                     <ArrowUpOutlined style={{ fontSize: "14px" }} />

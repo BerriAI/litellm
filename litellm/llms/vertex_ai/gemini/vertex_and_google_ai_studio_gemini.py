@@ -1419,7 +1419,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         _candidates: List[Candidates],
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict,
-    ) -> Tuple[List[dict], List[dict], List, List]:
+        cumulative_tool_call_index: int = 0,
+    ) -> Tuple[List[dict], List[dict], List, List, int]:
         """
         Helper method to process candidates and extract metadata
 
@@ -1428,6 +1429,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             url_context_metadata: List[dict]
             safety_ratings: List
             citation_metadata: List
+            cumulative_tool_call_index: int
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             is_function_call,
@@ -1443,7 +1445,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         chat_completion_logprobs: Optional[ChoiceLogprobs] = None
         tools: Optional[List[ChatCompletionToolCallChunk]] = []
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
-        cumulative_tool_call_index: int = 0
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
 
         for idx, candidate in enumerate(_candidates):
@@ -1563,6 +1564,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             url_context_metadata,
             safety_ratings,
             citation_metadata,
+            cumulative_tool_call_index,
         )
 
     def transform_response(
@@ -1663,6 +1665,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     url_context_metadata,
                     safety_ratings,
                     citation_metadata,
+                    _,  # cumulative_tool_call_index not needed in non-streaming
                 ) = VertexGeminiConfig._process_candidates(
                     _candidates, model_response, logging_obj.optional_params
                 )
@@ -2277,6 +2280,7 @@ class ModelResponseIterator:
         self.sent_first_chunk = False
         self.logging_obj = logging_obj
         self.is_function_call = check_is_function_call(logging_obj)
+        self.cumulative_tool_call_index: int = 0
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
@@ -2298,8 +2302,12 @@ class ModelResponseIterator:
                     url_context_metadata,
                     safety_ratings,
                     citation_metadata,
+                    self.cumulative_tool_call_index,
                 ) = VertexGeminiConfig._process_candidates(
-                    _candidates, model_response, self.logging_obj.optional_params
+                    _candidates,
+                    model_response,
+                    self.logging_obj.optional_params,
+                    cumulative_tool_call_index=self.cumulative_tool_call_index,
                 )
 
                 setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore

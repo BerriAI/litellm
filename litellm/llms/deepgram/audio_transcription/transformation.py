@@ -150,7 +150,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         segments = []
         current_speaker = None
-        current_words = []
+        current_words: list[str] = []
 
         for word_obj in words:
             speaker = word_obj.get("speaker")

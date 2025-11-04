@@ -455,6 +455,7 @@ const sidebars = {
           items: [
             "providers/azure_ai",
             "providers/azure_ocr",
+            "providers/azure_document_intelligence",
             "providers/azure_ai_speech",
             "providers/azure_ai_img",
             "providers/azure_ai_vector_stores",
