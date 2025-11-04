@@ -1286,18 +1286,19 @@ class BaseLLMHTTPHandler:
         Returns: (headers, complete_url, data, files)
         """
         from litellm.llms.base_llm.ocr.transformation import OCRRequestData
-
         headers = provider_config.validate_environment(
             api_key=api_key,
             api_base=api_base,
             headers=headers or {},
             model=model,
+            litellm_params=litellm_params,
         )
 
         complete_url = provider_config.get_complete_url(
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         # Transform the request to get data and files
@@ -1358,12 +1359,14 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             headers=headers or {},
             model=model,
+            litellm_params=litellm_params,
         )
 
         complete_url = provider_config.get_complete_url(
             api_base=api_base,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
         # Use async transform (providers can override this method if they need async operations)
@@ -1549,10 +1552,10 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        return self._transform_ocr_response(
-            provider_config=provider_config,
+        # Use async response transform for async operations
+        return await provider_config.async_transform_ocr_response(
             model=model,
-            response=response,
+            raw_response=response,
             logging_obj=logging_obj,
         )
 
@@ -4083,49 +4086,25 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # # Use JSON when no files, otherwise use form data with files
-            # if files and len(files) > 0:
-            #     # Use multipart/form-data when files are present
-            #     response = sync_httpx_client.post(
-            #         url=api_base,
-            #         headers=headers,
-            #         data=data,
-            #         files=files,
-            #         timeout=timeout,
-            #     )
+            # Use JSON when no files, otherwise use form data with files
+            if files and len(files) > 0:
+                # Use multipart/form-data when files are present
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files=files,
+                    timeout=timeout,
+                )
 
-            # # --- END MOCK VIDEO RESPONSE ---
-            # else:
-                # MOCK GEMINI VEO RESPONSE
-                import json
-                from unittest.mock import Mock
-                
-                mock_response_data = {
-                    "name": "operations/generateVideo/1234567890abcdef",
-                    "metadata": {
-                        "@type": "type.googleapis.com/google.cloud.aiplatform.v1.GenerateVideoMetadata",
-                        "model": "veo-3.0-generate-preview",
-                        "createTime": "2024-11-04T10:00:00Z",
-                        "updateTime": "2024-11-04T10:00:01Z"
-                    },
-                    "done": False
-                }
-                
-                response = Mock(spec=httpx.Response)
-                response.status_code = 200
-                response.headers = httpx.Headers({
-                    "content-type": "application/json",
-                    "x-goog-api-key": headers.get("x-goog-api-key", "mock-key")
-                })
-                response.text = json.dumps(mock_response_data)
-                response.json = lambda: mock_response_data
-                response.content = json.dumps(mock_response_data).encode()
-                # response = sync_httpx_client.post(
-                #     url=api_base,
-                #     headers=headers,
-                #     json=data,
-                #     timeout=timeout,
-                # )
+            # --- END MOCK VIDEO RESPONSE ---
+            else:
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
 
         except Exception as e:
             raise self._handle_error(
@@ -4137,6 +4116,7 @@ class BaseLLMHTTPHandler:
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
         )
 
     async def async_video_generation_handler(
@@ -4205,45 +4185,22 @@ class BaseLLMHTTPHandler:
 
         try:
             #Use JSON when no files, otherwise use form data with files
-            # if files is None or len(files) == 0:
-            #     response = await async_httpx_client.post(
-            #         url=api_base,
-            #         headers=headers,
-            #         json=data,
-            #         timeout=timeout,
-            #     )
-            # else:
-                # response = await async_httpx_client.post(
-                #     url=api_base,
-                #     headers=headers,
-                #     data=data,
-                #     files=files,
-                #     timeout=timeout,
-                # )
-                            # MOCK GEMINI VEO RESPONSE
-                import json
-                from unittest.mock import Mock
-                
-                mock_response_data = {
-                    "name": "operations/generateVideo/1234567890abcdef",
-                    "metadata": {
-                        "@type": "type.googleapis.com/google.cloud.aiplatform.v1.GenerateVideoMetadata",
-                        "model": "veo-3.0-generate-preview",
-                        "createTime": "2024-11-04T10:00:00Z",
-                        "updateTime": "2024-11-04T10:00:01Z"
-                    },
-                    "done": False
-                }
-                
-                response = Mock(spec=httpx.Response)
-                response.status_code = 200
-                response.headers = httpx.Headers({
-                    "content-type": "application/json",
-                    "x-goog-api-key": headers.get("x-goog-api-key", "mock-key")
-                })
-                response.text = json.dumps(mock_response_data)
-                response.json = lambda: mock_response_data
-                response.content = json.dumps(mock_response_data).encode()
+            if files is None or len(files) == 0:
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
+            else:
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files=files,
+                    timeout=timeout,
+                )
+
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -4254,6 +4211,7 @@ class BaseLLMHTTPHandler:
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
         )
 
     ###### VIDEO CONTENT HANDLER ######
@@ -4493,6 +4451,7 @@ class BaseLLMHTTPHandler:
             return video_remix_provider_config.transform_video_remix_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4574,6 +4533,7 @@ class BaseLLMHTTPHandler:
             return video_remix_provider_config.transform_video_remix_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4709,6 +4669,7 @@ class BaseLLMHTTPHandler:
             return video_list_provider_config.transform_video_list_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4868,32 +4829,15 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-                        # MOCK GEMINI VEO RESPONSE
-            import json
-            from unittest.mock import Mock
-            
-            mock_response_data =         {
-            "name": "operations/generateVideo/1234567890abcdef",
-            "done": False  # or true when complete
-        }
-            
-            response = Mock(spec=httpx.Response)
-            response.status_code = 200
-            response.headers = httpx.Headers({
-                "content-type": "application/json",
-                "x-goog-api-key": headers.get("x-goog-api-key", "mock-key")
-            })
-            response.text = json.dumps(mock_response_data)
-            response.json = lambda: mock_response_data
-            response.content = json.dumps(mock_response_data).encode()
-            # response = sync_httpx_client.get(
-            #     url=url,
-            #     headers=headers,
-            # )
+            response = sync_httpx_client.get(
+                url=url,
+                headers=headers,
+            )
 
             return video_status_provider_config.transform_video_status_retrieve_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
@@ -4961,30 +4905,14 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # response = await async_httpx_client.get(
-            #     url=url,
-            #     headers=headers,
-            # )
-            import json
-            from unittest.mock import Mock
-            
-            mock_response_data =         {
-            "name": "operations/generateVideo/1234567890abcdef",
-            "done": False  # or true when complete
-        }
-            
-            response = Mock(spec=httpx.Response)
-            response.status_code = 200
-            response.headers = httpx.Headers({
-                "content-type": "application/json",
-                "x-goog-api-key": headers.get("x-goog-api-key", "mock-key")
-            })
-            response.text = json.dumps(mock_response_data)
-            response.json = lambda: mock_response_data
-            response.content = json.dumps(mock_response_data).encode()
+            response = await async_httpx_client.get(
+                url=url,
+                headers=headers,
+            )
             return video_status_provider_config.transform_video_status_retrieve_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
 
         except Exception as e:
