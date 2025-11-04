@@ -3387,6 +3387,33 @@
         ],
         "source": "https://devblogs.microsoft.com/foundry/whats-new-in-azure-ai-foundry-august-2025/#mistral-document-ai-(ocr)-%E2%80%94-serverless-in-foundry"
     },
+    "azure_ai/doc-intelligence/prebuilt-read": {
+        "litellm_provider": "azure_ai",
+        "ocr_cost_per_page": 1.5e-3,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-document-intelligence/"
+    },
+    "azure_ai/doc-intelligence/prebuilt-layout": {
+        "litellm_provider": "azure_ai",
+        "ocr_cost_per_page": 1e-2,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-document-intelligence/"
+    },
+    "azure_ai/doc-intelligence/prebuilt-document": {
+        "litellm_provider": "azure_ai",
+        "ocr_cost_per_page": 1e-2,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-document-intelligence/"
+    },
     "azure_ai/MAI-DS-R1": {
         "input_cost_per_token": 1.35e-06,
         "litellm_provider": "azure_ai",
