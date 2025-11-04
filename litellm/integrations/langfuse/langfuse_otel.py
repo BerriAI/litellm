@@ -168,16 +168,16 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         output = response_obj.get("output", [])
         if output:
-            output_data = []
+            output_items_data: list[dict] = []
             for item in output:
                 if hasattr(item, "type"):
                     item_type = item.type
                     if item_type == "reasoning" and hasattr(item, "summary"):
                         for summary in item.summary:
                             if hasattr(summary, "text"):
-                                output_data.append({"role": "reasoning_summary", "content": summary.text})
+                                output_items_data.append({"role": "reasoning_summary", "content": summary.text})
                     elif item_type == "message":
-                        output_data.append({
+                        output_items_data.append({
                             "role": getattr(item, "role", "assistant"),
                             "content": getattr(getattr(item, "content", [{}])[0], "text", "")
                         })
@@ -191,9 +191,9 @@ class LangfuseOtelLogger(OpenTelemetry):
                             "type": "function_call",
                             "arguments": arguments_obj,
                         }
-                        output_data.append(langfuse_tool_call)
-            if output_data:
-                safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_OUTPUT.value, safe_dumps(output_data))
+                        output_items_data.append(langfuse_tool_call)
+            if output_items_data:
+                safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_OUTPUT.value, safe_dumps(output_items_data))
 
     @staticmethod
     def _set_langfuse_specific_attributes(span: Span, kwargs, response_obj):
