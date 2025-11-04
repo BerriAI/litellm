@@ -233,6 +233,7 @@ async def gemini_proxy_route(
         target=str(updated_url),
         custom_llm_provider="gemini",
         is_streaming_request=is_streaming_request,
+        query_params=merged_params,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
@@ -1035,7 +1036,6 @@ async def bedrock_proxy_route(
         fastapi_response,
         user_api_key_dict,
         custom_body=data,  # type: ignore
-        query_params={},  # type: ignore
     )
 
     return received_value
