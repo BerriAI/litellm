@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.chat.agentcore.sse_iterator import AgentCoreSSEStreamIterator
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.llms.bedrock_agentcore import (
     AgentCoreContentBlock,
@@ -31,10 +32,15 @@ from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.utils import CustomStreamWrapper
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+    HTTPHandler = Any
+    AsyncHTTPHandler = Any
+    CustomStreamWrapper = Any
 
 
 class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
@@ -399,6 +405,97 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             final_message=final_message
         )
 
+    def get_streaming_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+    ) -> AgentCoreSSEStreamIterator:
+        """
+        Return a streaming iterator for SSE responses.
+        
+        Args:
+            model: The model name
+            raw_response: Raw HTTP response with streaming data
+            
+        Returns:
+            AgentCoreSSEStreamIterator: Iterator that yields ModelResponse chunks
+        """
+        return AgentCoreSSEStreamIterator(response=raw_response, model=model)
+
+    def get_sync_custom_stream_wrapper(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        client: Optional[Union[HTTPHandler, "AsyncHTTPHandler"]] = None,
+        json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
+    ) -> CustomStreamWrapper:
+        """
+        Get a CustomStreamWrapper for synchronous streaming.
+        
+        This is called when stream=True is passed to completion().
+        """
+        from litellm.llms.custom_httpx.http_handler import (
+            HTTPHandler,
+            _get_httpx_client,
+        )
+        from litellm.utils import CustomStreamWrapper
+        
+        if client is None or not isinstance(client, HTTPHandler):
+            client = _get_httpx_client(params={})
+        
+        # Make streaming request
+        response = client.post(
+            api_base,
+            headers=headers,
+            data=signed_json_body if signed_json_body else json.dumps(data),
+            stream=True,  # THIS IS KEY - tells httpx to not buffer
+            logging_obj=logging_obj,
+        )
+        
+        if response.status_code != 200:
+            raise BedrockError(
+                status_code=response.status_code, message=str(response.read())
+            )
+        
+        # Create iterator for SSE stream
+        completion_stream = self.get_streaming_response(model=model, raw_response=response)
+        
+        streaming_response = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=logging_obj,
+        )
+        
+        # LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response="first stream response received",
+            additional_args={"complete_input_dict": data},
+        )
+        
+        return streaming_response
+
+    @property
+    def has_custom_stream_wrapper(self) -> bool:
+        """Indicates that this config has custom streaming support."""
+        return True
+
+    @property
+    def supports_stream_param_in_request_body(self) -> bool:
+        """
+        AgentCore does not allow passing `stream` in the request body.
+        Streaming is automatic based on the response format.
+        """
+        return False
+
     def transform_response(
         self,
         model: str,
@@ -416,6 +513,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         """
         Transform the AgentCore response to LiteLLM ModelResponse format.
         AgentCore can return either JSON or SSE (Server-Sent Events) stream responses.
+        
+        Note: For streaming responses, use get_streaming_response() instead.
         """
         try:
             # Parse the response based on content type (JSON or SSE)
