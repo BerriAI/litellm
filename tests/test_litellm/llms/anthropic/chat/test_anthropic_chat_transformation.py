@@ -366,40 +366,29 @@ def test_get_supported_params_thinking():
     assert "thinking" in params
 
 
-def test_anthropic_memory_tool_transformation_with_beta_header():
+def test_anthropic_memory_tool_auto_adds_beta_header():
     """
-    Tests that a litellm.completion() call with the Anthropic memory tool
-    and its required beta header is correctly transformed into the final
-    request payload.
+    Tests that LiteLLM automatically adds the required 'anthropic-beta' header
+    when the memory tool is present, and the user has NOT provided a beta header.
     """
+
     config = AnthropicConfig()
-
     memory_tool = [{"type": "memory_20250818", "name": "memory"}]
-    beta_headers = {"anthropic-beta": "context-management-2025-06-27"}
+    messages = [{"role": "user", "content": "Remember this."}]
+    
+    headers = {} 
+    optional_params = { "tools": memory_tool }
 
-    test_params = {
-        "tools": memory_tool,
-        "extra_headers": beta_headers,
-    }
 
-    transformed_params = config.map_openai_params(
-        non_default_params=test_params,
-        optional_params={},
-        model="claude-sonnet-4-5-20250929",
-        drop_params=False,
+    config.transform_request(
+        model="claude-3-5-sonnet-20240620",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers,
     )
 
-    assert "tools" in transformed_params
-    assert isinstance(transformed_params["tools"], list)
-    assert len(transformed_params["tools"]) == 1
 
-    transformed_tool = transformed_params["tools"][0]
-    assert transformed_tool.get("name") == "memory"
-    assert transformed_tool.get("type") == "memory_20250818"
+    assert "anthropic-beta" in headers
+    assert headers["anthropic-beta"] == "context-management-2025-06-27"
 
-    assert "extra_headers" in transformed_params
-    assert "anthropic-beta" in transformed_params["extra_headers"]
-    assert (
-        transformed_params["extra_headers"]["anthropic-beta"]
-        == "context-management-2025-06-27"
-    )
