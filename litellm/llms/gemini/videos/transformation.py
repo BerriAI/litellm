@@ -87,7 +87,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> Dict[str, Any]:
         """
         Map OpenAI-style parameters to Veo format.
         
@@ -97,7 +97,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         - size → aspectRatio (e.g., "1280x720" → "16:9")
         - seconds → durationSeconds
         """
-        mapped_params = {}
+        mapped_params: Dict[str, Any] = {}
         
         # Map input_reference to image
         if "input_reference" in video_create_optional_params:
@@ -106,15 +106,18 @@ class GeminiVideoConfig(BaseVideoConfig):
         # Map size to aspectRatio
         if "size" in video_create_optional_params:
             size = video_create_optional_params["size"]
-            aspect_ratio = self._convert_size_to_aspect_ratio(size)
-            if aspect_ratio:
-                mapped_params["aspectRatio"] = aspect_ratio
+            if size is not None:
+                aspect_ratio = self._convert_size_to_aspect_ratio(size)
+                if aspect_ratio:
+                    mapped_params["aspectRatio"] = aspect_ratio
         
         # Map seconds to durationSeconds
         if "seconds" in video_create_optional_params:
             seconds = video_create_optional_params["seconds"]
             try:
-                mapped_params["durationSeconds"] = int(seconds) if isinstance(seconds, str) else seconds
+                duration = int(seconds) if isinstance(seconds, str) else seconds
+                if duration is not None:
+                    mapped_params["durationSeconds"] = duration
             except (ValueError, TypeError):
                 # If conversion fails, skip this parameter
                 pass
@@ -241,8 +244,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         
         request_data = request_body_obj.model_dump(exclude_none=True)
         
-        
-        return request_data, None
+        return request_data, []
 
     def transform_video_create_response(
         self,
