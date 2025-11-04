@@ -15,19 +15,24 @@ import litellm
 from unittest.mock import MagicMock, patch
 import pytest
 
+import pytest
 
-def test_bedrock_agentcore_basic():
+@pytest.mark.parametrize(
+    "model", [
+        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_13sf6-cALnp38iZD", # non-streaming invocation
+        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC", # streaming invocation
+    ]
+)
+def test_bedrock_agentcore_basic(model):
     """
-    Test basic AgentCore invocation
+    Test AgentCore invocation parameterized by model
     """
-    #litellm._turn_on_debug()
+    litellm._turn_on_debug()
     response = litellm.completion(
-        model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
+        model=model,
         messages=[{"role": "user", "content": "Explain machine learning in simple terms"}],
     )
-
     print("response from agentcore=", response.model_dump_json(indent=4))
-
     # Assert that the message content has a response with some length
     assert response.choices[0].message.content
     assert len(response.choices[0].message.content) > 0

@@ -313,6 +313,35 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             final_message=result  # type: ignore
         )
 
+    def _get_parsed_response(
+        self, raw_response: httpx.Response
+    ) -> AgentCoreParsedResponse:
+        """
+        Parse AgentCore response based on content type.
+        
+        Args:
+            raw_response: Raw HTTP response from AgentCore
+            
+        Returns:
+            AgentCoreParsedResponse: Parsed response data
+        """
+        content_type = raw_response.headers.get("content-type", "").lower()
+        verbose_logger.debug(f"AgentCore response Content-Type: {content_type}")
+        
+        # Parse response based on content type
+        if "application/json" in content_type:
+            # Direct JSON response
+            verbose_logger.debug("Parsing JSON response")
+            response_json = raw_response.json()
+            verbose_logger.debug(f"Response JSON: {response_json}")
+            return self._parse_json_response(response_json)
+        else:
+            # SSE stream response (text/event-stream or default)
+            verbose_logger.debug("Parsing SSE stream response")
+            response_text = raw_response.text
+            verbose_logger.debug(f"AgentCore response (first 500 chars): {response_text[:500]}")
+            return self._parse_sse_stream(response_text)
+
     def _parse_sse_stream(self, response_text: str) -> AgentCoreParsedResponse:
         """
         Parse Server-Sent Events (SSE) stream format.
@@ -389,23 +418,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         AgentCore can return either JSON or SSE (Server-Sent Events) stream responses.
         """
         try:
-            # Check Content-Type to determine response format
-            content_type = raw_response.headers.get("content-type", "").lower()
-            verbose_logger.debug(f"AgentCore response Content-Type: {content_type}")
-            
-            # Parse response based on content type
-            if "application/json" in content_type:
-                # Direct JSON response
-                verbose_logger.debug("Parsing JSON response")
-                response_json = raw_response.json()
-                verbose_logger.debug(f"Response JSON: {response_json}")
-                parsed_data = self._parse_json_response(response_json)
-            else:
-                # SSE stream response (text/event-stream or default)
-                verbose_logger.debug("Parsing SSE stream response")
-                response_text = raw_response.text
-                verbose_logger.debug(f"AgentCore response (first 500 chars): {response_text[:500]}")
-                parsed_data = self._parse_sse_stream(response_text)
+            # Parse the response based on content type (JSON or SSE)
+            parsed_data = self._get_parsed_response(raw_response)
             
             content = parsed_data["content"]
             usage_data = parsed_data["usage"]
