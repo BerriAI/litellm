@@ -103,7 +103,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
     to: new Date(),
   });
-  const [modelViewMode, setModelViewMode] = useState<"chart" | "table">("table");
 
   const fetchSpendData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
