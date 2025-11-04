@@ -237,3 +237,74 @@ class TestApplyGuardrailCheck:
         assert hasattr(
             child_with_override, "apply_guardrail"
         ), "All instances should have apply_guardrail via inheritance"
+
+
+class TestGuardrailLoggingAggregation:
+    def _make_guardrail(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return CustomGuardrail(
+            guardrail_name="test_guardrail",
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+    def _invoke_add_log(self, request_data: dict) -> None:
+        guardrail = self._make_guardrail()
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"result": "ok"},
+            request_data=request_data,
+            guardrail_status="success",
+            start_time=1.0,
+            end_time=2.0,
+            duration=1.0,
+            masked_entity_count={"EMAIL": 1},
+            guardrail_provider="presidio",
+        )
+
+    def test_appends_to_existing_metadata_list(self):
+        request_data = {
+            "metadata": {
+                "standard_logging_guardrail_information": [
+                    {"guardrail_name": "existing_guardrail"}
+                ]
+            }
+        }
+
+        self._invoke_add_log(request_data)
+
+        info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert isinstance(info, list)
+        assert len(info) == 2
+        assert info[0]["guardrail_name"] == "existing_guardrail"
+        assert info[1]["guardrail_name"] == "test_guardrail"
+
+    def test_converts_existing_metadata_dict_to_list(self):
+        request_data = {
+            "metadata": {
+                "standard_logging_guardrail_information": {"guardrail_name": "legacy"}
+            }
+        }
+
+        self._invoke_add_log(request_data)
+
+        info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert isinstance(info, list)
+        assert len(info) == 2
+        assert info[0]["guardrail_name"] == "legacy"
+        assert info[1]["guardrail_name"] == "test_guardrail"
+
+    def test_appends_to_litellm_metadata(self):
+        request_data = {
+            "litellm_metadata": {
+                "standard_logging_guardrail_information": [
+                    {"guardrail_name": "litellm_existing"}
+                ]
+            }
+        }
+
+        self._invoke_add_log(request_data)
+
+        info = request_data["litellm_metadata"]["standard_logging_guardrail_information"]
+        assert isinstance(info, list)
+        assert len(info) == 2
+        assert info[1]["guardrail_name"] == "test_guardrail"

@@ -24,6 +24,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
+    _safe_set_request_parsed_body,
     get_form_data,
     get_request_body,
 )
@@ -39,6 +40,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     is_allowed_to_call_vector_store_endpoint,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 from .passthrough_endpoint_router import PassthroughEndpointRouter
@@ -161,12 +163,12 @@ async def llm_passthrough_factory_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers=auth_headers,
+        is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        stream=is_streaming_request,  # type: ignore
     )
 
     return received_value
@@ -230,13 +232,13 @@ async def gemini_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_llm_provider="gemini",
+        is_streaming_request=is_streaming_request,
+        query_params=merged_params,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        query_params=merged_params,  # type: ignore
-        stream=is_streaming_request,  # type: ignore
     )
 
     return received_value
@@ -283,12 +285,12 @@ async def cohere_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers={"Authorization": "Bearer {}".format(cohere_api_key)},
+        is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        stream=is_streaming_request,  # type: ignore
     )
 
     return received_value
@@ -412,12 +414,141 @@ async def mistral_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers={"Authorization": "Bearer {}".format(mistral_api_key)},
+        is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        stream=is_streaming_request,  # type: ignore
+    )
+
+    return received_value
+
+
+@router.api_route(
+    "/milvus/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Milvus Pass-through", "pass-through"],
+)
+async def milvus_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Enable using Milvus `/vectors` endpoint as a pass-through endpoint.
+    """
+
+    provider_config = ProviderConfigManager.get_provider_vector_stores_config(
+        provider=LlmProviders.MILVUS
+    )
+    if not provider_config:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to find Milvus vector store config.",
+        )
+
+    # check if managed vector store index is used
+    request_body = await get_request_body(request)
+
+    # check collectionName
+    collection_name = cast(Optional[str], request_body.get("collectionName"))
+    extra_headers = {}
+    base_target_url: Optional[str] = None
+    if not collection_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Collection name is required. Got {request_body}",
+        )
+
+    if not litellm.vector_store_index_registry or not litellm.vector_store_registry:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to find Milvus vector store index registry or vector store registry.",
+        )
+
+    # check if vector store index
+    is_vector_store_index = litellm.vector_store_index_registry.is_vector_store_index(
+        vector_store_index_name=collection_name
+    )
+
+    if not is_vector_store_index:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Collection {collection_name} is not a litellm managed vector store index. Only litellm managed vector store indexes are supported.",
+        )
+
+    is_allowed_to_call_vector_store_endpoint(
+        index_name=collection_name,
+        provider=LlmProviders.MILVUS,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+    )
+    # get the vector store name from index registry
+
+    index_object = (
+        (
+            litellm.vector_store_index_registry.get_vector_store_index_by_name(
+                vector_store_index_name=collection_name
+            )
+        )
+        if litellm.vector_store_index_registry is not None
+        else None
+    )
+    if index_object is None:
+        raise Exception(f"Vector store index not found for {collection_name}")
+
+    vector_store_name = index_object.litellm_params.vector_store_name
+    vector_store_index = index_object.litellm_params.vector_store_index
+
+    request_body["collectionName"] = vector_store_index
+
+    # Update the request object with the modified collection name
+    _safe_set_request_parsed_body(request, request_body)
+
+    vector_store = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry_by_name(
+        vector_store_name=vector_store_name
+    )
+    if vector_store is None:
+        raise Exception(f"Vector store not found for {vector_store_name}")
+    litellm_params = vector_store.get("litellm_params") or {}
+    auth_credentials = provider_config.get_auth_credentials(
+        litellm_params=litellm_params
+    )
+
+    extra_headers = auth_credentials.get("headers") or {}
+
+    litellm_params = vector_store.get("litellm_params") or {}
+
+    base_target_url = provider_config.get_complete_url(
+        api_base=litellm_params.get("api_base"), litellm_params=litellm_params
+    )
+
+    if base_target_url is None:
+        raise Exception(
+            f"api_base not found in vector store configuration for {vector_store_name}"
+        )
+
+    encoded_endpoint = httpx.URL(endpoint).path
+
+    # Ensure endpoint starts with '/' for proper URL construction
+    if not encoded_endpoint.startswith("/"):
+        encoded_endpoint = "/" + encoded_endpoint
+
+    # Construct the full target URL using httpx
+    base_url = httpx.URL(base_target_url)
+    updated_url = base_url.copy_with(path=encoded_endpoint)
+    ## CREATE PASS-THROUGH
+    endpoint_func = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers=extra_headers,
+    )  # dynamically construct pass-through endpoint based on incoming path
+    received_value = await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
     )
 
     return received_value
@@ -475,12 +606,12 @@ async def anthropic_proxy_route(
         target=str(updated_url),
         custom_headers={"x-api-key": "{}".format(anthropic_api_key)},
         _forward_headers=True,
+        is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        stream=is_streaming_request,  # type: ignore
     )
 
     return received_value
@@ -898,14 +1029,13 @@ async def bedrock_proxy_route(
         endpoint=endpoint,
         target=str(prepped.url),
         custom_headers=prepped.headers,  # type: ignore
+        is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        stream=is_streaming_request,  # type: ignore
         custom_body=data,  # type: ignore
-        query_params={},  # type: ignore
     )
 
     return received_value
@@ -981,12 +1111,12 @@ async def assemblyai_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers={"Authorization": "{}".format(assemblyai_api_key)},
+        is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request=request,
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
-        stream=is_streaming_request,  # type: ignore
     )
 
     return received_value
@@ -1687,13 +1817,12 @@ class BaseOpenAIPassThroughHandler:
             custom_headers=BaseOpenAIPassThroughHandler._assemble_headers(
                 api_key=api_key, request=request, extra_headers=extra_headers
             ),
+            is_streaming_request=is_streaming_request,  # type: ignore
         )  # dynamically construct pass-through endpoint based on incoming path
         received_value = await endpoint_func(
             request,
             fastapi_response,
             user_api_key_dict,
-            stream=is_streaming_request,  # type: ignore
-            query_params=dict(request.query_params),  # type: ignore
         )
 
         return received_value

@@ -49,6 +49,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_batch_size: Optional[int] = DEFAULT_S3_BATCH_SIZE,
         s3_config=None,
         s3_use_team_prefix: bool = False,
+        s3_strip_base64_files: bool = False,
         **kwargs,
     ):
         try:
@@ -56,12 +57,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 f"in init s3 logger - s3_callback_params {litellm.s3_callback_params}"
             )
 
-            # IMPORTANT: We use a concurrent limit of 1 to upload to s3
-            # Files should get uploaded BUT they should not impact latency of LLM calling logic
-            self.async_httpx_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.LoggingCallback,
-            )
-
+            # Initialize S3 params first to get the correct s3_verify value
             self._init_s3_params(
                 s3_bucket_name=s3_bucket_name,
                 s3_region_name=s3_region_name,
@@ -80,8 +76,19 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_config=s3_config,
                 s3_path=s3_path,
                 s3_use_team_prefix=s3_use_team_prefix,
+                s3_strip_base64_files=s3_strip_base64_files
             )
             verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
+
+            # IMPORTANT
+            # Create httpx client AFTER _init_s3_params so we have the correct s3_verify value
+            verbose_logger.debug(
+                f"s3_v2 logger creating async httpx client with s3_verify={self.s3_verify}"
+            )
+            self.async_httpx_client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.LoggingCallback,
+                params={"ssl_verify": self.s3_verify}
+            )
 
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
@@ -124,6 +131,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_config=None,
         s3_path: Optional[str] = None,
         s3_use_team_prefix: bool = False,
+        s3_strip_base64_files: bool = False,
     ):
         """
         Initialize the s3 params for this logging callback
@@ -144,9 +152,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             litellm.s3_callback_params.get("s3_api_version") or s3_api_version
         )
         self.s3_use_ssl = (
-            litellm.s3_callback_params.get("s3_use_ssl", True) or s3_use_ssl
+            litellm.s3_callback_params.get("s3_use_ssl", True) if litellm.s3_callback_params.get("s3_use_ssl") is not None else s3_use_ssl
         )
-        self.s3_verify = litellm.s3_callback_params.get("s3_verify") or s3_verify
+        self.s3_verify = (
+            litellm.s3_callback_params.get("s3_verify") if litellm.s3_callback_params.get("s3_verify") is not None else s3_verify
+        )
         self.s3_endpoint_url = (
             litellm.s3_callback_params.get("s3_endpoint_url") or s3_endpoint_url
         )
@@ -194,6 +204,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             or s3_use_team_prefix
         )
 
+        self.s3_strip_base64_files = (
+            bool(litellm.s3_callback_params.get("s3_strip_base64_files", False))
+            or s3_strip_base64_files
+        )
+
         return
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -239,7 +254,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             )
         except Exception as e:
             verbose_logger.exception(f"s3 Layer Error - {str(e)}")
-            pass
+            self.handle_callback_failure(callback_name="S3Logger")
 
     async def async_upload_data_to_s3(
         self, batch_logging_element: s3BatchLoggingElement
@@ -270,6 +285,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             verbose_logger.debug(
                 f"s3_v2 logger - uploading data to s3 - {batch_logging_element.s3_object_key}"
+            )
+            verbose_logger.debug(
+                f"s3_v2 logger - s3_verify setting: {self.s3_verify}"
             )
 
             # Prepare the URL
@@ -323,6 +341,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             response.raise_for_status()
         except Exception as e:
             verbose_logger.exception(f"Error uploading to s3: {str(e)}")
+            self.handle_callback_failure(callback_name="S3Logger")
 
     async def async_send_batch(self):
         """
@@ -363,6 +382,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         """
         if standard_logging_payload is None:
             return None
+
+        if self.s3_strip_base64_files:
+            import asyncio
+            standard_logging_payload = asyncio.run(self._strip_base64_from_messages(standard_logging_payload))
 
         team_alias = standard_logging_payload["metadata"].get("user_api_key_team_alias")
 
@@ -465,12 +488,15 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
-            httpx_client = _get_httpx_client()
+            httpx_client = _get_httpx_client(
+                params={"ssl_verify": self.s3_verify} if self.s3_verify is not None else None
+            )
             # Make the request
             response = httpx_client.put(url, data=json_string, headers=signed_headers)
             response.raise_for_status()
         except Exception as e:
             verbose_logger.exception(f"Error uploading to s3: {str(e)}")
+            self.handle_callback_failure(callback_name="S3Logger")
 
     async def _download_object_from_s3(self, s3_object_key: str) -> Optional[dict]:
         """

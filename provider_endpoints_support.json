@@ -14,7 +14,8 @@
         "audio_speech": "Supports /audio/speech endpoint",
         "moderations": "Supports /moderations endpoint",
         "batches": "Supports /batches endpoint",
-        "rerank": "Supports /rerank endpoint"
+        "rerank": "Supports /rerank endpoint",
+        "ocr": "Supports /ocr endpoint"
       }
     }
   },
@@ -192,7 +193,25 @@
         "audio_speech": true,
         "moderations": true,
         "batches": true,
-        "rerank": false
+        "rerank": false,
+        "ocr": true
+      }
+    },
+    "azure_ai/doc-intelligence": {
+      "display_name": "Azure AI Document Intelligence (`azure_ai/doc-intelligence`)",
+      "url": "https://docs.litellm.ai/docs/providers/azure_document_intelligence",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "ocr": true
       }
     },
     "azure_text": {
@@ -656,7 +675,8 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "ocr": true
       }
     },
     "gemini": {
@@ -944,7 +964,8 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "ocr": true
       }
     },
     "moonshot": {
