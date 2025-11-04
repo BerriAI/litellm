@@ -873,7 +873,7 @@ class NomaGuardrail(CustomGuardrail):
                 verbose_proxy_logger.info(msg)
             else:
                 verbose_proxy_logger.debug(msg)
-        
+
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
         from litellm.types.proxy.guardrails.guardrail_hooks.noma import (
