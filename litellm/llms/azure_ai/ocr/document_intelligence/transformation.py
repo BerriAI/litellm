@@ -286,6 +286,76 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
         return OCRPageDimensions(width=width_px, height=height_px, dpi=dpi)
 
+    @staticmethod
+    def _check_timeout(start_time: float, timeout_secs: int) -> None:
+        """
+        Check if operation has timed out.
+        
+        Args:
+            start_time: Start time of the operation
+            timeout_secs: Timeout duration in seconds
+            
+        Raises:
+            TimeoutError: If operation has exceeded timeout
+        """
+        if time.time() - start_time > timeout_secs:
+            raise TimeoutError(
+                f"Azure Document Intelligence operation polling timed out after {timeout_secs} seconds"
+            )
+
+    @staticmethod
+    def _get_retry_after(response: httpx.Response) -> int:
+        """
+        Get retry-after duration from response headers.
+        
+        Args:
+            response: HTTP response
+            
+        Returns:
+            Retry-after duration in seconds (default: 2)
+        """
+        retry_after = int(response.headers.get("retry-after", "2"))
+        verbose_logger.debug(f"Retry polling after: {retry_after} seconds")
+        return retry_after
+
+    @staticmethod
+    def _check_operation_status(response: httpx.Response) -> str:
+        """
+        Check Azure DI operation status from response.
+        
+        Args:
+            response: HTTP response from operation endpoint
+            
+        Returns:
+            Operation status string
+            
+        Raises:
+            ValueError: If operation failed or status is unknown
+        """
+        try:
+            result = response.json()
+            status = result.get("status")
+
+            verbose_logger.debug(f"Azure DI operation status: {status}")
+
+            if status == "succeeded":
+                return "succeeded"
+            elif status == "failed":
+                error_msg = result.get("error", {}).get("message", "Unknown error")
+                raise ValueError(
+                    f"Azure Document Intelligence analysis failed: {error_msg}"
+                )
+            elif status in ["running", "notStarted"]:
+                return "running"
+            else:
+                raise ValueError(f"Unknown operation status: {status}")
+
+        except Exception as e:
+            if "succeeded" in str(e) or "failed" in str(e):
+                raise
+            # If we can't parse JSON, something went wrong
+            raise ValueError(f"Failed to parse Azure DI operation response: {e}")
+
     def _poll_operation_sync(
         self,
         operation_url: str,
@@ -314,44 +384,20 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         verbose_logger.debug(f"Polling Azure DI operation: {operation_url}")
 
         while True:
-            if time.time() - start_time > timeout_secs:
-                raise TimeoutError(
-                    f"Azure Document Intelligence operation polling timed out after {timeout_secs} seconds"
-                )
+            self._check_timeout(start_time=start_time, timeout_secs=timeout_secs)
 
             # Poll the operation status
             response = client.get(url=operation_url, headers=headers)
 
-            # Check if operation is complete
-            try:
-                result = response.json()
-                status = result.get("status")
+            # Check operation status
+            status = self._check_operation_status(response=response)
 
-                verbose_logger.debug(f"Azure DI operation status: {status}")
-
-                if status == "succeeded":
-                    # Return the completed response
-                    return response
-                elif status == "failed":
-                    error_msg = result.get("error", {}).get("message", "Unknown error")
-                    raise ValueError(
-                        f"Azure Document Intelligence analysis failed: {error_msg}"
-                    )
-                elif status in ["running", "notStarted"]:
-                    # Wait before polling again
-                    retry_after = int(response.headers.get("retry-after", "2"))
-                    verbose_logger.debug(f"Retry polling after: {retry_after} seconds")
-                    time.sleep(retry_after)
-                else:
-                    raise ValueError(f"Unknown operation status: {status}")
-
-            except Exception as e:
-                if "succeeded" in str(e) or "failed" in str(e):
-                    raise
-                # If we can't parse JSON, something went wrong
-                raise ValueError(
-                    f"Failed to parse Azure DI operation response: {e}"
-                )
+            if status == "succeeded":
+                return response
+            elif status == "running":
+                # Wait before polling again
+                retry_after = self._get_retry_after(response=response)
+                time.sleep(retry_after)
 
     async def _poll_operation_async(
         self,
@@ -379,43 +425,20 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         verbose_logger.debug(f"Polling Azure DI operation (async): {operation_url}")
 
         while True:
-            if time.time() - start_time > timeout_secs:
-                raise TimeoutError(
-                    f"Azure Document Intelligence operation polling timed out after {timeout_secs} seconds"
-                )
+            self._check_timeout(start_time=start_time, timeout_secs=timeout_secs)
 
             # Poll the operation status
             response = await client.get(url=operation_url, headers=headers)
 
-            # Check if operation is complete
-            try:
-                result = response.json()
-                status = result.get("status")
+            # Check operation status
+            status = self._check_operation_status(response=response)
 
-                verbose_logger.debug(f"Azure DI operation status: {status}")
-
-                if status == "succeeded":
-                    # Return the completed response
-                    return response
-                elif status == "failed":
-                    error_msg = result.get("error", {}).get("message", "Unknown error")
-                    raise ValueError(
-                        f"Azure Document Intelligence analysis failed: {error_msg}"
-                    )
-                elif status in ["running", "notStarted"]:
-                    # Wait before polling again
-                    retry_after = int(response.headers.get("retry-after", "2"))
-                    await asyncio.sleep(retry_after)
-                else:
-                    raise ValueError(f"Unknown operation status: {status}")
-
-            except Exception as e:
-                if "succeeded" in str(e) or "failed" in str(e):
-                    raise
-                # If we can't parse JSON, something went wrong
-                raise ValueError(
-                    f"Failed to parse Azure DI operation response: {e}"
-                )
+            if status == "succeeded":
+                return response
+            elif status == "running":
+                # Wait before polling again
+                retry_after = self._get_retry_after(response=response)
+                await asyncio.sleep(retry_after)
 
     def transform_ocr_response(
         self,
