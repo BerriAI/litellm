@@ -20,8 +20,6 @@ def test_bedrock_agentcore_basic():
     """
     Test basic AgentCore invocation
     """
-    import litellm
-
     #litellm._turn_on_debug()
     response = litellm.completion(
         model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
@@ -36,11 +34,11 @@ def test_bedrock_agentcore_basic():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Skipping bedrock agentcore test - requires valid ARN")
 async def test_bedrock_agentcore_with_streaming():
     """
     Test AgentCore with streaming
     """
+    litellm._turn_on_debug()
     response = litellm.completion(
         model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
         messages=[
