@@ -39,11 +39,17 @@ def test_bedrock_agentcore_basic(model):
 
 
 @pytest.mark.asyncio
-async def test_bedrock_agentcore_with_streaming():
+@pytest.mark.parametrize(
+    "model", [
+        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_13sf6-cALnp38iZD", # non-streaming invocation
+        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC", # streaming invocation
+    ]
+)
+async def test_bedrock_agentcore_with_streaming(model):
     """
     Test AgentCore with streaming
     """
-    litellm._turn_on_debug()
+    #litellm._turn_on_debug()
     response = litellm.completion(
         model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
         messages=[
