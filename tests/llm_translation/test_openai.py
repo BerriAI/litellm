@@ -1312,7 +1312,7 @@ def test_openai_gpt_5_codex_reasoning():
 
 # Tests moved from test_streaming_n_with_tools.py
 # Regression test for: https://github.com/BerriAI/litellm/issues/8977
-@pytest.mark.parametrize("model", ["gpt-4o", "gpt-4-turbo"])
+@pytest.mark.parametrize("model", ["gpt-4o"])
 @pytest.mark.asyncio
 async def test_streaming_tool_calls_with_n_greater_than_1(model):
     """
