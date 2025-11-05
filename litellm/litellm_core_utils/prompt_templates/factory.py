@@ -1490,7 +1490,7 @@ def convert_to_anthropic_tool_invoke(
 
         _content_element = add_cache_control_to_content(
             anthropic_content_element=_anthropic_tool_use_param,
-            orignal_content_element=dict(tool),
+            original_content_element=dict(tool),
         )
 
         if "cache_control" in _content_element:
@@ -1512,9 +1512,9 @@ def add_cache_control_to_content(
         AnthropicMessagesToolUseParam,
         ChatCompletionThinkingBlock,
     ],
-    orignal_content_element: Union[dict, AllMessageValues],
+    original_content_element: Union[dict, AllMessageValues],
 ):
-    cache_control_param = orignal_content_element.get("cache_control")
+    cache_control_param = original_content_element.get("cache_control")
     if cache_control_param is not None and isinstance(cache_control_param, dict):
         transformed_param = ChatCompletionCachedContent(**cache_control_param)  # type: ignore
 
@@ -1727,7 +1727,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_content_element,
-                                orignal_content_element=dict(m),
+                                original_content_element=dict(m),
                             )
 
                             if "cache_control" in _content_element:
@@ -1745,7 +1745,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_text_content_element,
-                                orignal_content_element=dict(m),
+                                original_content_element=dict(m),
                             )
                             _content_element = cast(
                                 AnthropicMessagesTextParam, _content_element
@@ -1767,7 +1767,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     }
                     _content_element = add_cache_control_to_content(
                         anthropic_content_element=_anthropic_content_text_element,
-                        orignal_content_element=dict(user_message_types_block),
+                        original_content_element=dict(user_message_types_block),
                     )
 
                     if "cache_control" in _content_element:
@@ -1825,7 +1825,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         )
                         _cached_message = add_cache_control_to_content(
                             anthropic_content_element=anthropic_message,
-                            orignal_content_element=dict(m),
+                            original_content_element=dict(m),
                         )
 
                         assistant_content.append(
@@ -1845,7 +1845,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
 
                 _content_element = add_cache_control_to_content(
                     anthropic_content_element=_anthropic_text_content_element,
-                    orignal_content_element=dict(assistant_content_block),
+                    original_content_element=dict(assistant_content_block),
                 )
 
                 if "cache_control" in _content_element:

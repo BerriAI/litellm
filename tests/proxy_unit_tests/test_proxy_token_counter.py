@@ -694,7 +694,7 @@ async def test_vertex_ai_gemini_token_counting_with_contents(model_name):
 
     print("Vertex AI Gemini token counting response:", response)
 
-    # validate we have orignal response
+    # validate we have original response
     assert response.original_response is not None
     assert response.original_response.get("totalTokens") is not None
     assert response.original_response.get("promptTokensDetails") is not None
