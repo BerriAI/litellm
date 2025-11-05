@@ -127,7 +127,7 @@ class CyberArkSecretManager(BaseSecretManager):
                 content=policy_yaml,
             )
             resp.raise_for_status()
-            verbose_logger.debug(f"Created policy entry for variable: {secret_name}")
+            verbose_logger.debug("Created policy entry for a variable.")
         except httpx.HTTPStatusError as e:
             # Variable might already exist, which is fine
             if e.response.status_code in [409, 422]:
