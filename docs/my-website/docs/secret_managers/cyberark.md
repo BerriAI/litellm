@@ -72,7 +72,7 @@ When you create a virtual key in the LiteLLM UI, it automatically gets stored in
 
 In this example, we create a key named `litellm-cyber-ark-secret-key`:
 
-<Image img={require('../../static/img/cyberark1.png')} alt="Creating virtual key in LiteLLM UI" />
+<Image img={require('../../img/cyberark1.png')} alt="Creating virtual key in LiteLLM UI" />
 
 **Step 2:** Verify the secret exists in CyberArk
 
@@ -88,7 +88,7 @@ curl -H "Authorization: Token token=\"$TOKEN\"" \
 
 The response shows `litellm-cyber-ark-secret-key` exists in CyberArk:
 
-<Image img={require('../../static/img/cyberark2.png')} alt="Virtual key stored in CyberArk API" />
+<Image img={require('../../img/cyberark2.png')} alt="Virtual key stored in CyberArk API" />
 
 The virtual key is stored with the full path: `default:variable:litellm/litellm-cyber-ark-secret-key`
 
@@ -158,6 +158,5 @@ curl -X POST \
 - Variables must be defined in a Conjur policy before setting their values
 - LiteLLM automatically creates policy entries when writing new secrets
 - Secret names with slashes (e.g., `litellm/key`) are automatically URL-encoded
-- CyberArk Conjur does not support direct secret deletion via API (must use policy updates)
 - Session tokens are cached for 5 minutes by default to minimize API calls
 
