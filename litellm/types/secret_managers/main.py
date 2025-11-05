@@ -13,6 +13,7 @@ class KeyManagementSystem(enum.Enum):
     CYBERARK = "cyberark"
     LOCAL = "local"
     AWS_KMS = "aws_kms"
+    CUSTOM = "custom"
 
 
 class KeyManagementSettings(LiteLLMPydanticObjectBase):
