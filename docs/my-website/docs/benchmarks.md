@@ -68,17 +68,27 @@ In these tests the baseline latency characteristics are measured against a fake-
 
 **Portkey**
 
-- Low memory footprint.
-- CPU utilization ~40%.
-- Experienced 3 I/O timeout outages.
-- Stable latency with fewer spikes.
+**Pros**
+
+* Low memory footprint
+* Stable latency with minimal spikes
+
+**Cons**
+
+* CPU utilization capped around ~40%, indicating underutilization of available compute resources
+* Experienced three I/O timeout outages
 
 **LiteLLM**
 
-- High memory usage during init and per-request.
-- Full CPU utilization.
-- One OOM outage.
-- Strong connection handling, low latency after initial spikes.
+**Pros**
+
+* Fully utilizes available CPU capacity
+* Strong connection handling and low latency after initial warm-up spikes
+
+**Cons**
+
+* High memory usage during initialization and per request
+* One OOM outage observed
 
 ## Machine Spec used for testing
 
