@@ -6,7 +6,6 @@
 # +-------------------------------------------------------------+
 
 import asyncio
-import copy
 import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, Final, Literal, Optional, Type, Union
@@ -28,22 +27,11 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import EmbeddingResponse, GuardrailStatus, ImageResponse
 
 from litellm.types.utils import (
-    EmbeddingResponse,
-    GuardrailStatus,
-    ImageResponse,
     ModelResponseStream,
 )
 from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncGenerator,
-    Dict,
-    Final,
     List,
-    Literal,
-    Optional,
-    Type,
-    Union,
+    AsyncGenerator
 )
 
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
