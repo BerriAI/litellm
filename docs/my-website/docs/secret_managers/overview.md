@@ -14,13 +14,13 @@ LiteLLM supports **reading secrets (eg. `OPENAI_API_KEY`)** and **writing secret
 
 ## Supported Secret Managers
 
-- [AWS Key Management Service](./secret_managers/aws_kms)
-- [AWS Secret Manager](./secret_managers/aws_secret_manager)
-- [Azure Key Vault](./secret_managers/azure_key_vault)
-- [CyberArk Conjur](./secret_managers/cyberark)
-- [Google Secret Manager](./secret_managers/google_secret_manager)
-- [Google Key Management Service](./secret_managers/google_kms)
-- [Hashicorp Vault](./secret_managers/hashicorp_vault)
+- [AWS Key Management Service](./aws_kms)
+- [AWS Secret Manager](./aws_secret_manager)
+- [Azure Key Vault](./azure_key_vault)
+- [CyberArk Conjur](./cyberark)
+- [Google Secret Manager](./google_secret_manager)
+- [Google Key Management Service](./google_kms)
+- [Hashicorp Vault](./hashicorp_vault)
 
 ## All Secret Manager Settings
 
@@ -44,3 +44,4 @@ general_settings:
     # K/V pairs in 1 AWS Secret Settings
     primary_secret_name: "litellm_secrets" # OPTIONAL. Read multiple keys from one JSON secret on AWS Secret Manager
 ```
+
