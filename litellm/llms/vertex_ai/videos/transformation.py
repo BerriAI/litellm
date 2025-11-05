@@ -276,6 +276,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict] = None,
     ) -> VideoObject:
         """
         Transform the Veo video creation response.
@@ -288,6 +289,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         We return this as a VideoObject with:
         - id: operation name (used for polling)
         - status: "processing"
+        - usage: includes duration_seconds for cost calculation
         """
         response_data = raw_response.json()
 
@@ -322,6 +324,17 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             created_at=created_at,
         )
 
+        usage_data = {}
+        if request_data:
+            parameters = request_data.get("parameters", {})
+            duration = parameters.get("durationSeconds") or 8
+            if duration is not None:
+                try:
+                    usage_data["duration_seconds"] = float(duration)
+                except (ValueError, TypeError):
+                    pass
+        
+        video_obj.usage = usage_data
         return video_obj
 
     def transform_video_status_retrieve_request(

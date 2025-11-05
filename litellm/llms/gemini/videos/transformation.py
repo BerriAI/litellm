@@ -17,7 +17,7 @@ from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
 )
 import litellm
-
+from litellm.types.llms.gemini import GeminiLongRunningOperationResponse, GeminiVideoGenerationInstance, GeminiVideoGenerationParameters, GeminiVideoGenerationRequest
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from ...base_llm.videos.transformation import BaseVideoConfig as _BaseVideoConfig
@@ -96,8 +96,17 @@ class GeminiVideoConfig(BaseVideoConfig):
         - input_reference → image
         - size → aspectRatio (e.g., "1280x720" → "16:9")
         - seconds → durationSeconds
+        
+        All other params are passed through as-is to support Gemini-specific parameters.
         """
         mapped_params: Dict[str, Any] = {}
+        
+        # Get supported OpenAI params (exclude "model" and "prompt" which are handled separately)
+        supported_openai_params = self.get_supported_openai_params(model)
+        openai_params_to_map = {
+            param for param in supported_openai_params 
+            if param not in {"model", "prompt"}
+        }
         
         # Map input_reference to image
         if "input_reference" in video_create_optional_params:
@@ -121,6 +130,11 @@ class GeminiVideoConfig(BaseVideoConfig):
             except (ValueError, TypeError):
                 # If conversion fails, skip this parameter
                 pass
+        
+        # Pass through any other params that weren't mapped (Gemini-specific params)
+        for key, value in video_create_optional_params.items():
+            if key not in openai_params_to_map and key not in mapped_params:
+                mapped_params[key] = value
         
         return mapped_params
     
@@ -222,17 +236,11 @@ class GeminiVideoConfig(BaseVideoConfig):
             }
         }
         """
-        from litellm.types.llms.gemini import (
-            GeminiVideoGenerationInstance,
-            GeminiVideoGenerationParameters,
-            GeminiVideoGenerationRequest,
-        )
-        
         instance = GeminiVideoGenerationInstance(prompt=prompt)
         
         params_copy = video_create_optional_request_params.copy()
         
-        if "image" in params_copy:
+        if "image" in params_copy and params_copy["image"] is not None:
             image_data = _convert_image_to_gemini_format(params_copy["image"])
             params_copy["image"] = image_data
         
@@ -253,6 +261,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict] = None,
     ) -> VideoObject:
         """
         Transform the Veo video creation response.
@@ -268,10 +277,17 @@ class GeminiVideoConfig(BaseVideoConfig):
         We return this as a VideoObject with:
         - id: operation name (used for polling)
         - status: "processing"
-        """
+        - usage: includes duration_seconds for cost calculation
+        """        
         response_data = raw_response.json()
         
-        operation_name = response_data.get("name")
+        # Parse response using Pydantic model for type safety
+        try:
+            operation_response = GeminiLongRunningOperationResponse(**response_data)
+        except Exception as e:
+            raise ValueError(f"Failed to parse operation response: {e}")
+        
+        operation_name = operation_response.name
         if not operation_name:
             raise ValueError(f"No operation name in Veo response: {response_data}")
         
@@ -280,24 +296,24 @@ class GeminiVideoConfig(BaseVideoConfig):
         else:
             video_id = operation_name
         
-        # Convert Gemini's createTime to Unix timestamp
-        create_time_str = response_data.get("metadata", {}).get("createTime")
-        if create_time_str:
-            try:
-                created_at = _convert_vertex_datetime_to_openai_datetime(create_time_str)
-            except Exception:
-                created_at = int(time.time())
-        else:
-            created_at = int(time.time())
-        
         video_obj = VideoObject(
             id=video_id,
             object="video",
             status="processing",
             model=model,
-            created_at=created_at,
         )
         
+        usage_data = {}
+        if request_data:
+            parameters = request_data.get("parameters", {})
+            duration = parameters.get("durationSeconds") or 8
+            if duration is not None:
+                try:
+                    usage_data["duration_seconds"] = float(duration)
+                except (ValueError, TypeError):
+                    pass
+        
+        video_obj.usage = usage_data
         return video_obj
 
     def transform_video_status_retrieve_request(
@@ -350,34 +366,23 @@ class GeminiVideoConfig(BaseVideoConfig):
                 }
             }
         }
-        """
-        print(f"response_data: {raw_response}")
+        """        
         response_data = raw_response.json()
+        # Parse response using Pydantic model for type safety
+        operation_response = GeminiLongRunningOperationResponse(**response_data)
         
-        operation_name = response_data.get("name", "")
-        is_done = response_data.get("done", False)
+        operation_name = operation_response.name
+        is_done = operation_response.done
         
         if custom_llm_provider:
             video_id = encode_video_id_with_provider(operation_name, custom_llm_provider, None)
         else:
             video_id = operation_name
-        
-        # Convert createTime to Unix timestamp
-        create_time_str = response_data.get("metadata", {}).get("createTime")
-        if create_time_str:
-            try:
-                created_at = _convert_vertex_datetime_to_openai_datetime(create_time_str)
-            except Exception:
-                created_at = int(time.time())
-        else:
-            created_at = int(time.time())
-        
+                   
         video_obj = VideoObject(
             id=video_id,
             object="video",
-            status="processing" if not is_done else "completed",
-            model=response_data.get("metadata", {}).get("model"),
-            created_at=created_at,
+            status="processing" if not is_done else "completed"
         )
         return video_obj
 
@@ -398,40 +403,26 @@ class GeminiVideoConfig(BaseVideoConfig):
         operation_name = extract_original_video_id(video_id)
         
         status_url = f"{api_base.rstrip('/')}/v1beta/{operation_name}"
-        
         client = litellm.module_level_client
         status_response = client.get(url=status_url, headers=headers)
         status_response.raise_for_status()
-        
         response_data = status_response.json()
         
-        if not response_data.get("done", False):
+        operation_response = GeminiLongRunningOperationResponse(**response_data)
+
+        if not operation_response.done:
             raise ValueError(
                 "Video generation is not complete yet. "
                 "Please check status with video_status() before downloading."
             )
         
-        try:
-            video_response = response_data.get("response", {})
-            generate_video_response = video_response.get("generateVideoResponse", {})
-            generated_samples = generate_video_response.get("generatedSamples", [])
-            
-            if not generated_samples or len(generated_samples) == 0:
-                raise ValueError("No video samples found in completed operation")
-            
-            video_uri = generated_samples[0].get("video", {}).get("uri")
-            
-            if not video_uri:
-                raise ValueError("No video URI found in completed operation")
-                
-        except (KeyError, IndexError) as e:
-            raise ValueError(f"Failed to extract video URI: {e}")
+        if not operation_response.response:
+            raise ValueError("No response data in completed operation")
         
-        if not video_uri.startswith("files/"):
-            video_uri = f"files/{video_uri}"
+        generated_samples = operation_response.response.generateVideoResponse.generatedSamples
+        download_url = generated_samples[0].video.uri
         
-        download_url = f"{api_base.rstrip('/')}/v1beta/{video_uri}:download"
-        params: Dict[str, Any] = {"alt": "media"}
+        params: Dict[str, Any] = {}
         
         return download_url, params
 

@@ -10,6 +10,7 @@ import httpx
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
 from litellm.types.videos.main import VideoObject
 from litellm.types.router import GenericLiteLLMParams
+from litellm.llms.openai.cost_calculation import video_generation_cost
 
 
 class TestGeminiVideoConfig:
@@ -149,6 +150,64 @@ class TestGeminiVideoConfig:
         assert mapped["aspectRatio"] == "16:9"  # 1280x720 is landscape
         assert mapped["durationSeconds"] == 8
         assert mapped["image"] == "test_image.jpg"
+
+    def test_map_openai_params_with_gemini_specific_params(self):
+        """Test that Gemini-specific params are passed through correctly."""
+        params_with_gemini_specific = {
+            "size": "1280x720",
+            "seconds": "8",
+            "video": {"bytesBase64Encoded": "abc123", "mimeType": "video/mp4"},
+            "negativePrompt": "no people",
+            "referenceImages": [{"bytesBase64Encoded": "xyz789"}],
+            "personGeneration": "allow"
+        }
+        
+        mapped = self.config.map_openai_params(
+            video_create_optional_params=params_with_gemini_specific,
+            model="veo-3.1-generate-preview",
+            drop_params=False
+        )
+        
+        # Check OpenAI params are mapped
+        assert mapped["aspectRatio"] == "16:9"
+        assert mapped["durationSeconds"] == 8
+        
+        # Check Gemini-specific params are passed through
+        assert "video" in mapped
+        assert mapped["video"]["bytesBase64Encoded"] == "abc123"
+        assert mapped["negativePrompt"] == "no people"
+        assert mapped["referenceImages"] == [{"bytesBase64Encoded": "xyz789"}]
+        assert mapped["personGeneration"] == "allow"
+
+    def test_map_openai_params_with_extra_body(self):
+        """Test that extra_body params are merged and extra_body is removed."""
+        from litellm.videos.utils import VideoGenerationRequestUtils
+        
+        params_with_extra_body = {
+            "seconds": "4",
+            "extra_body": {
+                "negativePrompt": "no people",
+                "personGeneration": "allow",
+                "resolution": "1080p"
+            }
+        }
+        
+        mapped = VideoGenerationRequestUtils.get_optional_params_video_generation(
+            model="veo-3.0-generate-preview",
+            video_generation_provider_config=self.config,
+            video_generation_optional_params=params_with_extra_body
+        )
+        
+        # Check OpenAI params are mapped
+        assert mapped["durationSeconds"] == 4
+        
+        # Check extra_body params are merged
+        assert mapped["negativePrompt"] == "no people"
+        assert mapped["personGeneration"] == "allow"
+        assert mapped["resolution"] == "1080p"
+        
+        # Check extra_body itself is removed
+        assert "extra_body" not in mapped
     
     def test_convert_size_to_aspect_ratio(self):
         """Test size to aspect ratio conversion."""
@@ -189,6 +248,106 @@ class TestGeminiVideoConfig:
         assert result.status == "processing"
         assert result.object == "video"
         assert result.created_at > 0
+
+    def test_transform_video_create_response_with_cost_tracking(self):
+        """Test that duration is captured for cost tracking."""
+        # Mock response
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "name": "operations/generate_1234567890",
+        }
+        
+        # Request data with durationSeconds in parameters
+        request_data = {
+            "instances": [{"prompt": "A test video"}],
+            "parameters": {
+                "durationSeconds": 5,
+                "aspectRatio": "16:9"
+            }
+        }
+        
+        result = self.config.transform_video_create_response(
+            model="gemini/veo-3.0-generate-preview",
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="gemini",
+            request_data=request_data
+        )
+        
+        assert isinstance(result, VideoObject)
+        assert result.usage is not None, "Usage should be set"
+        assert "duration_seconds" in result.usage, "duration_seconds should be in usage"
+        assert result.usage["duration_seconds"] == 5.0, f"Expected 5.0, got {result.usage['duration_seconds']}"
+
+    def test_transform_video_create_response_cost_tracking_with_different_durations(self):
+        """Test cost tracking with different duration values."""
+        # Mock response
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "name": "operations/generate_1234567890",
+        }
+        
+        # Test with 8 seconds
+        request_data_8s = {
+            "instances": [{"prompt": "Test"}],
+            "parameters": {"durationSeconds": 8}
+        }
+        
+        result_8s = self.config.transform_video_create_response(
+            model="gemini/veo-3.1-generate-preview",
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="gemini",
+            request_data=request_data_8s
+        )
+        
+        assert result_8s.usage["duration_seconds"] == 8.0
+        
+        # Test with 4 seconds
+        request_data_4s = {
+            "instances": [{"prompt": "Test"}],
+            "parameters": {"durationSeconds": 4}
+        }
+        
+        result_4s = self.config.transform_video_create_response(
+            model="gemini/veo-3.1-fast-generate-preview",
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="gemini",
+            request_data=request_data_4s
+        )
+        
+        assert result_4s.usage["duration_seconds"] == 4.0
+
+    def test_transform_video_create_response_cost_tracking_no_duration(self):
+        """Test that usage defaults to 8 seconds when no duration in request."""
+        # Mock response
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "name": "operations/generate_1234567890",
+        }
+        
+        # Request data without durationSeconds (should default to 8 seconds)
+        request_data = {
+            "instances": [{"prompt": "A test video"}],
+            "parameters": {
+                "aspectRatio": "16:9"
+            }
+        }
+        
+        result = self.config.transform_video_create_response(
+            model="gemini/veo-3.0-generate-preview",
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="gemini",
+            request_data=request_data
+        )
+        
+        assert isinstance(result, VideoObject)
+        # When no duration is provided, it defaults to 8 seconds
+        assert result.usage is not None
+        assert "duration_seconds" in result.usage
+        assert result.usage["duration_seconds"] == 8.0, "Should default to 8 seconds when not provided"
 
     def test_transform_video_status_retrieve_request(self):
         """Test transformation of status retrieve request."""
@@ -417,6 +576,90 @@ class TestGeminiVideoIntegration:
         
         assert status_obj.status == "completed"
         assert status_obj.created_at > 0
+
+
+class TestGeminiVideoCostTracking:
+    """Test cost tracking for Gemini video generation."""
+    
+    def test_cost_calculation_with_duration(self):
+        """Test that cost is calculated correctly using duration from usage."""
+        # Test VEO 2.0 ($0.35/second)
+        cost_veo2 = video_generation_cost(
+            model="gemini/veo-2.0-generate-001",
+            duration_seconds=5.0,
+            custom_llm_provider="gemini"
+        )
+        expected_veo2 = 0.35 * 5.0  # $1.75
+        assert abs(cost_veo2 - expected_veo2) < 0.001, f"Expected ${expected_veo2}, got ${cost_veo2}"
+        
+        # Test VEO 3.0 ($0.75/second)
+        cost_veo3 = video_generation_cost(
+            model="gemini/veo-3.0-generate-preview",
+            duration_seconds=8.0,
+            custom_llm_provider="gemini"
+        )
+        expected_veo3 = 0.75 * 8.0  # $6.00
+        assert abs(cost_veo3 - expected_veo3) < 0.001, f"Expected ${expected_veo3}, got ${cost_veo3}"
+        
+        # Test VEO 3.1 Standard ($0.40/second)
+        cost_veo31 = video_generation_cost(
+            model="gemini/veo-3.1-generate-preview",
+            duration_seconds=10.0,
+            custom_llm_provider="gemini"
+        )
+        expected_veo31 = 0.40 * 10.0  # $4.00
+        assert abs(cost_veo31 - expected_veo31) < 0.001, f"Expected ${expected_veo31}, got ${cost_veo31}"
+        
+        # Test VEO 3.1 Fast ($0.15/second)
+        cost_veo31_fast = video_generation_cost(
+            model="gemini/veo-3.1-fast-generate-preview",
+            duration_seconds=6.0,
+            custom_llm_provider="gemini"
+        )
+        expected_veo31_fast = 0.15 * 6.0  # $0.90
+        assert abs(cost_veo31_fast - expected_veo31_fast) < 0.001, f"Expected ${expected_veo31_fast}, got ${cost_veo31_fast}"
+    
+    def test_cost_calculation_end_to_end(self):
+        """Test complete cost tracking flow: request -> response -> cost calculation."""
+        config = GeminiVideoConfig()
+        mock_logging_obj = Mock()
+        
+        # Create request with duration
+        request_data = {
+            "instances": [{"prompt": "A beautiful sunset"}],
+            "parameters": {"durationSeconds": 5}
+        }
+        
+        # Mock response
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "name": "operations/generate_test123",
+        }
+        
+        # Transform response
+        video_obj = config.transform_video_create_response(
+            model="gemini/veo-3.0-generate-preview",
+            raw_response=mock_response,
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="gemini",
+            request_data=request_data
+        )
+        
+        # Verify usage has duration
+        assert video_obj.usage is not None
+        assert "duration_seconds" in video_obj.usage
+        duration = video_obj.usage["duration_seconds"]
+        
+        # Calculate cost using the duration from usage
+        cost = video_generation_cost(
+            model="gemini/veo-3.0-generate-preview",
+            duration_seconds=duration,
+            custom_llm_provider="gemini"
+        )
+        
+        # Verify cost calculation (VEO 3.0 is $0.75/second)
+        expected_cost = 0.75 * 5.0  # $3.75
+        assert abs(cost - expected_cost) < 0.001, f"Expected ${expected_cost}, got ${cost}"
 
 
 if __name__ == "__main__":

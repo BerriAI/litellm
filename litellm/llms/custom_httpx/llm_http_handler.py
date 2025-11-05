@@ -4099,6 +4099,7 @@ class BaseLLMHTTPHandler:
                 )
 
             else:
+                # Use JSON content type for POST requests without files
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -4117,6 +4118,7 @@ class BaseLLMHTTPHandler:
             raw_response=response,
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
+            request_data=data,
         )
 
     async def async_video_generation_handler(
@@ -4213,6 +4215,7 @@ class BaseLLMHTTPHandler:
             raw_response=response,
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
+            request_data=data,
         )
 
     ###### VIDEO CONTENT HANDLER ######

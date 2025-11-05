@@ -12447,6 +12447,34 @@
             "video"
         ]
     },
+    "gemini/veo-3.1-fast-generate-preview": {
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "source": "https://ai.google.dev/gemini-api/docs/video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "gemini/veo-3.1-generate-preview": {
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.40,
+        "source": "https://ai.google.dev/gemini-api/docs/video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "google_pse/search": {
         "input_cost_per_query": 0.005,
         "litellm_provider": "google_pse",
