@@ -120,7 +120,6 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.types.containers.main import ContainerObject
 from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
@@ -2837,9 +2836,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
                 )
                 # Track callback logging failures in Prometheus
-                asyncio.create_task(
-                    self._handle_callback_failure(callback=callback)
-                )
+                self._handle_callback_failure(callback=callback)
 
     def _get_trace_id(self, service_name: Literal["langfuse"]) -> Optional[str]:
         """
@@ -4536,7 +4533,7 @@ class StandardLoggingPayloadSetup:
 
 def _get_status_fields(
     status: StandardLoggingPayloadStatus,
-    guardrail_information: Optional[list[dict]],
+    guardrail_information: Optional[List[dict]],
     error_str: Optional[str],
 ) -> "StandardLoggingPayloadStatusFields":
     """
