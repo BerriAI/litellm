@@ -129,10 +129,7 @@ const GuardrailDetails = ({ entry, index, total }: GuardrailDetailsProps) => {
           <h5 className="font-medium mb-2">Masked Entity Summary</h5>
           <div className="flex flex-wrap gap-2">
             {Object.entries(maskedEntityCount).map(([entityType, count]) => (
-              <span
-                key={entityType}
-                className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md text-xs font-medium"
-              >
+              <span key={entityType} className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
                 {entityType}: {count}
               </span>
             ))}
@@ -159,27 +156,31 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
   const guardrailEntries = Array.isArray(data)
     ? data.filter((entry): entry is GuardrailInformation => Boolean(entry))
     : data
-    ? [data]
-    : [];
-
-  if (guardrailEntries.length === 0) {
-    return null;
-  }
+      ? [data]
+      : [];
 
   const [sectionExpanded, setSectionExpanded] = useState(true);
 
-  const primaryName = guardrailEntries.length === 1 ? guardrailEntries[0].guardrail_name : `${guardrailEntries.length} guardrails`;
+  const primaryName =
+    guardrailEntries.length === 1 ? guardrailEntries[0].guardrail_name : `${guardrailEntries.length} guardrails`;
   const statuses = Array.from(new Set(guardrailEntries.map((entry) => entry.guardrail_status)));
   const allSucceeded = statuses.every((status) => (status ?? "").toLowerCase() === "success");
   const aggregatedStatus = allSucceeded ? "success" : "failure";
   const totalMaskedEntities = guardrailEntries.reduce((sum, entry) => {
     return (
       sum +
-      Object.values(entry.masked_entity_count || {}).reduce((acc, count) => acc + (typeof count === "number" ? count : 0), 0)
+      Object.values(entry.masked_entity_count || {}).reduce(
+        (acc, count) => acc + (typeof count === "number" ? count : 0),
+        0,
+      )
     );
   }, 0);
 
   const tooltipTitle = allSucceeded ? null : "Guardrail failed to run.";
+
+  if (guardrailEntries.length === 0) {
+    return null;
+  }
 
   return (
     <div className="bg-white rounded-lg shadow mb-6">
