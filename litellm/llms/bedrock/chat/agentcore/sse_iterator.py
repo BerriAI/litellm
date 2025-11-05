@@ -5,7 +5,7 @@ Handles Server-Sent Events (SSE) streaming responses from AgentCore.
 """
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import httpx
 

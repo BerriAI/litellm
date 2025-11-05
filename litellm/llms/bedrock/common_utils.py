@@ -556,8 +556,6 @@ def get_bedrock_chat_config(model: str):
     Returns:
         The appropriate Bedrock config class instance
     """
-    from litellm.llms.base_llm.chat.transformation import BaseConfig
-
     bedrock_route = BedrockModelInfo.get_bedrock_route(model)
     bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
         model=model

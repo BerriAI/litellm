@@ -20,11 +20,8 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.agentcore.sse_iterator import AgentCoreSSEStreamIterator
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.llms.bedrock_agentcore import (
-    AgentCoreContentBlock,
-    AgentCoreEvent,
     AgentCoreMessage,
     AgentCoreParsedResponse,
-    AgentCoreRequestPayload,
     AgentCoreUsage,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -374,7 +371,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             # Check for final complete message
             if "message" in data and isinstance(data["message"], dict):
                 final_message = data["message"]  # type: ignore
-                verbose_logger.debug(f"Found final message")
+                verbose_logger.debug("Found final message")
             
             # Process event data
             if "event" in data and isinstance(data["event"], dict):
