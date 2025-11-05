@@ -1,5 +1,7 @@
 # CyberArk Conjur
 
+import Image from '@theme/IdealImage';
+
 :::info
 
 ✨ **This is an Enterprise Feature**
@@ -61,6 +63,34 @@ $ litellm --config /path/to/config.yaml
 ```
 
 [Quick Test Proxy](../proxy/user_keys)
+
+## Writing Virtual Keys to CyberArk
+
+When you create a virtual key in the LiteLLM UI, it automatically gets stored in CyberArk Conjur.
+
+**Step 1:** Create a virtual key in the LiteLLM Admin UI
+
+In this example, we create a key named `litellm-cyber-ark-secret-key`:
+
+<Image img={require('../../static/img/cyberark1.png')} alt="Creating virtual key in LiteLLM UI" />
+
+**Step 2:** Verify the secret exists in CyberArk
+
+You can verify the virtual key was stored in CyberArk by querying the secrets API:
+
+```bash
+TOKEN=$(curl -s -X POST http://0.0.0.0:8080/authn/default/admin/authenticate \
+  -d "your-api-key" | base64 | tr -d '\n')
+
+curl -H "Authorization: Token token=\"$TOKEN\"" \
+  "http://0.0.0.0:8080/resources/default/variable" | jq .
+```
+
+The response shows `litellm-cyber-ark-secret-key` exists in CyberArk:
+
+<Image img={require('../../static/img/cyberark2.png')} alt="Virtual key stored in CyberArk API" />
+
+The virtual key is stored with the full path: `default:variable:litellm/litellm-cyber-ark-secret-key`
 
 ## How it works
 
