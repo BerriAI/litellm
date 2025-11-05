@@ -478,3 +478,141 @@ async def test_strip_base64_recursive_redaction():
             s = json.dumps(c).lower()
             # "[base64_redacted]" is fine, but raw base64 is not
             assert "base64," not in s, f"Found real base64 blob in: {s}"
+
+
+
+# --------------------------------------------------------------
+# Shared fixture that silences asyncio.create_task during tests
+# --------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def patch_asyncio_create_task():
+    """Prevent 'no running event loop' errors when S3Logger calls asyncio.create_task()."""
+    with patch("asyncio.create_task"):
+        yield
+
+
+# --------------------------------------------------------------
+# Parametrized prefix combination test
+# --------------------------------------------------------------
+@pytest.mark.parametrize(
+    "use_team_prefix,use_key_prefix,team_alias,key_alias,expected_prefix",
+    [
+        (False, False, "teamA", "keyA", ""),
+        (True, False, "teamA", "keyA", "teamA/"),
+        (False, True, "teamA", "keyA", "keyA/"),
+        (True, True, "teamA", "keyA", "teamA/keyA/"),
+        (True, True, None, "keyA", "keyA/"),
+        (True, True, "teamA", None, "teamA/"),
+        (True, True, None, None, ""),
+    ],
+)
+def test_s3_object_key_prefix_combinations(
+        use_team_prefix, use_key_prefix, team_alias, key_alias, expected_prefix
+):
+    """
+    Validate correct S3 prefix composition for team alias + key alias combinations.
+    """
+    with patch("litellm.integrations.s3_v2.get_s3_object_key") as mock_get_key:
+        mock_get_key.return_value = "mocked/s3/object/key.json"
+
+        logger = S3Logger(
+            s3_bucket_name="test-bucket",
+            s3_region_name="us-east-1",
+            s3_use_team_prefix=use_team_prefix,
+            s3_use_key_prefix=use_key_prefix,
+        )
+
+        payload = StandardLoggingPayload(
+            id="abc123",
+            metadata={
+                "user_api_key_team_alias": team_alias,
+                "user_api_key_alias": key_alias,
+            },
+            messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        )
+
+        result = logger.create_s3_batch_logging_element(datetime.utcnow(), payload)
+        assert result is not None
+        mock_get_key.assert_called_once()
+
+        prefix_arg = mock_get_key.call_args.kwargs.get("prefix")
+        assert prefix_arg == expected_prefix, (
+            f"Expected prefix '{expected_prefix}', got '{prefix_arg}' "
+            f"for team={team_alias}, key={key_alias}, "
+            f"use_team_prefix={use_team_prefix}, use_key_prefix={use_key_prefix}"
+        )
+
+
+# --------------------------------------------------------------
+# Test prefix priority and concatenation
+# --------------------------------------------------------------
+def test_prefix_priority_and_path_construction():
+    """
+    Validate that prefix components are ordered and joined with '/' only once.
+    """
+    with patch("litellm.integrations.s3_v2.get_s3_object_key") as mock_get_key:
+        mock_get_key.return_value = "mocked/key"
+
+        logger = S3Logger(s3_use_team_prefix=True, s3_use_key_prefix=True)
+        payload = StandardLoggingPayload(
+            id="xyz999",
+            metadata={
+                "user_api_key_team_alias": "Team-Alpha",
+                "user_api_key_alias": "API-12345",
+            },
+            messages=[],
+        )
+
+        logger.create_s3_batch_logging_element(datetime.utcnow(), payload)
+        prefix_arg = mock_get_key.call_args.kwargs.get("prefix", "")
+
+        assert prefix_arg == "Team-Alpha/API-12345/"
+        assert "//" not in prefix_arg
+
+
+# --------------------------------------------------------------
+# Test when prefixes are disabled
+# --------------------------------------------------------------
+def test_prefix_absent_when_flags_disabled():
+    """
+    Verify prefix is omitted entirely when prefix flags are False.
+    """
+    with patch("litellm.integrations.s3_v2.get_s3_object_key") as mock_get_key:
+        mock_get_key.return_value = "mocked/key"
+
+        logger = S3Logger(s3_use_team_prefix=False, s3_use_key_prefix=False)
+        payload = StandardLoggingPayload(
+            id="no-prefix",
+            metadata={
+                "user_api_key_team_alias": "team-x",
+                "user_api_key_alias": "key-x",
+            },
+            messages=[],
+        )
+
+        logger.create_s3_batch_logging_element(datetime.utcnow(), payload)
+        prefix_arg = mock_get_key.call_args.kwargs.get("prefix", None)
+        assert prefix_arg == "", f"Expected empty prefix, got {prefix_arg}"
+
+
+# --------------------------------------------------------------
+# Integration-style test (asyncio fixture will patch create_task)
+# --------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_combined_prefix_reflects_in_s3_object_key():
+    """
+    Integration-style test ensuring final s3_object_key includes both prefixes correctly.
+    """
+    logger = S3Logger(s3_use_team_prefix=True, s3_use_key_prefix=True)
+    payload = StandardLoggingPayload(
+        id="int-test",
+        metadata={
+            "user_api_key_team_alias": "myteam",
+            "user_api_key_alias": "apikey",
+        },
+        messages=[],
+    )
+
+    result = logger.create_s3_batch_logging_element(datetime.utcnow(), payload)
+    key = result.s3_object_key
+    assert "myteam/apikey/" in key, f"Expected both prefixes in key: {key}"
