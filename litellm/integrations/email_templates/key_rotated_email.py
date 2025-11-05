@@ -164,11 +164,8 @@ KEY_ROTATED_EMAIL_TEMPLATE = """
             </div>
             
             <div class="message">
-                <p>Your LiteLLM API key has been rotated. Please use the new key below.</p>
-            </div>
-            
-            <div class="budget-info">
-                <p style="margin: 0;"><strong>Monthly Budget:</strong> {key_budget}</p>
+                <p><strong>Your LiteLLM API key has been rotated</strong> as part of our ongoing commitment to security best practices.</p>
+                <p style="margin-top: 16px;">Your previous API key has been deactivated and will no longer work. Please update your applications with the new key below.</p>
             </div>
             
             <div class="key-container">
@@ -176,8 +173,12 @@ KEY_ROTATED_EMAIL_TEMPLATE = """
                 <div class="key">{key_token}</div>
             </div>
             
-            <h2>Quick Start Guide</h2>
-            <p>Here's how to use your key with the OpenAI SDK:</p>
+            <div class="budget-info">
+                <p style="margin: 0;"><strong>Monthly Budget:</strong> {key_budget}</p>
+            </div>
+            
+            <h2>Action Required</h2>
+            <p>Update your applications and systems with the new API key. Here's an example:</p>
             
             <div class="code-block">
 <span class="code-keyword">import</span> openai<br>
@@ -198,12 +199,23 @@ response = client.chat.completions.create(<br>
 )
             </div>
             
+            <div class="separator"></div>
+            
+            <h2>Security Best Practices</h2>
+            <p style="margin-bottom: 12px;">To keep your API key secure:</p>
+            <ul style="margin: 0; padding-left: 20px; color: #333333;">
+                <li style="margin-bottom: 8px;">Never share your API key publicly or commit it to version control</li>
+                <li style="margin-bottom: 8px;">Store it securely using environment variables or secret management systems</li>
+                <li style="margin-bottom: 8px;">Monitor your API usage regularly for any unusual activity</li>
+                <li style="margin-bottom: 8px;">Rotate your keys periodically as a security best practice</li>
+            </ul>
+            
             <a href="https://docs.litellm.ai/docs/proxy/user_keys" class="btn" style="color: #ffffff;">View Documentation</a>
             
             <div class="separator"></div>
             
             <h2>Need Help?</h2>
-            <p>If you have any questions or need assistance, please contact us at {email_support_contact}.</p>
+            <p>If you have any questions or need assistance updating your systems, please contact us at {email_support_contact}.</p>
         </div>
         {email_footer}
     </div>
