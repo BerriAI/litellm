@@ -200,10 +200,11 @@ class GeminiVideoConfig(BaseVideoConfig):
         self,
         model: str,
         prompt: str,
+        api_base: str,
         video_create_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles]:
+    ) -> Tuple[Dict, RequestFiles, str]:
         """
         Transform the video creation request for Veo API.
         
@@ -244,7 +245,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         
         request_data = request_body_obj.model_dump(exclude_none=True)
         
-        return request_data, []
+        return request_data, [], api_base
 
     def transform_video_create_response(
         self,

@@ -95,10 +95,11 @@ class OpenAIVideoConfig(BaseVideoConfig):
         self,
         model: str,
         prompt: str,
+        api_base: str,
         video_create_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles]:
+    ) -> Tuple[Dict, RequestFiles, str]:
         """
         Transform the video creation request for OpenAI API.
         """
@@ -130,8 +131,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
                 image=_input_reference,
                 field_name="input_reference",
             )
-        # Convert to dict for JSON serialization
-        return data_without_files, files_list
+        return data_without_files, files_list, api_base
 
     def transform_video_create_response(
         self,

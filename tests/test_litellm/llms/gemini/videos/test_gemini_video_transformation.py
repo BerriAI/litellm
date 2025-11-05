@@ -81,10 +81,12 @@ class TestGeminiVideoConfig:
     def test_transform_video_create_request(self):
         """Test transformation of video creation request."""
         prompt = "A cat playing with a ball of yarn"
+        api_base = "https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-generate-preview:predictLongRunning"
         
-        data, files = self.config.transform_video_create_request(
+        data, files, url = self.config.transform_video_create_request(
             model="veo-3.0-generate-preview",
             prompt=prompt,
+            api_base=api_base,
             video_create_optional_request_params={},
             litellm_params=GenericLiteLLMParams(),
             headers={}
@@ -97,14 +99,19 @@ class TestGeminiVideoConfig:
         
         # Check no files are uploaded
         assert files == []
+        
+        # URL should be returned as-is for Gemini
+        assert url == api_base
     
     def test_transform_video_create_request_with_params(self):
         """Test transformation with optional parameters."""
         prompt = "A cat playing with a ball of yarn"
+        api_base = "https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-generate-preview:predictLongRunning"
         
-        data, files = self.config.transform_video_create_request(
+        data, files, url = self.config.transform_video_create_request(
             model="veo-3.0-generate-preview",
             prompt=prompt,
+            api_base=api_base,
             video_create_optional_request_params={
                 "aspectRatio": "16:9",
                 "durationSeconds": 8,
@@ -343,9 +350,11 @@ class TestGeminiVideoIntegration:
         
         # Step 1: Create request with parameters
         prompt = "A beautiful sunset over mountains"
-        data, files = config.transform_video_create_request(
+        api_base = "https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-generate-preview:predictLongRunning"
+        data, files, url = config.transform_video_create_request(
             model="veo-3.0-generate-preview",
             prompt=prompt,
+            api_base=api_base,
             video_create_optional_request_params={
                 "aspectRatio": "16:9",
                 "durationSeconds": 8
