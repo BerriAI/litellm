@@ -303,21 +303,6 @@ class CyberArkSecretManager(BaseSecretManager):
             verbose_logger.exception(f"Error writing secret to CyberArk Conjur: {e}")
             return {"status": "error", "message": str(e)}
 
-    async def async_rotate_secret(
-        self,
-        current_secret_name: str,
-        new_secret_name: str,
-        new_secret_value: str,
-        optional_params: Optional[Dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Dict:
-        """
-        CyberArk Conjur does not have built-in secret rotation.
-
-        Raises:
-            NotImplementedError: Always raised
-        """
-        raise NotImplementedError("CyberArk Conjur does not support secret rotation")
 
     async def async_delete_secret(
         self,
