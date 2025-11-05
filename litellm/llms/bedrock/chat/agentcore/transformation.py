@@ -480,6 +480,67 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         
         return streaming_response
 
+    async def get_async_custom_stream_wrapper(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        client: Optional["AsyncHTTPHandler"] = None,
+        json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
+    ) -> CustomStreamWrapper:
+        """
+        Get a CustomStreamWrapper for asynchronous streaming.
+
+        This is called when stream=True is passed to acompletion().
+        """
+        from litellm.llms.custom_httpx.http_handler import (
+            AsyncHTTPHandler,
+            get_async_httpx_client,
+        )
+        from litellm.utils import CustomStreamWrapper
+
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            client = get_async_httpx_client(llm_provider="bedrock", params={})
+
+        # Make async streaming request
+        response = await client.post(
+            api_base,
+            headers=headers,
+            data=signed_json_body if signed_json_body else json.dumps(data),
+            stream=True,  # THIS IS KEY - tells httpx to not buffer
+            logging_obj=logging_obj,
+        )
+
+        if response.status_code != 200:
+            raise BedrockError(
+                status_code=response.status_code, message=str(await response.aread())
+            )
+
+        # Create iterator for SSE stream
+        completion_stream = self.get_streaming_response(model=model, raw_response=response)
+
+        streaming_response = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=logging_obj,
+        )
+
+        # LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response="first stream response received",
+            additional_args={"complete_input_dict": data},
+        )
+
+        return streaming_response
+
     @property
     def has_custom_stream_wrapper(self) -> bool:
         """Indicates that this config has custom streaming support."""
