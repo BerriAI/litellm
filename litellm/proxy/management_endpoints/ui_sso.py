@@ -273,6 +273,26 @@ def generic_response_convertor(
     team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
     all_teams.extend(team_ids)
 
+    # Extract user role from response if available
+    generic_user_role_attribute_name = os.getenv(
+        "GENERIC_USER_ROLE_ATTRIBUTE", "app_roles"
+    )
+    user_role: Optional[LitellmUserRoles] = None
+    user_role_value = get_nested_value(response, generic_user_role_attribute_name)
+    if user_role_value:
+        # Handle both single role (string) and multiple roles (list)
+        roles_to_check = (
+            user_role_value if isinstance(user_role_value, list) else [user_role_value]
+        )
+        for role_str in roles_to_check:
+            role = get_litellm_user_role(role_str)
+            if role is not None:
+                user_role = role
+                verbose_proxy_logger.debug(
+                    f"Found valid LitellmUserRoles '{role.value}' in response"
+                )
+                break
+
     return CustomOpenID(
         id=get_nested_value(response, generic_user_id_attribute_name),
         display_name=get_nested_value(
@@ -283,7 +303,7 @@ def generic_response_convertor(
         last_name=get_nested_value(response, generic_user_last_name_attribute_name),
         provider=get_nested_value(response, generic_provider_attribute_name),
         team_ids=all_teams,
-        user_role=None,
+        user_role=user_role,
     )
 
 
@@ -564,10 +584,12 @@ def apply_user_info_values_to_sso_user_defined_values(
     if user_info is not None and user_info.user_id is not None:
         user_defined_values["user_id"] = user_info.user_id
 
-    if user_info is None or user_info.user_role is None:
-        user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-    else:
-        user_defined_values["user_role"] = user_info.user_role
+    # Only override user_role if it's not already set in user_defined_values
+    if user_defined_values.get("user_role") is None:
+        if user_info is None or user_info.user_role is None:
+            user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        else:
+            user_defined_values["user_role"] = user_info.user_role
 
     return user_defined_values
 
@@ -1577,7 +1599,7 @@ class SSOAuthenticationHandler:
                 user_id=user_id,
                 user_email=user_email,
                 max_budget=max_internal_user_budget,
-                user_role=None,
+                user_role=user_role,
                 budget_duration=internal_user_budget_duration,
             )
 
