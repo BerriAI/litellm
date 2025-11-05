@@ -202,6 +202,7 @@ class HashicorpSecretManager(BaseSecretManager):
         description: Optional[str] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        tags: Optional[Union[dict, list]] = None
     ) -> Dict[str, Any]:
         """
         Writes a secret to Vault KV v2 using an async HTTPX client.
