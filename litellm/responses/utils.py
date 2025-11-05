@@ -381,7 +381,7 @@ class ResponseAPILoggingUtils:
                 cached_tokens=response_api_usage.input_tokens_details.cached_tokens,
                 audio_tokens=response_api_usage.input_tokens_details.audio_tokens,
             )
-        usage = Usage(
+        usage = Usage(  # type: ignore[assignment]
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
@@ -392,4 +392,4 @@ class ResponseAPILoggingUtils:
         if hasattr(response_api_usage, "cost") and response_api_usage.cost is not None:
             setattr(usage, "cost", response_api_usage.cost)
 
-        return usage
+        return usage  # type: ignore[return-value]
