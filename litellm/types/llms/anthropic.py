@@ -514,3 +514,4 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     Known beta header values for Anthropic.
     """
     WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"
+    WEB_SEARCH_2025_03_05 = "web-search-2025-03-05"
