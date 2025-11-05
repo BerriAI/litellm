@@ -398,6 +398,8 @@ const sidebars = {
             "search/parallel_ai",
             "search/google_pse",
             "search/dataforseo",
+            "search/firecrawl",
+            "search/searxng",
           ]
         },
         {
@@ -455,6 +457,7 @@ const sidebars = {
           items: [
             "providers/azure_ai",
             "providers/azure_ocr",
+            "providers/azure_document_intelligence",
             "providers/azure_ai_speech",
             "providers/azure_ai_img",
             "providers/azure_ai_vector_stores",
@@ -470,6 +473,7 @@ const sidebars = {
             "providers/vertex_self_deployed",
             "providers/vertex_image",
             "providers/vertex_batch",
+            "providers/vertex_ocr",
           ]
         },
         {
@@ -492,6 +496,7 @@ const sidebars = {
             "providers/bedrock_embedding",
             "providers/bedrock_image_gen",
             "providers/bedrock_rerank",
+            "providers/bedrock_agentcore",
             "providers/bedrock_agents",
             "providers/bedrock_batches",
             "providers/bedrock_vector_store",

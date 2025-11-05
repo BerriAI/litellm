@@ -2200,7 +2200,7 @@ class StandardLoggingPayload(TypedDict):
     error_information: Optional[StandardLoggingPayloadErrorInformation]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
-    guardrail_information: Optional[list[StandardLoggingGuardrailInformation]]
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams]
 
 
@@ -2594,6 +2594,8 @@ class SearchProviders(str, Enum):
     EXA_AI = "exa_ai"
     GOOGLE_PSE = "google_pse"
     DATAFORSEO = "dataforseo"
+    FIRECRAWL = "firecrawl"
+    SEARXNG = "searxng"
 
 
 # Create a set of all search provider values for quick lookup

@@ -7193,49 +7193,9 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.MORPH == provider:
             return litellm.MorphChatConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
-            bedrock_route = BedrockModelInfo.get_bedrock_route(model)
-            bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
-                model=model
-            )
+            from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 
-            base_model = BedrockModelInfo.get_base_model(model)
-
-            if bedrock_route == "converse" or bedrock_route == "converse_like":
-                return litellm.AmazonConverseConfig()
-            elif bedrock_route == "agent":
-                from litellm.llms.bedrock.chat.invoke_agent.transformation import (
-                    AmazonInvokeAgentConfig,
-                )
-
-                return AmazonInvokeAgentConfig()
-            elif bedrock_invoke_provider == "amazon":  # amazon titan llms
-                return litellm.AmazonTitanConfig()
-            elif bedrock_invoke_provider == "anthropic":
-                if (
-                    base_model
-                    in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names()
-                ):
-                    return litellm.AmazonAnthropicConfig()
-                else:
-                    return litellm.AmazonAnthropicClaudeConfig()
-            elif (
-                bedrock_invoke_provider == "meta" or bedrock_invoke_provider == "llama"
-            ):  # amazon / meta llms
-                return litellm.AmazonLlamaConfig()
-            elif bedrock_invoke_provider == "ai21":  # ai21 llms
-                return litellm.AmazonAI21Config()
-            elif bedrock_invoke_provider == "cohere":  # cohere models on bedrock
-                return litellm.AmazonCohereConfig()
-            elif bedrock_invoke_provider == "mistral":  # mistral models on bedrock
-                return litellm.AmazonMistralConfig()
-            elif bedrock_invoke_provider == "deepseek_r1":  # deepseek models on bedrock
-                return litellm.AmazonDeepSeekR1Config()
-            elif bedrock_invoke_provider == "nova":
-                return litellm.AmazonInvokeNovaConfig()
-            elif bedrock_invoke_provider == "qwen3":
-                return litellm.AmazonQwen3Config()
-            else:
-                return litellm.AmazonInvokeConfig()
+            return get_bedrock_chat_config(model=model)
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyChatConfig()
         elif litellm.LlmProviders.OPENAI == provider:
@@ -7741,11 +7701,17 @@ class ProviderConfigManager:
         """
         Get OCR configuration for a given provider.
         """
-        from litellm.llms.azure_ai.ocr.transformation import AzureAIOCRConfig
+        from litellm.llms.vertex_ai.ocr.transformation import VertexAIOCRConfig
+
+        # Special handling for Azure AI - distinguish between Mistral OCR and Document Intelligence
+        if provider == litellm.LlmProviders.AZURE_AI:
+            from litellm.llms.azure_ai.ocr.common_utils import get_azure_ai_ocr_config
+
+            return get_azure_ai_ocr_config(model=model)
 
         PROVIDER_TO_CONFIG_MAP = {
             litellm.LlmProviders.MISTRAL: MistralOCRConfig,
-            litellm.LlmProviders.AZURE_AI: AzureAIOCRConfig,
+            litellm.LlmProviders.VERTEX_AI: VertexAIOCRConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
@@ -7761,11 +7727,13 @@ class ProviderConfigManager:
         """
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
+        from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.parallel_ai.search.transformation import (
             ParallelAISearchConfig,
         )
         from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
+        from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
 
         PROVIDER_TO_CONFIG_MAP = {
@@ -7775,6 +7743,8 @@ class ProviderConfigManager:
             SearchProviders.EXA_AI: ExaAISearchConfig,
             SearchProviders.GOOGLE_PSE: GooglePSESearchConfig,
             SearchProviders.DATAFORSEO: DataForSEOSearchConfig,
+            SearchProviders.FIRECRAWL: FirecrawlSearchConfig,
+            SearchProviders.SEARXNG: SearXNGSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

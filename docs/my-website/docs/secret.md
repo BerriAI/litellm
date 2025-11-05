@@ -71,6 +71,10 @@ general_settings:
     store_virtual_keys: true # OPTIONAL. Defaults to False, when True will store virtual keys in secret manager
     prefix_for_stored_virtual_keys: "litellm/" # OPTIONAL. If set, this prefix will be used for stored virtual keys in the secret manager
     access_mode: "write_only" # Literal["read_only", "write_only", "read_and_write"]
+    description: "litellm virtual key" # OPTIONAL, if set will set this as the description for all virtual keys
+    tags: # OPTIONAL, if set will set this as the tags for all virtual keys
+      Environment: "Prod"
+      Owner: "AI Platform team"
 ```
 </TabItem>
 <TabItem value="read_and_write" label="Read + Write Keys with AWS Secret Manager">

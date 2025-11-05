@@ -9,6 +9,11 @@ model_list:
       model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
       aws_region_name: us-west-2
       custom_llm_provider: bedrock
+  - model_name: bedrock/*
+    litellm_params:
+      model: bedrock/*
+      custom_llm_provider: bedrock
+      aws_region_name: us-west-2
     
 
 # like MCPs/vector stores
@@ -23,12 +28,21 @@ search_tools:
       api_key: os.environ/EXA_API_KEY
   
 
-
-# for /files endpoints
-files_settings:
-  - custom_llm_provider: openai
-    api_key: os.environ/OPENAI_API_KEY
-
-
 litellm_settings:
-  callbacks: ["datadog"]
+  # Comprehensive logging settings
+  store_audit_logs: true
+  verbose: true
+  log_level: "DEBUG"  # Options: DEBUG, INFO, WARNING, ERROR
+  success_callback: ["s3_v2"]
+  s3_callback_params:
+    s3_endpoint_url: "https://localhost:443"  # Replace with your Minio server URL and port
+    s3_aws_access_key_id: "minioadmin"
+    s3_aws_secret_access_key: "minioadmin"
+    s3_region_name: "minio"  # This can be any value for Minio
+    s3_bucket_name: "litellm-test"  # Replace with your bucket name
+    s3_use_ssl: False
+    s3_verify: False
+  cache: True
+  cache_params:
+    type: local
+  drop_params: True
