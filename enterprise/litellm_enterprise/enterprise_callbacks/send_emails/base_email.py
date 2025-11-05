@@ -27,6 +27,7 @@ from litellm.integrations.email_templates.user_invitation_email import (
     USER_INVITATION_EMAIL_TEMPLATE,
 )
 from litellm.proxy._types import InvitationNew, UserAPIKeyAuth, WebhookEvent
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
 
 
@@ -88,11 +89,17 @@ class BaseEmailLogger(CustomLogger):
             f"send_key_created_email_event: {json.dumps(send_key_created_email_event, indent=4, default=str)}"
         )
 
+        # Check if API key should be included in email
+        include_api_key = get_secret_bool(secret_name="EMAIL_INCLUDE_API_KEY", default_value=True)
+        if include_api_key is None:
+            include_api_key = True  # Default to True if not set
+        key_token_display = send_key_created_email_event.virtual_key if include_api_key else "[Key hidden for security - retrieve from dashboard]"
+
         email_html_content = KEY_CREATED_EMAIL_TEMPLATE.format(
             email_logo_url=email_params.logo_url,
             recipient_email=email_params.recipient_email,
             key_budget=self._format_key_budget(send_key_created_email_event.max_budget),
-            key_token=send_key_created_email_event.virtual_key,
+            key_token=key_token_display,
             base_url=email_params.base_url,
             email_support_contact=email_params.support_contact,
             email_footer=email_params.signature,
@@ -123,11 +130,17 @@ class BaseEmailLogger(CustomLogger):
             f"send_key_rotated_email_event: {json.dumps(send_key_rotated_email_event, indent=4, default=str)}"
         )
 
+        # Check if API key should be included in email
+        include_api_key = get_secret_bool(secret_name="EMAIL_INCLUDE_API_KEY", default_value=True)
+        if include_api_key is None:
+            include_api_key = True  # Default to True if not set
+        key_token_display = send_key_rotated_email_event.virtual_key if include_api_key else "[Key hidden for security - retrieve from dashboard]"
+
         email_html_content = KEY_ROTATED_EMAIL_TEMPLATE.format(
             email_logo_url=email_params.logo_url,
             recipient_email=email_params.recipient_email,
             key_budget=self._format_key_budget(send_key_rotated_email_event.max_budget),
-            key_token=send_key_rotated_email_event.virtual_key,
+            key_token=key_token_display,
             base_url=email_params.base_url,
             email_support_contact=email_params.support_contact,
             email_footer=email_params.signature,

@@ -253,6 +253,73 @@ async def test_send_key_rotated_email(
 
 
 @pytest.mark.asyncio
+async def test_send_key_created_email_without_key(
+    base_email_logger, mock_send_email, mock_lookup_user_email
+):
+    """
+    Test that send_key_created_email hides the API key when EMAIL_INCLUDE_API_KEY is false
+    """
+    event = SendKeyCreatedEmailEvent(
+        user_id="test_user",
+        user_email="test@example.com",
+        virtual_key="sk-secret-key-456",
+        max_budget=100.0,
+        spend=0.0,
+        event_group=Litellm_EntityType.USER,
+        event="key_created",
+        event_message="Test Key Created",
+    )
+
+    with mock.patch.dict(
+        os.environ,
+        {
+            "EMAIL_INCLUDE_API_KEY": "false",
+            "PROXY_BASE_URL": "http://test.com",
+        },
+    ):
+        await base_email_logger.send_key_created_email(event)
+
+        mock_send_email.assert_called_once()
+        call_args = mock_send_email.call_args[1]
+        assert "sk-secret-key-456" not in call_args["html_body"]
+        assert "[Key hidden for security - retrieve from dashboard]" in call_args["html_body"]
+
+
+@pytest.mark.asyncio
+async def test_send_key_rotated_email_without_key(
+    base_email_logger, mock_send_email, mock_lookup_user_email
+):
+    """
+    Test that send_key_rotated_email hides the API key when EMAIL_INCLUDE_API_KEY is false
+    """
+    event = SendKeyRotatedEmailEvent(
+        user_id="test_user",
+        user_email="test@example.com",
+        virtual_key="sk-secret-rotated-789",
+        key_alias="test-key-alias",
+        max_budget=200.0,
+        spend=50.0,
+        event_group=Litellm_EntityType.KEY,
+        event="key_rotated",
+        event_message="API Key Rotated",
+    )
+
+    with mock.patch.dict(
+        os.environ,
+        {
+            "EMAIL_INCLUDE_API_KEY": "false",
+            "PROXY_BASE_URL": "http://test.com",
+        },
+    ):
+        await base_email_logger.send_key_rotated_email(event)
+
+        mock_send_email.assert_called_once()
+        call_args = mock_send_email.call_args[1]
+        assert "sk-secret-rotated-789" not in call_args["html_body"]
+        assert "[Key hidden for security - retrieve from dashboard]" in call_args["html_body"]
+
+
+@pytest.mark.asyncio
 async def test_get_invitation_link(base_email_logger):
     # Mock prisma client and its response
     mock_invitation_row = mock.MagicMock()
