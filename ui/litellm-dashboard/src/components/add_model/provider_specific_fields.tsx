@@ -509,7 +509,7 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       key: "api_key",
       label: "vLLM API Key",
       type: "password",
-      required: true,
+      required: false,
     },
   ],
   [Providers.Voyage]: [
