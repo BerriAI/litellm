@@ -1,7 +1,6 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
-import asyncio
 import copy
 import datetime
 import json

@@ -127,12 +127,12 @@ class CyberArkSecretManager(BaseSecretManager):
                 content=policy_yaml,
             )
             resp.raise_for_status()
-            verbose_logger.debug("Created policy entry for a variable.")
+            verbose_logger.debug(f"Created policy entry for variable: {secret_name}")
         except httpx.HTTPStatusError as e:
             # Variable might already exist, which is fine
             if e.response.status_code in [409, 422]:
                 verbose_logger.debug(
-                    "A variable already exists or policy conflict (expected)"
+                    f"Variable {secret_name} already exists or policy conflict (expected)"
                 )
             else:
                 verbose_logger.warning(
@@ -303,21 +303,6 @@ class CyberArkSecretManager(BaseSecretManager):
             verbose_logger.exception(f"Error writing secret to CyberArk Conjur: {e}")
             return {"status": "error", "message": str(e)}
 
-    async def async_rotate_secret(
-        self,
-        current_secret_name: str,
-        new_secret_name: str,
-        new_secret_value: str,
-        optional_params: Optional[Dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Dict:
-        """
-        CyberArk Conjur does not have built-in secret rotation.
-
-        Raises:
-            NotImplementedError: Always raised
-        """
-        raise NotImplementedError("CyberArk Conjur does not support secret rotation")
 
     async def async_delete_secret(
         self,
