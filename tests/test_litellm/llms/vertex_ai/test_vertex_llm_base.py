@@ -12,6 +12,9 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm.llms.vertex_ai.aws_credentials_supplier import (
+    Boto3AwsSecurityCredentialsSupplier,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
@@ -878,3 +881,192 @@ class TestVertexBase:
         
         expected_no_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
         assert result_url_no_streaming == expected_no_streaming_url, f"Expected {expected_no_streaming_url}, got {result_url_no_streaming}"
+
+    def test_aws_federation_with_explicit_credentials(self):
+        """
+        Test AWS to GCP federation using explicit AWS credentials (no metadata endpoints).
+        
+        This test verifies that when AWS auth parameters are provided in the credential config,
+        LiteLLM uses BaseAWSLLM to get AWS credentials and creates a custom supplier for GCP.
+        """
+        vertex_base = VertexBase()
+
+        credentials = {
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/my-pool/providers/aws-provider",
+            "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+            "token_url": "https://sts.googleapis.com/v1/token",
+            "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/my-sa@project.iam.gserviceaccount.com:generateAccessToken",
+            "credential_source": {
+                "environment_id": "aws1",
+                "regional_cred_verification_url": "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15"
+            },
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_session_name": "litellm-test",
+            "aws_region_name": "us-east-1"
+        }
+
+        # Mock boto3 credentials
+        mock_boto3_creds = MagicMock()
+        mock_boto3_creds.access_key = "AKIAIOSFODNN7EXAMPLE"
+        mock_boto3_creds.secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        mock_boto3_creds.token = "fake-session-token"
+        
+        def mock_get_frozen_credentials():
+            frozen = MagicMock()
+            frozen.access_key = "AKIAIOSFODNN7EXAMPLE"
+            frozen.secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+            frozen.token = "fake-session-token"
+            return frozen
+        
+        mock_boto3_creds.get_frozen_credentials = mock_get_frozen_credentials
+
+        # Mock GCP credentials
+        mock_gcp_creds = MagicMock()
+        mock_gcp_creds.token = "gcp-token"
+        mock_gcp_creds.expired = False
+        mock_gcp_creds.project_id = "test-project"
+
+        with patch("litellm.llms.bedrock.base_aws_llm.BaseAWSLLM.get_credentials", return_value=mock_boto3_creds) as mock_aws_creds, \
+             patch("google.auth.aws.Credentials", return_value=mock_gcp_creds) as mock_gcp_aws_creds, \
+             patch.object(vertex_base, "refresh_auth") as mock_refresh:
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-gcp-token"
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            # Call load_auth
+            creds, project_id = vertex_base.load_auth(
+                credentials=credentials,
+                project_id=None
+            )
+
+            # Verify BaseAWSLLM.get_credentials was called with correct params
+            mock_aws_creds.assert_called_once()
+            call_kwargs = mock_aws_creds.call_args[1]
+            assert call_kwargs["aws_role_name"] == "arn:aws:iam::123456789012:role/MyRole"
+            assert call_kwargs["aws_session_name"] == "litellm-test"
+            assert call_kwargs["aws_region_name"] == "us-east-1"
+
+            # Verify google.auth.aws.Credentials was called
+            assert mock_gcp_aws_creds.called
+            call_kwargs = mock_gcp_aws_creds.call_args[1]
+            
+            # Verify custom supplier was used
+            assert call_kwargs["aws_security_credentials_supplier"] is not None
+            assert call_kwargs["credential_source"] is None  # Not using metadata
+
+            # Verify credentials were refreshed
+            assert mock_refresh.called
+            assert creds.token == "refreshed-gcp-token"
+
+    def test_boto3_aws_security_credentials_supplier(self):
+        """
+        Test Boto3AwsSecurityCredentialsSupplier correctly wraps boto3 credentials.
+        """
+        # Mock boto3 credentials with get_frozen_credentials
+        mock_boto3_creds = MagicMock()
+        
+        frozen_creds = MagicMock()
+        frozen_creds.access_key = "AKIATEST123"
+        frozen_creds.secret_key = "secretkey123"
+        frozen_creds.token = "session-token-123"
+        
+        mock_boto3_creds.get_frozen_credentials = MagicMock(return_value=frozen_creds)
+
+        # Create supplier
+        supplier = Boto3AwsSecurityCredentialsSupplier(
+            boto3_credentials=mock_boto3_creds,
+            aws_region="us-west-2"
+        )
+
+        # Test get_aws_security_credentials
+        creds = supplier.get_aws_security_credentials(context=None, request=None)
+        
+        assert creds["access_key_id"] == "AKIATEST123"
+        assert creds["secret_access_key"] == "secretkey123"
+        assert creds["security_token"] == "session-token-123"
+
+        # Test get_aws_region
+        region = supplier.get_aws_region(context=None, request=None)
+        assert region == "us-west-2"
+
+    def test_extract_aws_params(self):
+        """
+        Test _extract_aws_params correctly identifies AWS auth parameters.
+        """
+        vertex_base = VertexBase()
+
+        # Test with AWS role params
+        json_obj = {
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/aws",
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_session_name": "my-session",
+            "aws_region_name": "us-east-1"
+        }
+
+        aws_params = vertex_base._extract_aws_params(json_obj)
+        
+        assert aws_params is not None
+        assert aws_params["aws_role_name"] == "arn:aws:iam::123456789012:role/MyRole"
+        assert aws_params["aws_session_name"] == "my-session"
+        assert aws_params["aws_region_name"] == "us-east-1"
+
+        # Test with no AWS params
+        json_obj_no_aws = {
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/aws"
+        }
+
+        aws_params_none = vertex_base._extract_aws_params(json_obj_no_aws)
+        assert aws_params_none is None
+
+    def test_aws_federation_fallback_to_metadata(self):
+        """
+        Test that when no AWS auth params are provided, it falls back to metadata-based flow.
+        """
+        vertex_base = VertexBase()
+
+        credentials = {
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/my-pool/providers/aws-provider",
+            "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+            "token_url": "https://sts.googleapis.com/v1/token",
+            "credential_source": {
+                "environment_id": "aws1",
+                "regional_cred_verification_url": "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15"
+            }
+        }
+
+        mock_creds = MagicMock()
+        mock_creds.token = "token-from-metadata"
+        mock_creds.expired = False
+        mock_creds.project_id = "test-project"
+
+        with patch.object(
+            vertex_base, "_credentials_from_identity_pool_with_aws", return_value=mock_creds
+        ) as mock_metadata_auth, \
+             patch.object(
+            vertex_base, "_credentials_from_aws_with_explicit_auth"
+        ) as mock_explicit_auth, \
+             patch.object(vertex_base, "refresh_auth") as mock_refresh:
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            # Call load_auth - should use metadata-based flow
+            creds, project_id = vertex_base.load_auth(
+                credentials=credentials,
+                project_id=None
+            )
+
+            # Verify metadata-based auth was used
+            assert mock_metadata_auth.called
+            # Verify explicit auth was NOT used
+            assert not mock_explicit_auth.called
+            # Verify credentials were returned
+            assert creds.token == "refreshed-token"
