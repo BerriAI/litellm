@@ -96,7 +96,7 @@ class TestGeminiVideoConfig:
         assert data["instances"][0]["prompt"] == prompt
         
         # Check no files are uploaded
-        assert files is None
+        assert files == []
     
     def test_transform_video_create_request_with_params(self):
         """Test transformation with optional parameters."""
