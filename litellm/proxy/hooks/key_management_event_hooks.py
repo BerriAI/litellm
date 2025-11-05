@@ -403,8 +403,6 @@ class KeyManagementEventHooks:
                 + CommonProxyErrors.missing_enterprise_package.value
             )
 
-        from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
-
         try:
             from litellm_enterprise.types.enterprise_callbacks.send_emails import (
                 SendKeyRotatedEmailEvent,
