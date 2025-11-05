@@ -18,7 +18,7 @@ Send LiteLLM Proxy users emails for specific events.
 
 | Category | Details |
 |----------|---------|
-| Supported Events | • User added as a user on LiteLLM Proxy<br/>• Proxy API Key created for user |
+| Supported Events | • User added as a user on LiteLLM Proxy<br/>• Proxy API Key created for user<br/>• Proxy API Key rotated for user |
 | Supported Email Integrations | • Resend API<br/>• SMTP |
 
 ## Usage
@@ -123,6 +123,35 @@ On the Create Key Modal, Select Advanced Settings > Set Send Email to True.
   style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
 />
 
+### 3. Proxy API Key Rotated for User
+
+This email is sent when you rotate an API key for a user on LiteLLM Proxy.
+
+<Image 
+  img={require('../../img/email_regen2.png')}
+  style={{width: '20%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+**How to trigger this event**
+
+On the LiteLLM Proxy UI, go to Virtual Keys > Click on a key > Click "Regenerate Key"
+
+:::info
+
+Ensure there is a `user_id` attached to the key. This would have been set when creating the key.
+
+:::
+
+<Image 
+  img={require('../../img/email_regen.png')}
+  style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+After regenerating the key, the user will receive an email notification with:
+- Security-focused messaging about the rotation
+- The new API key (or a placeholder if `EMAIL_INCLUDE_API_KEY=false`)
+- Instructions to update their applications
+- Security best practices
 
 ## Email Customization
 
