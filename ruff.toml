@@ -13,3 +13,8 @@ exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_conf
 "litellm/llms/azure_ai/embed/__init__.py" = ["F401"]
 "litellm/llms/azure_ai/rerank/__init__.py" = ["F401"]
 "litellm/llms/bedrock/chat/__init__.py" = ["F401"]
+
+# TODO: Refactor these functions to be under 50 statements (see issue #16218)
+"litellm/integrations/arize/_utils.py" = ["PLR0915"]  # 91 statements in one function
+"litellm/integrations/langfuse/langfuse_otel.py" = ["PLR0915"]  # 61 statements in one function
+"litellm/router.py" = ["PLR0915"]  # 56 statements in one function
