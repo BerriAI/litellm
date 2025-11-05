@@ -635,6 +635,38 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             f"[CustomLogger] Completed base64 strip; retained {total_items} content items"
         )
         return payload
+
+    def _strip_base64_from_messages_sync(
+            self, payload: "StandardLoggingPayload", max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+    ) -> "StandardLoggingPayload":
+        """
+        Removes or redacts base64-encoded file data (e.g., PDFs, images, audio)
+        from messages and responses before sending to SQS.
+
+        Behavior:
+          • Drop entries with a 'file' key.
+          • Drop entries with type == 'file' or any non-text type.
+          • Keep untyped or text content.
+          • Recursively redact inline base64 blobs in *any* string field, at any depth.
+        """
+        raw_messages: Any = payload.get("messages", [])
+        messages: List[Any] = raw_messages if isinstance(raw_messages, list) else []
+        verbose_logger.debug(f"[CustomLogger] Stripping base64 from {len(messages)} messages")
+
+        if messages:
+            payload["messages"] = self._process_messages(messages=messages, max_depth=max_depth)
+
+        total_items = 0
+        for m in payload.get("messages", []) or []:
+            if isinstance(m, dict):
+                content = m.get("content", [])
+                if isinstance(content, list):
+                    total_items += len(content)
+
+        verbose_logger.debug(
+            f"[CustomLogger] Completed base64 strip; retained {total_items} content items"
+        )
+        return payload
     
 
     def _redact_base64(self, value: Any, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER) -> Any:

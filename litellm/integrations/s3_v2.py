@@ -50,6 +50,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_config=None,
         s3_use_team_prefix: bool = False,
         s3_strip_base64_files: bool = False,
+        s3_use_key_prefix: bool = False,
         **kwargs,
     ):
         try:
@@ -76,7 +77,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_config=s3_config,
                 s3_path=s3_path,
                 s3_use_team_prefix=s3_use_team_prefix,
-                s3_strip_base64_files=s3_strip_base64_files
+                s3_strip_base64_files=s3_strip_base64_files,
+                s3_use_key_prefix=s3_use_key_prefix
             )
             verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
 
@@ -132,6 +134,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_path: Optional[str] = None,
         s3_use_team_prefix: bool = False,
         s3_strip_base64_files: bool = False,
+        s3_use_key_prefix: bool = False,
     ):
         """
         Initialize the s3 params for this logging callback
@@ -202,6 +205,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         self.s3_use_team_prefix = (
             bool(litellm.s3_callback_params.get("s3_use_team_prefix", False))
             or s3_use_team_prefix
+        )
+
+        self.s3_use_key_prefix = (
+                bool(litellm.s3_callback_params.get("s3_use_key_prefix", False))
+                or s3_use_key_prefix
         )
 
         self.s3_strip_base64_files = (
@@ -384,36 +392,36 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             return None
 
         if self.s3_strip_base64_files:
-            import asyncio
-            standard_logging_payload = asyncio.run(self._strip_base64_from_messages(standard_logging_payload))
+            standard_logging_payload = self._strip_base64_from_messages_sync(standard_logging_payload)
 
-        team_alias = standard_logging_payload["metadata"].get("user_api_key_team_alias")
+        # Base prefix (default empty)
+        prefix_components = []
+        if self.s3_use_team_prefix:
+            team_alias = standard_logging_payload.get("metadata", {}).get("user_api_key_team_alias", None)
+            if team_alias:
+                prefix_components.append(team_alias)
+        if self.s3_use_key_prefix:
+            user_api_key_alias = standard_logging_payload.get("metadata", {}).get("user_api_key_alias", None)
+            if user_api_key_alias:
+                prefix_components.append(user_api_key_alias)
 
-        team_alias_prefix = ""
-        if (
-            litellm.enable_preview_features
-            and self.s3_use_team_prefix
-            and team_alias is not None
-        ):
-            team_alias_prefix = f"{team_alias}/"
+
+        # Construct full prefix path
+        prefix_path = "/".join(prefix_components)
+        if prefix_path:
+            prefix_path += "/"
 
         s3_file_name = (
             litellm.utils.get_logging_id(start_time, standard_logging_payload) or ""
         )
+        verbose_logger.debug(f"Creating s3 file with prefix_components={prefix_components},prefix_path={prefix_path} and {s3_file_name}")
         s3_object_key = get_s3_object_key(
             s3_path=cast(Optional[str], self.s3_path) or "",
-            team_alias_prefix=team_alias_prefix,
+            prefix=prefix_path,
             start_time=start_time,
             s3_file_name=s3_file_name,
         )
-
-        s3_object_download_filename = (
-            "time-"
-            + start_time.strftime("%Y-%m-%dT%H-%M-%S-%f")
-            + "_"
-            + standard_logging_payload["id"]
-            + ".json"
-        )
+        verbose_logger.debug(f"s3_object_key={s3_object_key}")
 
         s3_object_download_filename = f"time-{start_time.strftime('%Y-%m-%dT%H-%M-%S-%f')}_{standard_logging_payload['id']}.json"
 
