@@ -547,7 +547,7 @@ class InternalServerError(openai.InternalServerError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        self.response = httpx.Response(
+        self.response = response or httpx.Response(
             status_code=self.status_code,
             request=httpx.Request(
                 method="POST",
