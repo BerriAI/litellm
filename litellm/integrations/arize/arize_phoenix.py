@@ -41,38 +41,51 @@ class ArizePhoenixLogger:
             ArizePhoenixConfig: A Pydantic model containing Arize Phoenix configuration.
         """
         api_key = os.environ.get("PHOENIX_API_KEY", None)
-        grpc_endpoint = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT", None)
-        http_endpoint = os.environ.get("PHOENIX_COLLECTOR_HTTP_ENDPOINT", None)
+        
+        # Check for Phoenix collector endpoint (updated to match Phoenix's environment variable names)
+        # Phoenix uses PHOENIX_COLLECTOR_ENDPOINT as the primary variable
+        collector_endpoint = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT", None)
+        
+        # Fallback to legacy LiteLLM environment variables for backward compatibility
+        if not collector_endpoint:
+            grpc_endpoint = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT", None)
+            http_endpoint = os.environ.get("PHOENIX_COLLECTOR_HTTP_ENDPOINT", None)
+            collector_endpoint = http_endpoint or grpc_endpoint
 
         endpoint = None
         protocol: Protocol = "otlp_http"
 
-        if http_endpoint:
-            endpoint = http_endpoint
-            protocol = "otlp_http"
-        elif grpc_endpoint:
-            endpoint = grpc_endpoint
-            protocol = "otlp_grpc"
+        if collector_endpoint:
+            # Parse the endpoint to determine protocol
+            if collector_endpoint.startswith("grpc://") or (":4317" in collector_endpoint and not "/v1/traces" in collector_endpoint):
+                endpoint = collector_endpoint
+                protocol = "otlp_grpc"
+            else:
+                # Ensure HTTP endpoints have the correct path
+                if not collector_endpoint.endswith("/v1/traces"):
+                    if collector_endpoint.endswith("/"):
+                        endpoint = f"{collector_endpoint}v1/traces"
+                    else:
+                        endpoint = f"{collector_endpoint}/v1/traces"
+                else:
+                    endpoint = collector_endpoint
+                protocol = "otlp_http"
         else:
             endpoint = ARIZE_HOSTED_PHOENIX_ENDPOINT
             protocol = "otlp_http"
             verbose_logger.debug(
-                f"No PHOENIX_COLLECTOR_ENDPOINT or PHOENIX_COLLECTOR_HTTP_ENDPOINT found, using default endpoint with http: {ARIZE_HOSTED_PHOENIX_ENDPOINT}"
+                f"No PHOENIX_COLLECTOR_ENDPOINT found, using default Arize hosted Phoenix endpoint: {ARIZE_HOSTED_PHOENIX_ENDPOINT}"
             )
 
         otlp_auth_headers = None
-        # If the endpoint is the Arize hosted Phoenix endpoint, use the api_key as the auth header as currently it is uses
-        # a slightly different auth header format than self hosted phoenix
-        if endpoint == ARIZE_HOSTED_PHOENIX_ENDPOINT:
-            if api_key is None:
-                raise ValueError(
-                    "PHOENIX_API_KEY must be set when the Arize hosted Phoenix endpoint is used."
-                )
-            otlp_auth_headers = f"api_key={api_key}"
-        elif api_key is not None:
-            # api_key/auth is optional for self hosted phoenix
-            otlp_auth_headers = (
-                f"Authorization={urllib.parse.quote(f'Bearer {api_key}')}"
+        # Phoenix now uses standard Authorization: Bearer <token> format for both hosted and self-hosted
+        if api_key is not None:
+            # Use standard Authorization header format that matches Phoenix's current API
+            otlp_auth_headers = f"Authorization=Bearer {api_key}"
+        elif endpoint == ARIZE_HOSTED_PHOENIX_ENDPOINT:
+            # Arize hosted Phoenix requires API key
+            raise ValueError(
+                "PHOENIX_API_KEY must be set when using the Arize hosted Phoenix endpoint."
             )
 
         return ArizePhoenixConfig(
