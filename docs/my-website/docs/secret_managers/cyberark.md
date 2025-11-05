@@ -160,3 +160,8 @@ curl -X POST \
 - Secret names with slashes (e.g., `litellm/key`) are automatically URL-encoded
 - Session tokens are cached for 5 minutes by default to minimize API calls
 
+## Video Walkthrough
+
+This video walks through using CyberArk Conjur as a secret manager with LiteLLM. We create a virtual key in the LiteLLM Admin UI and verify it exists in CyberArk. Then we rotate the secret key and verify it exists in CyberArk.
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/e9892ae6cb9545d1b709b82e8695db91" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
