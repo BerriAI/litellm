@@ -45,10 +45,9 @@ class KeyManagementEventHooks:
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-        if data.send_invite_email is True:
-            await KeyManagementEventHooks._send_key_created_email(
-                response.model_dump(exclude_none=True)
-            )
+        await KeyManagementEventHooks._send_key_created_email(
+            response.model_dump(exclude_none=True)
+        )
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
