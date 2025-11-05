@@ -1,19 +1,18 @@
 import ast
 import os
 import traceback
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 import httpx
 
 import litellm
-from litellm._logging import print_verbose, verbose_logger
+from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
 from litellm.secret_managers.secret_manager_handler import get_secret_from_manager
-from litellm.types.secret_managers.main import KeyManagementSystem
 
 oidc_cache = DualCache()
 
