@@ -140,9 +140,11 @@ For example, a virtual key would be stored as: `litellm/virtual-key-name`
 
 ## Troubleshooting
 
-If you're experiencing issues with CyberArk Conjur integration, you can validate the endpoints work as expected by running these curl commands directly:
+If you're experiencing issues with the LiteLLM integration, first validate that your CyberArk Conjur instance is working correctly. Run these curl commands directly against your CyberArk endpoints to verify connectivity and authentication:
 
 **Step 1: Authenticate and get a token**
+
+Replace `http://conjur.example.com:8080` with your `CYBERARK_API_BASE` and use your actual credentials:
 
 ```bash title="Authenticate" showLineNumbers
 TOKEN=$(curl -s -X POST http://conjur.example.com:8080/authn/default/admin/authenticate \
@@ -165,7 +167,7 @@ curl -X POST \
   "http://conjur.example.com:8080/secrets/default/variable/test-secret"
 ```
 
-If these commands work successfully, the issue may be with your LiteLLM configuration. Check that:
+If these commands work successfully against your CyberArk instance, then CyberArk is functioning correctly and the issue is with your LiteLLM configuration. Check that:
 - Your environment variables are correctly set
 - The `CYBERARK_API_BASE` URL is accessible from your LiteLLM instance
 - Your API key or certificates have the necessary permissions in CyberArk
