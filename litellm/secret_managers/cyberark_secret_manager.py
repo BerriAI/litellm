@@ -72,12 +72,12 @@ class CyberArkSecretManager(BaseSecretManager):
         try:
             if self.tls_cert_path and self.tls_key_path:
                 # Certificate-based authentication
-                client = httpx.Client(cert=(self.tls_cert_path, self.tls_key_path))
-                resp = client.post(auth_url, content=self.conjur_api_key)
+                http_client = httpx.Client(cert=(self.tls_cert_path, self.tls_key_path))
+                resp = http_client.post(auth_url, content=self.conjur_api_key)
             else:
                 # API key authentication
-                client = _get_httpx_client()
-                resp = client.post(auth_url, content=self.conjur_api_key)
+                http_handler = _get_httpx_client()
+                resp = http_handler.post(auth_url, content=self.conjur_api_key)
 
             resp.raise_for_status()
 
