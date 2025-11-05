@@ -7971,6 +7971,14 @@
         "litellm_provider": "perplexity",
         "mode": "search"
     },
+    "searxng/search": {
+        "litellm_provider": "searxng",
+        "mode": "search",
+        "input_cost_per_query": 0.0,
+        "metadata": {
+            "notes": "SearXNG is an open-source metasearch engine. Free to use when self-hosted or using public instances."
+        }
+    },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",

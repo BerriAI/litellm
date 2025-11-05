@@ -1374,6 +1374,23 @@
         "rerank": false
       }
     },
+    "searxng": {
+      "display_name": "SearXNG (`searxng`)",
+      "url": "https://docs.litellm.ai/docs/search/searxng",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true
+      }
+    },
     "sambanova": {
       "display_name": "Sambanova (`sambanova`)",
       "url": "https://docs.litellm.ai/docs/providers/sambanova",
