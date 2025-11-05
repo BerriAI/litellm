@@ -200,6 +200,8 @@ class SearXNGSearchConfig(BaseSearchConfig):
         response_json = raw_response.json()
         
         # Transform results to SearchResult objects
+        # Note: SearXNG doesn't natively support limiting results via API params
+        # It returns ~20 results per page by default
         results = []
         for result in response_json.get("results", []):
             # Get date from either publishedDate or pubdate field

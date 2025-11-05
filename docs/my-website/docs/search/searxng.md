@@ -8,6 +8,8 @@
 
 SearXNG is a free, open-source metasearch engine that aggregates results from multiple search engines while protecting user privacy. It can be self-hosted or used via public instances.
 
+**Note:** SearXNG returns a fixed number of results per page (~20 by default) and does not support limiting results via the API. The `max_results` parameter is not directly supported by SearXNG.
+
 ## LiteLLM Python SDK
 
 ```python showLineNumbers title="SearXNG Search"

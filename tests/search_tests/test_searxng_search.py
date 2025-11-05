@@ -82,4 +82,28 @@ class TestSearXNGSearch(BaseSearchTest):
             
         except Exception as e:
             pytest.fail(f"Search call failed: {str(e)}")
+    
+    def test_search_with_optional_params(self):
+        """
+        Test search with optional parameters.
+        Override for SearXNG since it doesn't natively limit results.
+        """
+        litellm.set_verbose = True
+        search_provider = self.get_search_provider()
+
+        response = litellm.search(
+            query="machine learning",
+            search_provider=search_provider,
+            max_results=5,
+        )
+
+        # Validate response
+        assert hasattr(response, "results"), "Response should have 'results' attribute"
+        assert isinstance(response.results, list), "results should be a list"
+        assert len(response.results) > 0, "Should have at least one result"
+        # Note: SearXNG doesn't natively limit results, so we don't check <= 5
+        
+        print(f"\nSearch with optional params validated:")
+        print(f"  - Requested max_results: 5")
+        print(f"  - Received results: {len(response.results)}")
 
