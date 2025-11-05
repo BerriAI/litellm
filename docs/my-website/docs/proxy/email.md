@@ -129,7 +129,7 @@ This email is sent when you rotate an API key for a user on LiteLLM Proxy.
 
 <Image 
   img={require('../../img/email_regen2.png')}
-  style={{width: '20%', display: 'block', margin: '0 0 2rem 0'}}
+  style={{maxHeight: '600px', width: 'auto', display: 'block', margin: '0 0 2rem 0'}}
 />
 
 **How to trigger this event**
