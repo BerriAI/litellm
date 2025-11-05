@@ -1,5 +1,5 @@
 import enum
-from typing import List, Literal, Optional, Dict
+from typing import Dict, List, Literal, Optional
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -10,6 +10,7 @@ class KeyManagementSystem(enum.Enum):
     AWS_SECRET_MANAGER = "aws_secret_manager"
     GOOGLE_SECRET_MANAGER = "google_secret_manager"
     HASHICORP_VAULT = "hashicorp_vault"
+    CYBERARK = "cyberark"
     LOCAL = "local"
     AWS_KMS = "aws_kms"
 
