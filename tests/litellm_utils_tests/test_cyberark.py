@@ -39,7 +39,7 @@ async def test_cyberark_write_and_read_secret():
             secret_name=secret_name,
             secret_value=secret_value,
         )
-        print("write_response=", write_response)
+        # Avoid logging write_response to prevent leaking secret names
 
         # Validate write was successful
         assert write_response["status"] == "success"
