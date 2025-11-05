@@ -145,11 +145,10 @@ class KeyManagementEventHooks:
             )
 
         # send key rotated email if configured
-        if data is not None and data.send_invite_email is True:
-            await KeyManagementEventHooks._send_key_rotated_email(
-                response=response.model_dump(exclude_none=True),
-                existing_key_alias=existing_key_row.key_alias,
-            )
+        await KeyManagementEventHooks._send_key_rotated_email(
+            response=response.model_dump(exclude_none=True),
+            existing_key_alias=existing_key_row.key_alias,
+        )
 
         # store the audit log
         if litellm.store_audit_logs is True and existing_key_row.token is not None:
