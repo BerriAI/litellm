@@ -185,7 +185,6 @@ const sidebars = {
             "proxy/cli_sso",
             "proxy/custom_auth",
             "proxy/ip_address",
-            "proxy/email",
             "proxy/multiple_admins",
           ],
         },
@@ -233,7 +232,8 @@ const sidebars = {
             "proxy/dynamic_logging",
             "proxy/logging",
             "proxy/logging_spec",
-            "proxy/team_logging"
+            "proxy/team_logging",
+            "proxy/email",
           ],
         },
         {
