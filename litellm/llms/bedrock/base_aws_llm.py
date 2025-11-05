@@ -901,7 +901,7 @@ class BaseAWSLLM:
         api_base: Optional[str],
         aws_bedrock_runtime_endpoint: Optional[str],
         aws_region_name: str,
-        endpoint_type: Optional[Literal["runtime", "agent"]] = "runtime",
+        endpoint_type: Optional[Literal["runtime", "agent", "agentcore"]] = "runtime",
     ) -> Tuple[str, str]:
         env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
         if api_base is not None:
@@ -935,7 +935,7 @@ class BaseAWSLLM:
         return endpoint_url, proxy_endpoint_url
 
     def _select_default_endpoint_url(
-        self, endpoint_type: Optional[Literal["runtime", "agent"]], aws_region_name: str
+        self, endpoint_type: Optional[Literal["runtime", "agent", "agentcore"]], aws_region_name: str
     ) -> str:
         """
         Select the default endpoint url based on the endpoint type
@@ -944,6 +944,8 @@ class BaseAWSLLM:
         """
         if endpoint_type == "agent":
             return f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
+        elif endpoint_type == "agentcore":
+            return f"https://bedrock-agentcore.{aws_region_name}.amazonaws.com"
         else:
             return f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
@@ -1091,7 +1093,7 @@ class BaseAWSLLM:
 
     def _sign_request(
         self,
-        service_name: Literal["bedrock", "sagemaker"],
+        service_name: Literal["bedrock", "sagemaker", "bedrock-agentcore"],
         headers: dict,
         optional_params: dict,
         request_data: dict,

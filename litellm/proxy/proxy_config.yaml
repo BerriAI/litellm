@@ -9,6 +9,11 @@ model_list:
       model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
       aws_region_name: us-west-2
       custom_llm_provider: bedrock
+  - model_name: bedrock/*
+    litellm_params:
+      model: bedrock/*
+      custom_llm_provider: bedrock
+      aws_region_name: us-west-2
     
 
 # like MCPs/vector stores
@@ -40,3 +45,4 @@ litellm_settings:
   cache: True
   cache_params:
     type: local
+  drop_params: True
