@@ -549,9 +549,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             else:
                 # Calculate token usage using LiteLLM's token counter
                 verbose_logger.debug("No usage data from AgentCore - calculating tokens")
-                usage = self._calculate_usage(model, messages, content)
-                if usage:
-                    setattr(model_response, "usage", usage)
+                calculated_usage = self._calculate_usage(model, messages, content)
+                if calculated_usage:
+                    setattr(model_response, "usage", calculated_usage)
             
             return model_response
 
