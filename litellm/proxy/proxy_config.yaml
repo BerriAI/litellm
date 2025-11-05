@@ -1,3 +1,10 @@
+general_settings:
+  key_management_system: "cyberark"
+  key_management_settings: 
+    store_virtual_keys: true
+    prefix_for_stored_virtual_keys: "litellm/"
+    access_mode: "read_and_write"
+
 model_list:
   - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
     litellm_params:
