@@ -278,13 +278,20 @@ SearXNG returns results in the standard LiteLLM search format:
 
 ## Troubleshooting
 
-### Connection Issues
+### Test Your Instance First
 
-If you encounter connection issues:
+If LiteLLM with searxng search provider is not working, test your SearXNG instance directly with curl:
 
-1. **Check instance availability**: Verify the SearXNG instance is online
-2. **Try a different instance**: Use an alternative from [searx.space](https://searx.space/)
-3. **Check rate limits**: Some instances may rate limit requests
+```bash
+# Test if JSON API is working
+curl -s "https://your-searxng-instance.com/search?q=test&format=json" | head -50
+
+# Example with specific instance
+curl -s "https://serxng-deployment-production.up.railway.app/search?q=test&format=json" | head -50
+```
+
+**Expected response**: JSON with search results  
+**If you get HTML**: JSON format is not enabled in the instance's `settings.yml`
 
 ### No Results
 
@@ -296,9 +303,16 @@ If you get no results:
 
 ### JSON Format Not Enabled
 
-Some instances disable JSON output by default. If you get an error:
+If you get HTML instead of JSON:
 
-1. Use an instance with JSON enabled
-2. Self-host your own instance with JSON enabled
-3. Check instance configuration at `/config` endpoint
+1. **Test with curl**: Use the curl command above to verify JSON output
+2. **Self-host your own instance**: Use [our deployment repo](https://github.com/BerriAI/serxng-deployment) with JSON pre-configured
+3. **Check instance configuration**: Not all public instances have JSON enabled
+4. **Enable JSON manually**: Add to `settings.yml`:
+   ```yaml
+   search:
+     formats:
+       - html
+       - json
+   ```
 
