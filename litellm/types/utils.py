@@ -2594,6 +2594,7 @@ class SearchProviders(str, Enum):
     EXA_AI = "exa_ai"
     GOOGLE_PSE = "google_pse"
     DATAFORSEO = "dataforseo"
+    FIRECRAWL = "firecrawl"
 
 
 # Create a set of all search provider values for quick lookup
