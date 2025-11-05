@@ -17,7 +17,7 @@ interface GenerateCodeParams {
   selectedVectorStores: string[];
   selectedGuardrails: string[];
   selectedMCPTools: string[];
-  selectedVoice: string;
+  selectedVoice?: string;
   endpointType: string;
   selectedModel: string | undefined;
   selectedSdk: "openai" | "azure";
