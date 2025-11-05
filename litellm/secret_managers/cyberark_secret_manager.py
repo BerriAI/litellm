@@ -132,7 +132,7 @@ class CyberArkSecretManager(BaseSecretManager):
             # Variable might already exist, which is fine
             if e.response.status_code in [409, 422]:
                 verbose_logger.debug(
-                    f"Variable {secret_name} already exists or policy conflict (expected)"
+                    "A variable already exists or policy conflict (expected)"
                 )
             else:
                 verbose_logger.warning(
