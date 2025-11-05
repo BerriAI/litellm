@@ -88,7 +88,6 @@ In these tests the baseline latency characteristics are measured against a fake-
 **Cons**
 
 * High memory usage during initialization and per request
-* One OOM outage observed
 
 ## Machine Spec used for testing
 
