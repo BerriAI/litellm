@@ -193,3 +193,63 @@ async def test_primary_secret_functionality():
         )
         print("Delete Response:", delete_response)
         assert delete_response is not None
+
+@pytest.mark.asyncio
+async def test_write_secret_with_description_and_tags():
+    """Test writing a secret with description and tags"""
+    check_aws_credentials()
+
+    secret_manager = AWSSecretsManagerV2()
+    test_secret_name = f"litellm_test_{uuid.uuid4().hex[:8]}_tags"
+    test_secret_value = "test_value_with_tags"
+
+    test_description = "LiteLLM Secret with Description and Tags"
+    test_tags = {
+        "Environment": "Test",
+        "Owner": "IntelligenceLayer",
+        "Purpose": "UnitTest",
+    }
+
+    try:
+        # Write secret with tags and description
+        write_response = await secret_manager.async_write_secret(
+            secret_name=test_secret_name,
+            secret_value=test_secret_value,
+            description=test_description,
+            tags=test_tags,
+        )
+
+        print("Write Response:", write_response)
+        assert write_response is not None
+        assert "ARN" in write_response
+        assert "Name" in write_response
+        assert write_response["Name"] == test_secret_name
+
+        # --- Validate the secret metadata via AWS CLI / boto3 ---
+        import boto3
+
+        client = boto3.client("secretsmanager", region_name=os.getenv("AWS_REGION_NAME"))
+        describe_resp = client.describe_secret(SecretId=test_secret_name)
+        print("Describe Response:", describe_resp)
+
+        # Validate description
+        assert describe_resp.get("Description") == test_description
+
+        # Validate tags (as list of dicts in AWS)
+        if "Tags" in describe_resp:
+            tag_dict = {t["Key"]: t["Value"] for t in describe_resp["Tags"]}
+            for k, v in test_tags.items():
+                assert tag_dict.get(k) == v, f"Expected tag {k}={v}, got {tag_dict.get(k)}"
+        else:
+            pytest.fail("No tags found in describe_secret response")
+
+        # --- Validate secret value ---
+        read_value = await secret_manager.async_read_secret(secret_name=test_secret_name)
+        print("Read Value:", read_value)
+        assert read_value == test_secret_value
+
+    finally:
+        # Cleanup: Delete the secret
+        delete_response = await secret_manager.async_delete_secret(secret_name=test_secret_name)
+        print("Delete Response:", delete_response)
+        assert delete_response is not None
