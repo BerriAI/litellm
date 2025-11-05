@@ -12,8 +12,8 @@ export async function makeOpenAIChatCompletionRequest(
   tags?: string[],
   signal?: AbortSignal,
   onReasoningContent?: (content: string) => void,
-  onTimingData?: (timeToFirstToken: number) => void,
-  onUsageData?: (usage: TokenUsage) => void,
+  onTimingData?: (timeToFirstToken: number, model?: string) => void,
+  onUsageData?: (usage: TokenUsage, toolName?: string, model?: string) => void,
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
@@ -101,7 +101,7 @@ export async function makeOpenAIChatCompletionRequest(
         console.log("First token received! Time:", timeToFirstToken, "ms");
         if (onTimingData) {
           console.log("Calling onTimingData with:", timeToFirstToken);
-          onTimingData(timeToFirstToken);
+          onTimingData(timeToFirstToken, selectedModel);
         } else {
           console.log("onTimingData callback is not defined!");
         }
@@ -110,14 +110,14 @@ export async function makeOpenAIChatCompletionRequest(
       // Process content
       if (chunk.choices[0]?.delta?.content) {
         const content = chunk.choices[0].delta.content;
-        updateUI(content, chunk.model);
+        updateUI(content, selectedModel);
         fullResponseContent += content;
       }
 
       // Process image generation if present
       if (delta && delta.image && onImageGenerated) {
         console.log("Image generated:", delta.image);
-        onImageGenerated(delta.image.url, chunk.model);
+        onImageGenerated(delta.image.url, selectedModel);
       }
 
       // Process reasoning content if present - using type assertion
@@ -150,7 +150,7 @@ export async function makeOpenAIChatCompletionRequest(
           usageData.reasoningTokens = chunkWithUsage.usage.completion_tokens_details.reasoning_tokens;
         }
 
-        onUsageData(usageData);
+        onUsageData(usageData, undefined, selectedModel);
       }
     }
   } catch (error) {

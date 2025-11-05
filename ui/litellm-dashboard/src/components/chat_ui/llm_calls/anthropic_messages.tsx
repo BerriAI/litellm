@@ -12,8 +12,8 @@ export async function makeAnthropicMessagesRequest(
   tags: string[] = [],
   signal?: AbortSignal,
   onReasoningContent?: (content: string) => void,
-  onTimingData?: (timeToFirstToken: number) => void,
-  onUsageData?: (usage: TokenUsage) => void,
+  onTimingData?: (timeToFirstToken: number, model?: string) => void,
+  onUsageData?: (usage: TokenUsage, toolName?: string, model?: string) => void,
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
@@ -97,7 +97,7 @@ export async function makeAnthropicMessagesRequest(
           const timeToFirstToken = Date.now() - startTime;
           console.log("First token received! Time:", timeToFirstToken, "ms");
           if (onTimingData) {
-            onTimingData(timeToFirstToken);
+            onTimingData(timeToFirstToken, selectedModel);
           }
         }
 
@@ -121,7 +121,7 @@ export async function makeAnthropicMessagesRequest(
           promptTokens: usage.input_tokens,
           totalTokens: usage.input_tokens + usage.output_tokens,
         };
-        onUsageData(usageData);
+        onUsageData(usageData, undefined, selectedModel);
       }
     }
   } catch (error) {

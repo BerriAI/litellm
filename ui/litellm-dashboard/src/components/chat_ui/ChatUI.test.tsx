@@ -2,10 +2,16 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ChatUI from "./ChatUI";
 import * as fetchModelsModule from "./llm_calls/fetch_models";
+import * as chatCompletionModule from "./llm_calls/chat_completion";
 
 // Mock the fetchAvailableModels function
 vi.mock("./llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
+}));
+
+// Mock the chat completion request
+vi.mock("./llm_calls/chat_completion", () => ({
+  makeOpenAIChatCompletionRequest: vi.fn(),
 }));
 
 // Mock other networking functions that cause errors
@@ -15,6 +21,7 @@ vi.mock("../networking", () => ({
   getGuardrailsList: vi.fn().mockResolvedValue({ data: [] }),
   mcpToolsCall: vi.fn().mockResolvedValue({ data: [] }),
   modelHubCall: vi.fn().mockResolvedValue({ data: [] }),
+  getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
 }));
 
 // Mock scrollIntoView which is not available in jsdom
@@ -290,5 +297,296 @@ describe("ChatUI", () => {
     const voiceSelectContainer = voiceText.parentElement;
     const voiceSelectElement = voiceSelectContainer?.querySelector(".ant-select");
     expect(voiceSelectElement).toBeInTheDocument();
+  });
+
+  it("should send requests to all selected models when multiple models are selected", async () => {
+    // Mock the chat completion function to simulate successful requests
+    const mockChatCompletion = vi.mocked(chatCompletionModule.makeOpenAIChatCompletionRequest);
+    mockChatCompletion.mockImplementation(async (chatHistory, updateUI, selectedModel) => {
+      // Simulate streaming response
+      updateUI("Hello from ", selectedModel);
+      updateUI(selectedModel, selectedModel);
+    });
+
+    const { getByText, container } = render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText("Test Key")).toBeInTheDocument();
+    });
+
+    // Wait for Model 1 to be auto-selected
+    await waitFor(() => {
+      expect(getByText("Model 1")).toBeInTheDocument();
+    });
+
+    // Open model selector and select Model 2
+    const selectComponent = container.querySelectorAll(".ant-select-selector")[1];
+    fireEvent.mouseDown(selectComponent!);
+
+    let model2Option: HTMLElement | null = null;
+    await waitFor(() => {
+      const options = document.querySelectorAll(".ant-select-item-option-content");
+      model2Option = Array.from(options).find((opt) => opt.textContent === "Model 2") as HTMLElement;
+      expect(model2Option).toBeTruthy();
+    });
+
+    fireEvent.click(model2Option!);
+
+    // Wait for both models to be selected
+    await waitFor(() => {
+      const tags = container.querySelectorAll(".ant-tag");
+      expect(tags.length).toBe(2);
+    });
+
+    // Find the text area and type a message
+    const textArea = container.querySelector("textarea");
+    expect(textArea).toBeTruthy();
+
+    fireEvent.change(textArea!, { target: { value: "Hello, models!" } });
+
+    // Find and click the send button
+    const sendButton = container.querySelector('button[class*="bg-blue-600"]');
+    expect(sendButton).toBeTruthy();
+    fireEvent.click(sendButton!);
+
+    // Verify that makeOpenAIChatCompletionRequest was called twice (once for each model)
+    await waitFor(
+      () => {
+        expect(mockChatCompletion).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 3000 },
+    );
+
+    // Get all calls to the mock function
+    const calls = mockChatCompletion.mock.calls;
+
+    // Verify both models were called
+    const modelsCalled = calls.map((call) => call[2]); // 3rd argument is the model
+    expect(modelsCalled).toContain("Model 1");
+    expect(modelsCalled).toContain("Model 2");
+
+    // Verify that both calls received the user message
+    calls.forEach((call) => {
+      const chatHistory = call[0]; // First argument is chat history
+      const lastMessage = chatHistory[chatHistory.length - 1];
+      expect(lastMessage.role).toBe("user");
+      expect(lastMessage.content).toBe("Hello, models!");
+    });
+  });
+
+  it("should render separate chat boxes for each model response", async () => {
+    // Mock the chat completion function to simulate responses from different models
+    const mockChatCompletion = vi.mocked(chatCompletionModule.makeOpenAIChatCompletionRequest);
+    mockChatCompletion.mockImplementation(async (chatHistory, updateUI, selectedModel) => {
+      // Simulate different responses from different models
+      updateUI(`Response from ${selectedModel}`, selectedModel);
+    });
+
+    const { getByText, container, getAllByText } = render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText("Test Key")).toBeInTheDocument();
+    });
+
+    // Wait for Model 1 to be auto-selected
+    await waitFor(() => {
+      expect(getByText("Model 1")).toBeInTheDocument();
+    });
+
+    // Select Model 2
+    const selectComponent = container.querySelectorAll(".ant-select-selector")[1];
+    fireEvent.mouseDown(selectComponent!);
+
+    let model2Option: HTMLElement | null = null;
+    await waitFor(() => {
+      const options = document.querySelectorAll(".ant-select-item-option-content");
+      model2Option = Array.from(options).find((opt) => opt.textContent === "Model 2") as HTMLElement;
+      expect(model2Option).toBeTruthy();
+    });
+
+    fireEvent.click(model2Option!);
+
+    // Select Model 3
+    fireEvent.mouseDown(selectComponent!);
+
+    let model3Option: HTMLElement | null = null;
+    await waitFor(() => {
+      const options = document.querySelectorAll(".ant-select-item-option-content");
+      model3Option = Array.from(options).find((opt) => opt.textContent === "Model 3") as HTMLElement;
+      expect(model3Option).toBeTruthy();
+    });
+
+    fireEvent.click(model3Option!);
+
+    // Wait for all three models to be selected
+    await waitFor(() => {
+      const tags = container.querySelectorAll(".ant-tag");
+      expect(tags.length).toBe(3);
+    });
+
+    // Send a message
+    const textArea = container.querySelector("textarea");
+    fireEvent.change(textArea!, { target: { value: "Hello to all!" } });
+
+    const sendButton = container.querySelector('button[class*="bg-blue-600"]');
+    fireEvent.click(sendButton!);
+
+    // Wait for all responses to be rendered
+    await waitFor(
+      () => {
+        // Check that we have responses from each model
+        expect(screen.getByText("Response from Model 1")).toBeInTheDocument();
+        expect(screen.getByText("Response from Model 2")).toBeInTheDocument();
+        expect(screen.getByText("Response from Model 3")).toBeInTheDocument();
+      },
+      { timeout: 3000 },
+    );
+
+    // Verify that each model's response is in a separate chat box with the model badge
+    const chatMessages = container.querySelectorAll('[class*="inline-block max-w-"]');
+    // Should have 4 messages total: 1 user message + 3 assistant messages (one from each model)
+    expect(chatMessages.length).toBeGreaterThanOrEqual(4);
+
+    // Verify each model badge appears in the assistant messages
+    const modelBadges = container.querySelectorAll(".bg-gray-100.text-gray-600");
+    const badgeTexts = Array.from(modelBadges).map((badge) => badge.textContent);
+    expect(badgeTexts).toContain("Model 1");
+    expect(badgeTexts).toContain("Model 2");
+    expect(badgeTexts).toContain("Model 3");
+  });
+
+  it("should only send respective model messages in follow-up conversations", async () => {
+    // Track all calls to the chat completion function
+    const mockChatCompletion = vi.mocked(chatCompletionModule.makeOpenAIChatCompletionRequest);
+    const callHistory: any[] = [];
+
+    mockChatCompletion.mockImplementation(async (chatHistory, updateUI, selectedModel) => {
+      // Store the chat history for each call
+      callHistory.push({
+        model: selectedModel,
+        messages: [...chatHistory],
+      });
+      // Simulate response
+      updateUI(`Response from ${selectedModel}`, selectedModel);
+    });
+
+    const { getByText, container } = render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText("Test Key")).toBeInTheDocument();
+    });
+
+    // Wait for Model 1 to be auto-selected
+    await waitFor(() => {
+      expect(getByText("Model 1")).toBeInTheDocument();
+    });
+
+    // Select Model 2
+    const selectComponent = container.querySelectorAll(".ant-select-selector")[1];
+    fireEvent.mouseDown(selectComponent!);
+
+    let model2Option: HTMLElement | null = null;
+    await waitFor(() => {
+      const options = document.querySelectorAll(".ant-select-item-option-content");
+      model2Option = Array.from(options).find((opt) => opt.textContent === "Model 2") as HTMLElement;
+      expect(model2Option).toBeTruthy();
+    });
+
+    fireEvent.click(model2Option!);
+
+    // Wait for both models to be selected
+    await waitFor(() => {
+      const tags = container.querySelectorAll(".ant-tag");
+      expect(tags.length).toBe(2);
+    });
+
+    // Send first message
+    const textArea = container.querySelector("textarea");
+    fireEvent.change(textArea!, { target: { value: "First message" } });
+
+    const sendButton = container.querySelector('button[class*="bg-blue-600"]');
+    fireEvent.click(sendButton!);
+
+    // Wait for first responses
+    await waitFor(
+      () => {
+        expect(mockChatCompletion).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 3000 },
+    );
+
+    // Clear call history for the second round
+    callHistory.length = 0;
+    mockChatCompletion.mockClear();
+
+    // Send second message
+    fireEvent.change(textArea!, { target: { value: "Second message" } });
+    fireEvent.click(sendButton!);
+
+    // Wait for second responses
+    await waitFor(
+      () => {
+        expect(mockChatCompletion).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 3000 },
+    );
+
+    // Verify that each model only received its own assistant messages in the history
+    const model1Call = callHistory.find((call) => call.model === "Model 1");
+    const model2Call = callHistory.find((call) => call.model === "Model 2");
+
+    expect(model1Call).toBeTruthy();
+    expect(model2Call).toBeTruthy();
+
+    // Model 1's chat history should contain:
+    // - First user message
+    // - Model 1's assistant response
+    // - Second user message
+    const model1AssistantMessages = model1Call.messages.filter((msg: any) => msg.role === "assistant");
+    model1AssistantMessages.forEach((msg: any) => {
+      // Should not contain Model 2's responses (content shouldn't be "Response from Model 2")
+      expect(msg.content).not.toContain("Response from Model 2");
+    });
+
+    // Model 2's chat history should contain:
+    // - First user message
+    // - Model 2's assistant response
+    // - Second user message
+    const model2AssistantMessages = model2Call.messages.filter((msg: any) => msg.role === "assistant");
+    model2AssistantMessages.forEach((msg: any) => {
+      // Should not contain Model 1's responses
+      expect(msg.content).not.toContain("Response from Model 1");
+    });
+
+    // Verify user messages are included in both
+    const model1UserMessages = model1Call.messages.filter((msg: any) => msg.role === "user");
+    const model2UserMessages = model2Call.messages.filter((msg: any) => msg.role === "user");
+
+    expect(model1UserMessages.length).toBe(2); // Both user messages
+    expect(model2UserMessages.length).toBe(2); // Both user messages
   });
 });

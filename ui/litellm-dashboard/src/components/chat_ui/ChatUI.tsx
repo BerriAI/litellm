@@ -124,6 +124,10 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
   );
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Track abort controllers for each model when using multi-model
+  const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  // Track which models are still loading
+  const loadingModelsRef = useRef<Set<string>>(new Set());
   const [selectedTags, setSelectedTags] = useState<string[]>(() => {
     const saved = sessionStorage.getItem("selectedTags");
     try {
@@ -340,45 +344,69 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
   const updateTextUI = (role: string, chunk: string, model?: string) => {
     console.log("updateTextUI called with:", role, chunk, model);
     setChatHistory((prev) => {
-      const last = prev[prev.length - 1];
-      // if the last message is already from this same role, append
-      if (last && last.role === role && !last.isImage && !last.isAudio) {
-        // build a new object, but only set `model` if it wasn't there already
+      // For multi-model support: Find the last message from this specific model
+      // Search backwards to find the most recent message for this model
+      let foundIndex = -1;
+      for (let i = prev.length - 1; i >= 0; i--) {
+        const msg = prev[i];
+        // Match by role and model, and ensure it's not an image or audio message
+        if (msg.role === role && msg.model === model && !msg.isImage && !msg.isAudio) {
+          foundIndex = i;
+          break;
+        }
+        // Stop searching if we hit a user message (each user message starts a new round)
+        if (msg.role === "user") {
+          break;
+        }
+      }
+
+      if (foundIndex !== -1) {
+        // Found an existing message from this model, append to it
         const updated: MessageType = {
-          ...last,
-          content: last.content + chunk,
-          model: last.model ?? model, // ← only use the passed‐in model on the first chunk
+          ...prev[foundIndex],
+          content: prev[foundIndex].content + chunk,
         };
-        return [...prev.slice(0, -1), updated];
+        return [...prev.slice(0, foundIndex), updated, ...prev.slice(foundIndex + 1)];
       } else {
-        // otherwise start a brand new assistant bubble
+        // No existing message from this model, create a new one
         return [
           ...prev,
           {
             role,
             content: chunk,
-            model, // model set exactly once here
+            model,
           },
         ];
       }
     });
   };
 
-  const updateReasoningContent = (chunk: string) => {
+  const updateReasoningContent = (chunk: string, model?: string) => {
     setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
+      // Find the last assistant message from this specific model
+      let foundIndex = -1;
+      for (let i = prevHistory.length - 1; i >= 0; i--) {
+        const msg = prevHistory[i];
+        if (msg.role === "assistant" && msg.model === model && !msg.isImage && !msg.isAudio) {
+          foundIndex = i;
+          break;
+        }
+        if (msg.role === "user") {
+          break;
+        }
+      }
 
-      if (lastMessage && lastMessage.role === "assistant" && !lastMessage.isImage && !lastMessage.isAudio) {
+      if (foundIndex !== -1) {
         return [
-          ...prevHistory.slice(0, prevHistory.length - 1),
+          ...prevHistory.slice(0, foundIndex),
           {
-            ...lastMessage,
-            reasoningContent: (lastMessage.reasoningContent || "") + chunk,
+            ...prevHistory[foundIndex],
+            reasoningContent: (prevHistory[foundIndex].reasoningContent || "") + chunk,
           },
+          ...prevHistory.slice(foundIndex + 1),
         ];
       } else {
-        // If there's no assistant message yet, we'll create one with empty content
-        // but with reasoning content
+        // If there's no assistant message yet for this model, create one
         if (prevHistory.length > 0 && prevHistory[prevHistory.length - 1].role === "user") {
           return [
             ...prevHistory,
@@ -386,6 +414,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
               role: "assistant",
               content: "",
               reasoningContent: chunk,
+              model,
             },
           ];
         }
@@ -395,77 +424,105 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     });
   };
 
-  const updateTimingData = (timeToFirstToken: number) => {
-    console.log("updateTimingData called with:", timeToFirstToken);
+  const updateTimingData = (timeToFirstToken: number, model?: string) => {
+    console.log("updateTimingData called with:", timeToFirstToken, model);
     setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
-      console.log("Current last message:", lastMessage);
+      // Find the last assistant message from this specific model
+      let foundIndex = -1;
+      for (let i = prevHistory.length - 1; i >= 0; i--) {
+        const msg = prevHistory[i];
+        if (msg.role === "assistant" && msg.model === model) {
+          foundIndex = i;
+          break;
+        }
+        if (msg.role === "user") {
+          break;
+        }
+      }
 
-      if (lastMessage && lastMessage.role === "assistant") {
+      if (foundIndex !== -1) {
         console.log("Updating assistant message with timeToFirstToken:", timeToFirstToken);
-        const updatedHistory = [
-          ...prevHistory.slice(0, prevHistory.length - 1),
+        return [
+          ...prevHistory.slice(0, foundIndex),
           {
-            ...lastMessage,
+            ...prevHistory[foundIndex],
             timeToFirstToken,
           },
+          ...prevHistory.slice(foundIndex + 1),
         ];
-        console.log("Updated chat history:", updatedHistory);
-        return updatedHistory;
-      }
-      // If the last message is a user message and no assistant message exists yet,
-      // create a new assistant message with empty content
-      else if (lastMessage && lastMessage.role === "user") {
+      } else {
+        // Create a new assistant message with empty content for this model
+        // This handles the multi-model case where messages from different models arrive in parallel
         console.log("Creating new assistant message with timeToFirstToken:", timeToFirstToken);
         return [
           ...prevHistory,
           {
-            role: "assistant",
+            role: "assistant" as const,
             content: "",
             timeToFirstToken,
+            model,
           },
         ];
       }
-
-      console.log("No appropriate message found to update timing");
-      return prevHistory;
     });
   };
 
-  const updateUsageData = (usage: TokenUsage, toolName?: string) => {
-    console.log("Received usage data:", usage);
+  const updateUsageData = (usage: TokenUsage, toolName?: string, model?: string) => {
+    console.log("Received usage data:", usage, "for model:", model, "toolName:", toolName);
     setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
+      // Find the last assistant message from this specific model
+      let foundIndex = -1;
+      for (let i = prevHistory.length - 1; i >= 0; i--) {
+        const msg = prevHistory[i];
+        if (msg.role === "assistant" && msg.model === model) {
+          foundIndex = i;
+          break;
+        }
+        if (msg.role === "user") {
+          break;
+        }
+      }
 
-      if (lastMessage && lastMessage.role === "assistant") {
+      if (foundIndex !== -1) {
         console.log("Updating message with usage data:", usage);
         const updatedMessage = {
-          ...lastMessage,
+          ...prevHistory[foundIndex],
           usage,
           toolName,
         };
         console.log("Updated message:", updatedMessage);
 
-        return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
+        return [...prevHistory.slice(0, foundIndex), updatedMessage, ...prevHistory.slice(foundIndex + 1)];
       }
 
       return prevHistory;
     });
   };
 
-  const updateSearchResults = (searchResults: any[]) => {
-    console.log("Received search results:", searchResults);
+  const updateSearchResults = (searchResults: any[], model?: string) => {
+    console.log("Received search results:", searchResults, "for model:", model);
     setChatHistory((prevHistory) => {
-      const lastMessage = prevHistory[prevHistory.length - 1];
+      // Find the last assistant message from this specific model
+      let foundIndex = -1;
+      for (let i = prevHistory.length - 1; i >= 0; i--) {
+        const msg = prevHistory[i];
+        if (msg.role === "assistant" && msg.model === model) {
+          foundIndex = i;
+          break;
+        }
+        if (msg.role === "user") {
+          break;
+        }
+      }
 
-      if (lastMessage && lastMessage.role === "assistant") {
+      if (foundIndex !== -1) {
         console.log("Updating message with search results");
         const updatedMessage = {
-          ...lastMessage,
+          ...prevHistory[foundIndex],
           searchResults,
         };
 
-        return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
+        return [...prevHistory.slice(0, foundIndex), updatedMessage, ...prevHistory.slice(foundIndex + 1)];
       }
 
       return prevHistory;
@@ -509,7 +566,7 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     });
   };
 
-  const updateImageUI = (imageUrl: string, model: string) => {
+  const updateImageUI = (imageUrl: string, model?: string) => {
     setChatHistory((prevHistory) => [...prevHistory, { role: "assistant", content: imageUrl, model, isImage: true }]);
   };
 
@@ -520,26 +577,37 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     ]);
   };
 
-  const updateAudioUI = (audioUrl: string, model: string) => {
+  const updateAudioUI = (audioUrl: string, model?: string) => {
     setChatHistory((prevHistory) => [...prevHistory, { role: "assistant", content: audioUrl, model, isAudio: true }]);
   };
 
   const updateChatImageUI = (imageUrl: string, model?: string) => {
     setChatHistory((prev) => {
-      const last = prev[prev.length - 1];
-      // If the last message is from assistant and has content, add image to it
-      if (last && last.role === "assistant" && !last.isImage && !last.isAudio) {
+      // Find the last assistant message from this specific model
+      let foundIndex = -1;
+      for (let i = prev.length - 1; i >= 0; i--) {
+        const msg = prev[i];
+        if (msg.role === "assistant" && msg.model === model && !msg.isImage && !msg.isAudio) {
+          foundIndex = i;
+          break;
+        }
+        if (msg.role === "user") {
+          break;
+        }
+      }
+
+      if (foundIndex !== -1) {
+        // Add image to existing message from this model
         const updated = {
-          ...last,
+          ...prev[foundIndex],
           image: {
             url: imageUrl,
             detail: "auto",
           },
-          model: last.model ?? model,
         };
-        return [...prev.slice(0, -1), updated];
+        return [...prev.slice(0, foundIndex), updated, ...prev.slice(foundIndex + 1)];
       } else {
-        // Otherwise create a new assistant message with just the image
+        // Create a new assistant message with just the image
         return [
           ...prev,
           {
@@ -565,12 +633,21 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
   };
 
   const handleCancelRequest = () => {
+    // Cancel all ongoing model requests
+    if (abortControllersRef.current.size > 0) {
+      abortControllersRef.current.forEach((controller) => {
+        controller.abort();
+      });
+      abortControllersRef.current.clear();
+      loadingModelsRef.current.clear();
+    }
+    // Also cancel single request if exists (for backward compatibility)
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
-      setIsLoading(false);
-      NotificationsManager.info("Request cancelled");
     }
+    setIsLoading(false);
+    NotificationsManager.info("Request cancelled");
   };
 
   const handleImageUpload = (file: File) => {
@@ -725,161 +802,215 @@ const ChatUI: React.FC<ChatUIProps> = ({ accessToken, token, userRole, userID, d
     setMCPEvents([]); // Clear previous MCP events for new conversation turn
     setIsLoading(true);
 
+    // Clear previous abort controllers and loading state
+    abortControllersRef.current.clear();
+    loadingModelsRef.current.clear();
+
+    // Track all models that will be making requests
+    selectedModels.forEach((model) => {
+      loadingModelsRef.current.add(model);
+    });
+
+    // Helper function to mark a model as done loading
+    const markModelComplete = (model: string) => {
+      loadingModelsRef.current.delete(model);
+      abortControllersRef.current.delete(model);
+
+      // Only set isLoading to false when all models are done
+      if (loadingModelsRef.current.size === 0) {
+        setIsLoading(false);
+      }
+    };
+
+    // Helper function to handle errors for a specific model
+    const handleModelError = (model: string, error: any, signal: AbortSignal) => {
+      if (signal.aborted) {
+        console.log(`Request for model ${model} was cancelled`);
+      } else {
+        console.error(`Error fetching response from ${model}:`, error);
+        updateTextUI("assistant", `Error fetching response: ${error}`, model);
+      }
+      markModelComplete(model);
+    };
+
     try {
       if (selectedModels.length > 0) {
-        const selectedModel = selectedModels[0]; // For now, use first model (will be updated later for multi-model)
-        if (endpointType === EndpointType.CHAT) {
-          // Create chat history for API call - strip out model field and isImage field
-          // For chat completions, we preserve the multimodal content structure
-          const apiChatHistory = [
-            ...chatHistory
-              .filter((msg) => !msg.isImage && !msg.isAudio)
-              .map(({ role, content }) => ({
-                role,
-                content: typeof content === "string" ? content : "",
-              })),
-            newUserMessage,
-          ];
+        // Send requests to all selected models in parallel
+        const modelPromises = selectedModels.map(async (selectedModel) => {
+          // Create abort controller for this model
+          const controller = new AbortController();
+          abortControllersRef.current.set(selectedModel, controller);
+          const signal = controller.signal;
 
-          await makeOpenAIChatCompletionRequest(
-            apiChatHistory,
-            (chunk, model) => updateTextUI("assistant", chunk, model),
-            selectedModel,
-            effectiveApiKey,
-            selectedTags,
-            signal,
-            updateReasoningContent,
-            updateTimingData,
-            updateUsageData,
-            traceId,
-            selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
-            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools, // Pass the selected tools array
-            updateChatImageUI, // Pass the image callback
-            updateSearchResults, // Pass the search results callback
-          );
-        } else if (endpointType === EndpointType.IMAGE) {
-          // For image generation
-          await makeOpenAIImageGenerationRequest(
-            inputMessage,
-            (imageUrl, model) => updateImageUI(imageUrl, model),
-            selectedModel,
-            effectiveApiKey,
-            selectedTags,
-            signal,
-          );
-        } else if (endpointType === EndpointType.SPEECH) {
-          // For audio speech
-          await makeOpenAIAudioSpeechRequest(
-            inputMessage,
-            selectedVoice,
-            (audioUrl, model) => updateAudioUI(audioUrl, model),
-            selectedModel || "",
-            effectiveApiKey,
-            selectedTags,
-            signal,
-          );
-        } else if (endpointType === EndpointType.IMAGE_EDITS) {
-          // For image edits
-          if (uploadedImages.length > 0) {
-            await makeOpenAIImageEditsRequest(
-              uploadedImages.length === 1 ? uploadedImages[0] : uploadedImages,
-              inputMessage,
-              (imageUrl, model) => updateImageUI(imageUrl, model),
-              selectedModel,
-              effectiveApiKey,
-              selectedTags,
-              signal,
-            );
+          try {
+            if (endpointType === EndpointType.CHAT) {
+              // Create chat history for API call - strip out model field and isImage field
+              // For chat completions, we preserve the multimodal content structure
+              // Only include user messages and assistant messages from THIS specific model
+              const apiChatHistory = [
+                ...chatHistory
+                  .filter((msg) => !msg.isImage && !msg.isAudio)
+                  .filter((msg) => msg.role === "user" || msg.model === selectedModel)
+                  .map(({ role, content }) => ({
+                    role,
+                    content: typeof content === "string" ? content : "",
+                  })),
+                newUserMessage,
+              ];
+
+              await makeOpenAIChatCompletionRequest(
+                apiChatHistory,
+                (chunk, model) => updateTextUI("assistant", chunk, model || selectedModel),
+                selectedModel,
+                effectiveApiKey,
+                selectedTags,
+                signal,
+                (chunk: string) => updateReasoningContent(chunk, selectedModel),
+                (timeToFirstToken: number) => updateTimingData(timeToFirstToken, selectedModel),
+                (usage: TokenUsage, toolName?: string) => updateUsageData(usage, toolName, selectedModel),
+                traceId,
+                selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
+                selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+                selectedMCPTools, // Pass the selected tools array
+                (imageUrl: string, model?: string) => updateChatImageUI(imageUrl, model || selectedModel), // Pass the image callback
+                (searchResults: any[]) => updateSearchResults(searchResults, selectedModel), // Pass the search results callback
+              );
+            } else if (endpointType === EndpointType.IMAGE) {
+              // For image generation
+              await makeOpenAIImageGenerationRequest(
+                inputMessage,
+                (imageUrl, model) => updateImageUI(imageUrl, model || selectedModel),
+                selectedModel,
+                effectiveApiKey,
+                selectedTags,
+                signal,
+              );
+            } else if (endpointType === EndpointType.SPEECH) {
+              // For audio speech
+              await makeOpenAIAudioSpeechRequest(
+                inputMessage,
+                selectedVoice,
+                (audioUrl, model) => updateAudioUI(audioUrl, model || selectedModel),
+                selectedModel || "",
+                effectiveApiKey,
+                selectedTags,
+                signal,
+              );
+            } else if (endpointType === EndpointType.IMAGE_EDITS) {
+              // For image edits
+              if (uploadedImages.length > 0) {
+                await makeOpenAIImageEditsRequest(
+                  uploadedImages.length === 1 ? uploadedImages[0] : uploadedImages,
+                  inputMessage,
+                  (imageUrl, model) => updateImageUI(imageUrl, model || selectedModel),
+                  selectedModel,
+                  effectiveApiKey,
+                  selectedTags,
+                  signal,
+                );
+              }
+            } else if (endpointType === EndpointType.RESPONSES) {
+              // Create chat history for API call - strip out model field and isImage field
+              let apiChatHistory;
+
+              if (useApiSessionManagement && responsesSessionId) {
+                // When using API session management with existing session, only send the new message
+                apiChatHistory = [newUserMessage];
+              } else {
+                // When using UI session management or starting new API session, send full history
+                // Only include user messages and assistant messages from THIS specific model
+                apiChatHistory = [
+                  ...chatHistory
+                    .filter((msg) => !msg.isImage && !msg.isAudio)
+                    .filter((msg) => msg.role === "user" || msg.model === selectedModel)
+                    .map(({ role, content }) => ({ role, content })),
+                  newUserMessage,
+                ];
+              }
+
+              await makeOpenAIResponsesRequest(
+                apiChatHistory,
+                (role, delta, model) => updateTextUI(role, delta, model || selectedModel),
+                selectedModel,
+                effectiveApiKey,
+                selectedTags,
+                signal,
+                (chunk) => updateReasoningContent(chunk, selectedModel),
+                (timeToFirstToken) => updateTimingData(timeToFirstToken, selectedModel),
+                (usage, toolName) => updateUsageData(usage, toolName, selectedModel),
+                traceId,
+                selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
+                selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+                selectedMCPTools, // Pass the selected tools array
+                useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
+                handleResponseId, // Pass callback to capture new response ID
+                handleMCPEvent, // Pass MCP event handler
+              );
+            } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
+              // Only include user messages and assistant messages from THIS specific model
+              const apiChatHistory = [
+                ...chatHistory
+                  .filter((msg) => !msg.isImage && !msg.isAudio)
+                  .filter((msg) => msg.role === "user" || msg.model === selectedModel)
+                  .map(({ role, content }) => ({ role, content })),
+                newUserMessage,
+              ];
+
+              await makeAnthropicMessagesRequest(
+                apiChatHistory,
+                (role, delta, model) => updateTextUI(role, delta, model || selectedModel),
+                selectedModel,
+                effectiveApiKey,
+                selectedTags,
+                signal,
+                (chunk: string) => updateReasoningContent(chunk, selectedModel),
+                (timeToFirstToken: number) => updateTimingData(timeToFirstToken, selectedModel),
+                (usage: TokenUsage, toolName?: string) => updateUsageData(usage, toolName, selectedModel),
+                traceId,
+                selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
+                selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+                selectedMCPTools, // Pass the selected tools array
+              );
+            } else if (endpointType === EndpointType.EMBEDDINGS) {
+              await makeOpenAIEmbeddingsRequest(
+                inputMessage,
+                (embeddings, model) => updateEmbeddingsUI(embeddings, model || selectedModel),
+                selectedModel,
+                effectiveApiKey,
+                selectedTags,
+              );
+            } else if (endpointType === EndpointType.TRANSCRIPTION) {
+              // For audio transcriptions
+              if (uploadedAudio) {
+                await makeOpenAIAudioTranscriptionRequest(
+                  uploadedAudio,
+                  (transcription, model) => updateTextUI("assistant", transcription, model || selectedModel),
+                  selectedModel,
+                  effectiveApiKey,
+                  selectedTags,
+                  signal,
+                );
+              }
+            }
+
+            // Mark this model as complete
+            markModelComplete(selectedModel);
+          } catch (error) {
+            handleModelError(selectedModel, error, signal);
           }
-        } else if (endpointType === EndpointType.RESPONSES) {
-          // Create chat history for API call - strip out model field and isImage field
-          let apiChatHistory;
+        });
 
-          if (useApiSessionManagement && responsesSessionId) {
-            // When using API session management with existing session, only send the new message
-            apiChatHistory = [newUserMessage];
-          } else {
-            // When using UI session management or starting new API session, send full history
-            apiChatHistory = [
-              ...chatHistory
-                .filter((msg) => !msg.isImage && !msg.isAudio)
-                .map(({ role, content }) => ({ role, content })),
-              newUserMessage,
-            ];
-          }
-
-          await makeOpenAIResponsesRequest(
-            apiChatHistory,
-            (role, delta, model) => updateTextUI(role, delta, model),
-            selectedModel,
-            effectiveApiKey,
-            selectedTags,
-            signal,
-            updateReasoningContent,
-            updateTimingData,
-            updateUsageData,
-            traceId,
-            selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
-            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools, // Pass the selected tools array
-            useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
-            handleResponseId, // Pass callback to capture new response ID
-            handleMCPEvent, // Pass MCP event handler
-          );
-        } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
-          const apiChatHistory = [
-            ...chatHistory
-              .filter((msg) => !msg.isImage && !msg.isAudio)
-              .map(({ role, content }) => ({ role, content })),
-            newUserMessage,
-          ];
-
-          await makeAnthropicMessagesRequest(
-            apiChatHistory,
-            (role, delta, model) => updateTextUI(role, delta, model),
-            selectedModel,
-            effectiveApiKey,
-            selectedTags,
-            signal,
-            updateReasoningContent,
-            updateTimingData,
-            updateUsageData,
-            traceId,
-            selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
-            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools, // Pass the selected tools array
-          );
-        } else if (endpointType === EndpointType.EMBEDDINGS) {
-          await makeOpenAIEmbeddingsRequest(
-            inputMessage,
-            (embeddings, model) => updateEmbeddingsUI(embeddings, model),
-            selectedModel,
-            effectiveApiKey,
-            selectedTags,
-          );
-        } else if (endpointType === EndpointType.TRANSCRIPTION) {
-          // For audio transcriptions
-          if (uploadedAudio) {
-            await makeOpenAIAudioTranscriptionRequest(
-              uploadedAudio,
-              (transcription, model) => updateTextUI("assistant", transcription, model),
-              selectedModel,
-              effectiveApiKey,
-              selectedTags,
-              signal,
-            );
-          }
-        }
+        // Wait for all model requests to complete
+        await Promise.all(modelPromises);
       }
     } catch (error) {
-      if (signal.aborted) {
-        console.log("Request was cancelled");
-      } else {
-        console.error("Error fetching response", error);
-        updateTextUI("assistant", "Error fetching response:" + error);
-      }
+      console.error("Error in multi-model request:", error);
+      // Clean up any remaining loading states
+      loadingModelsRef.current.clear();
+      abortControllersRef.current.clear();
+      setIsLoading(false);
     } finally {
+      // Ensure loading is turned off
       setIsLoading(false);
       abortControllerRef.current = null;
       // Clear image after successful request for image edits
