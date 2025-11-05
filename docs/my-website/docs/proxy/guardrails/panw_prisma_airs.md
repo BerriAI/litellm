@@ -253,23 +253,24 @@ LiteLLM automatically generates a unique `litellm_trace_id` for each conversatio
 ```
 Conversation Session: litellm_trace_id = "abc-123-def-456"
 
-Turn 1:
-  - Prompt scan:   AI Session ID = "abc-123-def-456"
-  - Response scan: AI Session ID = "abc-123-def-456"
+Turn 1 (User):    "What's the capital of France?"
+  → Scan ID: scan_001 | Prisma AIRS AI Session ID: abc-123-def-456
 
-Turn 2:
-  - Prompt scan:   AI Session ID = "abc-123-def-456"
-  - Response scan: AI Session ID = "abc-123-def-456"
+Turn 2 (Assistant): "Paris is the capital of France."
+  → Scan ID: scan_002 | Prisma AIRS AI Session ID: abc-123-def-456
 
-Turn 3:
-  - Prompt scan:   AI Session ID = "abc-123-def-456"
-  - Response scan: AI Session ID = "abc-123-def-456"
+Turn 3 (User):    "What's the population?"
+  → Scan ID: scan_003 | Prisma AIRS AI Session ID: abc-123-def-456
+
+Turn 4 (Assistant): "Paris has approximately 2.1 million residents."
+  → Scan ID: scan_004 | Prisma AIRS AI Session ID: abc-123-def-456
 ```
 
-All scans appear under the same AI Session ID in PANW SCM, making it easy to:
-- Review complete conversation history
+All scans appear under the same AI Session ID in Prisma AIRS logs, making it easy to:
+- Review complete conversation history (all 4 turns grouped together)
 - Identify patterns across multiple turns
 - Correlate security events within a session
+- Track the flow of user prompts and AI responses
 
 ### Session Tracking
 
