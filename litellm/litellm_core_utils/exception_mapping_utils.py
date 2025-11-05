@@ -12,6 +12,7 @@ from ..exceptions import (
     APIConnectionError,
     APIError,
     AuthenticationError,
+    BadGatewayError,
     BadRequestError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
@@ -502,6 +503,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         exception_mapping_worked = True
                         raise InternalServerError(
                             message=f"InternalServerError: {exception_provider} - {message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=getattr(original_exception, "response", None),
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 502:
+                        exception_mapping_worked = True
+                        raise BadGatewayError(
+                            message=f"BadGatewayError: {exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=getattr(original_exception, "response", None),
