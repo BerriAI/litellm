@@ -263,7 +263,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             payload["ai_profile"] = ai_profile
 
         if is_response:
-            payload["metadata"]["is_response"] = True  # type: ignore[index]
+            payload["metadata"]["is_response"] = True  # type: ignore[call-overload, index]
 
         headers = {
             "Content-Type": "application/json",
