@@ -125,26 +125,46 @@ Support for 60+ languages with the `language` parameter.
 
 ## Self-Hosting
 
-SearXNG can be self-hosted for complete control:
+SearXNG can be self-hosted for complete control.
+
+### Quick Deploy
+
+Use our pre-configured deployment repository for easy setup:
+
+**[Fork and Deploy: github.com/BerriAI/serxng-deployment](https://github.com/BerriAI/serxng-deployment)**
+
+This repository includes:
+- Docker and Docker Compose setup
+- JSON API format pre-configured
+- Ready to deploy
+
+### Manual Installation
+
+See the [official SearXNG installation instructions](https://docs.searxng.org/admin/installation.html) for detailed setup.
+
+**Important:** When you install SearXNG, the only active output format by default is the HTML format. You need to activate the JSON format to use the API.
+
+Add the following to your `settings.yml` file:
+
+```yaml
+search:
+  formats:
+    - html
+    - json
+```
+
+Then restart SearXNG:
 
 ```bash
 # Using Docker
-docker run -d -p 8080:8080 searxng/searxng
+docker run -d -p 8080:8080 \
+  -v $(pwd)/settings.yml:/etc/searxng/settings.yml:ro \
+  -e SEARXNG_BASE_URL=http://localhost:8080 \
+  searxng/searxng
 
 # Then configure LiteLLM to use your instance
 export SEARXNG_API_BASE=http://localhost:8080
 ```
-
-## Public Instances
-
-You can use any public SearXNG instance. Find available instances at [searx.space](https://searx.space/).
-
-**Example instances:**
-- `https://serxng-deployment-production.up.railway.app`
-- `https://searx.be`
-- `https://search.bus-hit.me`
-
-**Note:** Public instances may have rate limits or require authentication. Check the instance's documentation.
 
 ## Configuration
 
