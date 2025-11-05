@@ -23167,6 +23167,34 @@
             "video"
         ]
     },
+    "vertex_ai/veo-3.1-generate-preview": {
+        "litellm_provider": "vertex_ai-video-models",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.4,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "vertex_ai/veo-3.1-fast-generate-preview": {
+        "litellm_provider": "vertex_ai-video-models",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "voyage/rerank-2": {
         "input_cost_per_query": 5e-08,
         "input_cost_per_token": 5e-08,

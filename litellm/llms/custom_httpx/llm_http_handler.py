@@ -4271,7 +4271,7 @@ class BaseLLMHTTPHandler:
         )
 
         # Transform the request using the provider config
-        url, params = video_content_provider_config.transform_video_content_request(
+        url, data = video_content_provider_config.transform_video_content_request(
             video_id=video_id,
             api_base=api_base,
             litellm_params=litellm_params,
@@ -4281,19 +4281,18 @@ class BaseLLMHTTPHandler:
         try:
             # Use POST if params contains data (e.g., Vertex AI fetchPredictOperation)
             # Otherwise use GET (e.g., OpenAI video content download)
-            if params and not all(isinstance(v, (str, int, float, bool)) for v in params.values() if v is not None):
-                # If params contains complex data structures, it's a POST body
+            if data:
                 response = sync_httpx_client.post(
                     url=url,
                     headers=headers,
-                    json=params,
+                    json=data,
                 )
             else:
                 # Otherwise it's a GET request with query params
                 response = sync_httpx_client.get(
                     url=url,
                     headers=headers,
-                    params=params,
+                    params=data,
                 )
 
             # Transform the response using the provider config
@@ -4347,7 +4346,7 @@ class BaseLLMHTTPHandler:
         )
 
         # Transform the request using the provider config
-        url, params = video_content_provider_config.transform_video_content_request(
+        url, data = video_content_provider_config.transform_video_content_request(
             video_id=video_id,
             api_base=api_base,
             litellm_params=litellm_params,
@@ -4357,19 +4356,18 @@ class BaseLLMHTTPHandler:
         try:
             # Use POST if params contains data (e.g., Vertex AI fetchPredictOperation)
             # Otherwise use GET (e.g., OpenAI video content download)
-            if params and not all(isinstance(v, (str, int, float, bool)) for v in params.values() if v is not None):
-                # If params contains complex data structures, it's a POST body
+            if data:
                 response = await async_httpx_client.post(
                     url=url,
                     headers=headers,
-                    json=params,
+                    json=data,
                 )
             else:
                 # Otherwise it's a GET request with query params
                 response = await async_httpx_client.get(
                     url=url,
                     headers=headers,
-                    params=params,
+                    params=data,
                 )
 
             # Transform the response using the provider config

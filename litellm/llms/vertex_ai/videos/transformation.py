@@ -72,6 +72,24 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         BaseVideoConfig.__init__(self)
         VertexBase.__init__(self)
 
+    @staticmethod
+    def extract_model_from_operation_name(operation_name: str) -> Optional[str]:
+        """
+        Extract the model name from a Vertex AI operation name.
+        
+        Args:
+            operation_name: Operation name in format:
+                projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL/operations/OPERATION_ID
+        
+        Returns:
+            Model name (e.g., "veo-2.0-generate-001") or None if extraction fails
+        """
+        parts = operation_name.split("/")
+        # Model is at index 7 in the operation name format
+        if len(parts) >= 8:
+            return parts[7]
+        return None
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get the list of supported OpenAI parameters for Veo video generation.
@@ -240,21 +258,19 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             }
         }
         """
-        from litellm.types.llms.vertex_ai import (
-            VertexVideoGenerationInstance,
-            VertexVideoGenerationParameters,
-            VertexVideoGenerationRequest,
-        )
-
         # Build instance with prompt
         instance_dict: Dict[str, Any] = {"prompt": prompt}
-
-        # Handle image input if present
         params_copy = video_create_optional_request_params.copy()
-        if "image" in params_copy:
+
+
+        # Check if user wants to provide full instance dict
+        if "instances" in params_copy and isinstance(params_copy["instances"], dict):
+            # Replace/merge with user-provided instance
+            instance_dict.update(params_copy["instances"])
+            params_copy.pop("instances")
+        elif "image" in params_copy and params_copy["image"] is not None:
             image_data = _convert_image_to_vertex_format(params_copy["image"])
             instance_dict["image"] = image_data
-            # Remove image from params as it's now in instance
             params_copy.pop("image")
 
         # Build request data directly (TypedDict doesn't have model_dump)
@@ -304,24 +320,12 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         else:
             video_id = operation_name
 
-        # Try to get create time from metadata if available
-        create_time_str = response_data.get("metadata", {}).get("createTime")
-        if create_time_str:
-            try:
-                created_at = _convert_vertex_datetime_to_openai_datetime(
-                    create_time_str
-                )
-            except Exception:
-                created_at = int(time.time())
-        else:
-            created_at = int(time.time())
 
         video_obj = VideoObject(
             id=video_id,
             object="video",
             status="processing",
-            model=model,
-            created_at=created_at,
+            model=model
         )
 
         usage_data = {}
@@ -350,27 +354,23 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         Veo polls operations using :fetchPredictOperation endpoint with POST request.
         """
         operation_name = extract_original_video_id(video_id)
-
-        # Extract project, location, and model from operation name
-        # Format: projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL/operations/OPERATION_ID
-        parts = operation_name.split("/")
-        if len(parts) >= 8:
-            project = parts[1]
-            location = parts[3]
-            model = parts[7]
-
-            # Append fetchPredictOperation endpoint
-            url = f"{api_base}:fetchPredictOperation"
-
-            # Request body contains the operation name
-            params = {"operationName": operation_name}
-
-            return url, params
-        else:
+        model = self.extract_model_from_operation_name(operation_name)
+        
+        if not model:
             raise ValueError(
                 f"Invalid operation name format: {operation_name}. "
                 "Expected format: projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL/operations/OPERATION_ID"
             )
+
+        # Construct the full URL including model ID
+        # URL format: https://LOCATION-aiplatform.googleapis.com/v1/projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL:fetchPredictOperation
+        # Strip trailing slashes from api_base and append model
+        url = f"{api_base.rstrip('/')}/{model}:fetchPredictOperation"
+
+        # Request body contains the operation name
+        params = {"operationName": operation_name}
+
+        return url, params
 
     def transform_video_status_retrieve_response(
         self,
@@ -408,9 +408,12 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         operation_name = response_data.get("name", "")
         is_done = response_data.get("done", False)
 
+        # Extract model from operation name
+        model = self.extract_model_from_operation_name(operation_name)
+
         if custom_llm_provider:
             video_id = encode_video_id_with_provider(
-                operation_name, custom_llm_provider, None
+                operation_name, custom_llm_provider, model
             )
         else:
             video_id = operation_name
@@ -426,12 +429,6 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
                 created_at = int(time.time())
         else:
             created_at = int(time.time())
-
-        # Extract model from operation name if available
-        model = None
-        parts = operation_name.split("/")
-        if len(parts) >= 8:
-            model = parts[7]
 
         video_obj = VideoObject(
             id=video_id,
@@ -460,26 +457,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         Since we need to make an HTTP call here, we'll use the same fetchPredictOperation
         approach as status retrieval.
         """
-        operation_name = extract_original_video_id(video_id)
-
-        # Build the URL for fetchPredictOperation (same as status retrieve)
-        parts = operation_name.split("/")
-        if len(parts) >= 8:
-            project = parts[1]
-            location = parts[3]
-            model = parts[7]
-
-            # Append fetchPredictOperation endpoint
-            url = f"{api_base}:fetchPredictOperation"
-
-            params = {"operationName": operation_name}
-
-            return url, params
-        else:
-            raise ValueError(
-                f"Invalid operation name format: {operation_name}. "
-                "Expected format: projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL/operations/OPERATION_ID"
-            )
+        return self.transform_video_status_retrieve_request(video_id, api_base, litellm_params, headers)
 
     def transform_video_content_response(
         self,
