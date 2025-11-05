@@ -132,9 +132,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         mcp_access_groups: accessGroups,
         alias: restValues.alias,
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
+        static_headers: staticHeaders,
       };
-
-      payload.static_headers = staticHeaders;
 
       console.log(`Payload: ${JSON.stringify(payload)}`);
 
