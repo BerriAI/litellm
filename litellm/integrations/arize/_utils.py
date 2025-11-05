@@ -8,6 +8,7 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     BaseLLMObsOTELAttributes,
     safe_set_attribute,
 )
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
@@ -99,7 +100,6 @@ def set_attributes(
         SpanAttributes,
         ToolCallAttributes,
     )
-    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
     try:
         optional_params = kwargs.get("optional_params", {})
