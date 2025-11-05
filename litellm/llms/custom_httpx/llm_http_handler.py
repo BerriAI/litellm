@@ -4050,14 +4050,13 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        # headers = video_generation_provider_config.validate_environment(
-        #     api_key=api_key,
-        #     headers=video_generation_optional_request_params.get("extra_headers", {})
-        #     or {},
-        #     model=model,
-        # )
-        headers = {"Authorization": f"Bearer token"}
-
+        headers = video_generation_provider_config.validate_environment(
+            api_key=api_key,
+            headers=video_generation_optional_request_params.get("extra_headers", {})
+            or {},
+            model=model,
+        )
+        
         if extra_headers:
             headers.update(extra_headers)
 
