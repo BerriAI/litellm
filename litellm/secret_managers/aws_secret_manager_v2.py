@@ -15,7 +15,7 @@ Requires:
 
 import json
 import os
-from typing import Any, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import httpx
 
@@ -221,7 +221,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         """
         from litellm._uuid import uuid
 
-        data = {
+        data: Dict[str, Any] = {
             "Name": secret_name,
             "SecretString": secret_value,
             "ClientRequestToken": str(uuid.uuid4()),
