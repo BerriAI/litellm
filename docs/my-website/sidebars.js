@@ -260,7 +260,14 @@ const sidebars = {
           type: "category",
           label: "Secret Managers",
           items: [
-            "secret",
+            "secret_managers/overview",
+            "secret_managers/aws_secret_manager",
+            "secret_managers/aws_kms",
+            "secret_managers/azure_key_vault",
+            "secret_managers/cyberark",
+            "secret_managers/google_secret_manager",
+            "secret_managers/google_kms",
+            "secret_managers/hashicorp_vault",
             "oidc"
           ]
         },
