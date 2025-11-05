@@ -173,7 +173,6 @@ const sidebars = {
           href: "https://litellm-api.up.railway.app/",
         },
   "proxy/enterprise",
-  "proxy/management_cli",
         {
           type: "category",
           label: "Authentication",
@@ -186,15 +185,6 @@ const sidebars = {
             "proxy/custom_auth",
             "proxy/ip_address",
             "proxy/multiple_admins",
-          ],
-        },
-        {
-          type: "category",
-          label: "Spend Tracking",
-          items: [
-            "proxy/cost_tracking",
-            "proxy/custom_pricing",
-            "proxy/billing",
           ],
         },
         {
@@ -220,6 +210,7 @@ const sidebars = {
             "proxy/rules",
           ]
         },
+        "proxy/management_cli",
         {
           type: "link",
           label: "Load Balancing, Routing, Fallbacks",
@@ -270,6 +261,15 @@ const sidebars = {
             "secret_managers/hashicorp_vault",
             "oidc"
           ]
+        },
+        {
+          type: "category",
+          label: "Spend Tracking",
+          items: [
+            "proxy/cost_tracking",
+            "proxy/custom_pricing",
+            "proxy/billing",
+          ],
         },
       ]
     },
