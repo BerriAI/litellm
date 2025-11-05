@@ -27,7 +27,7 @@ LiteLLM supports two methods of authentication:
 1. API key authentication - `CYBERARK_API_KEY` (recommended)
 2. Certificate authentication - `CYBERARK_CLIENT_CERT` and `CYBERARK_CLIENT_KEY`
 
-```bash
+```bash title="Environment Variables" showLineNumbers
 CYBERARK_API_BASE="http://your-conjur-instance:8080"
 CYBERARK_ACCOUNT="default"
 CYBERARK_USERNAME="admin"
@@ -45,7 +45,7 @@ CYBERARK_REFRESH_INTERVAL="300" # defaults to 300 seconds (5 minutes), frequency
 
 **Step 2.** Add to proxy config.yaml
 
-```yaml
+```yaml title="Proxy Config" showLineNumbers
 general_settings:
   key_management_system: "cyberark"
 
@@ -58,7 +58,7 @@ general_settings:
 
 **Step 3.** Start + test proxy
 
-```bash
+```bash title="Start Proxy" showLineNumbers
 $ litellm --config /path/to/config.yaml
 ```
 
@@ -78,7 +78,7 @@ In this example, we create a key named `litellm-cyber-ark-secret-key`:
 
 You can verify the virtual key was stored in CyberArk by querying the secrets API:
 
-```bash
+```bash title="Verify Secret in CyberArk" showLineNumbers
 TOKEN=$(curl -s -X POST http://0.0.0.0:8080/authn/default/admin/authenticate \
   -d "your-api-key" | base64 | tr -d '\n')
 
@@ -131,34 +131,44 @@ LiteLLM stores secrets under the `prefix_for_stored_virtual_keys` path (default:
 
 For example, a virtual key would be stored as: `litellm/virtual-key-name`
 
-**Working curl examples**
-
-Authenticate and get a token:
-```bash
-TOKEN=$(curl -s -X POST http://conjur.example.com:8080/authn/default/admin/authenticate \
-  -d "your-api-key" | base64 | tr -d '\n')
-```
-
-Read a secret:
-```bash
-curl -H "Authorization: Token token=\"$TOKEN\"" \
-  "http://conjur.example.com:8080/secrets/default/variable/test-secret"
-```
-
-Write a secret:
-```bash
-curl -X POST \
-  -H "Authorization: Token token=\"$TOKEN\"" \
-  --data "my-secret-value" \
-  "http://conjur.example.com:8080/secrets/default/variable/test-secret"
-```
-
 **Important Notes**
 
 - Variables must be defined in a Conjur policy before setting their values
 - LiteLLM automatically creates policy entries when writing new secrets
 - Secret names with slashes (e.g., `litellm/key`) are automatically URL-encoded
 - Session tokens are cached for 5 minutes by default to minimize API calls
+
+## Troubleshooting
+
+If you're experiencing issues with CyberArk Conjur integration, you can validate the endpoints work as expected by running these curl commands directly:
+
+**Step 1: Authenticate and get a token**
+
+```bash title="Authenticate" showLineNumbers
+TOKEN=$(curl -s -X POST http://conjur.example.com:8080/authn/default/admin/authenticate \
+  -d "your-api-key" | base64 | tr -d '\n')
+```
+
+**Step 2: Test reading a secret**
+
+```bash title="Read Secret" showLineNumbers
+curl -H "Authorization: Token token=\"$TOKEN\"" \
+  "http://conjur.example.com:8080/secrets/default/variable/test-secret"
+```
+
+**Step 3: Test writing a secret**
+
+```bash title="Write Secret" showLineNumbers
+curl -X POST \
+  -H "Authorization: Token token=\"$TOKEN\"" \
+  --data "my-secret-value" \
+  "http://conjur.example.com:8080/secrets/default/variable/test-secret"
+```
+
+If these commands work successfully, the issue may be with your LiteLLM configuration. Check that:
+- Your environment variables are correctly set
+- The `CYBERARK_API_BASE` URL is accessible from your LiteLLM instance
+- Your API key or certificates have the necessary permissions in CyberArk
 
 ## Video Walkthrough
 
