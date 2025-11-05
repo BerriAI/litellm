@@ -1457,7 +1457,7 @@ litellm_settings:
     # from logged messages to avoid large payloads. SQS has a 1 MB payload size limit.
     s3_use_team_prefix: false
     # If true, Litellm will add the team alias prefix to s3 path
-    s3_use_keyprefix: false
+    s3_use_key_prefix: false
     # If true, Litellm will add the key alias prefix to s3 path
 
 ```
