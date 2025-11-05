@@ -1,5 +1,5 @@
 import enum
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Dict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -36,3 +36,10 @@ class KeyManagementSettings(LiteLLMPydanticObjectBase):
 
     eg. on AWS you can store multiple secret values as K/V pairs in a single secret
     """
+
+    description: Optional[str] = None
+    """Optional description attached when creating secrets (visible in AWS console)."""
+
+
+    tags: Optional[Dict[str, str]] = None
+    """Optional tags to attach when creating secrets (e.g. {"Environment": "Prod", "Owner": "AI-Platform"})."""

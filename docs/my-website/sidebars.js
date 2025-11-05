@@ -398,6 +398,8 @@ const sidebars = {
             "search/parallel_ai",
             "search/google_pse",
             "search/dataforseo",
+            "search/firecrawl",
+            "search/searxng",
           ]
         },
         {
@@ -494,6 +496,7 @@ const sidebars = {
             "providers/bedrock_embedding",
             "providers/bedrock_image_gen",
             "providers/bedrock_rerank",
+            "providers/bedrock_agentcore",
             "providers/bedrock_agents",
             "providers/bedrock_batches",
             "providers/bedrock_vector_store",

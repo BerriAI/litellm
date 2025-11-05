@@ -234,11 +234,21 @@ class KeyManagementEventHooks:
 
                 # store the key in the secret manager
                 if isinstance(litellm.secret_manager_client, BaseSecretManager):
+                    tags = getattr(litellm._key_management_settings, "tags", None)
+                    description = getattr(
+                        litellm._key_management_settings, "description", None
+                    )
+                    verbose_proxy_logger.debug(
+                        f"Creating secret with {secret_name} and tags={tags} and description={description}"
+                    )
+
                     await litellm.secret_manager_client.async_write_secret(
                         secret_name=KeyManagementEventHooks._get_secret_name(
                             secret_name
                         ),
+                        description=description,
                         secret_value=secret_token,
+                        tags=tags
                     )
 
     @staticmethod
