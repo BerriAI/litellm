@@ -772,142 +772,68 @@ class Router:
         self.aget_messages = self.factory_function(litellm.aget_messages)
         self.arun_thread = self.factory_function(litellm.arun_thread)
 
-    def initialize_router_endpoints(self):
-        self.amoderation = self.factory_function(
-            litellm.amoderation, call_type="moderation"
-        )
-        self.aanthropic_messages = self.factory_function(
-            litellm.anthropic_messages, call_type="anthropic_messages"
-        )
-        self.agenerate_content = self.factory_function(
-            litellm.agenerate_content, call_type="agenerate_content"
-        )
-
-        self.aadapter_generate_content = self.factory_function(
-            litellm.aadapter_generate_content, call_type="aadapter_generate_content"
-        )
-
-        self.aresponses = self.factory_function(
-            litellm.aresponses, call_type="aresponses"
-        )
-        self.afile_delete = self.factory_function(
-            litellm.afile_delete, call_type="afile_delete"
-        )
-
-        self.afile_content = self.factory_function(
-            litellm.afile_content, call_type="afile_content"
-        )
+    def _initialize_core_endpoints(self):
+        """Helper to initialize core router endpoints."""
+        self.amoderation = self.factory_function(litellm.amoderation, call_type="moderation")
+        self.aanthropic_messages = self.factory_function(litellm.anthropic_messages, call_type="anthropic_messages")
+        self.agenerate_content = self.factory_function(litellm.agenerate_content, call_type="agenerate_content")
+        self.aadapter_generate_content = self.factory_function(litellm.aadapter_generate_content, call_type="aadapter_generate_content")
+        self.aresponses = self.factory_function(litellm.aresponses, call_type="aresponses")
+        self.afile_delete = self.factory_function(litellm.afile_delete, call_type="afile_delete")
+        self.afile_content = self.factory_function(litellm.afile_content, call_type="afile_content")
         self.responses = self.factory_function(litellm.responses, call_type="responses")
-        self.aget_responses = self.factory_function(
-            litellm.aget_responses, call_type="aget_responses"
-        )
-        self.acancel_responses = self.factory_function(
-            litellm.acancel_responses, call_type="acancel_responses"
-        )
-        self.adelete_responses = self.factory_function(
-            litellm.adelete_responses, call_type="adelete_responses"
-        )
-        self.alist_input_items = self.factory_function(
-            litellm.alist_input_items, call_type="alist_input_items"
-        )
-        self._arealtime = self.factory_function(
-            litellm._arealtime, call_type="_arealtime"
-        )
-        self.acreate_fine_tuning_job = self.factory_function(
-            litellm.acreate_fine_tuning_job, call_type="acreate_fine_tuning_job"
-        )
-        self.acancel_fine_tuning_job = self.factory_function(
-            litellm.acancel_fine_tuning_job, call_type="acancel_fine_tuning_job"
-        )
-        self.alist_fine_tuning_jobs = self.factory_function(
-            litellm.alist_fine_tuning_jobs, call_type="alist_fine_tuning_jobs"
-        )
-        self.aretrieve_fine_tuning_job = self.factory_function(
-            litellm.aretrieve_fine_tuning_job, call_type="aretrieve_fine_tuning_job"
-        )
-        self.afile_list = self.factory_function(
-            litellm.afile_list, call_type="alist_files"
-        )
-        self.aimage_edit = self.factory_function(
-            litellm.aimage_edit, call_type="aimage_edit"
-        )
-        self.allm_passthrough_route = self.factory_function(
-            litellm.allm_passthrough_route, call_type="allm_passthrough_route"
-        )
+        self.aget_responses = self.factory_function(litellm.aget_responses, call_type="aget_responses")
+        self.acancel_responses = self.factory_function(litellm.acancel_responses, call_type="acancel_responses")
+        self.adelete_responses = self.factory_function(litellm.adelete_responses, call_type="adelete_responses")
+        self.alist_input_items = self.factory_function(litellm.alist_input_items, call_type="alist_input_items")
+        self._arealtime = self.factory_function(litellm._arealtime, call_type="_arealtime")
+        self.acreate_fine_tuning_job = self.factory_function(litellm.acreate_fine_tuning_job, call_type="acreate_fine_tuning_job")
+        self.acancel_fine_tuning_job = self.factory_function(litellm.acancel_fine_tuning_job, call_type="acancel_fine_tuning_job")
+        self.alist_fine_tuning_jobs = self.factory_function(litellm.alist_fine_tuning_jobs, call_type="alist_fine_tuning_jobs")
+        self.aretrieve_fine_tuning_job = self.factory_function(litellm.aretrieve_fine_tuning_job, call_type="aretrieve_fine_tuning_job")
+        self.afile_list = self.factory_function(litellm.afile_list, call_type="alist_files")
+        self.aimage_edit = self.factory_function(litellm.aimage_edit, call_type="aimage_edit")
+        self.allm_passthrough_route = self.factory_function(litellm.allm_passthrough_route, call_type="allm_passthrough_route")
 
-        #########################################################
-        # Vector Store routes
-        #########################################################
+    def _initialize_specialized_endpoints(self):
+        """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container)."""
         from litellm.vector_stores.main import acreate, asearch, create, search
+        self.avector_store_search = self.factory_function(asearch, call_type="avector_store_search")
+        self.avector_store_create = self.factory_function(acreate, call_type="avector_store_create")
+        self.vector_store_search = self.factory_function(search, call_type="vector_store_search")
+        self.vector_store_create = self.factory_function(create, call_type="vector_store_create")
 
-        # async routes
-        self.avector_store_search = self.factory_function(
-            asearch, call_type="avector_store_search"
-        )
-        self.avector_store_create = self.factory_function(
-            acreate, call_type="avector_store_create"
-        )
-        # sync routes
-        self.vector_store_search = self.factory_function(
-            search, call_type="vector_store_search"
-        )
-        self.vector_store_create = self.factory_function(
-            create, call_type="vector_store_create"
-        )
-
-        #########################################################
-        # Gemini Native routes
-        #########################################################
         from litellm.google_genai import (
             agenerate_content,
             agenerate_content_stream,
             generate_content,
             generate_content_stream,
         )
+        self.agenerate_content = self.factory_function(agenerate_content, call_type="agenerate_content")
+        self.generate_content = self.factory_function(generate_content, call_type="generate_content")
+        self.agenerate_content_stream = self.factory_function(agenerate_content_stream, call_type="agenerate_content_stream")
+        self.generate_content_stream = self.factory_function(generate_content_stream, call_type="generate_content_stream")
 
-        self.agenerate_content = self.factory_function(
-            agenerate_content, call_type="agenerate_content"
-        )
-        self.generate_content = self.factory_function(
-            generate_content, call_type="generate_content"
-        )
-        self.agenerate_content_stream = self.factory_function(
-            agenerate_content_stream, call_type="agenerate_content_stream"
-        )
-        self.generate_content_stream = self.factory_function(
-            generate_content_stream, call_type="generate_content_stream"
-        )
-
-        #########################################################
-        # OCR routes
-        #########################################################
         from litellm.ocr import aocr, ocr
-
         self.aocr = self.factory_function(aocr, call_type="aocr")
         self.ocr = self.factory_function(ocr, call_type="ocr")
 
-        # Search routes
-        #########################################################
         from litellm.search import asearch, search
-
         self.asearch = self.factory_function(asearch, call_type="asearch")
         self.search = self.factory_function(search, call_type="search")
 
-        # Video routes
-        #########################################################
         from litellm.videos import (
-            avideo_generation,
-            video_generation,
-            avideo_list,
-            video_list,
-            avideo_status,
-            video_status,
             avideo_content,
-            video_content,
+            avideo_generation,
+            avideo_list,
             avideo_remix,
+            avideo_status,
+            video_content,
+            video_generation,
+            video_list,
             video_remix,
+            video_status,
         )
-
         self.avideo_generation = self.factory_function(avideo_generation, call_type="avideo_generation")
         self.video_generation = self.factory_function(video_generation, call_type="video_generation")
         self.avideo_list = self.factory_function(avideo_list, call_type="avideo_list")
@@ -919,19 +845,16 @@ class Router:
         self.avideo_remix = self.factory_function(avideo_remix, call_type="avideo_remix")
         self.video_remix = self.factory_function(video_remix, call_type="video_remix")
 
-        # Container routes
-        #########################################################
         from litellm.containers import (
             acreate_container,
-            create_container,
-            alist_containers,
-            list_containers,
-            aretrieve_container,
-            retrieve_container,
             adelete_container,
+            alist_containers,
+            aretrieve_container,
+            create_container,
             delete_container,
+            list_containers,
+            retrieve_container,
         )
-
         self.acreate_container = self.factory_function(acreate_container, call_type="acreate_container")
         self.create_container = self.factory_function(create_container, call_type="create_container")
         self.alist_containers = self.factory_function(alist_containers, call_type="alist_containers")
@@ -940,6 +863,10 @@ class Router:
         self.retrieve_container = self.factory_function(retrieve_container, call_type="retrieve_container")
         self.adelete_container = self.factory_function(adelete_container, call_type="adelete_container")
         self.delete_container = self.factory_function(delete_container, call_type="delete_container")
+
+    def initialize_router_endpoints(self):
+        self._initialize_core_endpoints()
+        self._initialize_specialized_endpoints()
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
