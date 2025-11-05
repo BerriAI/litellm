@@ -636,6 +636,7 @@ async def test_openai_responses_litellm_router_no_metadata():
             self._json_data = json_data
             self.status_code = status_code
             self.text = str(json_data)
+            self.headers = httpx.Headers({})
 
         def json(self):  # Changed from async to sync
             return self._json_data
@@ -733,6 +734,7 @@ async def test_openai_responses_litellm_router_with_metadata():
             self._json_data = json_data
             self.status_code = status_code
             self.text = str(json_data)
+            self.headers = httpx.Headers({})
 
         def json(self):
             return self._json_data
@@ -815,6 +817,7 @@ async def test_openai_responses_litellm_router_with_prompt():
             self._json_data = json_data
             self.status_code = status_code
             self.text = str(json_data)
+            self.headers = httpx.Headers({})
 
         def json(self):
             return self._json_data
@@ -931,6 +934,7 @@ async def test_openai_o1_pro_response_api(sync_mode):
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
+            self.headers = httpx.Headers({})
 
         def json(self):  # Changed from async to sync
             return self._json_data
@@ -1027,7 +1031,7 @@ async def test_openai_o1_pro_response_api_streaming(sync_mode):
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
-            self.headers = {}
+            self.headers = httpx.Headers({})
 
         def json(self):
             return self._json_data
@@ -1148,7 +1152,7 @@ def test_basic_computer_use_preview_tool_call():
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
-            self.headers = {}
+            self.headers = httpx.Headers({})
 
         def json(self):
             return self._json_data
@@ -1453,7 +1457,7 @@ async def test_aresponses_service_tier_and_safety_identifier():
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
-            self.headers = {}
+            self.headers = httpx.Headers({})
 
         def json(self):
             return self._json_data
@@ -1550,7 +1554,7 @@ async def test_openai_gpt5_reasoning_effort_parameter():
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
-            self.headers = {}
+            self.headers = httpx.Headers({})
 
         def json(self):
             return self._json_data

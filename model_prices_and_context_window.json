@@ -7887,10 +7887,97 @@
             }
         ]
     },
+    "firecrawl/search": {
+        "litellm_provider": "firecrawl",
+        "mode": "search",
+        "tiered_pricing": [
+            {
+                "input_cost_per_query": 1.66e-03,
+                "max_results_range": [
+                    1,
+                    10
+                ]
+            },
+            {
+                "input_cost_per_query": 3.32e-03,
+                "max_results_range": [
+                    11,
+                    20
+                ]
+            },
+            {
+                "input_cost_per_query": 4.98e-03,
+                "max_results_range": [
+                    21,
+                    30
+                ]
+            },
+            {
+                "input_cost_per_query": 6.64e-03,
+                "max_results_range": [
+                    31,
+                    40
+                ]
+            },
+            {
+                "input_cost_per_query": 8.3e-03,
+                "max_results_range": [
+                    41,
+                    50
+                ]
+            },
+            {
+                "input_cost_per_query": 9.96e-03,
+                "max_results_range": [
+                    51,
+                    60
+                ]
+            },
+            {
+                "input_cost_per_query": 11.62e-03,
+                "max_results_range": [
+                    61,
+                    70
+                ]
+            },
+            {
+                "input_cost_per_query": 13.28e-03,
+                "max_results_range": [
+                    71,
+                    80
+                ]
+            },
+            {
+                "input_cost_per_query": 14.94e-03,
+                "max_results_range": [
+                    81,
+                    90
+                ]
+            },
+            {
+                "input_cost_per_query": 16.6e-03,
+                "max_results_range": [
+                    91,
+                    100
+                ]
+            }
+        ],
+        "metadata": {
+            "notes": "Firecrawl search pricing: $83 for 100,000 credits, 2 credits per 10 results. Cost = ceiling(limit/10) * 2 * $0.00083"
+        }
+    },
     "perplexity/search": {
         "input_cost_per_query": 5e-03,
         "litellm_provider": "perplexity",
         "mode": "search"
+    },
+    "searxng/search": {
+        "litellm_provider": "searxng",
+        "mode": "search",
+        "input_cost_per_query": 0.0,
+        "metadata": {
+            "notes": "SearXNG is an open-source metasearch engine. Free to use when self-hosted or using public instances."
+        }
     },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,

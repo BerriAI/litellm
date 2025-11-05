@@ -7727,11 +7727,13 @@ class ProviderConfigManager:
         """
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
+        from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.parallel_ai.search.transformation import (
             ParallelAISearchConfig,
         )
         from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
+        from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
 
         PROVIDER_TO_CONFIG_MAP = {
@@ -7741,6 +7743,8 @@ class ProviderConfigManager:
             SearchProviders.EXA_AI: ExaAISearchConfig,
             SearchProviders.GOOGLE_PSE: GooglePSESearchConfig,
             SearchProviders.DATAFORSEO: DataForSEOSearchConfig,
+            SearchProviders.FIRECRAWL: FirecrawlSearchConfig,
+            SearchProviders.SEARXNG: SearXNGSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

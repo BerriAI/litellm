@@ -398,6 +398,8 @@ const sidebars = {
             "search/parallel_ai",
             "search/google_pse",
             "search/dataforseo",
+            "search/firecrawl",
+            "search/searxng",
           ]
         },
         {
