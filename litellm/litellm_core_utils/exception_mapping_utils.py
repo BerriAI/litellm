@@ -44,16 +44,16 @@ class ExceptionCheckers:
         """
         if not isinstance(error_str, str):
             return False
-        
+
         if "429" in error_str or "rate limit" in error_str.lower():
             return True
-        
+
         #######################################
         # Mistral API returns this error string
         #########################################
         if "service tier capacity exceeded" in error_str.lower():
             return True
-        
+
         return False
 
     @staticmethod
@@ -647,6 +647,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             message=f"AnthropicException - {error_str}. Handle with `litellm.InternalServerError`.",
                             llm_provider="anthropic",
                             model=model,
+                            response=getattr(original_exception, "response", None),
+                        )
+                    elif original_exception.status_code == 502:
+                        exception_mapping_worked = True
+                        raise BadGatewayError(
+                            message=f"AnthropicException BadGatewayError - {error_str}",
+                            llm_provider="anthropic",
+                            model=model,
+                            response=getattr(original_exception, "response", None),
                         )
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
@@ -654,6 +663,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             message=f"AnthropicException - {error_str}. Handle with `litellm.ServiceUnavailableError`.",
                             llm_provider="anthropic",
                             model=model,
+                            response=getattr(original_exception, "response", None),
+                        )
+                    elif original_exception.status_code == 504:  # gateway timeout error
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"AnthropicException Timeout - {error_str}",
+                            model=model,
+                            llm_provider="anthropic",
+                            exception_status_code=original_exception.status_code,
                         )
             elif custom_llm_provider == "replicate":
                 if "Incorrect authentication token" in error_str:
@@ -2094,6 +2112,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         exception_mapping_worked = True
                         raise RateLimitError(
                             message=f"AzureException RateLimitError - {message}",
+                            model=model,
+                            llm_provider="azure",
+                            litellm_debug_info=extra_information,
+                            response=getattr(original_exception, "response", None),
+                        )
+                    elif original_exception.status_code == 502:
+                        exception_mapping_worked = True
+                        raise BadGatewayError(
+                            message=f"AzureException BadGatewayError - {message}",
                             model=model,
                             llm_provider="azure",
                             litellm_debug_info=extra_information,
