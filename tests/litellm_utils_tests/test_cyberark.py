@@ -46,7 +46,7 @@ async def test_cyberark_write_and_read_secret():
 
         # Read the secret back
         read_value = cyberark_manager.sync_read_secret(secret_name=secret_name)
-        print("READ VALUE=", read_value)
+        # Don't log secret value in clear text
 
         # Validate the secret exists and has the correct value
         assert read_value is not None
