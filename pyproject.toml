@@ -30,7 +30,10 @@ tokenizers = "*"
 click = "*"
 jinja2 = "^3.1.2"
 aiohttp = ">=3.10"
-pydantic = "^2.5.0"
+pydantic = [
+    {version = "^2.5.0,<2.11.0", python = ">=3.8.1,<3.9"},
+    {version = "^2.11.0", python = ">=3.9"}
+]
 jsonschema = "^4.22.0"
 numpydoc = {version = "*", optional = true} # used in utils.py
 
