@@ -632,16 +632,18 @@ class Message(OpenAIObject):
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
-    audio: Optional[ChatCompletionAudioResponse] = None
-    images: Optional[List[ImageURLListItem]] = None
-    reasoning_content: Optional[str] = None
+    audio: Optional[ChatCompletionAudioResponse] = Field(default=None, exclude=True)
+    images: Optional[List[ImageURLListItem]] = Field(default=None, exclude=True)
+    reasoning_content: Optional[str] = Field(default=None, exclude=True)
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
-    ] = None
+    ] = Field(default=None, exclude=True)
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
         default=None, exclude=True
     )
-    annotations: Optional[List[ChatCompletionAnnotation]] = None
+    annotations: Optional[List[ChatCompletionAnnotation]] = Field(
+        default=None, exclude=True
+    )
 
     def __init__(
         self,
@@ -700,32 +702,6 @@ class Message(OpenAIObject):
             **init_values,  # type: ignore
             **params,
         )
-
-        if audio is None:
-            # delete audio from self
-            # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
-            if hasattr(self, "audio"):
-                del self.audio
-
-        if images is None:
-            if hasattr(self, "images"):
-                del self.images
-
-        if annotations is None:
-            # ensure default response matches OpenAI spec
-            # Some OpenAI compatible APIs raise an error if annotations are passed in
-            if hasattr(self, "annotations"):
-                del self.annotations
-
-        if reasoning_content is None:
-            # ensure default response matches OpenAI spec
-            if hasattr(self, "reasoning_content"):
-                del self.reasoning_content
-
-        if thinking_blocks is None:
-            # ensure default response matches OpenAI spec
-            if hasattr(self, "thinking_blocks"):
-                del self.thinking_blocks
 
         add_provider_specific_fields(self, provider_specific_fields)
 
@@ -848,9 +824,11 @@ class Choices(OpenAIObject):
     finish_reason: str
     index: int
     message: Message
-    logprobs: Optional[Union[ChoiceLogprobs, Any]] = None
+    logprobs: Optional[Union[ChoiceLogprobs, Any]] = Field(default=None, exclude=True)
 
-    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(
+        default=None, exclude=True
+    )
 
     def __init__(
         self,
@@ -889,12 +867,8 @@ class Choices(OpenAIObject):
         if enhancements is not None:
             self.enhancements = enhancements
 
-        self.provider_specific_fields = provider_specific_fields
-
-        if self.logprobs is None:
-            del self.logprobs
-        if self.provider_specific_fields is None:
-            del self.provider_specific_fields
+        if provider_specific_fields is not None:
+            self.provider_specific_fields = provider_specific_fields
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
