@@ -44,4 +44,22 @@ describe("ProviderSpecificFields", () => {
       expect(apiKeyLabel).toBeInTheDocument();
     });
   });
+
+  it("should render the provider specific fields for vLLM", async () => {
+    const { getByLabelText, getByPlaceholderText } = render(
+      <Form>
+        <ProviderSpecificFields selectedProvider={"Hosted_Vllm" as Providers} />
+      </Form>,
+    );
+
+    await waitFor(() => {
+      const apiBaseInput = getByPlaceholderText("https://...");
+      expect(apiBaseInput).toBeInTheDocument();
+      expect(apiBaseInput).toHaveAttribute("type", "text");
+
+      // Check for API Key field
+      const apiKeyLabel = getByLabelText("vLLM API Key");
+      expect(apiKeyLabel).toBeInTheDocument();
+    });
+  });
 });

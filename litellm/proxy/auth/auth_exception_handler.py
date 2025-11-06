@@ -44,7 +44,7 @@ class UserAPIKeyAuthExceptionHandler:
             - UserAPIKeyAuth: If general_settings.allow_requests_on_db_unavailable is True
 
         Raises:
-            - Orignal Exception in all other cases
+            - Original Exception in all other cases
         """
         from litellm.proxy.proxy_server import (
             general_settings,

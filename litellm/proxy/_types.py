@@ -2364,6 +2364,7 @@ class WebhookEvent(CallInfo):
         "threshold_crossed",
         "projected_limit_exceeded",
         "key_created",
+        "key_rotated",
         "internal_user_created",
         "spend_tracked",
     ]

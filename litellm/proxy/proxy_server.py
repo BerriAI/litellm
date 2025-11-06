@@ -2658,6 +2658,12 @@ class ProxyConfig:
                 )
 
                 HashicorpSecretManager()
+            elif key_management_system == KeyManagementSystem.CYBERARK.value:
+                from litellm.secret_managers.cyberark_secret_manager import (
+                    CyberArkSecretManager,
+                )
+
+                CyberArkSecretManager()
             else:
                 raise ValueError("Invalid Key Management System selected")
 
