@@ -308,9 +308,8 @@ class VertexBase:
                     raise ValueError(
                         "Missing gemini_api_key, please set `GEMINI_API_KEY`"
                     )
-                auth_header = (
-                    gemini_api_key  # cloudflare expects api key as bearer token
-                )
+                if gemini_api_key is not None:
+                    auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment] 
             else:
                 url = "{}:{}".format(api_base, endpoint)
 

@@ -95,6 +95,15 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             # If the error is due to incomplete transfer encoding, we can still
             # return what we've received so far, similar to how httpx handles it
             return
+        except RuntimeError as e:
+            # Some providers (e.g., SSE streams) may close the connection
+            # causing aiohttp StreamReader to raise a generic RuntimeError
+            # with message "Connection closed.". Treat this as a graceful
+            # end-of-stream so downstream consumers don't error.
+            if "Connection closed" in str(e):
+                verbose_logger.debug("Upstream closed streaming connection; ending iterator gracefully")
+                return
+            raise
         except aiohttp.http_exceptions.TransferEncodingError as e:
             # Handle transfer encoding errors gracefully
             verbose_logger.debug(f"Transfer encoding error, but continuing: {e}")

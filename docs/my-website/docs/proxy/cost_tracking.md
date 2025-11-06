@@ -9,7 +9,7 @@ Track spend for keys, users, and teams across 100+ LLMs.
 LiteLLM automatically tracks spend for all known models. See our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
 
 :::tip Keep Pricing Data Updated
-[Sync model pricing data from GitHub](../sync_models_github.md) to ensure accurate cost tracking.
+[Sync model pricing data from GitHub](./sync_models_github.md) to ensure accurate cost tracking.
 :::
 
 ### How to Track Spend with LiteLLM
