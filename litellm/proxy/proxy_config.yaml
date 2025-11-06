@@ -1,3 +1,10 @@
+general_settings:
+  key_management_system: "cyberark"
+  key_management_settings: 
+    store_virtual_keys: true
+    prefix_for_stored_virtual_keys: "litellm/"
+    access_mode: "read_and_write"
+
 model_list:
   - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
     litellm_params:
@@ -33,7 +40,7 @@ litellm_settings:
   store_audit_logs: true
   verbose: true
   log_level: "DEBUG"  # Options: DEBUG, INFO, WARNING, ERROR
-  success_callback: ["s3_v2"]
+  callbacks: ["s3_v2", "smtp_email"]
   s3_callback_params:
     s3_endpoint_url: "https://localhost:443"  # Replace with your Minio server URL and port
     s3_aws_access_key_id: "minioadmin"
