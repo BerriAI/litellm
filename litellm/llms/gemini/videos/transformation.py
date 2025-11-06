@@ -18,6 +18,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 import litellm
 from litellm.types.llms.gemini import GeminiLongRunningOperationResponse, GeminiVideoGenerationInstance, GeminiVideoGenerationParameters, GeminiVideoGenerationRequest
+from litellm.constants import DEFAULT_VIDEO_DURATION_SECONDS
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from ...base_llm.videos.transformation import BaseVideoConfig as _BaseVideoConfig
@@ -95,7 +96,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         - prompt → prompt
         - input_reference → image
         - size → aspectRatio (e.g., "1280x720" → "16:9")
-        - seconds → durationSeconds
+        - seconds → durationSeconds (defaults to 4 seconds if not provided)
         
         All other params are passed through as-is to support Gemini-specific parameters.
         """
@@ -120,7 +121,7 @@ class GeminiVideoConfig(BaseVideoConfig):
                 if aspect_ratio:
                     mapped_params["aspectRatio"] = aspect_ratio
         
-        # Map seconds to durationSeconds
+        # Map seconds to durationSeconds, default to 4 seconds (matching OpenAI)
         if "seconds" in video_create_optional_params:
             seconds = video_create_optional_params["seconds"]
             try:
@@ -128,8 +129,11 @@ class GeminiVideoConfig(BaseVideoConfig):
                 if duration is not None:
                     mapped_params["durationSeconds"] = duration
             except (ValueError, TypeError):
-                # If conversion fails, skip this parameter
-                pass
+                # If conversion fails, use default
+                mapped_params["durationSeconds"] = DEFAULT_VIDEO_DURATION_SECONDS
+        else:
+            # Always set default duration if not provided
+            mapped_params["durationSeconds"] = DEFAULT_VIDEO_DURATION_SECONDS
         
         # Pass through any other params that weren't mapped (Gemini-specific params)
         for key, value in video_create_optional_params.items():
@@ -306,7 +310,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         usage_data = {}
         if request_data:
             parameters = request_data.get("parameters", {})
-            duration = parameters.get("durationSeconds") or 8
+            duration = parameters.get("durationSeconds") or DEFAULT_VIDEO_DURATION_SECONDS
             if duration is not None:
                 try:
                     usage_data["duration_seconds"] = float(duration)

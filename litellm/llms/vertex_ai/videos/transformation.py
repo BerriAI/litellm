@@ -24,6 +24,7 @@ from litellm.types.videos.utils import (
     extract_original_video_id,
 )
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.constants import DEFAULT_VIDEO_DURATION_SECONDS
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -110,7 +111,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         - prompt → prompt (in instances)
         - input_reference → image (in instances)
         - size → aspectRatio (e.g., "1280x720" → "16:9")
-        - seconds → durationSeconds
+        - seconds → durationSeconds (defaults to 4 seconds if not provided)
         """
         mapped_params: Dict[str, Any] = {}
 
@@ -126,7 +127,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
                 if aspect_ratio:
                     mapped_params["aspectRatio"] = aspect_ratio
 
-        # Map seconds to durationSeconds
+        # Map seconds to durationSeconds, default to 4 seconds (matching OpenAI)
         if "seconds" in video_create_optional_params:
             seconds = video_create_optional_params["seconds"]
             try:
@@ -134,8 +135,11 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
                 if duration is not None:
                     mapped_params["durationSeconds"] = duration
             except (ValueError, TypeError):
-                # If conversion fails, skip this parameter
-                pass
+                # If conversion fails, use default
+                mapped_params["durationSeconds"] = DEFAULT_VIDEO_DURATION_SECONDS
+        else:
+            # Always set default duration if not provided
+            mapped_params["durationSeconds"] = DEFAULT_VIDEO_DURATION_SECONDS
 
         return mapped_params
 
@@ -331,7 +335,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         usage_data = {}
         if request_data:
             parameters = request_data.get("parameters", {})
-            duration = parameters.get("durationSeconds") or 8
+            duration = parameters.get("durationSeconds") or DEFAULT_VIDEO_DURATION_SECONDS
             if duration is not None:
                 try:
                     usage_data["duration_seconds"] = float(duration)
