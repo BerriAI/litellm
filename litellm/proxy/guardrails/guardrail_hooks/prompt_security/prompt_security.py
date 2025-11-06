@@ -25,10 +25,11 @@ class PromptSecurityGuardrailMissingSecrets(Exception):
     pass
 
 class PromptSecurityGuardrail(CustomGuardrail):
-    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs):
+    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, user: Optional[str] = None, **kwargs):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.api_key = api_key or os.environ.get("PROMPT_SECURITY_API_KEY")
         self.api_base = api_base or os.environ.get("PROMPT_SECURITY_API_BASE")
+        self.user = user or os.environ.get("PROMPT_SECURITY_USER")
         if not self.api_key or not self.api_base:
             msg = (
                 "Couldn't get Prompt Security api base or key, "
@@ -136,7 +137,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
     async def process_message_files(self, messages: list) -> list:
         """
-        Process messages and sanitize any file content (images, documents, etc.)
+        Process messages and sanitize any file content (images, documents, PDFs, etc.)
         """
         processed_messages = []
         
@@ -150,7 +151,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                     if isinstance(item, dict):
                         item_type = item.get("type")
                         
-                        # Handle image_url type
+                        # Handle image_url type (for images)
                         if item_type == "image_url":
                             image_url_data = item.get("image_url", {})
                             if isinstance(image_url_data, dict):
@@ -158,7 +159,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                             else:
                                 url = image_url_data
                             
-                            # Check if it's a base64 encoded image
+                            # Check if it's a base64 encoded file
                             if url.startswith("data:"):
                                 try:
                                     # Extract base64 data
@@ -195,8 +196,82 @@ class PromptSecurityGuardrail(CustomGuardrail):
                                             verbose_proxy_logger.info("File content modified by Prompt Security")
                                     
                                 except Exception as e:
-                                    verbose_proxy_logger.error(f"Error sanitizing file: {str(e)}")
+                                    verbose_proxy_logger.error(f"Error sanitizing image file: {str(e)}")
                                     raise HTTPException(status_code=500, detail=f"File sanitization failed: {str(e)}")
+                        
+                        # Handle document/PDF type (for PDFs and other documents)
+                        elif item_type in ["document", "file"]:
+                            # Handle different document structures
+                            doc_data = item.get("document") or item.get("file") or item
+                            
+                            # Check for base64 data or URL
+                            if isinstance(doc_data, dict):
+                                url = doc_data.get("url", "")
+                                doc_content = doc_data.get("data", "")
+                            else:
+                                url = doc_data if isinstance(doc_data, str) else ""
+                                doc_content = ""
+                            
+                            # Process base64 encoded documents
+                            if url.startswith("data:") or doc_content:
+                                try:
+                                    # Extract base64 data
+                                    if url.startswith("data:"):
+                                        header, encoded = url.split(",", 1)
+                                        file_data = base64.b64decode(encoded)
+                                        mime_type = header.split(";")[0].split(":")[1]
+                                    else:
+                                        # Direct base64 content
+                                        file_data = base64.b64decode(doc_content)
+                                        mime_type = doc_data.get("mime_type", "application/pdf")
+                                    
+                                    # Determine filename from mime type
+                                    if "pdf" in mime_type:
+                                        filename = "document.pdf"
+                                    elif "word" in mime_type or "docx" in mime_type:
+                                        filename = "document.docx"
+                                    elif "excel" in mime_type or "xlsx" in mime_type:
+                                        filename = "document.xlsx"
+                                    else:
+                                        extension = mime_type.split("/")[-1]
+                                        filename = f"document.{extension}"
+                                    
+                                    verbose_proxy_logger.info(f"Sanitizing document: {filename}")
+                                    
+                                    # Sanitize the file
+                                    sanitization_result = await self.sanitize_file_content(file_data, filename)
+                                    
+                                    action = sanitization_result.get("action")
+                                    
+                                    if action == "block":
+                                        violations = sanitization_result.get("violations", [])
+                                        raise HTTPException(
+                                            status_code=400,
+                                            detail=f"Document blocked by Prompt Security. Violations: {', '.join(violations)}"
+                                        )
+                                    elif action == "modify":
+                                        # Replace with sanitized content
+                                        sanitized_content = sanitization_result.get("content", "")
+                                        if sanitized_content:
+                                            # Convert back to base64
+                                            if isinstance(sanitized_content, bytes):
+                                                sanitized_encoded = base64.b64encode(sanitized_content).decode()
+                                            else:
+                                                sanitized_encoded = base64.b64encode(sanitized_content.encode()).decode()
+                                            
+                                            if url.startswith("data:"):
+                                                sanitized_url = f"{header},{sanitized_encoded}"
+                                                if isinstance(doc_data, dict):
+                                                    doc_data["url"] = sanitized_url
+                                            else:
+                                                if isinstance(doc_data, dict):
+                                                    doc_data["data"] = sanitized_encoded
+                                            
+                                            verbose_proxy_logger.info("Document content modified by Prompt Security")
+                                    
+                                except Exception as e:
+                                    verbose_proxy_logger.error(f"Error sanitizing document: {str(e)}")
+                                    raise HTTPException(status_code=500, detail=f"Document sanitization failed: {str(e)}")
                         
                         processed_content.append(item)
                     else:
@@ -211,25 +286,37 @@ class PromptSecurityGuardrail(CustomGuardrail):
         return processed_messages
 
     async def call_prompt_security_guardrail(self, data: dict) -> dict:
+
         messages = data.get("messages", [])
         
         # First, sanitize any files in the messages
         messages = await self.process_message_files(messages)
+
+        def good_msg(msg):
+            if msg.get('content', '').startswith('### '): return False
+            if '"follow_ups": [' in msg.get('content', ''): return False
+            return True
+
+        messages = list(filter(lambda msg: good_msg(msg), messages))
+
         data["messages"] = messages
-        
+
         # Then, run the regular prompt security check
         headers = { 'APP-ID': self.api_key, 'Content-Type': 'application/json' }
         response = await self.async_handler.post(
             f"{self.api_base}/api/protect",
             headers=headers,
-            json={"messages": messages},
+            json={"messages": messages, "user": self.user},
         )
         response.raise_for_status()
         res = response.json()
         result = res.get("result", {}).get("prompt", {})
+        if result is None: # prompt can exist but be with value None!
+            return data
         action = result.get("action")
+        violations = result.get("violations", [])
         if action == "block":
-            raise HTTPException(status_code=400, detail="Blocked by Prompt Security")
+            raise HTTPException(status_code=400, detail="Blocked by Prompt Security, Violations: " + ", ".join(violations))
         elif action == "modify":
             data["messages"] = result.get("modified_messages", [])
         return data
@@ -239,12 +326,16 @@ class PromptSecurityGuardrail(CustomGuardrail):
         response = await self.async_handler.post(
             f"{self.api_base}/api/protect",
             headers = { 'APP-ID': self.api_key, 'Content-Type': 'application/json' },
-            json = { "response": output }
+            json = { "response": output, "user": self.user }
         )
         response.raise_for_status()
         res = response.json()
+        print("RET!!!:", res)
         result = res.get("result", {}).get("response", {})
-        return { "action": result.get("action"), "modified_text": result.get("modified_text") }
+        if result is None: # prompt can exist but be with value None!
+            return {}
+        violations = result.get("violations", [])
+        return { "action": result.get("action"), "modified_text": result.get("modified_text"), "violations": violations }
 
     async def async_post_call_success_hook(
         self,
@@ -255,8 +346,9 @@ class PromptSecurityGuardrail(CustomGuardrail):
         if (isinstance(response, ModelResponse) and response.choices and isinstance(response.choices[0], Choices)):
             content = response.choices[0].message.content or ""
             ret = await self.call_prompt_security_guardrail_on_output(content)
+            violations = ret.get("violations", [])
             if ret.get("action") == "block":
-                raise HTTPException(status_code=400, detail="Blocked by Prompt Security")
+                raise HTTPException(status_code=400, detail="Blocked by Prompt Security, Violations: " + ", ".join(violations))
             elif ret.get("action") == "modify":
                 response.choices[0].message.content = ret.get("modified_text")
         return response
@@ -287,9 +379,10 @@ class PromptSecurityGuardrail(CustomGuardrail):
                         chunk, buffer = buffer,''
 
                     ret = await self.call_prompt_security_guardrail_on_output(chunk)
+                    violations = ret.get("violations", [])
                     if ret.get("action") == "block":
                         from litellm.proxy.proxy_server import StreamingCallbackError
-                        raise StreamingCallbackError("Blocked by Prompt Security")
+                        raise StreamingCallbackError("Blocked by Prompt Security, Violations: " + ", ".join(violations))
                     elif ret.get("action") == "modify":
                         chunk = ret.get("modified_text")
                     
@@ -306,3 +399,4 @@ class PromptSecurityGuardrail(CustomGuardrail):
             PromptSecurityGuardrailConfigModel,
         )
         return PromptSecurityGuardrailConfigModel
+
