@@ -158,9 +158,15 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         session_id = optional_params.get("runtimeSessionId", None)
         if session_id:
             return session_id
-        
+
         # Generate a session ID with 33+ characters
         return f"litellm-session-{str(uuid.uuid4())}"
+
+    def _get_runtime_user_id(self, optional_params: dict) -> Optional[str]:
+        """
+        Get runtime user ID if provided
+        """
+        return optional_params.get("runtimeUserId", None)
 
     def transform_request(
         self,
@@ -172,28 +178,34 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
     ) -> dict:
         """
         Transform the request to AgentCore format.
-        
+
         Based on boto3's implementation:
         - Session ID goes in header: X-Amzn-Bedrock-AgentCore-Runtime-Session-Id
+        - User ID goes in header: X-Amzn-Bedrock-AgentCore-Runtime-User-Id
         - Qualifier goes as query parameter
         - Only the payload goes in the request body
-        
+
         Returns:
             dict: Payload dict containing the prompt
         """
         # Use the last message content as the prompt
         prompt = convert_content_list_to_str(messages[-1])
-        
+
         # Create the payload - this is what goes in the body (raw JSON)
         payload: dict = {"prompt": prompt}
-        
+
         # Get or generate session ID - this goes in the header
         runtime_session_id = self._get_runtime_session_id(optional_params)
         headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] = runtime_session_id
-        
+
+        # Get user ID if provided - this goes in the header
+        runtime_user_id = self._get_runtime_user_id(optional_params)
+        if runtime_user_id:
+            headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] = runtime_user_id
+
         # The request data is the payload dict (will be JSON encoded by the HTTP handler)
         # Qualifier will be handled as a query parameter in get_complete_url
-        
+
         return payload
 
     def _extract_sse_json(self, line: str) -> Optional[Dict]:
