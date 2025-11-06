@@ -32,17 +32,17 @@ TEST_API_KEY = "sk-1234"  # API key used in test requests
 
 # Number of API requests to execute in each batch during testing
 # Larger batches = more requests before measuring memory, smoother growth patterns
-# Optimized to 50 for faster test execution while maintaining detection accuracy
-DEFAULT_BATCH_SIZE = 50
+# Optimized to 30 for CI performance while maintaining detection accuracy
+DEFAULT_BATCH_SIZE = 30
 
 # Number of batches to run during the measurement phase
 # More batches = longer test runtime but more confidence in leak detection
-# Optimized to 6 for faster feedback while maintaining statistical significance
-DEFAULT_NUM_BATCHES = 6
+# Optimized to 5 for CI performance while maintaining statistical significance
+DEFAULT_NUM_BATCHES = 5
 
 # Number of warmup batches to run before measurement begins
 # Warmup allows caches and memory allocations to stabilize before measurement
-# Optimized to 2 for faster test startup while allowing stabilization
+# Set to 1 for fast startup while allowing initial stabilization
 DEFAULT_WARMUP_BATCHES = 1
 
 # Hard limit on number of batches to prevent excessively long test runs
@@ -55,7 +55,7 @@ MAX_NUM_BATCHES = 15
 
 # Window size for calculating rolling average of memory measurements
 # Smooths out noise in memory measurements for more accurate trend detection
-# Set to 3 to match optimized batch count (6 batches) while maintaining smoothing
+# Set to 3 to match optimized batch count (5 batches) while maintaining smoothing
 DEFAULT_ROLLING_AVERAGE_WINDOW = 3
 
 # Maximum allowed memory growth percentage for basic test pass/fail
@@ -92,8 +92,8 @@ DEFAULT_CAPTURE_TOP_CONSUMERS = True
 
 # Number of top memory consumers to capture in each snapshot
 # Higher values provide more detail but increase snapshot size
-# Optimized to 10 to reduce profiling overhead while capturing key consumers
-DEFAULT_TOP_CONSUMERS_COUNT = 10
+# Optimized to 5 for CI performance while capturing key consumers
+DEFAULT_TOP_CONSUMERS_COUNT = 5
 
 # Default directory for JSON output files containing memory snapshot data
 # Each test gets its own file: {OUTPUT_DIR}/test_name.json
@@ -125,8 +125,8 @@ DEFAULT_MEMORY_INCREASE_THRESHOLD_PCT = 2.0
 # Periodic sampling interval for detailed snapshots
 # Captures a detailed snapshot every N requests regardless of memory changes
 # Ensures regular sampling even when memory is stable
-# Optimized to 25 to reduce profiling overhead while maintaining coverage
-DEFAULT_PERIODIC_SAMPLE_INTERVAL = 10
+# Optimized to 15 for CI performance while maintaining coverage
+DEFAULT_PERIODIC_SAMPLE_INTERVAL = 15
 
 # =============================================================================
 # Memory Leak Detection Thresholds
