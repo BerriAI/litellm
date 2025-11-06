@@ -24,6 +24,7 @@ from litellm.types.guardrails import (
     ContentFilterAction,
     ContentFilterPattern,
     GuardrailEventHooks,
+    Mode,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes, GuardrailStatus
@@ -49,7 +50,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         patterns: Optional[List[ContentFilterPattern]] = None,
         blocked_words: Optional[List[BlockedWord]] = None,
         blocked_words_file: Optional[str] = None,
-        event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = None,
+        event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]] = None,
         default_on: bool = False,
         pattern_redaction_format: str = "[{pattern_name}_REDACTED]",
         keyword_redaction_tag: str = "[KEYWORD_REDACTED]",
