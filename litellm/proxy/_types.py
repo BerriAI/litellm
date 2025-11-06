@@ -229,6 +229,7 @@ class LiteLLMRoutes(enum.Enum):
         "completion",
         "embeddings",
         "image_generation",
+        "video_generation",
         "audio_transcriptions",
         "moderations",
         "model_list",  # OpenAI /v1/models route

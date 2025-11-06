@@ -6026,6 +6026,7 @@ async def ahealth_check(
             "audio_speech",
             "audio_transcription",
             "image_generation",
+            "video_generation",
             "batch",
             "rerank",
             "realtime",
