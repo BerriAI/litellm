@@ -545,10 +545,17 @@ def test_embedding(mock_aembedding, client_no_auth):
             "input": ["good morning from litellm"],
         }
 
+        pre_call_return_value = {
+            **test_data,
+            "metadata": {"source": "unit-test"},
+            "proxy_server_request": {"path": "/v1/embeddings"},
+            "secret_fields": [],
+        }
+
         with patch.object(
             litellm.proxy.proxy_server.proxy_logging_obj,
             "pre_call_hook",
-            new=AsyncMock(return_value=test_data.copy()),
+            new=AsyncMock(return_value=pre_call_return_value),
         ) as mock_pre_call_hook, patch.object(
             litellm.proxy.proxy_server.proxy_logging_obj,
             "during_call_hook",
