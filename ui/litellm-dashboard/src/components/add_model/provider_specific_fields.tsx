@@ -507,9 +507,9 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     },
     {
       key: "api_key",
-      label: "OpenAI API Key",
+      label: "vLLM API Key",
       type: "password",
-      required: true,
+      required: false,
     },
   ],
   [Providers.Voyage]: [
@@ -581,7 +581,7 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       label: "API Key",
       type: "password",
       required: true,
-    }
+    },
   ],
 };
 
