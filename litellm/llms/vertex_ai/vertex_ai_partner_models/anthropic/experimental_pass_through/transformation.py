@@ -51,12 +51,13 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         headers["content-type"] = "application/json"
         
-        # Add web search beta header for Vertex AI
-        tools = optional_params.get("tools", [])
-        for tool in tools:
-            if isinstance(tool, dict) and tool.get("type", "").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
-                headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
-                break
+        # Add web search beta header for Vertex AI only if not already set
+        if "anthropic-beta" not in headers:
+            tools = optional_params.get("tools", [])
+            for tool in tools:
+                if isinstance(tool, dict) and tool.get("type", "").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
+                    headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                    break
         
         return headers, api_base
 
