@@ -101,7 +101,7 @@ class CustomSecretManager(BaseSecretManager):
         super().__init__()
         self.secret_manager_name = secret_manager_name or "custom_secret_manager"
         verbose_logger.info(
-            f"Initialized custom secret manager: {self.secret_manager_name}"
+            "Initialized custom secret manager"
         )
 
     @abstractmethod
