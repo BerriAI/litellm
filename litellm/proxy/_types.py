@@ -964,6 +964,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: Optional[List[str]] = None
     extra_headers: Optional[List[str]] = None
+    static_headers: Optional[Dict[str, str]] = None
     # Stdio-specific fields
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
@@ -995,6 +996,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
+    static_headers: Optional[Dict[str, str]] = None
     # Stdio-specific fields
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
@@ -1035,6 +1037,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     allowed_tools: List[str] = Field(default_factory=list)
     extra_headers: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
+    static_headers: Optional[Dict[str, str]] = None
     # Health check status
     status: Optional[Literal["healthy", "unhealthy", "unknown"]] = Field(
         default="unknown",
@@ -2361,6 +2364,7 @@ class WebhookEvent(CallInfo):
         "threshold_crossed",
         "projected_limit_exceeded",
         "key_created",
+        "key_rotated",
         "internal_user_created",
         "spend_tracked",
     ]
@@ -2521,7 +2525,7 @@ class SpendLogsMetadata(TypedDict):
     applied_guardrails: Optional[List[str]]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
-    guardrail_information: Optional[list[StandardLoggingGuardrailInformation]]
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
     status: StandardLoggingPayloadStatus
     proxy_server_request: Optional[str]
     batch_models: Optional[List[str]]

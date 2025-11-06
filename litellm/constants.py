@@ -209,8 +209,17 @@ DEFAULT_POLLING_INTERVAL = float(
     os.getenv("DEFAULT_POLLING_INTERVAL", 0.03)
 )  # default polling interval for the scheduler
 AZURE_OPERATION_POLLING_TIMEOUT = int(os.getenv("AZURE_OPERATION_POLLING_TIMEOUT", 120))
+AZURE_DOCUMENT_INTELLIGENCE_API_VERSION = str(
+    os.getenv("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION", "2024-11-30")
+)
+AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI = int(
+    os.getenv("AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI", 96)
+)
 REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", 0.1))
 REDIS_CONNECTION_POOL_TIMEOUT = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5))
+# Default Redis major version to assume when version cannot be determined
+# Using 7 as it's the modern version that supports LPOP with count parameter
+DEFAULT_REDIS_MAJOR_VERSION = 7
 NON_LLM_CONNECTION_TIMEOUT = int(
     os.getenv("NON_LLM_CONNECTION_TIMEOUT", 15)
 )  # timeout for adjacent services (e.g. jwt auth)

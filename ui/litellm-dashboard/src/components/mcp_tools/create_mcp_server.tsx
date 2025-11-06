@@ -60,18 +60,30 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
   };
 
-  const handleCreate = async (formValues: Record<string, any>) => {
+  const handleCreate = async (values: Record<string, any>) => {
     setIsLoading(true);
     try {
-      // Transform access groups into objects with name property
+      const { static_headers: staticHeadersList, stdio_config: rawStdioConfig, ...restValues } = values;
 
-      const accessGroups = formValues.mcp_access_groups;
+      // Transform access groups into objects with name property
+      const accessGroups = restValues.mcp_access_groups;
+
+      const staticHeaders = Array.isArray(staticHeadersList)
+        ? staticHeadersList.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
+            const header = entry?.header?.trim();
+            if (!header) {
+              return acc;
+            }
+            acc[header] = entry?.value ?? "";
+            return acc;
+          }, {})
+        : {} as Record<string, string>;
 
       // Process stdio configuration if present
       let stdioFields = {};
-      if (formValues.stdio_config && transportType === "stdio") {
+      if (rawStdioConfig && transportType === "stdio") {
         try {
-          const stdioConfig = JSON.parse(formValues.stdio_config);
+          const stdioConfig = JSON.parse(rawStdioConfig);
 
           // Handle both formats:
           // 1. Full mcpServers structure: {"mcpServers": {"server-name": {...}}}
@@ -87,8 +99,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               actualConfig = stdioConfig.mcpServers[firstServerName];
 
               // If no alias is provided, use the server name from the JSON
-              if (!formValues.server_name) {
-                formValues.server_name = firstServerName.replace(/-/g, "_"); // Replace hyphens with underscores
+              if (!restValues.server_name) {
+                restValues.server_name = firstServerName.replace(/-/g, "_"); // Replace hyphens with underscores
               }
             }
           }
@@ -108,18 +120,19 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
       // Prepare the payload with cost configuration and allowed tools
       const payload = {
-        ...formValues,
+        ...restValues,
         ...stdioFields,
         // Remove the raw stdio_config field as we've extracted its components
         stdio_config: undefined,
         mcp_info: {
-          server_name: formValues.server_name || formValues.url,
-          description: formValues.description,
+          server_name: restValues.server_name || restValues.url,
+          description: restValues.description,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
         },
         mcp_access_groups: accessGroups,
-        alias: formValues.alias,
+        alias: restValues.alias,
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
+        static_headers: staticHeaders,
       };
 
       console.log(`Payload: ${JSON.stringify(payload)}`);

@@ -9,7 +9,6 @@ from typing import Any, Dict, Optional
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-from litellm.types.llms.vertex_ai import VertexPartnerProvider
 
 
 class VertexAIPartnerModelsTokenCounter(VertexBase):
