@@ -42,6 +42,11 @@ class KeyManagementSettings(LiteLLMPydanticObjectBase):
     description: Optional[str] = None
     """Optional description attached when creating secrets (visible in AWS console)."""
 
-
     tags: Optional[Dict[str, str]] = None
     """Optional tags to attach when creating secrets (e.g. {"Environment": "Prod", "Owner": "AI-Platform"})."""
+
+    custom_secret_manager: Optional[str] = None
+    """
+    Path to custom secret manager class (e.g. "my_secret_manager.InMemorySecretManager")
+    Required when key_management_system is "custom"
+    """
