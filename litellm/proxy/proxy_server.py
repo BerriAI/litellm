@@ -903,6 +903,20 @@ try:
     ui_path = os.path.join(current_dir, "_experimental", "out")
     litellm_asset_prefix = "/litellm-asset-prefix"
 
+    # For non-root Docker, use the pre-built UI from /tmp/litellm_ui
+    # Support both "true" and "True" for case-insensitive comparison
+    if os.getenv("LITELLM_NON_ROOT", "").lower() == "true":
+        non_root_ui_path = "/tmp/litellm_ui"
+        
+        # Check if the UI was built and exists at the expected location
+        if os.path.exists(non_root_ui_path) and os.listdir(non_root_ui_path):
+            verbose_proxy_logger.info(f"Using pre-built UI for non-root Docker: {non_root_ui_path}")
+            verbose_proxy_logger.info(f"UI files found: {len(os.listdir(non_root_ui_path))} items")
+            ui_path = non_root_ui_path
+        else:
+            verbose_proxy_logger.error(f"UI not found at {non_root_ui_path}. UI will not be available.")
+            verbose_proxy_logger.error(f"Path exists: {os.path.exists(non_root_ui_path)}, Has content: {os.path.exists(non_root_ui_path) and bool(os.listdir(non_root_ui_path))}")
+
     # Only modify files if a custom server root path is set
     if server_root_path and server_root_path != "/":
         # Iterate through files in the UI directory
@@ -962,17 +976,22 @@ try:
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
     # Handle HTML file restructuring
-    for filename in os.listdir(ui_path):
-        if filename.endswith(".html") and filename != "index.html":
-            # Create a folder with the same name as the HTML file
-            folder_name = os.path.splitext(filename)[0]
-            folder_path = os.path.join(ui_path, folder_name)
-            os.makedirs(folder_path, exist_ok=True)
+    # Skip this for non-root Docker since it's done at build time
+    # Support both "true" and "True" for case-insensitive comparison
+    if os.getenv("LITELLM_NON_ROOT", "").lower() != "true":
+        for filename in os.listdir(ui_path):
+            if filename.endswith(".html") and filename != "index.html":
+                # Create a folder with the same name as the HTML file
+                folder_name = os.path.splitext(filename)[0]
+                folder_path = os.path.join(ui_path, folder_name)
+                os.makedirs(folder_path, exist_ok=True)
 
-            # Move the HTML file into the folder and rename it to 'index.html'
-            src = os.path.join(ui_path, filename)
-            dst = os.path.join(folder_path, "index.html")
-            os.rename(src, dst)
+                # Move the HTML file into the folder and rename it to 'index.html'
+                src = os.path.join(ui_path, filename)
+                dst = os.path.join(folder_path, "index.html")
+                os.rename(src, dst)
+    else:
+        verbose_proxy_logger.info("Skipping runtime HTML restructuring for non-root Docker (already done at build time)")
 
 except Exception:
     pass
