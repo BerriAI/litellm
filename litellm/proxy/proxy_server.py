@@ -2281,9 +2281,7 @@ class ProxyConfig:
         if general_settings is None:
             general_settings = {}
         if general_settings:
-            ### LOAD SECRET MANAGER ###
-            key_management_system = general_settings.get("key_management_system", None)
-            self.initialize_secret_manager(key_management_system=key_management_system)
+            ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
                 "key_management_settings", None
             )
@@ -2291,6 +2289,13 @@ class ProxyConfig:
                 litellm._key_management_settings = KeyManagementSettings(
                     **key_management_settings
                 )
+            
+            ### LOAD SECRET MANAGER ###
+            key_management_system = general_settings.get("key_management_system", None)
+            self.initialize_secret_manager(
+                key_management_system=key_management_system,
+                config_file_path=config_file_path
+            )
             ### [DEPRECATED] LOAD FROM GOOGLE KMS ### old way of loading from google kms
             use_google_kms = general_settings.get("use_google_kms", False)
             load_google_kms(use_google_kms=use_google_kms)
@@ -2622,7 +2627,9 @@ class ProxyConfig:
                         litellm.logging_callback_manager.add_litellm_callback(_logger)
         pass
 
-    def initialize_secret_manager(self, key_management_system: Optional[str]):
+    def initialize_secret_manager(
+        self, key_management_system: Optional[str], config_file_path: Optional[str] = None
+    ):
         """
         Initialize the relevant secret manager if `key_management_system` is provided
         """
@@ -2664,6 +2671,13 @@ class ProxyConfig:
                 )
 
                 CyberArkSecretManager()
+            elif key_management_system == KeyManagementSystem.CUSTOM.value:
+                ### LOAD CUSTOM SECRET MANAGER ###
+                from litellm.secret_managers.custom_secret_manager_loader import (
+                    load_custom_secret_manager,
+                )
+
+                load_custom_secret_manager(config_file_path=config_file_path)
             else:
                 raise ValueError("Invalid Key Management System selected")
 
