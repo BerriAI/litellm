@@ -2,7 +2,10 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj, verbose_logger
+from litellm.litellm_core_utils.litellm_logging import (
+    Logging as LiteLLMLoggingObj,
+    verbose_logger,
+)
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )

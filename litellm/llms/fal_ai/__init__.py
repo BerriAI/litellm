@@ -21,4 +21,3 @@ __all__ = [
     "FalAIStableDiffusionConfig",
     "get_fal_ai_image_generation_config",
 ]
-

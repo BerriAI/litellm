@@ -5,4 +5,3 @@ from .transformation import AzureAVATextToSpeechConfig
 __all__ = [
     "AzureAVATextToSpeechConfig",
 ]
-

@@ -37,15 +37,23 @@ class EmailEvent(str, enum.Enum):
     new_user_invitation = "New User Invitation"
     virtual_key_rotated = "Virtual Key Rotated"
 
+
 class EmailEventSettings(BaseModel):
     event: EmailEvent
     enabled: bool
+
+
 class EmailEventSettingsUpdateRequest(BaseModel):
     settings: List[EmailEventSettings]
+
+
 class EmailEventSettingsResponse(BaseModel):
     settings: List[EmailEventSettings]
+
+
 class DefaultEmailSettings(BaseModel):
     """Default settings for email events"""
+
     settings: Dict[EmailEvent, bool] = Field(
         default_factory=lambda: {
             EmailEvent.virtual_key_created: True,  # On by default
@@ -53,9 +61,11 @@ class DefaultEmailSettings(BaseModel):
             EmailEvent.virtual_key_rotated: True,  # On by default
         }
     )
+
     def to_dict(self) -> Dict[str, bool]:
         """Convert to dictionary with string keys for storage"""
         return {event.value: enabled for event, enabled in self.settings.items()}
+
     @classmethod
     def get_defaults(cls) -> Dict[str, bool]:
         """Get the default settings as a dictionary with string keys"""

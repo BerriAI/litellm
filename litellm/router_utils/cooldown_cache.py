@@ -127,7 +127,7 @@ class CooldownCache:
 
         if results is None or all(v is None for v in results):
             return active_cooldowns
-        
+
         # Process the results
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):

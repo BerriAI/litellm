@@ -1113,7 +1113,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             # Azure image generation API doesn't support extra_body parameter
             extra_body = optional_params.pop("extra_body", {})
             flattened_params = {**optional_params, **extra_body}
-            
+
             data = {"model": model, "prompt": prompt, **flattened_params}
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):
@@ -1124,9 +1124,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if api_key is None and azure_ad_token_provider is not None:
                 azure_ad_token = azure_ad_token_provider()
                 if azure_ad_token:
-                    headers.pop(
-                        "api-key", None
-                    )
+                    headers.pop("api-key", None)
                     headers["Authorization"] = f"Bearer {azure_ad_token}"
 
             # init AzureOpenAI Client

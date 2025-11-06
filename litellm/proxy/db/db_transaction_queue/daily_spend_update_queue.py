@@ -53,9 +53,9 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
 
     def __init__(self):
         super().__init__()
-        self.update_queue: asyncio.Queue[Dict[str, BaseDailySpendTransaction]] = (
-            asyncio.Queue()
-        )
+        self.update_queue: asyncio.Queue[
+            Dict[str, BaseDailySpendTransaction]
+        ] = asyncio.Queue()
 
     async def add_update(self, update: Dict[str, BaseDailySpendTransaction]):
         """Enqueue an update."""
@@ -72,9 +72,9 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
         Combine all updates in the queue into a single update.
         This is used to reduce the size of the in-memory queue.
         """
-        updates: List[Dict[str, BaseDailySpendTransaction]] = (
-            await self.flush_all_updates_from_in_memory_queue()
-        )
+        updates: List[
+            Dict[str, BaseDailySpendTransaction]
+        ] = await self.flush_all_updates_from_in_memory_queue()
         aggregated_updates = self.get_aggregated_daily_spend_update_transactions(
             updates
         )

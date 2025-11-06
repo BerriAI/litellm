@@ -26,7 +26,9 @@ class VideoGenerationRequestUtils:
             A dictionary of supported parameters for the video generation API
         """
         # Get supported parameters for the model
-        supported_params = video_generation_provider_config.get_supported_openai_params(model)
+        supported_params = video_generation_provider_config.get_supported_openai_params(
+            model
+        )
 
         # Check for unsupported parameters
         unsupported_params = [

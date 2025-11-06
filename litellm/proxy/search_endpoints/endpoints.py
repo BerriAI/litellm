@@ -126,7 +126,7 @@ async def search(
     # Read request body
     body = await request.body()
     data = orjson.loads(body)
-    
+
     # If search_tool_name is provided in URL path, use it (takes precedence over body)
     if search_tool_name is not None:
         data["search_tool_name"] = search_tool_name
@@ -159,4 +159,3 @@ async def search(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-

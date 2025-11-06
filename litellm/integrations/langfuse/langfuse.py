@@ -689,7 +689,7 @@ class LangFuseLogger:
                         "total_cost": cost if self._supports_costs() else None,
                     }
                     cache_read_input_tokens = _usage_obj.get(
-                            "cache_read_input_tokens", 0
+                        "cache_read_input_tokens", 0
                     )
                     # According to langfuse documentation: "the input value must be reduced by the number of cache_read_input_tokens"
                     input_tokens = _usage_obj.prompt_tokens - cache_read_input_tokens

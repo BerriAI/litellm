@@ -111,10 +111,10 @@ class BaseResponsesAPIStreamingIterator:
                             )
                             if usage_obj is not None:
                                 try:
-                                    cost: Optional[float] = (
-                                        self.logging_obj._response_cost_calculator(
-                                            result=response_obj
-                                        )
+                                    cost: Optional[
+                                        float
+                                    ] = self.logging_obj._response_cost_calculator(
+                                        result=response_obj
                                     )
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)
@@ -327,9 +327,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         # Add cost to usage object if include_cost_in_streaming_usage is True
         if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-            usage_obj: Optional[ResponseAPIUsage] = getattr(
-                transformed, "usage", None
-            )
+            usage_obj: Optional[ResponseAPIUsage] = getattr(transformed, "usage", None)
             if usage_obj is not None:
                 try:
                     cost: Optional[float] = logging_obj._response_cost_calculator(

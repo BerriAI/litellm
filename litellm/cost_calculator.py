@@ -327,12 +327,14 @@ def cost_per_token(  # noqa: PLR0915
     elif call_type == "search" or call_type == "asearch":
         # Search providers use per-query pricing
         from litellm.search import search_provider_cost_per_query
-        
+
         return search_provider_cost_per_query(
             model=model,
             custom_llm_provider=custom_llm_provider,
             number_of_queries=number_of_queries or 1,
-            optional_params=response._hidden_params if response and hasattr(response, "_hidden_params") else None
+            optional_params=response._hidden_params
+            if response and hasattr(response, "_hidden_params")
+            else None,
         )
     elif custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
@@ -803,9 +805,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[Union[dict, Usage]] = (
-                            completion_response.get("usage", {})
-                        )
+                        usage_obj: Optional[
+                            Union[dict, Usage]
+                        ] = completion_response.get("usage", {})
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -906,27 +908,34 @@ def completion_cost(  # noqa: PLR0915
                     or call_type == CallTypes.avideo_remix.value
                 ):
                     ### VIDEO GENERATION COST CALCULATION ###
-                    if completion_response is not None and hasattr(completion_response, 'usage'):
+                    if completion_response is not None and hasattr(
+                        completion_response, "usage"
+                    ):
                         usage_obj = completion_response.usage
                         # Handle both dict and Pydantic Usage object
                         if isinstance(usage_obj, dict):
-                            duration_seconds = usage_obj.get('duration_seconds', None)
+                            duration_seconds = usage_obj.get("duration_seconds", None)
                         else:
-                            duration_seconds = getattr(usage_obj, 'duration_seconds', None)
+                            duration_seconds = getattr(
+                                usage_obj, "duration_seconds", None
+                            )
 
                         if duration_seconds is not None:
                             # Calculate cost based on video duration using video-specific cost calculation
-                            from litellm.llms.openai.cost_calculation import video_generation_cost
+                            from litellm.llms.openai.cost_calculation import (
+                                video_generation_cost,
+                            )
+
                             return video_generation_cost(
                                 model=model,
                                 duration_seconds=duration_seconds,
-                                custom_llm_provider=custom_llm_provider
+                                custom_llm_provider=custom_llm_provider,
                             )
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
                         model=model,
                         duration_seconds=0.0,  # Default to 0 if no duration available
-                        custom_llm_provider=custom_llm_provider
+                        custom_llm_provider=custom_llm_provider,
                     )
                 elif (
                     call_type == CallTypes.speech.value
@@ -1460,13 +1469,13 @@ def default_video_cost_calculator(
         model_name_without_custom_llm_provider = model.replace(
             f"{custom_llm_provider}/", ""
         )
-        base_model_name = f"{custom_llm_provider}/{model_name_without_custom_llm_provider}"
+        base_model_name = (
+            f"{custom_llm_provider}/{model_name_without_custom_llm_provider}"
+        )
 
-    verbose_logger.debug(
-        f"Looking up cost for video model: {base_model_name}"
-    )
+    verbose_logger.debug(f"Looking up cost for video model: {base_model_name}")
 
-    model_without_provider = model.split('/')[-1]
+    model_without_provider = model.split("/")[-1]
 
     # Try model with provider first, fall back to base model name
     cost_info: Optional[dict] = None
@@ -1480,7 +1489,7 @@ def default_video_cost_calculator(
         if _model is not None and _model in litellm.model_cost:
             cost_info = litellm.model_cost[_model]
             break
-    
+
     # If still not found, try with custom_llm_provider prefix
     if cost_info is None and custom_llm_provider:
         prefixed_model = f"{custom_llm_provider}/{model}"
@@ -1495,12 +1504,12 @@ def default_video_cost_calculator(
     video_cost_per_second = cost_info.get("output_cost_per_video_per_second")
     if video_cost_per_second is not None:
         return video_cost_per_second * duration_seconds
-    
+
     # Fallback to general output cost per second
     output_cost_per_second = cost_info.get("output_cost_per_second")
     if output_cost_per_second is not None:
         return output_cost_per_second * duration_seconds
-    
+
     # If no cost information found, return 0
     verbose_logger.info(
         f"No cost information found for video model {model}. Please add pricing to model_prices_and_context_window.json"

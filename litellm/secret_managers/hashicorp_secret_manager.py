@@ -125,9 +125,9 @@ class HashicorpSecretManager(BaseSecretManager):
     def get_url(self, secret_name: str) -> str:
         """
         Constructs the Vault URL for KV v2 secrets.
-        
+
         Format: {VAULT_ADDR}/v1/{NAMESPACE}/{MOUNT_NAME}/data/{PATH_PREFIX}/{SECRET_NAME}
-        
+
         Examples:
         - Default: http://127.0.0.1:8200/v1/secret/data/mykey
         - With namespace: http://127.0.0.1:8200/v1/mynamespace/secret/data/mykey
@@ -221,7 +221,7 @@ class HashicorpSecretManager(BaseSecretManager):
         description: Optional[str] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
-        tags: Optional[Union[dict, list]] = None
+        tags: Optional[Union[dict, list]] = None,
     ) -> Dict[str, Any]:
         """
         Writes a secret to Vault KV v2 using an async HTTPX client.

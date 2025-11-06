@@ -56,20 +56,20 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             _, api_key = self._get_openai_compatible_provider_info(
                 api_base=api_base, api_key=api_key
             )
-        
+
         # Validate API key is present
         if api_key is None:
             raise ValueError(
                 "The api_key client option must be set either by passing api_key to the client or by setting the PERPLEXITY_API_KEY environment variable"
             )
-        
+
         # Set authorization header
         headers["Authorization"] = f"Bearer {api_key}"
-        
+
         # Ensure Content-Type is set to application/json
         if "content-type" not in headers and "Content-Type" not in headers:
             headers["Content-Type"] = "application/json"
-        
+
         return headers
 
     def get_supported_openai_params(self, model: str) -> list:
@@ -100,7 +100,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
                 base_openai_params.append("reasoning_effort")
         except Exception as e:
             verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
-        
+
         try:
             if litellm.supports_web_search(
                 model=model, custom_llm_provider=self.custom_llm_provider
@@ -108,9 +108,8 @@ class PerplexityChatConfig(OpenAIGPTConfig):
                 base_openai_params.append("web_search_options")
         except Exception as e:
             verbose_logger.debug(f"Error checking if model supports web search: {e}")
-        
-        return base_openai_params
 
+        return base_openai_params
 
     def transform_response(  # noqa: PLR0913
         self,
@@ -122,9 +121,9 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,  
+        encoding: Any,
         api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,  
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         """Transform Perplexity response to standard format."""
         # Call the parent transform_response first to handle the standard transformation
@@ -147,16 +146,21 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             raw_response_json = raw_response.json()
             self.add_cost_to_usage(model_response, raw_response_json)
             self._enhance_usage_with_perplexity_fields(
-                model_response, raw_response_json,
+                model_response,
+                raw_response_json,
             )
             self._add_citations_as_annotations(model_response, raw_response_json)
         except (ValueError, TypeError, KeyError) as e:
-            verbose_logger.debug(f"Error extracting Perplexity-specific usage fields: {e}")
+            verbose_logger.debug(
+                f"Error extracting Perplexity-specific usage fields: {e}"
+            )
 
         return model_response
 
-    def _enhance_usage_with_perplexity_fields(  
-        self, model_response: ModelResponse, raw_response_json: dict,
+    def _enhance_usage_with_perplexity_fields(
+        self,
+        model_response: ModelResponse,
+        raw_response_json: dict,
     ) -> None:
         """Extract citation tokens and search queries from Perplexity API response.
 
@@ -292,7 +296,9 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         if search_results:
             setattr(model_response, "search_results", search_results)
 
-    def add_cost_to_usage(self, model_response: ModelResponse, raw_response_json: dict) -> None:
+    def add_cost_to_usage(
+        self, model_response: ModelResponse, raw_response_json: dict
+    ) -> None:
         """Add the cost to the usage object."""
         try:
             usage_data = raw_response_json.get("usage")
@@ -313,10 +319,10 @@ class PerplexityChatConfig(OpenAIGPTConfig):
                 if response_cost is not None:
                     # Store cost in hidden params for the cost calculator to use
                     if not hasattr(model_response, "_hidden_params"):
-                        model_response._hidden_params = {}  
-                    if "additional_headers" not in model_response._hidden_params:  
-                        model_response._hidden_params["additional_headers"] = {}  
-                    model_response._hidden_params["additional_headers"][  
+                        model_response._hidden_params = {}
+                    if "additional_headers" not in model_response._hidden_params:
+                        model_response._hidden_params["additional_headers"] = {}
+                    model_response._hidden_params["additional_headers"][
                         "llm_provider-x-litellm-response-cost"
                     ] = float(response_cost)
         except (ValueError, TypeError, KeyError) as e:

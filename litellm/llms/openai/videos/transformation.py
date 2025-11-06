@@ -11,6 +11,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.videos.main import VideoObject
 import litellm
 from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
@@ -87,7 +88,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         """
         if api_base is None:
             api_base = "https://api.openai.com/v1"
-        
+
         return f"{api_base.rstrip('/')}/videos"
 
     def transform_video_create_request(
@@ -103,15 +104,14 @@ class OpenAIVideoConfig(BaseVideoConfig):
         """
         # Remove model and extra_headers from optional params as they're handled separately
         video_create_optional_request_params = {
-            k: v for k, v in video_create_optional_request_params.items()
+            k: v
+            for k, v in video_create_optional_request_params.items()
             if k not in ["model", "extra_headers"]
         }
-        
+
         # Create the request data
         video_create_request = CreateVideoRequest(
-            model=model,
-            prompt=prompt,
-            **video_create_optional_request_params
+            model=model, prompt=prompt, **video_create_optional_request_params
         )
         request_dict = cast(Dict, video_create_request)
 
@@ -142,16 +142,16 @@ class OpenAIVideoConfig(BaseVideoConfig):
         Transform the OpenAI video creation response.
         """
         response_data = raw_response.json()
-        
+
         # Transform the response data
-    
+
         video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
-        
+
         # Create usage object with duration information for cost calculation
         # Video generation API doesn't provide usage, so we create one with duration
         usage_data = {}
         if video_obj:
-            if hasattr(video_obj, 'seconds') and video_obj.seconds:
+            if hasattr(video_obj, "seconds") and video_obj.seconds:
                 try:
                     usage_data["duration_seconds"] = float(video_obj.seconds)
                 except (ValueError, TypeError):
@@ -159,7 +159,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
         # Create the response
         video_obj.usage = usage_data
 
-        
         return video_obj
 
     def transform_video_content_request(
@@ -171,16 +170,16 @@ class OpenAIVideoConfig(BaseVideoConfig):
     ) -> Tuple[str, Dict]:
         """
         Transform the video content request for OpenAI API.
-        
+
         OpenAI API expects the following request:
         - GET /v1/videos/{video_id}/content
         """
         # Construct the URL for video content download
         url = f"{api_base.rstrip('/')}/{video_id}/content"
-        
+
         # Add video_id as query parameter
         params = {"video_id": video_id}
-        
+
         return url, params
 
     def transform_video_remix_request(
@@ -194,22 +193,22 @@ class OpenAIVideoConfig(BaseVideoConfig):
     ) -> Tuple[str, Dict]:
         """
         Transform the video remix request for OpenAI API.
-        
+
         OpenAI API expects the following request:
         - POST /v1/videos/{video_id}/remix
         """
         # Construct the URL for video remix
         url = f"{api_base.rstrip('/')}/{video_id}/remix"
-        
+
         # Prepare the request data
         data = {"prompt": prompt}
-        
+
         # Add any extra body parameters
         if extra_body:
             data.update(extra_body)
-        
+
         return url, data
-    
+
     def transform_video_content_response(
         self,
         raw_response: httpx.Response,
@@ -231,15 +230,15 @@ class OpenAIVideoConfig(BaseVideoConfig):
         Transform the OpenAI video remix response.
         """
         response_data = raw_response.json()
-        
+
         # Transform the response data
         video_obj = VideoObject(**response_data)  # type: ignore[arg-type]
-        
+
         # Create usage object with duration information for cost calculation
         # Video remix API doesn't provide usage, so we create one with duration
         usage_data = {}
         if video_obj:
-            if hasattr(video_obj, 'seconds') and video_obj.seconds:
+            if hasattr(video_obj, "seconds") and video_obj.seconds:
                 try:
                     usage_data["duration_seconds"] = float(video_obj.seconds)
                 except (ValueError, TypeError):
@@ -261,13 +260,13 @@ class OpenAIVideoConfig(BaseVideoConfig):
     ) -> Tuple[str, Dict]:
         """
         Transform the video list request for OpenAI API.
-        
+
         OpenAI API expects the following request:
         - GET /v1/videos
         """
         # Use the api_base directly for video list
         url = api_base
-        
+
         # Prepare query parameters
         params = {}
         if after is not None:
@@ -276,18 +275,18 @@ class OpenAIVideoConfig(BaseVideoConfig):
             params["limit"] = str(limit)
         if order is not None:
             params["order"] = order
-        
+
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
-        
+
         return url, params
 
     def transform_video_list_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> Dict[str,str]:
+    ) -> Dict[str, str]:
         return raw_response.json()
 
     def transform_video_delete_request(
@@ -299,16 +298,16 @@ class OpenAIVideoConfig(BaseVideoConfig):
     ) -> Tuple[str, Dict]:
         """
         Transform the video delete request for OpenAI API.
-        
+
         OpenAI API expects the following request:
         - DELETE /v1/videos/{video_id}
         """
         # Construct the URL for video delete
         url = f"{api_base.rstrip('/')}/{video_id}"
-        
+
         # No data needed for DELETE request
         data: Dict[str, Any] = {}
-        
+
         return url, data
 
     def transform_video_delete_response(
@@ -320,7 +319,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         Transform the OpenAI video delete response.
         """
         response_data = raw_response.json()
-        
+
         # Transform the response data
         video_obj = VideoObject(**response_data)  # type: ignore[arg-type]  # type: ignore[arg-type]
 
@@ -338,10 +337,10 @@ class OpenAIVideoConfig(BaseVideoConfig):
         """
         # For video retrieve, we just need to construct the URL
         url = f"{api_base.rstrip('/')}/{video_id}"
-        
+
         # No additional data needed for GET request
         data: Dict[str, Any] = {}
-        
+
         return url, data
 
     def transform_video_status_retrieve_response(
@@ -381,4 +380,6 @@ class OpenAIVideoConfig(BaseVideoConfig):
         if isinstance(image, BufferedReader):
             files_list.append((field_name, (image.name, image, image_content_type)))
         else:
-            files_list.append((field_name, ("input_reference.png", image, image_content_type)))
+            files_list.append(
+                (field_name, ("input_reference.png", image, image_content_type))
+            )

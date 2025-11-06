@@ -636,7 +636,9 @@ async def get_guardrail_info(guardrail_id: str):
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.DB
+        guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = (
+            GUARDRAIL_DEFINITION_LOCATION.DB
+        )
         result = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
         )
@@ -697,10 +699,12 @@ async def get_guardrail_ui_settings():
     # Convert the PII_ENTITY_CATEGORIES_MAP to the format expected by the UI
     category_maps = []
     for category, entities in PII_ENTITY_CATEGORIES_MAP.items():
-        category_maps.append({
-            "category": category.value,
-            "entities": [entity.value for entity in entities]
-        })
+        category_maps.append(
+            {
+                "category": category.value,
+                "entities": [entity.value for entity in entities],
+            }
+        )
 
     return GuardrailUIAddGuardrailSettings(
         supported_entities=[entity.value for entity in PiiEntityType],
@@ -824,30 +828,32 @@ def _should_skip_optional_params(field_name: str, field_annotation: Any) -> bool
     """Check if optional_params field should be skipped (not meaningfully overridden)."""
     if field_name != "optional_params":
         return False
-    
+
     if field_annotation is None:
         return True
-    
+
     # Check if the annotation is still a generic TypeVar (not specialized)
     if isinstance(field_annotation, TypeVar) or (
         hasattr(field_annotation, "__origin__")
         and field_annotation.__origin__ is TypeVar
     ):
         return True
-    
+
     # Also skip if it's a generic type that wasn't specialized
     if hasattr(field_annotation, "__name__") and field_annotation.__name__ in (
         "T",
         "TypeVar",
     ):
         return True
-    
+
     # Handle Optional[T] where T is still a TypeVar
     if hasattr(field_annotation, "__args__"):
-        non_none_args = [arg for arg in field_annotation.__args__ if arg is not type(None)]
+        non_none_args = [
+            arg for arg in field_annotation.__args__ if arg is not type(None)
+        ]
         if non_none_args and isinstance(non_none_args[0], TypeVar):
             return True
-    
+
     return False
 
 
@@ -934,9 +940,11 @@ def _extract_fields_recursive(
 
     for field_name, field in model.model_fields.items():
         field_annotation = field.annotation
-        
+
         # Skip optional_params if it's not meaningfully overridden
-        if _should_skip_optional_params(field_name=field_name, field_annotation=field_annotation):
+        if _should_skip_optional_params(
+            field_name=field_name, field_annotation=field_annotation
+        ):
             continue
 
         # Handle Optional types and get the actual type
@@ -1068,6 +1076,7 @@ async def get_provider_specific_params():
 
     return provider_params
 
+
 @router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
 @router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
 async def apply_guardrail(
@@ -1076,11 +1085,11 @@ async def apply_guardrail(
 ):
     """
     Apply a guardrail to text input and return the processed result.
-    
+
     This endpoint allows testing guardrails by applying them to custom text inputs.
     """
     from litellm.proxy.utils import handle_exception_on_proxy
-    
+
     try:
         active_guardrail: Optional[
             CustomGuardrail
@@ -1100,4 +1109,3 @@ async def apply_guardrail(
         return ApplyGuardrailResponse(response_text=response_text)
     except Exception as e:
         raise handle_exception_on_proxy(e)
-

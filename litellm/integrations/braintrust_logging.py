@@ -42,9 +42,9 @@ class BraintrustLogger(CustomLogger):
             "Authorization": "Bearer " + self.api_key,
             "Content-Type": "application/json",
         }
-        self._project_id_cache: Dict[str, str] = (
-            {}
-        )  # Cache mapping project names to IDs
+        self._project_id_cache: Dict[
+            str, str
+        ] = {}  # Cache mapping project names to IDs
         self.global_braintrust_http_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
@@ -206,7 +206,7 @@ class BraintrustLogger(CustomLogger):
 
             # Allow metadata override for span name
             span_name = dynamic_metadata.get("span_name", "Chat Completion")
-            
+
             # Span parents is a special case
             span_parents = dynamic_metadata.get("span_parents")
 
@@ -228,7 +228,7 @@ class BraintrustLogger(CustomLogger):
                 "tags": tags,
                 "span_attributes": {"name": span_name, "type": "llm"},
             }
-            
+
             # Only add those that are not None (or falsy)
             for key, value in span_attributes.items():
                 if value:

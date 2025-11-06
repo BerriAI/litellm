@@ -753,7 +753,7 @@ class ProxyBaseLLMRequestProcessing:
             # This matches the original behavior before the refactor in commit 511d435f6f
             error_body = await e.response.aread()
             error_text = error_body.decode("utf-8")
-            
+
             raise HTTPException(
                 status_code=e.response.status_code,
                 detail={"error": error_text},
@@ -1018,9 +1018,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = (
-                    cache_creation_input_tokens
-                )
+                usage_kwargs[
+                    "cache_creation_input_tokens"
+                ] = cache_creation_input_tokens
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 

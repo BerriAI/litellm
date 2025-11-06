@@ -12,7 +12,6 @@ TEST_PDF_URL = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9U
 
 
 class HealthCheckHelpers:
-
     @staticmethod
     async def ahealth_check_wildcard_models(
         model: str,
@@ -106,7 +105,7 @@ class HealthCheckHelpers:
         Callable,
     ]:
         """
-        Returns a dictionary of mode handlers for health check calls. 
+        Returns a dictionary of mode handlers for health check calls.
 
         Mode Handlers are Callables that need to be run for execution of the health check call.
 

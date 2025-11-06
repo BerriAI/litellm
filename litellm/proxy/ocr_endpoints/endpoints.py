@@ -94,4 +94,3 @@ async def ocr(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-

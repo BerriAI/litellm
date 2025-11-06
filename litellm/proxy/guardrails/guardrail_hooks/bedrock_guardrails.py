@@ -648,9 +648,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
-            None
-        )
+        bedrock_guardrail_response: Optional[
+            Union[BedrockGuardrailResponse, str]
+        ] = None
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=new_messages, request_data=data
@@ -662,11 +662,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data["messages"] = (
-            self._update_messages_with_updated_bedrock_guardrail_response(
-                messages=new_messages,
-                bedrock_guardrail_response=bedrock_guardrail_response,
-            )
+        data[
+            "messages"
+        ] = self._update_messages_with_updated_bedrock_guardrail_response(
+            messages=new_messages,
+            bedrock_guardrail_response=bedrock_guardrail_response,
         )
         if isinstance(bedrock_guardrail_response, str):
             data["mock_response"] = self.create_guardrail_blocked_response(
@@ -718,9 +718,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
-            None
-        )
+        bedrock_guardrail_response: Optional[
+            Union[BedrockGuardrailResponse, str]
+        ] = None
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=new_messages, request_data=data
@@ -732,11 +732,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data["messages"] = (
-            self._update_messages_with_updated_bedrock_guardrail_response(
-                messages=new_messages,
-                bedrock_guardrail_response=bedrock_guardrail_response,
-            )
+        data[
+            "messages"
+        ] = self._update_messages_with_updated_bedrock_guardrail_response(
+            messages=new_messages,
+            bedrock_guardrail_response=bedrock_guardrail_response,
         )
         if isinstance(bedrock_guardrail_response, str):
             data["mock_response"] = self.create_guardrail_blocked_response(
@@ -1163,7 +1163,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         This method allows users to test Bedrock guardrails without making actual LLM calls.
         It creates a mock request and response to test the guardrail functionality.
-        
+
         Args:
             text: The text to analyze
             language: Optional language parameter (not used by Bedrock)
@@ -1175,11 +1175,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             mock_messages: List[AllMessageValues] = [
                 ChatCompletionUserMessage(role="user", content=text)
             ]
-            
+
             # Use provided request_data or create a mock one for testing
             if request_data is None:
                 request_data = {"messages": mock_messages}
-            
+
             bedrock_response = await self.make_bedrock_api_request(
                 source="INPUT",
                 messages=mock_messages,

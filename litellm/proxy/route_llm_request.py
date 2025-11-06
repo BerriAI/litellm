@@ -70,12 +70,13 @@ def add_shared_session_to_data(data: dict) -> None:
     """
     Add shared aiohttp session for connection reuse (prevents cold starts).
     Silently continues without session reuse if import fails or session is unavailable.
-    
+
     Args:
         data: Dictionary to add the shared session to
     """
     try:
         from litellm.proxy.proxy_server import shared_aiohttp_session
+
         if shared_aiohttp_session is not None and not shared_aiohttp_session.closed:
             data["shared_session"] = shared_aiohttp_session
     except Exception:
@@ -126,7 +127,7 @@ async def route_request(
     Common helper to route the request
     """
     add_shared_session_to_data(data)
-    
+
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
 
@@ -161,7 +162,12 @@ async def route_request(
             return llm_router.abatch_completion(models=models, **data)
     elif llm_router is not None:
         # Skip model-based routing for container operations
-        if route_type in ["acreate_container", "alist_containers", "aretrieve_container", "adelete_container"]:
+        if route_type in [
+            "acreate_container",
+            "alist_containers",
+            "aretrieve_container",
+            "adelete_container",
+        ]:
             return getattr(llm_router, f"{route_type}")(**data)
         if route_type in [
             "avideo_list",
@@ -171,7 +177,7 @@ async def route_request(
         ] and (data.get("model") is None or data.get("model") == ""):
             # These video endpoints don't need a model, use custom_llm_provider
             return getattr(litellm, f"{route_type}")(**data)
-        
+
         team_model_name = (
             llm_router.map_team_model(data["model"], team_id)
             if team_id is not None
@@ -181,9 +187,8 @@ async def route_request(
             data["model"] = team_model_name
             return getattr(llm_router, f"{route_type}")(**data)
 
-        elif (
-            data["model"] in router_model_names
-            or llm_router.has_model_id(data["model"])
+        elif data["model"] in router_model_names or llm_router.has_model_id(
+            data["model"]
         ):
             return getattr(llm_router, f"{route_type}")(**data)
 

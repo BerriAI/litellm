@@ -16,7 +16,6 @@ if TYPE_CHECKING:
 
 
 class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
-
     @staticmethod
     @override
     def set_messages(span: "Span", kwargs: Dict[str, Any]):
@@ -178,22 +177,42 @@ def _set_response_attributes(span: "Span", response_obj):
                         first_content = content_list[0]
                         message_content = getattr(first_content, "text", "")
                     message_role = getattr(item, "role", "assistant")
-                    safe_set_attribute(span, SpanAttributes.OUTPUT_VALUE, message_content)
-                    safe_set_attribute(span, f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}", message_content)
-                    safe_set_attribute(span, f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", message_role)
+                    safe_set_attribute(
+                        span, SpanAttributes.OUTPUT_VALUE, message_content
+                    )
+                    safe_set_attribute(
+                        span,
+                        f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
+                        message_content,
+                    )
+                    safe_set_attribute(
+                        span, f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", message_role
+                    )
 
     usage = response_obj and response_obj.get("usage")
     if usage:
-        safe_set_attribute(span, SpanAttributes.LLM_TOKEN_COUNT_TOTAL, usage.get("total_tokens"))
+        safe_set_attribute(
+            span, SpanAttributes.LLM_TOKEN_COUNT_TOTAL, usage.get("total_tokens")
+        )
         completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
         if completion_tokens:
-            safe_set_attribute(span, SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, completion_tokens)
+            safe_set_attribute(
+                span, SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, completion_tokens
+            )
         prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
         if prompt_tokens:
-            safe_set_attribute(span, SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt_tokens)
-        reasoning_tokens = usage.get("output_tokens_details", {}).get("reasoning_tokens")
+            safe_set_attribute(
+                span, SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt_tokens
+            )
+        reasoning_tokens = usage.get("output_tokens_details", {}).get(
+            "reasoning_tokens"
+        )
         if reasoning_tokens:
-            safe_set_attribute(span, SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, reasoning_tokens)
+            safe_set_attribute(
+                span,
+                SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING,
+                reasoning_tokens,
+            )
 
 
 def set_attributes(
@@ -227,17 +246,29 @@ def set_attributes(
         if kwargs.get("model"):
             safe_set_attribute(span, SpanAttributes.LLM_MODEL_NAME, kwargs.get("model"))
 
-        safe_set_attribute(span, "llm.request.type", standard_logging_payload["call_type"])
-        safe_set_attribute(span, SpanAttributes.LLM_PROVIDER, litellm_params.get("custom_llm_provider", "Unknown"))
+        safe_set_attribute(
+            span, "llm.request.type", standard_logging_payload["call_type"]
+        )
+        safe_set_attribute(
+            span,
+            SpanAttributes.LLM_PROVIDER,
+            litellm_params.get("custom_llm_provider", "Unknown"),
+        )
 
         if optional_params.get("max_tokens"):
-            safe_set_attribute(span, "llm.request.max_tokens", optional_params.get("max_tokens"))
+            safe_set_attribute(
+                span, "llm.request.max_tokens", optional_params.get("max_tokens")
+            )
         if optional_params.get("temperature"):
-            safe_set_attribute(span, "llm.request.temperature", optional_params.get("temperature"))
+            safe_set_attribute(
+                span, "llm.request.temperature", optional_params.get("temperature")
+            )
         if optional_params.get("top_p"):
             safe_set_attribute(span, "llm.request.top_p", optional_params.get("top_p"))
 
-        safe_set_attribute(span, "llm.is_streaming", str(optional_params.get("stream", False)))
+        safe_set_attribute(
+            span, "llm.is_streaming", str(optional_params.get("stream", False))
+        )
 
         if optional_params.get("user"):
             safe_set_attribute(span, "llm.user", optional_params.get("user"))
@@ -247,7 +278,11 @@ def set_attributes(
         if response_obj and response_obj.get("model"):
             safe_set_attribute(span, "llm.response.model", response_obj.get("model"))
 
-        safe_set_attribute(span, SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.LLM.value)
+        safe_set_attribute(
+            span,
+            SpanAttributes.OPENINFERENCE_SPAN_KIND,
+            OpenInferenceSpanKindValues.LLM.value,
+        )
         attributes.set_messages(span, kwargs)
 
         _set_tool_attributes(span=span, optional_params=optional_params)
@@ -258,7 +293,9 @@ def set_attributes(
             else None
         )
         if model_params:
-            safe_set_attribute(span, SpanAttributes.LLM_INVOCATION_PARAMETERS, safe_dumps(model_params))
+            safe_set_attribute(
+                span, SpanAttributes.LLM_INVOCATION_PARAMETERS, safe_dumps(model_params)
+            )
             if model_params.get("user"):
                 user_id = model_params.get("user")
                 if user_id is not None:

@@ -136,7 +136,7 @@ class ResponsesIDSecurity(CustomLogger):
         split_result = response_id.split("resp_")
         if len(split_result) < 2:
             return False
-        
+
         remaining_string = split_result[1]
         decrypted_value = decrypt_value_helper(
             value=remaining_string, key="response_id", return_original_value=True
@@ -161,7 +161,7 @@ class ResponsesIDSecurity(CustomLogger):
         split_result = response_id.split("resp_")
         if len(split_result) < 2:
             return response_id, None, None
-        
+
         remaining_string = split_result[1]
         decrypted_value = decrypt_value_helper(
             value=remaining_string, key="response_id", return_original_value=True

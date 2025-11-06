@@ -71,13 +71,13 @@ class DataDogLogger(
                 raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
             if os.getenv("DD_SITE", None) is None:
                 raise Exception("DD_SITE is not set in .env, set 'DD_SITE=<>")
-            
+
             #########################################################
             # Handle datadog_params set as litellm.datadog_params
             #########################################################
             dict_datadog_params = self._get_datadog_params()
             kwargs.update(dict_datadog_params)
-            
+
             self.async_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback
             )
@@ -120,7 +120,9 @@ class DataDogLogger(
                 dict_datadog_params = litellm.datadog_params.model_dump()
             elif isinstance(litellm.datadog_params, Dict):
                 # only allow params that are of DatadogInitParams
-                dict_datadog_params = DatadogInitParams(**litellm.datadog_params).model_dump()
+                dict_datadog_params = DatadogInitParams(
+                    **litellm.datadog_params
+                ).model_dump()
         return dict_datadog_params
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -275,6 +277,7 @@ class DataDogLogger(
         status: DataDogStatus,
     ) -> DatadogPayload:
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
         json_payload = safe_dumps(standard_logging_object)
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
         dd_payload = DatadogPayload(
@@ -341,6 +344,7 @@ class DataDogLogger(
         import gzip
 
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
         compressed_data = gzip.compress(safe_dumps(data).encode("utf-8"))
         response = await self.async_client.post(
             url=self.intake_url,
@@ -371,6 +375,7 @@ class DataDogLogger(
             _payload_dict = payload.model_dump()
             _payload_dict.update(event_metadata or {})
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
             _dd_message_str = safe_dumps(_payload_dict)
             _dd_payload = DatadogPayload(
                 ddsource=self._get_datadog_source(),
@@ -412,6 +417,7 @@ class DataDogLogger(
             _payload_dict.update(event_metadata or {})
 
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
             _dd_message_str = safe_dumps(_payload_dict)
             _dd_payload = DatadogPayload(
                 ddsource=self._get_datadog_source(),
@@ -480,7 +486,6 @@ class DataDogLogger(
                 else:
                     clean_metadata[key] = value
 
-
         # Build the initial payload
         payload = {
             "id": id,
@@ -500,6 +505,7 @@ class DataDogLogger(
         }
 
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
         json_payload = safe_dumps(payload)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)

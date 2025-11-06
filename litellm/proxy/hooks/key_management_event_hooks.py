@@ -253,7 +253,7 @@ class KeyManagementEventHooks:
                         ),
                         description=description,
                         secret_value=secret_token,
-                        tags=tags
+                        tags=tags,
                     )
 
     @staticmethod
@@ -392,7 +392,9 @@ class KeyManagementEventHooks:
             )
 
     @staticmethod
-    async def _send_key_rotated_email(response: dict, existing_key_alias: Optional[str]):
+    async def _send_key_rotated_email(
+        response: dict, existing_key_alias: Optional[str]
+    ):
         try:
             from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
                 BaseEmailLogger,

@@ -47,7 +47,7 @@ class IBMGuardrailDetector(CustomGuardrail):
     ):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
-            params={"ssl_verify": verify_ssl}
+            params={"ssl_verify": verify_ssl},
         )
 
         # Set API configuration
@@ -141,7 +141,6 @@ class IBMGuardrailDetector(CustomGuardrail):
         )
 
         try:
-
             response = await self.async_handler.post(
                 url=self.api_url,
                 json=payload,

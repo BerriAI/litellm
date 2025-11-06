@@ -279,9 +279,7 @@ class SnowflakeConfig(OpenAIGPTConfig):
                 }
                 # Add description if present
                 if "description" in function:
-                    snowflake_tool["tool_spec"]["description"] = function[
-                        "description"
-                    ]
+                    snowflake_tool["tool_spec"]["description"] = function["description"]
 
                 snowflake_tools.append(snowflake_tool)
 

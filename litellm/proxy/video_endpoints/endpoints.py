@@ -243,7 +243,6 @@ async def video_status(
         or get_custom_llm_provider_from_request_query(request=request)
         or await get_custom_llm_provider_from_request_body(request=request)
         or "openai"
-
     )
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
@@ -357,14 +356,14 @@ async def video_content(
             user_api_base=user_api_base,
             version=version,
         )
-        
+
         # Return raw video bytes with proper content type
         return Response(
             content=video_bytes,
             media_type="video/mp4",
             headers={
                 "Content-Disposition": f"attachment; filename=video_{video_id}.mp4"
-            }
+            },
         )
     except Exception as e:
         raise await processor._handle_llm_api_exception(

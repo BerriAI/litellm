@@ -105,7 +105,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             model_group_info: Optional[
                 ModelGroupInfo
             ] = self.llm_router.get_model_group_info(model_group=model)
-            
+
             weight: float = 1
             if (
                 litellm.priority_reservation is None

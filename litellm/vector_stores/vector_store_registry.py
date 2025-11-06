@@ -22,9 +22,9 @@ class VectorStoreIndexRegistry:
     def __init__(
         self, vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = []
     ):
-        self.vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = (
-            vector_store_indexes
-        )
+        self.vector_store_indexes: List[
+            LiteLLM_ManagedVectorStoreIndex
+        ] = vector_store_indexes
 
     def get_vector_store_indexes(self) -> List[LiteLLM_ManagedVectorStoreIndex]:
         """

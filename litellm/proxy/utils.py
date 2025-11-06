@@ -1079,16 +1079,14 @@ class ProxyLogging:
                         event_type = GuardrailEventHooks.during_mcp_call
 
                     if (
-                        callback.should_run_guardrail(
-                            data=data, event_type=event_type
-                        )
+                        callback.should_run_guardrail(data=data, event_type=event_type)
                         is not True
                     ):
                         continue
                 # Convert user_api_key_dict to proper format for async_moderation_hook
                 if call_type == "mcp_call":
-                    user_api_key_auth_dict = (
-                        self._convert_user_api_key_auth_to_dict(user_api_key_dict)
+                    user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(
+                        user_api_key_dict
                     )
                 else:
                     user_api_key_auth_dict = user_api_key_dict

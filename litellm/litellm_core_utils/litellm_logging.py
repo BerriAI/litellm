@@ -1625,7 +1625,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OCRResponse)  # OCR
             or isinstance(logging_result, dict)
             and logging_result.get("object") == "vector_store.search_results.page"
-            or isinstance(logging_result, VideoObject) 
+            or isinstance(logging_result, VideoObject)
             or isinstance(logging_result, ContainerObject)
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
@@ -2478,26 +2478,24 @@ class Logging(LiteLLMLoggingBaseClass):
     def _handle_callback_failure(self, callback: Any):
         """
         Handle callback logging failures by incrementing Prometheus metrics.
-        
+
         Works for both sync and async contexts since Prometheus counter increment is synchronous.
-        
+
         Args:
             callback: The callback that failed
         """
         try:
             callback_name = self._get_callback_name(callback)
-            
+
             all_callbacks = litellm.logging_callback_manager._get_all_callbacks()
-                        
+
             for callback_obj in all_callbacks:
-                if hasattr(callback_obj, 'increment_callback_logging_failure'):
+                if hasattr(callback_obj, "increment_callback_logging_failure"):
                     callback_obj.increment_callback_logging_failure(callback_name=callback_name)  # type: ignore
                     break  # Only increment once
-                    
+
         except Exception as e:
-            verbose_logger.debug(
-                f"Error in _handle_callback_failure: {str(e)}"
-            )
+            verbose_logger.debug(f"Error in _handle_callback_failure: {str(e)}")
 
     def _failure_handler_helper_fn(
         self, exception, traceback_exception, start_time=None, end_time=None

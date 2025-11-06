@@ -693,15 +693,14 @@ def run_server(  # noqa: PLR0915
                 litellm._key_management_settings = KeyManagementSettings(
                     **key_management_settings
                 )
-            
+
             if general_settings:
                 ### LOAD SECRET MANAGER ###
                 key_management_system = general_settings.get(
                     "key_management_system", None
                 )
                 proxy_config.initialize_secret_manager(
-                    key_management_system=key_management_system,
-                    config_file_path=config
+                    key_management_system=key_management_system, config_file_path=config
                 )
             database_url = general_settings.get("database_url", None)
             if database_url is None and os.getenv("DATABASE_URL") is None:

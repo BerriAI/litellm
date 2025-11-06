@@ -58,7 +58,6 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
     def validate_environment(
         self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
-
         basic_headers = self._base_validate_azure_environment(headers, litellm_params)
         basic_headers.update({"Content-Type": "application/json"})
         return basic_headers

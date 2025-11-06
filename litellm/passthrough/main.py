@@ -113,7 +113,7 @@ async def allm_passthrough_route(
             # Only call raise_for_status if it's a Response object (not a generator)
             if isinstance(response, httpx.Response):
                 response.raise_for_status()
-            
+
             return response
         else:
             # This shouldn't happen when allm_passthrough_route=True, but handle it for type safety
@@ -358,7 +358,7 @@ async def _async_passthrough_request(
     """
     # client.client.send returns a coroutine for async clients
     response_result = client.client.send(request=request, stream=is_streaming_request)
-    
+
     # Check if it's a coroutine and await it
     if asyncio.iscoroutine(response_result):
         if is_streaming_request:
@@ -410,7 +410,6 @@ async def _async_streaming(
         raw_bytes: List[bytes] = []
 
         async for chunk in iter_response.aiter_bytes():  # type: ignore
-
             raw_bytes.append(chunk)
             yield chunk
 
