@@ -594,6 +594,7 @@ class LitellmParams(
     NomaGuardrailConfigModel,
     ToolPermissionGuardrailConfigModel,
     JavelinGuardrailConfigModel,
+    ContentFilterConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
