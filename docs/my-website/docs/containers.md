@@ -1,6 +1,3 @@
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 # /containers
 
 Manage OpenAI code interpreter containers (sessions) for executing code in isolated environments.
@@ -14,17 +11,15 @@ Manage OpenAI code interpreter containers (sessions) for executing code in isola
 | Spend Management | ✅ Budget tracking and rate limiting |
 | Supported Providers | `openai`|
 
-## **Supported Providers**:
-- [OpenAI](#quick-start)
-
-## Quick Start 
+:::tip
 
 Containers provide isolated execution environments for code interpreter sessions. You can create, list, retrieve, and delete containers.
 
-### SDK, PROXY, and OpenAI Client
+:::
 
-<Tabs>
-<TabItem value="sdk" label="SDK">
+## **LiteLLM Python SDK Usage**
+
+### Quick Start
 
 **Create a Container**
 
@@ -46,22 +41,33 @@ container = litellm.create_container(
 
 print(f"Container ID: {container.id}")
 print(f"Container Name: {container.name}")
-
-### ASYNC USAGE ### 
-# container = await litellm.acreate_container(
-#     name="My Code Interpreter Container",
-#     custom_llm_provider="openai",
-#     expires_after={
-#         "anchor": "last_active_at",
-#         "minutes": 20
-#     }
-# )
 ```
 
-**List Containers**
+### Async Usage
 
 ```python
-from litellm import list_containers, alist_containers
+from litellm import acreate_container
+import os 
+
+os.environ["OPENAI_API_KEY"] = "sk-.."
+
+container = await acreate_container(
+    name="My Code Interpreter Container",
+    custom_llm_provider="openai",
+    expires_after={
+        "anchor": "last_active_at",
+        "minutes": 20
+    }
+)
+
+print(f"Container ID: {container.id}")
+print(f"Container Name: {container.name}")
+```
+
+### List Containers
+
+```python
+from litellm import list_containers
 import os 
 
 os.environ["OPENAI_API_KEY"] = "sk-.."
@@ -75,19 +81,28 @@ containers = list_containers(
 print(f"Found {len(containers.data)} containers")
 for container in containers.data:
     print(f"  - {container.id}: {container.name}")
-
-### ASYNC USAGE ### 
-# containers = await alist_containers(
-#     custom_llm_provider="openai",
-#     limit=20,
-#     order="desc"
-# )
 ```
 
-**Retrieve a Container**
+**Async Usage:**
 
 ```python
-from litellm import retrieve_container, aretrieve_container
+from litellm import alist_containers
+
+containers = await alist_containers(
+    custom_llm_provider="openai",
+    limit=20,
+    order="desc"
+)
+
+print(f"Found {len(containers.data)} containers")
+for container in containers.data:
+    print(f"  - {container.id}: {container.name}")
+```
+
+### Retrieve a Container
+
+```python
+from litellm import retrieve_container
 import os 
 
 os.environ["OPENAI_API_KEY"] = "sk-.."
@@ -100,18 +115,27 @@ container = retrieve_container(
 print(f"Container: {container.name}")
 print(f"Status: {container.status}")
 print(f"Created: {container.created_at}")
-
-### ASYNC USAGE ### 
-# container = await aretrieve_container(
-#     container_id="cntr_123...",
-#     custom_llm_provider="openai"
-# )
 ```
 
-**Delete a Container**
+**Async Usage:**
 
 ```python
-from litellm import delete_container, adelete_container
+from litellm import aretrieve_container
+
+container = await aretrieve_container(
+    container_id="cntr_123...",
+    custom_llm_provider="openai"
+)
+
+print(f"Container: {container.name}")
+print(f"Status: {container.status}")
+print(f"Created: {container.created_at}")
+```
+
+### Delete a Container
+
+```python
+from litellm import delete_container
 import os 
 
 os.environ["OPENAI_API_KEY"] = "sk-.."
@@ -123,16 +147,30 @@ result = delete_container(
 
 print(f"Deleted: {result.deleted}")
 print(f"Container ID: {result.id}")
-
-### ASYNC USAGE ### 
-# result = await adelete_container(
-#     container_id="cntr_123...",
-#     custom_llm_provider="openai"
-# )
 ```
 
-</TabItem>
-<TabItem value="proxy" label="LiteLLM PROXY Server">
+**Async Usage:**
+
+```python
+from litellm import adelete_container
+
+result = await adelete_container(
+    container_id="cntr_123...",
+    custom_llm_provider="openai"
+)
+
+print(f"Deleted: {result.deleted}")
+print(f"Container ID: {result.id}")
+```
+
+## **LiteLLM Proxy Usage**
+
+LiteLLM provides OpenAI API compatible container endpoints for managing code interpreter sessions:
+
+- `/v1/containers` - Create and list containers
+- `/v1/containers/{container_id}` - Retrieve and delete containers
+
+**Setup**
 
 ```bash
 $ export OPENAI_API_KEY="sk-..."
@@ -208,10 +246,13 @@ curl -X DELETE "http://localhost:4000/v1/containers/cntr_123..." \
     -H "Authorization: Bearer sk-1234"
 ```
 
-</TabItem>
-<TabItem value="openai" label="OpenAI Python Client">
+## **Using OpenAI Client with LiteLLM Proxy**
 
-**Setup**
+You can use the standard OpenAI Python client to interact with LiteLLM's container endpoints. This provides a familiar interface while leveraging LiteLLM's proxy features.
+
+### Setup
+
+First, configure your OpenAI client to point to your LiteLLM proxy:
 
 ```python
 from openai import OpenAI
@@ -222,7 +263,7 @@ client = OpenAI(
 )
 ```
 
-**Create a Container**
+### Create a Container
 
 ```python
 container = client.containers.create(
@@ -239,7 +280,7 @@ print(f"Container Name: {container.name}")
 print(f"Created at: {container.created_at}")
 ```
 
-**List Containers**
+### List Containers
 
 ```python
 containers = client.containers.list(
@@ -252,7 +293,7 @@ for container in containers.data:
     print(f"  - {container.id}: {container.name}")
 ```
 
-**Retrieve a Container**
+### Retrieve a Container
 
 ```python
 container = client.containers.retrieve(
@@ -265,7 +306,7 @@ print(f"Status: {container.status}")
 print(f"Last active: {container.last_active_at}")
 ```
 
-**Delete a Container**
+### Delete a Container
 
 ```python
 result = client.containers.delete(
@@ -277,8 +318,62 @@ print(f"Deleted: {result.deleted}")
 print(f"Container ID: {result.id}")
 ```
 
-</TabItem>
-</Tabs>
+### Complete Workflow Example
+
+Here's a complete example showing the full container management workflow:
+
+```python
+from openai import OpenAI
+
+# Initialize client
+client = OpenAI(
+    api_key="sk-1234",
+    base_url="http://localhost:4000"
+)
+
+# 1. Create a container
+print("Creating container...")
+container = client.containers.create(
+    name="My Code Interpreter Session",
+    expires_after={
+        "anchor": "last_active_at",
+        "minutes": 20
+    },
+    extra_body={"custom_llm_provider": "openai"}
+)
+
+container_id = container.id
+print(f"Container created. ID: {container_id}")
+
+# 2. List all containers
+print("\nListing containers...")
+containers = client.containers.list(
+    extra_body={"custom_llm_provider": "openai"}
+)
+
+for c in containers.data:
+    print(f"  - {c.id}: {c.name} (Status: {c.status})")
+
+# 3. Retrieve specific container
+print(f"\nRetrieving container {container_id}...")
+retrieved = client.containers.retrieve(
+    container_id=container_id,
+    extra_body={"custom_llm_provider": "openai"}
+)
+
+print(f"Container: {retrieved.name}")
+print(f"Status: {retrieved.status}")
+print(f"Last active: {retrieved.last_active_at}")
+
+# 4. Delete container
+print(f"\nDeleting container {container_id}...")
+result = client.containers.delete(
+    container_id=container_id,
+    extra_body={"custom_llm_provider": "openai"}
+)
+
+print(f"Deleted: {result.deleted}")
+```
 
 ## Container Parameters
 
@@ -355,4 +450,16 @@ print(f"Container ID: {result.id}")
   "deleted": true
 }
 ```
+
+## **Supported Providers**
+
+| Provider    | Support Status | Notes |
+|-------------|----------------|-------|
+| OpenAI      | ✅ Supported   | Full support for all container operations |
+
+:::info
+
+Currently, only OpenAI supports container management for code interpreter sessions. Support for additional providers may be added in the future.
+
+:::
 
