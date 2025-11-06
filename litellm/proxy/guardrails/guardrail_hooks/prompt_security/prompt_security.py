@@ -294,8 +294,11 @@ class PromptSecurityGuardrail(CustomGuardrail):
         messages = await self.process_message_files(messages)
 
         def good_msg(msg):
-            if msg.get('content', '').startswith('### '): return False
-            if '"follow_ups": [' in msg.get('content', ''): return False
+            content = msg.get('content', '')
+            # Handle both string and list content types
+            if isinstance(content, str):
+                if content.startswith('### '): return False
+                if '"follow_ups": [' in content: return False
             return True
 
         messages = list(filter(lambda msg: good_msg(msg), messages))
@@ -400,4 +403,3 @@ class PromptSecurityGuardrail(CustomGuardrail):
             PromptSecurityGuardrailConfigModel,
         )
         return PromptSecurityGuardrailConfigModel
-
