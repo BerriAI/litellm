@@ -25,11 +25,12 @@ class PromptSecurityGuardrailMissingSecrets(Exception):
     pass
 
 class PromptSecurityGuardrail(CustomGuardrail):
-    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, user: Optional[str] = None, **kwargs):
+    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, user: Optional[str] = None, system_prompt: Optional[str] = None, **kwargs):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.api_key = api_key or os.environ.get("PROMPT_SECURITY_API_KEY")
         self.api_base = api_base or os.environ.get("PROMPT_SECURITY_API_BASE")
         self.user = user or os.environ.get("PROMPT_SECURITY_USER")
+        self.system_prompt = system_prompt or os.environ.get("PROMPT_SECURITY_SYSTEM_PROMPT")
         if not self.api_key or not self.api_base:
             msg = (
                 "Couldn't get Prompt Security api base or key, "
@@ -306,7 +307,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         response = await self.async_handler.post(
             f"{self.api_base}/api/protect",
             headers=headers,
-            json={"messages": messages, "user": self.user},
+            json={"messages": messages, "user": self.user, "system_prompt": self.system_prompt},
         )
         response.raise_for_status()
         res = response.json()
@@ -326,7 +327,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         response = await self.async_handler.post(
             f"{self.api_base}/api/protect",
             headers = { 'APP-ID': self.api_key, 'Content-Type': 'application/json' },
-            json = { "response": output, "user": self.user }
+            json = { "response": output, "user": self.user, "system_prompt": self.system_prompt }
         )
         response.raise_for_status()
         res = response.json()
