@@ -95,4 +95,38 @@ describe("SSOModals", () => {
       expect(getByText("URL must start with http:// or https://")).toBeInTheDocument();
     });
   });
+
+  it("should automatically remove trailing slash from the proxy base url", async () => {
+    const TestWrapper = () => {
+      const [form] = Form.useForm();
+      return (
+        <SSOModals
+          isAddSSOModalVisible={true}
+          isInstructionsModalVisible={false}
+          handleAddSSOOk={() => {}}
+          handleAddSSOCancel={() => {}}
+          handleShowInstructions={() => {}}
+          handleInstructionsOk={() => {}}
+          handleInstructionsCancel={() => {}}
+          form={form}
+          accessToken={null}
+          ssoConfigured={false}
+        />
+      );
+    };
+
+    const { getByLabelText, container } = render(<TestWrapper />);
+
+    // Fill in the proxy base url with a trailing slash
+    const urlInput = getByLabelText("PROXY BASE URL") as HTMLInputElement;
+    fireEvent.change(urlInput, { target: { value: "https://example.com/" } });
+
+    // Trigger blur to ensure normalization is applied
+    fireEvent.blur(urlInput);
+
+    // Check that the trailing slash was removed by the normalize function
+    await waitFor(() => {
+      expect(urlInput.value).toBe("https://example.com");
+    });
+  });
 });
